@@ -222,8 +222,43 @@ lock each one.
 
 ---
 
+## Phase 5 — Operations A: Work Orders + Systems & Licenses ✅ (closed 2026-06-03)
+
+**Goal:** the operator-facing mini-ITSM the spec named most prominently —
+asset-linked work orders + a systems/license register with live expiry —
+all on pure CRUD (no new transport).
+
+### Sub-commits
+- ✅ SC1 — migration 000010: work_orders (lifecycle + asset link + cost) +
+  work_order_events (append-only timeline) + systems (license/support
+  expiry register). sqlc DATE override added.
+- ✅ SC2 — `internal/operations` pure helper: `ComputeLicenseStatus`
+  (active / expiring-90d / due-soon-30d / critical-7d / expired / unknown)
+  + `WorstStatus` rollup, with tests. API (`internal/api/operations.go`):
+  work-order list/create/get/PATCH (status transitions auto-record timeline
+  events; resolved_at stamped on solve/close) + systems list (status
+  computed live) / create.
+- ✅ SC3 — UI: **Work Orders** page (list sorted by status+priority, create
+  form, detail with status buttons + timeline + note entry) and **Systems &
+  Licenses** page (list with computed expiry badges, create form with date
+  pickers). Nav + routes.
+- ✅ SC4 — build/vet/test green; docs; closed.
+
+### Verification (2026-06-03)
+`go build/vet/test ./...` green; new license-status tests (thresholds +
+worst-of rollup). Frontend tsc + build green. First write-path (POST/PATCH)
+in HIMS — added `api.post`/`api.patch` to the web client.
+
+### Carry-forward → Operations B
+Spare parts (stock + min-qty + work-order consumption decrement), purchase
+records, and Expenses (aggregating contracts/internet/licenses/repairs/parts
+by hotel/system/vendor/category/asset). Work-order `spare_parts` is free
+text until the stock link lands.
+
+---
+
 ## Later phases ⬜
-See `PLAN.md` §10. Remaining: **3b/3c** (virtualization + iLO/iDRAC — new
-transports), CCTV, wireless, databases/AD, peripherals/voice, operations
-layer (work orders → spare parts → purchases → expenses → licenses), MIB
-upload engine + reporting/dashboards.
+See `PLAN.md` §10. Remaining: **Operations B** (spare parts → purchases →
+expenses), **3b/3c** (virtualization + iLO/iDRAC — new transports), CCTV,
+wireless, databases/AD, peripherals/voice, MIB upload engine +
+reporting/dashboards.

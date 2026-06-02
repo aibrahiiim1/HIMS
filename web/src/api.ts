@@ -6,7 +6,27 @@ async function get<T>(path: string): Promise<T> {
   return r.json()
 }
 
-export const api = { get }
+async function post<T>(path: string, body: unknown): Promise<T> {
+  const r = await fetch(`${BASE}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${path}`)
+  return r.json()
+}
+
+async function patch<T>(path: string, body: unknown): Promise<T> {
+  const r = await fetch(`${BASE}${path}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${path}`)
+  return r.json()
+}
+
+export const api = { get, post, patch }
 
 // ---- Domain types -----------------------------------------------------------
 
@@ -170,6 +190,47 @@ export interface DeviceRole {
   device_id: string
   role: string
   source: string
+}
+
+export interface WorkOrder {
+  id: string
+  device_id?: string | null
+  location_id?: string | null
+  title: string
+  problem_type: string
+  priority: string
+  status: string
+  assigned_to?: string | null
+  diagnosis?: string | null
+  action_taken?: string | null
+  spare_parts?: string | null
+  external_vendor?: string | null
+  cost: number
+  created_at: string
+  resolved_at?: string | null
+}
+
+export interface WorkOrderEvent {
+  id: string
+  work_order_id: string
+  event_type: string
+  note?: string | null
+  actor?: string | null
+  created_at: string
+}
+
+export interface SystemLicense {
+  id: string
+  name: string
+  vendor?: string | null
+  location_id?: string | null
+  license_expiry?: string | null
+  support_expiry?: string | null
+  cost: number
+  notes?: string | null
+  license_status: string
+  support_status: string
+  overall_status: string
 }
 
 export interface Location {

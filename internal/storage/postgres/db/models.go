@@ -268,6 +268,19 @@ type Subnet struct {
 	UpdatedAt  time.Time    `json:"updated_at"`
 }
 
+type System struct {
+	ID            uuid.UUID  `json:"id"`
+	Name          string     `json:"name"`
+	Vendor        *string    `json:"vendor"`
+	LocationID    *uuid.UUID `json:"location_id"`
+	LicenseExpiry *time.Time `json:"license_expiry"`
+	SupportExpiry *time.Time `json:"support_expiry"`
+	Cost          float64    `json:"cost"`
+	Notes         *string    `json:"notes"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
+}
+
 type TopologyLink struct {
 	ID             uuid.UUID   `json:"id"`
 	LocalDeviceID  uuid.UUID   `json:"local_device_id"`
@@ -287,4 +300,32 @@ type Vlan struct {
 	Name             *string   `json:"name"`
 	CollectionSource string    `json:"collection_source"`
 	LastSeenAt       time.Time `json:"last_seen_at"`
+}
+
+type WorkOrder struct {
+	ID             uuid.UUID  `json:"id"`
+	DeviceID       *uuid.UUID `json:"device_id"`
+	LocationID     *uuid.UUID `json:"location_id"`
+	Title          string     `json:"title"`
+	ProblemType    string     `json:"problem_type"`
+	Priority       string     `json:"priority"`
+	Status         string     `json:"status"`
+	AssignedTo     *string    `json:"assigned_to"`
+	Diagnosis      *string    `json:"diagnosis"`
+	ActionTaken    *string    `json:"action_taken"`
+	SpareParts     *string    `json:"spare_parts"`
+	ExternalVendor *string    `json:"external_vendor"`
+	Cost           float64    `json:"cost"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+	ResolvedAt     *time.Time `json:"resolved_at"`
+}
+
+type WorkOrderEvent struct {
+	ID          uuid.UUID `json:"id"`
+	WorkOrderID uuid.UUID `json:"work_order_id"`
+	EventType   string    `json:"event_type"`
+	Note        *string   `json:"note"`
+	Actor       *string   `json:"actor"`
+	CreatedAt   time.Time `json:"created_at"`
 }

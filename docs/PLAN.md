@@ -163,6 +163,10 @@ monitoring_samples (TimescaleDB hypertable).
 - **Phase 8 — Peripherals** (printers/UPS/fingerprint/IP phones) + voice.
 - **Phase 9 — Operations layer:** work orders → spare parts → purchases →
   expenses → licenses/contracts; alert → work-order bridge.
+  - **A ✅ DONE** (built early — pure CRUD, high value): work orders
+    (asset-linked, lifecycle, timeline, cost) + Systems & Licenses register
+    (live expiry status). **B (open)** — spare parts, purchases, expenses
+    aggregation; alert→work-order bridge.
 - **Phase 10 — MIB upload engine, reporting, executive dashboards.**
 
 Ordering rationale (operator): switches + topology + credential resolver

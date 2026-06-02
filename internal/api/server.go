@@ -74,6 +74,14 @@ func (s *Server) routes() {
 		// --- Locations -----------------------------------------------
 		r.Get("/locations", s.listLocations)
 		r.Get("/locations/{id}/children", s.childLocations)
+
+		// --- Operations: work orders + systems/licenses --------------
+		r.Get("/work-orders", s.listWorkOrders)
+		r.Post("/work-orders", s.createWorkOrder)
+		r.Get("/work-orders/{id}", s.getWorkOrder)
+		r.Patch("/work-orders/{id}", s.updateWorkOrder)
+		r.Get("/systems", s.listSystems)
+		r.Post("/systems", s.createSystem)
 	})
 }
 

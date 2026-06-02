@@ -6,6 +6,8 @@ import { ServerDetail } from './pages/ServerDetail'
 import { FirewallDetail } from './pages/FirewallDetail'
 import { TopologyPage } from './pages/TopologyPage'
 import { SearchPage } from './pages/SearchPage'
+import { WorkOrders } from './pages/WorkOrders'
+import { Systems } from './pages/Systems'
 import './App.css'
 
 const qc = new QueryClient({ defaultOptions: { queries: { staleTime: 30_000, retry: 1 } } })
@@ -21,6 +23,8 @@ function Nav() {
       <Link to="/firewalls" style={active('/firewalls')}>Firewalls</Link>
       <Link to="/topology" style={active('/topology')}>Topology</Link>
       <Link to="/search" style={active('/search')}>Search</Link>
+      <Link to="/work-orders" style={active('/work-orders')}>Work Orders</Link>
+      <Link to="/systems" style={active('/systems')}>Systems</Link>
     </nav>
   )
 }
@@ -40,6 +44,8 @@ export default function App() {
             <Route path="/firewalls/:id" element={<FirewallDetail />} />
             <Route path="/topology" element={<TopologyPage />} />
             <Route path="/search" element={<SearchPage />} />
+            <Route path="/work-orders" element={<WorkOrders />} />
+            <Route path="/systems" element={<Systems />} />
           </Routes>
         </div>
       </BrowserRouter>

@@ -14,6 +14,7 @@ import (
 type Querier interface {
 	AddCredentialGroupMember(ctx context.Context, arg AddCredentialGroupMemberParams) error
 	AddDeviceRole(ctx context.Context, arg AddDeviceRoleParams) error
+	AddWorkOrderEvent(ctx context.Context, arg AddWorkOrderEventParams) (WorkOrderEvent, error)
 	BindCredentialGroup(ctx context.Context, arg BindCredentialGroupParams) (CredentialBinding, error)
 	CreateCredential(ctx context.Context, arg CreateCredentialParams) (Credential, error)
 	CreateCredentialGroup(ctx context.Context, arg CreateCredentialGroupParams) (CredentialGroup, error)
@@ -21,6 +22,8 @@ type Querier interface {
 	CreateDiscoveryJob(ctx context.Context, arg CreateDiscoveryJobParams) (DiscoveryJob, error)
 	CreateDiscoveryResult(ctx context.Context, arg CreateDiscoveryResultParams) (DiscoveryResult, error)
 	CreateLocation(ctx context.Context, arg CreateLocationParams) (Location, error)
+	CreateSystem(ctx context.Context, arg CreateSystemParams) (System, error)
+	CreateWorkOrder(ctx context.Context, arg CreateWorkOrderParams) (WorkOrder, error)
 	DeleteLocation(ctx context.Context, id uuid.UUID) error
 	DeleteStaleARP(ctx context.Context, arg DeleteStaleARPParams) error
 	DeleteStaleHAMembers(ctx context.Context, arg DeleteStaleHAMembersParams) error
@@ -32,6 +35,7 @@ type Querier interface {
 	DeleteStaleServerStorage(ctx context.Context, arg DeleteStaleServerStorageParams) error
 	DeleteStaleVlans(ctx context.Context, arg DeleteStaleVlansParams) error
 	DeleteStaleVpnTunnels(ctx context.Context, arg DeleteStaleVpnTunnelsParams) error
+	DeleteSystem(ctx context.Context, id uuid.UUID) error
 	// First step of the IP→MAC→port→path search.
 	FindMACByIP(ctx context.Context, ipAddress netip.Addr) ([]FindMACByIPRow, error)
 	// Topology search: which switch + port + VLAN carries a MAC?
@@ -41,6 +45,8 @@ type Querier interface {
 	GetDiscoveryJob(ctx context.Context, id uuid.UUID) (DiscoveryJob, error)
 	GetFirewallStatus(ctx context.Context, deviceID uuid.UUID) (FirewallStatus, error)
 	GetLocation(ctx context.Context, id uuid.UUID) (Location, error)
+	GetSystem(ctx context.Context, id uuid.UUID) (System, error)
+	GetWorkOrder(ctx context.Context, id uuid.UUID) (WorkOrder, error)
 	// Used by the topology graph to build the full picture.
 	ListAllTopologyLinks(ctx context.Context) ([]ListAllTopologyLinksRow, error)
 	ListChildLocations(ctx context.Context, parentID *uuid.UUID) ([]Location, error)
@@ -57,9 +63,13 @@ type Querier interface {
 	ListPortVlans(ctx context.Context, deviceID uuid.UUID) ([]PortVlan, error)
 	ListRootLocations(ctx context.Context) ([]Location, error)
 	ListServerStorage(ctx context.Context, deviceID uuid.UUID) ([]ServerStorage, error)
+	ListSystems(ctx context.Context) ([]System, error)
 	ListTopologyLinks(ctx context.Context, localDeviceID uuid.UUID) ([]TopologyLink, error)
 	ListVlans(ctx context.Context, deviceID uuid.UUID) ([]Vlan, error)
 	ListVpnTunnels(ctx context.Context, deviceID uuid.UUID) ([]FirewallVpnTunnel, error)
+	ListWorkOrderEvents(ctx context.Context, workOrderID uuid.UUID) ([]WorkOrderEvent, error)
+	ListWorkOrders(ctx context.Context) ([]WorkOrder, error)
+	ListWorkOrdersByDevice(ctx context.Context, deviceID *uuid.UUID) ([]WorkOrder, error)
 	// Identity reconciliation key (multi-hotel safe): same IP can recur across
 	// hotels, so a live device is unique by (primary_ip, location).
 	LiveDeviceByIPAndLocation(ctx context.Context, arg LiveDeviceByIPAndLocationParams) (Device, error)
@@ -80,6 +90,8 @@ type Querier interface {
 	TouchDeviceDiscovery(ctx context.Context, arg TouchDeviceDiscoveryParams) error
 	UpdateDiscoveryJobStatus(ctx context.Context, arg UpdateDiscoveryJobStatusParams) error
 	UpdateDiscoveryResult(ctx context.Context, arg UpdateDiscoveryResultParams) error
+	UpdateSystem(ctx context.Context, arg UpdateSystemParams) (System, error)
+	UpdateWorkOrder(ctx context.Context, arg UpdateWorkOrderParams) (WorkOrder, error)
 	// ---- ARP entries ---------------------------------------------------------
 	UpsertARP(ctx context.Context, arg UpsertARPParams) error
 	UpsertDeviceFact(ctx context.Context, arg UpsertDeviceFactParams) error
