@@ -143,7 +143,8 @@ monitoring_samples (TimescaleDB hypertable).
   discovery pipeline wired to the resolver, topology engine, IP/MAC/name →
   path search, topology graph UI. End-to-end proof of the architecture.
 - **Phase 2 — More switch drivers** (Cisco IOS, Huawei VRP) + topology
-  hardening.
+  hardening. ✅ DONE — shared `swsnmp` collectors, Cisco (CDP) + Huawei
+  drivers, LLDP/CDP neighbor merge. No schema/UI change (driver-engine win).
 - **Phase 3 — Compute:** servers (SNMP/WinRM/SSH), then virtualization
   (ESXi/Hyper-V + VM mapping), iLO/iDRAC.
 - **Phase 4 — Firewall** (FortiGate driver — port the proven Fortinet OID

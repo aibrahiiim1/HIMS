@@ -7,13 +7,17 @@ package drivers
 import (
 	"github.com/coralsearesorts/hims/internal/driver"
 	"github.com/coralsearesorts/hims/internal/driver/aruba"
+	"github.com/coralsearesorts/hims/internal/driver/cisco"
+	"github.com/coralsearesorts/hims/internal/driver/huawei"
 )
 
 // Builtin returns a Registry populated with the drivers compiled into this
-// build. Phase 0 ships the Aruba/HPE reference driver; later phases append
-// cisco_ios, huawei_vrp, fortigate, hikvision, vmware, …
+// build. Phase 1: Aruba/HPE. Phase 2 adds Cisco IOS + Huawei VRP. Later
+// phases append fortigate, hikvision, vmware, …
 func Builtin() *driver.Registry {
 	r := driver.NewRegistry()
 	r.Register(aruba.New())
+	r.Register(cisco.New())
+	r.Register(huawei.New())
 	return r
 }

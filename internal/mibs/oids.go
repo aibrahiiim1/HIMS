@@ -56,4 +56,16 @@ const (
 	HPEnterprise    = "1.3.6.1.4.1.11."
 	ArubaEnterprise = "1.3.6.1.4.1.14823."
 	ArubaOSCX       = "1.3.6.1.4.1.47196."
+
+	// Cisco + Huawei enterprise OID prefixes
+	CiscoEnterprise  = "1.3.6.1.4.1.9."
+	HuaweiEnterprise = "1.3.6.1.4.1.2011."
+
+	// --- CISCO-CDP-MIB (cdpCacheTable) ------------------------------------
+	// Index is (cdpCacheIfIndex, cdpCacheDeviceIndex) — 2 elements.
+	CdpCacheEntry         = "1.3.6.1.4.1.9.9.23.1.2.1.1"
+	CdpCacheColAddress    = 4 // cdpCacheAddress (remote mgmt addr, often 4-byte)
+	CdpCacheColDeviceID   = 6 // cdpCacheDeviceId (remote sysName)
+	CdpCacheColDevicePort = 7 // cdpCacheDevicePort (remote port)
+	CdpCacheColPlatform   = 8 // cdpCachePlatform (remote model)
 )

@@ -109,6 +109,45 @@ aruba, credresolver, topology). Frontend: `tsc --noEmit` clean +
 
 ---
 
+## Phase 2 — More switch drivers + topology hardening ✅ (closed 2026-06-03)
+
+**Goal:** prove the driver engine scales to multiple vendors with no schema
+or UI change, and harden topology for mixed-vendor segments.
+
+### Sub-commits
+- ✅ SC1 — extracted the shared switch-collection logic into
+  `internal/driver/swsnmp` (CollectSysInfo / Interfaces / VLANs / FDB /
+  LLDP / DerivePortRoles / FirmwareFromDescr). Refactored the Aruba driver
+  to a thin assembly over it — **Aruba tests unchanged + still green**
+  (behavior preserved).
+- ✅ SC2 — **Cisco IOS driver** (`internal/driver/cisco`): fingerprint by
+  enterprise OID 9 / "Cisco IOS" sysDescr; Collect via swsnmp + **CDP**
+  (`swsnmp.CollectCDP`, CISCO-CDP-MIB cdpCacheTable) merged with LLDP. 4 tests.
+- ✅ SC3 — **Huawei VRP driver** (`internal/driver/huawei`): fingerprint by
+  enterprise OID 2011 / Huawei|VRP|Quidway sysDescr; Collect via swsnmp.
+  3 tests. Both registered in `drivers.Builtin()`.
+- ✅ SC4 — topology hardening: `topology.NeighborMerge` dedups LLDP+CDP for
+  the same neighbor (LLDP wins identity, CDP mgmt-IP folded in), keyed by
+  (local-if, remote-identity); keeps distinct neighbors + LAG legs apart;
+  drops unidentifiable neighbors. 4 tests.
+
+### Verification (2026-06-03)
+`go build/vet/test ./...` green. New tests: cisco 4, huawei 3, drivers
+(cross-vendor disambiguation) 3, topology merge 4 — plus all Phase 0/1
+suites still pass. **No frontend changes** — Cisco/Huawei switches render
+through the same generic switch template (ADR-0001 payoff).
+
+### Carry-forward
+- `NeighborMerge` is a tested utility; it wires into the collect→persist
+  write-back path when that lands (Phase 3 monitoring).
+- Cisco per-VLAN FDB community-indexing (older IOS) not yet handled — the
+  standard dot1q + legacy-bridge FDB covers modern IOS; revisit if a real
+  device returns empty FDB.
+
+---
+
 ## Later phases ⬜
-See `PLAN.md` §10 (compute, firewall, CCTV, wireless, databases/AD,
-peripherals/voice, operations layer, MIB engine + reporting).
+See `PLAN.md` §10. Next: **Phase 3 — Compute** (servers via SNMP/WinRM/SSH,
+then virtualization ESXi/Hyper-V + VM mapping, iLO/iDRAC). Then firewall
+(port the proven FortiGate driver), CCTV, wireless, databases/AD,
+peripherals/voice, operations layer, MIB engine + reporting.
