@@ -189,6 +189,20 @@ type PortVlan struct {
 	LastSeenAt       time.Time `json:"last_seen_at"`
 }
 
+type ServerStorage struct {
+	ID               uuid.UUID `json:"id"`
+	DeviceID         uuid.UUID `json:"device_id"`
+	HrIndex          int32     `json:"hr_index"`
+	Descr            *string   `json:"descr"`
+	StorageType      string    `json:"storage_type"`
+	TotalBytes       *int64    `json:"total_bytes"`
+	UsedBytes        *int64    `json:"used_bytes"`
+	CollectionSource string    `json:"collection_source"`
+	LastSeenAt       time.Time `json:"last_seen_at"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
 type Subnet struct {
 	ID         uuid.UUID    `json:"id"`
 	LocationID uuid.UUID    `json:"location_id"`

@@ -45,6 +45,33 @@ func TestBuiltin_UnknownVendorNoMatch(t *testing.T) {
 	}
 }
 
+func TestBuiltin_ServerByNetSnmpOID(t *testing.T) {
+	r := Builtin()
+	d, m := r.Best(driver.Probe{SNMPSysObjectID: ".1.3.6.1.4.1.8072.3.2.10", OpenTCPPorts: []int{161}})
+	if d == nil || d.Name() != "host_snmp" {
+		t.Fatalf("net-snmp OID should classify as host_snmp, got %v", d)
+	}
+	if m.Confidence != 80 {
+		t.Errorf("expected conf=80, got %d", m.Confidence)
+	}
+}
+
+// A Linux-based switch (vendor enterprise OID + "Linux" sysDescr) must
+// classify as a SWITCH — the authoritative enterprise-OID match (90)
+// outranks the server descr-heuristic (55). This is the exact class of bug
+// behind the prior fleet's "linux switches" misclassification.
+func TestBuiltin_LinuxBasedSwitchStaysSwitch(t *testing.T) {
+	r := Builtin()
+	d, _ := r.Best(driver.Probe{
+		SNMPSysObjectID: ".1.3.6.1.4.1.11.2.3.7.11.180", // HP enterprise
+		SNMPSysDescr:    "Linux-based ProCurve switch firmware",
+		OpenTCPPorts:    []int{161},
+	})
+	if d == nil || d.Name() != "aruba_hpe" {
+		t.Fatalf("Linux-based HP switch must classify as aruba_hpe, got %v", d)
+	}
+}
+
 func TestBuiltin_AllRegistered(t *testing.T) {
 	r := Builtin()
 	got := map[string]bool{}

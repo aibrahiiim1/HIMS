@@ -68,4 +68,22 @@ const (
 	CdpCacheColDeviceID   = 6 // cdpCacheDeviceId (remote sysName)
 	CdpCacheColDevicePort = 7 // cdpCacheDevicePort (remote port)
 	CdpCacheColPlatform   = 8 // cdpCachePlatform (remote model)
+
+	// Server enterprise OID prefixes
+	NetSnmpEnterprise   = "1.3.6.1.4.1.8072." // net-snmp (Linux/BSD agents)
+	MicrosoftEnterprise = "1.3.6.1.4.1.311."  // Windows SNMP service
+
+	// --- HOST-RESOURCES-MIB ------------------------------------------------
+	HrSystemUptime    = "1.3.6.1.2.1.25.1.1.0"
+	HrProcessorLoad   = "1.3.6.1.2.1.25.3.3.1.2" // per-CPU load %, walk + average
+	HrStorageEntry    = "1.3.6.1.2.1.25.2.3.1"   // hrStorageTable entry root
+	HrStorageColType  = 2                        // hrStorageType (OID enum)
+	HrStorageColDescr = 3                        // hrStorageDescr
+	HrStorageColUnits = 4                        // hrStorageAllocationUnits
+	HrStorageColSize  = 5                        // hrStorageSize (in units)
+	HrStorageColUsed  = 6                        // hrStorageUsed (in units)
+	// hrStorageType values
+	HrStorageRAM        = "1.3.6.1.2.1.25.2.1.2"
+	HrStorageVirtualMem = "1.3.6.1.2.1.25.2.1.3"
+	HrStorageFixedDisk  = "1.3.6.1.2.1.25.2.1.4"
 )

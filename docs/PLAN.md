@@ -147,6 +147,11 @@ monitoring_samples (TimescaleDB hypertable).
   drivers, LLDP/CDP neighbor merge. No schema/UI change (driver-engine win).
 - **Phase 3 — Compute:** servers (SNMP/WinRM/SSH), then virtualization
   (ESXi/Hyper-V + VM mapping), iLO/iDRAC.
+  - **3a ✅ DONE** — servers via SNMP HOST-RESOURCES (CPU/RAM/disk +
+    interfaces), `host_snmp` driver, port-based role inference, server
+    template UI.
+  - **3b/3c (open)** — virtualization (vSphere/WinRM) + VM→host mapping;
+    iLO/iDRAC via Redfish. Both need new transports.
 - **Phase 4 — Firewall** (FortiGate driver — port the proven Fortinet OID
   work: HA/VPN/sessions/CPU-RAM-disk/license).
 - **Phase 5 — CCTV:** NVR/DVR + cameras (ONVIF/RTSP/vendor API).

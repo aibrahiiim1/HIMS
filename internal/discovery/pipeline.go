@@ -82,8 +82,9 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 	}
 	r.Alive = true
 
-	// Step 2: Light port scan (most-common management ports for switches).
-	r.OpenPorts = scanPorts(ctx, ip, []int{22, 23, 80, 161, 443, 8080})
+	// Step 2: Light port scan. Management ports for switches/servers plus
+	// the service ports the role-inference engine keys on (DNS/DC/DB).
+	r.OpenPorts = scanPorts(ctx, ip, []int{22, 23, 53, 80, 88, 161, 389, 443, 1433, 1521, 3389, 5432, 8080})
 
 	// Step 3: SNMP light probe for sysDescr + sysObjectID (cheap, uses port 161).
 	var community string

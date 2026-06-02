@@ -80,6 +80,8 @@ type Facts struct {
 	VLANs      []VLANSnap
 	MACs       []MACSnap
 	Neighbors  []NeighborSnap
+	// Server inventory (HOST-RESOURCES-MIB).
+	Storage []StorageSnap
 }
 
 // Collector is the optional capability a driver gains once the Phase 1
@@ -121,6 +123,16 @@ type InterfaceSnap struct {
 type VLANSnap struct {
 	VLANID int
 	Name   string
+}
+
+// StorageSnap is one server storage volume (RAM or filesystem) from
+// HOST-RESOURCES-MIB.
+type StorageSnap struct {
+	Index      int32
+	Descr      string
+	Type       string // ram | disk | virtual | other
+	TotalBytes int64
+	UsedBytes  int64
 }
 
 // MACSnap is one FDB row (MAC → port + VLAN).

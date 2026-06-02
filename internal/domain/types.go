@@ -115,6 +115,28 @@ const (
 	CatApplication        DeviceCategory = "application"
 )
 
+// DeviceRole is a role a device fulfils; a device may hold several at once
+// (e.g. a Windows box that is DC + DNS + DHCP). Mirrors the device_roles
+// table's CHECK set.
+type DeviceRole string
+
+const (
+	RoleHyperVHost       DeviceRole = "hyperv_host"
+	RoleESXiHost         DeviceRole = "esxi_host"
+	RoleDomainController DeviceRole = "domain_controller"
+	RoleDNS              DeviceRole = "dns"
+	RoleDHCP             DeviceRole = "dhcp"
+	RoleSQLServer        DeviceRole = "sql_server"
+	RoleOracle           DeviceRole = "oracle"
+	RolePostgreSQL       DeviceRole = "postgresql"
+	RoleFileServer       DeviceRole = "file_server"
+	RoleWebServer        DeviceRole = "web_server"
+	RoleWirelessControl  DeviceRole = "wireless_controller"
+	RoleVoice            DeviceRole = "voice"
+	RoleRouter           DeviceRole = "router"
+	RoleFirewall         DeviceRole = "firewall"
+)
+
 // DeviceStatus is the reachability/health rollup.
 type DeviceStatus string
 

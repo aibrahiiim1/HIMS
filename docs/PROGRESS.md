@@ -146,8 +146,45 @@ through the same generic switch template (ADR-0001 payoff).
 
 ---
 
+## Phase 3a — Servers via SNMP (HOST-RESOURCES-MIB) ✅ (closed 2026-06-03)
+
+**Goal:** bring servers into the CMDB on the proven SNMP transport —
+CPU/RAM/disk + interfaces + multi-role inference — without yet needing the
+heavier WinRM/SSH/vSphere transports.
+
+### Sub-commits
+- ✅ SC1 — migration 000008 `server_storage` (per-volume RAM/disk) + queries.
+- ✅ SC2 — HOST-RESOURCES OIDs + `swsnmp.CollectHostResources` (uptime,
+  avg CPU load, hrStorageTable → RAM/disk) + **`host_snmp` driver**:
+  fingerprints net-snmp(8072)/Microsoft(311) OIDs at conf 80, OS-descr at
+  conf 55 (deliberately below a switch's authoritative 90 — a Linux-based
+  switch stays a switch). `discovery.InferRoles` (open-ports → candidate
+  roles: DNS/DHCP/DC[88+389]/SQL/Oracle/PostgreSQL); port-scan widened;
+  `domain.DeviceRole` enum added.
+- ✅ SC3 — API `/devices/{id}/storage|facts|roles`; **server template UI**
+  (`ServerDetail`: resource facts, storage volumes w/ used%, roles,
+  interfaces). Inventory split Switches / Servers; DeviceList parameterized
+  by category.
+- ✅ SC4 — build/vet/test green; docs; closed.
+
+### Verification (2026-06-03)
+`go build/vet/test ./...` green. New tests: host-resources collect (CPU
+avg + RAM/disk byte math), role inference (DC needs 88+389; DB ports; no
+false positives), server-by-net-snmp-OID, **Linux-based-switch-stays-
+switch** disambiguation. Frontend tsc + build green.
+
+### Carry-forward → Phase 3b / 3c (new transports)
+- **3b — Virtualization**: ESXi (vSphere SOAP/REST), Hyper-V (WinRM/WMI) +
+  VM→host mapping. Needs a vSphere client + WinRM transport.
+- **3c — iLO/iDRAC** hardware health via Redfish (HTTP/JSON) or SNMP.
+- Deep server inventory (services / installed software / exact OS build)
+  via WinRM/SSH — beyond the SNMP baseline.
+- Role inference is port-based (candidate); LDAP-bind / SQL-handshake
+  confirmation is a later enhancement.
+
+---
+
 ## Later phases ⬜
-See `PLAN.md` §10. Next: **Phase 3 — Compute** (servers via SNMP/WinRM/SSH,
-then virtualization ESXi/Hyper-V + VM mapping, iLO/iDRAC). Then firewall
-(port the proven FortiGate driver), CCTV, wireless, databases/AD,
+See `PLAN.md` §10. Next: **Phase 3b/3c** (virtualization + iLO/iDRAC), then
+firewall (port the proven FortiGate driver), CCTV, wireless, databases/AD,
 peripherals/voice, operations layer, MIB engine + reporting.

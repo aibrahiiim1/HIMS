@@ -27,6 +27,7 @@ type Querier interface {
 	DeleteStaleMACEntries(ctx context.Context, arg DeleteStaleMACEntriesParams) error
 	DeleteStaleNeighbors(ctx context.Context, arg DeleteStaleNeighborsParams) error
 	DeleteStalePortVlans(ctx context.Context, arg DeleteStalePortVlansParams) error
+	DeleteStaleServerStorage(ctx context.Context, arg DeleteStaleServerStorageParams) error
 	DeleteStaleVlans(ctx context.Context, arg DeleteStaleVlansParams) error
 	// First step of the IP→MAC→port→path search.
 	FindMACByIP(ctx context.Context, ipAddress netip.Addr) ([]FindMACByIPRow, error)
@@ -49,6 +50,7 @@ type Querier interface {
 	ListNeighbors(ctx context.Context, deviceID uuid.UUID) ([]Neighbor, error)
 	ListPortVlans(ctx context.Context, deviceID uuid.UUID) ([]PortVlan, error)
 	ListRootLocations(ctx context.Context) ([]Location, error)
+	ListServerStorage(ctx context.Context, deviceID uuid.UUID) ([]ServerStorage, error)
 	ListTopologyLinks(ctx context.Context, localDeviceID uuid.UUID) ([]TopologyLink, error)
 	ListVlans(ctx context.Context, deviceID uuid.UUID) ([]Vlan, error)
 	// Identity reconciliation key (multi-hotel safe): same IP can recur across
@@ -81,6 +83,7 @@ type Querier interface {
 	// ---- Neighbors (LLDP/CDP) -----------------------------------------------
 	UpsertNeighbor(ctx context.Context, arg UpsertNeighborParams) (Neighbor, error)
 	UpsertPortVlan(ctx context.Context, arg UpsertPortVlanParams) error
+	UpsertServerStorage(ctx context.Context, arg UpsertServerStorageParams) error
 	// ---- Topology links ------------------------------------------------------
 	UpsertTopologyLink(ctx context.Context, arg UpsertTopologyLinkParams) error
 	// ---- VLANs ----------------------------------------------------------------

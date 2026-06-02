@@ -108,6 +108,31 @@ export interface PathStep {
   port_role?: string | null
 }
 
+export interface ServerStorage {
+  id: string
+  device_id: string
+  hr_index: number
+  descr?: string | null
+  storage_type: string
+  total_bytes?: number | null
+  used_bytes?: number | null
+  last_seen_at: string
+}
+
+export interface DeviceFact {
+  device_id: string
+  key: string
+  value?: string | null
+  driver: string
+  observed_at: string
+}
+
+export interface DeviceRole {
+  device_id: string
+  role: string
+  source: string
+}
+
 export interface Location {
   id: string
   parent_id?: string | null

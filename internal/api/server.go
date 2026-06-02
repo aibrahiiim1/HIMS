@@ -58,6 +58,9 @@ func (s *Server) routes() {
 		r.Get("/devices/{id}/vlans", s.deviceVLANs)
 		r.Get("/devices/{id}/neighbors", s.deviceNeighbors)
 		r.Get("/devices/{id}/topology", s.deviceTopology)
+		r.Get("/devices/{id}/storage", s.deviceStorage)
+		r.Get("/devices/{id}/facts", s.deviceFacts)
+		r.Get("/devices/{id}/roles", s.deviceRoles)
 
 		// --- Topology & search ----------------------------------------
 		// IP/MAC/name → switch+port+path (the headline Phase 1 feature).
@@ -136,6 +139,45 @@ func (s *Server) deviceTopology(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, links)
+}
+
+func (s *Server) deviceStorage(w http.ResponseWriter, r *http.Request) {
+	ctx, id, ok := pathDevice(w, r)
+	if !ok {
+		return
+	}
+	rows, err := s.queries.ListServerStorage(ctx, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (s *Server) deviceFacts(w http.ResponseWriter, r *http.Request) {
+	ctx, id, ok := pathDevice(w, r)
+	if !ok {
+		return
+	}
+	rows, err := s.queries.ListDeviceFacts(ctx, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (s *Server) deviceRoles(w http.ResponseWriter, r *http.Request) {
+	ctx, id, ok := pathDevice(w, r)
+	if !ok {
+		return
+	}
+	rows, err := s.queries.ListDeviceRoles(ctx, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
 }
 
 // ---- Topology & search handlers ----------------------------------------------
