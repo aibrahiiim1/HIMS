@@ -6,6 +6,7 @@ package db
 
 import (
 	"context"
+	"net/netip"
 
 	"github.com/google/uuid"
 )
@@ -17,17 +18,39 @@ type Querier interface {
 	CreateCredential(ctx context.Context, arg CreateCredentialParams) (Credential, error)
 	CreateCredentialGroup(ctx context.Context, arg CreateCredentialGroupParams) (CredentialGroup, error)
 	CreateDevice(ctx context.Context, arg CreateDeviceParams) (Device, error)
+	CreateDiscoveryJob(ctx context.Context, arg CreateDiscoveryJobParams) (DiscoveryJob, error)
+	CreateDiscoveryResult(ctx context.Context, arg CreateDiscoveryResultParams) (DiscoveryResult, error)
 	CreateLocation(ctx context.Context, arg CreateLocationParams) (Location, error)
 	DeleteLocation(ctx context.Context, id uuid.UUID) error
+	DeleteStaleARP(ctx context.Context, arg DeleteStaleARPParams) error
+	DeleteStaleInterfaces(ctx context.Context, arg DeleteStaleInterfacesParams) error
+	DeleteStaleMACEntries(ctx context.Context, arg DeleteStaleMACEntriesParams) error
+	DeleteStaleNeighbors(ctx context.Context, arg DeleteStaleNeighborsParams) error
+	DeleteStalePortVlans(ctx context.Context, arg DeleteStalePortVlansParams) error
+	DeleteStaleVlans(ctx context.Context, arg DeleteStaleVlansParams) error
+	// First step of the IP→MAC→port→path search.
+	FindMACByIP(ctx context.Context, ipAddress netip.Addr) ([]FindMACByIPRow, error)
+	// Topology search: which switch + port + VLAN carries a MAC?
+	FindMACOnSwitches(ctx context.Context, mac string) ([]FindMACOnSwitchesRow, error)
 	GetCredential(ctx context.Context, id uuid.UUID) (Credential, error)
 	GetDevice(ctx context.Context, id uuid.UUID) (Device, error)
+	GetDiscoveryJob(ctx context.Context, id uuid.UUID) (DiscoveryJob, error)
 	GetLocation(ctx context.Context, id uuid.UUID) (Location, error)
+	// Used by the topology graph to build the full picture.
+	ListAllTopologyLinks(ctx context.Context) ([]ListAllTopologyLinksRow, error)
 	ListChildLocations(ctx context.Context, parentID *uuid.UUID) ([]Location, error)
 	ListCredentials(ctx context.Context) ([]Credential, error)
 	ListDeviceFacts(ctx context.Context, deviceID uuid.UUID) ([]DeviceFact, error)
 	ListDeviceRoles(ctx context.Context, deviceID uuid.UUID) ([]DeviceRole, error)
 	ListDevicesByCategory(ctx context.Context, category string) ([]Device, error)
+	ListDiscoveryJobs(ctx context.Context) ([]DiscoveryJob, error)
+	ListDiscoveryResults(ctx context.Context, jobID uuid.UUID) ([]DiscoveryResult, error)
+	ListInterfaces(ctx context.Context, deviceID uuid.UUID) ([]Interface, error)
+	ListNeighbors(ctx context.Context, deviceID uuid.UUID) ([]Neighbor, error)
+	ListPortVlans(ctx context.Context, deviceID uuid.UUID) ([]PortVlan, error)
 	ListRootLocations(ctx context.Context) ([]Location, error)
+	ListTopologyLinks(ctx context.Context, localDeviceID uuid.UUID) ([]TopologyLink, error)
+	ListVlans(ctx context.Context, deviceID uuid.UUID) ([]Vlan, error)
 	// Identity reconciliation key (multi-hotel safe): same IP can recur across
 	// hotels, so a live device is unique by (primary_ip, location).
 	LiveDeviceByIPAndLocation(ctx context.Context, arg LiveDeviceByIPAndLocationParams) (Device, error)
@@ -37,10 +60,31 @@ type Querier interface {
 	// pure resolver (internal/credresolver) can order them.
 	//   specificity 2 = subnet binding, 1 = location binding.
 	ResolveCandidatesForIP(ctx context.Context, arg ResolveCandidatesForIPParams) ([]ResolveCandidatesForIPRow, error)
+	SearchByHostname(ctx context.Context, hostname *string) ([]SearchByHostnameRow, error)
+	// Primary search entry point for the IP → MAC → port path resolution.
+	SearchByIP(ctx context.Context, primaryIp *netip.Addr) (SearchByIPRow, error)
+	// Finds the switch(es) that have this MAC in their FDB, then joins the
+	// interface for port + VLAN detail.
+	SearchByMAC(ctx context.Context, mac string) ([]SearchByMACRow, error)
 	// Bind-on-success: record the credential that last authenticated.
 	SetDeviceCredential(ctx context.Context, arg SetDeviceCredentialParams) error
 	TouchDeviceDiscovery(ctx context.Context, arg TouchDeviceDiscoveryParams) error
+	UpdateDiscoveryJobStatus(ctx context.Context, arg UpdateDiscoveryJobStatusParams) error
+	UpdateDiscoveryResult(ctx context.Context, arg UpdateDiscoveryResultParams) error
+	// ---- ARP entries ---------------------------------------------------------
+	UpsertARP(ctx context.Context, arg UpsertARPParams) error
 	UpsertDeviceFact(ctx context.Context, arg UpsertDeviceFactParams) error
+	// ---- Interfaces -----------------------------------------------------------
+	UpsertInterface(ctx context.Context, arg UpsertInterfaceParams) (Interface, error)
+	// ---- MAC address table ---------------------------------------------------
+	UpsertMAC(ctx context.Context, arg UpsertMACParams) error
+	// ---- Neighbors (LLDP/CDP) -----------------------------------------------
+	UpsertNeighbor(ctx context.Context, arg UpsertNeighborParams) (Neighbor, error)
+	UpsertPortVlan(ctx context.Context, arg UpsertPortVlanParams) error
+	// ---- Topology links ------------------------------------------------------
+	UpsertTopologyLink(ctx context.Context, arg UpsertTopologyLinkParams) error
+	// ---- VLANs ----------------------------------------------------------------
+	UpsertVlan(ctx context.Context, arg UpsertVlanParams) (Vlan, error)
 }
 
 var _ Querier = (*Queries)(nil)

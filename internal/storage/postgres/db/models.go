@@ -11,6 +11,16 @@ import (
 	"github.com/google/uuid"
 )
 
+type ArpEntry struct {
+	ID               uuid.UUID  `json:"id"`
+	DeviceID         uuid.UUID  `json:"device_id"`
+	IpAddress        netip.Addr `json:"ip_address"`
+	Mac              string     `json:"mac"`
+	IfIndex          *int32     `json:"if_index"`
+	CollectionSource string     `json:"collection_source"`
+	LastSeenAt       time.Time  `json:"last_seen_at"`
+}
+
 type Credential struct {
 	ID            uuid.UUID `json:"id"`
 	Name          string    `json:"name"`
@@ -84,6 +94,53 @@ type DeviceRole struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+type DiscoveryJob struct {
+	ID         uuid.UUID     `json:"id"`
+	LocationID *uuid.UUID    `json:"location_id"`
+	SubnetID   *uuid.UUID    `json:"subnet_id"`
+	ScopeCidr  *netip.Prefix `json:"scope_cidr"`
+	Status     string        `json:"status"`
+	StartedAt  *time.Time    `json:"started_at"`
+	FinishedAt *time.Time    `json:"finished_at"`
+	HostCount  int32         `json:"host_count"`
+	FoundCount int32         `json:"found_count"`
+	Error      *string       `json:"error"`
+	Metadata   []byte        `json:"metadata"`
+	CreatedAt  time.Time     `json:"created_at"`
+}
+
+type DiscoveryResult struct {
+	ID        uuid.UUID  `json:"id"`
+	JobID     uuid.UUID  `json:"job_id"`
+	Ip        netip.Addr `json:"ip"`
+	Outcome   string     `json:"outcome"`
+	DeviceID  *uuid.UUID `json:"device_id"`
+	Driver    *string    `json:"driver"`
+	Category  *string    `json:"category"`
+	ProbeData []byte     `json:"probe_data"`
+	Error     *string    `json:"error"`
+	ProbedAt  time.Time  `json:"probed_at"`
+}
+
+type Interface struct {
+	ID               uuid.UUID `json:"id"`
+	DeviceID         uuid.UUID `json:"device_id"`
+	IfIndex          int32     `json:"if_index"`
+	IfName           *string   `json:"if_name"`
+	IfDescr          *string   `json:"if_descr"`
+	IfAlias          *string   `json:"if_alias"`
+	IfType           *int32    `json:"if_type"`
+	Mac              *string   `json:"mac"`
+	SpeedMbps        *int32    `json:"speed_mbps"`
+	AdminStatus      *int16    `json:"admin_status"`
+	OperStatus       *int16    `json:"oper_status"`
+	PortRole         string    `json:"port_role"`
+	CollectionSource string    `json:"collection_source"`
+	LastSeenAt       time.Time `json:"last_seen_at"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
 type Location struct {
 	ID        uuid.UUID  `json:"id"`
 	ParentID  *uuid.UUID `json:"parent_id"`
@@ -95,6 +152,43 @@ type Location struct {
 	UpdatedAt time.Time  `json:"updated_at"`
 }
 
+type MacAddress struct {
+	ID               uuid.UUID `json:"id"`
+	DeviceID         uuid.UUID `json:"device_id"`
+	Mac              string    `json:"mac"`
+	VlanID           int32     `json:"vlan_id"`
+	IfIndex          *int32    `json:"if_index"`
+	FdbStatus        int16     `json:"fdb_status"`
+	CollectionSource string    `json:"collection_source"`
+	LastSeenAt       time.Time `json:"last_seen_at"`
+}
+
+type Neighbor struct {
+	ID               uuid.UUID   `json:"id"`
+	DeviceID         uuid.UUID   `json:"device_id"`
+	LocalIfIndex     *int32      `json:"local_if_index"`
+	LocalIfName      *string     `json:"local_if_name"`
+	RemChassisID     *string     `json:"rem_chassis_id"`
+	RemSysName       *string     `json:"rem_sys_name"`
+	RemSysDesc       *string     `json:"rem_sys_desc"`
+	RemPortID        *string     `json:"rem_port_id"`
+	RemPortDesc      *string     `json:"rem_port_desc"`
+	RemMgmtIp        *netip.Addr `json:"rem_mgmt_ip"`
+	Protocol         string      `json:"protocol"`
+	CollectionSource string      `json:"collection_source"`
+	LastSeenAt       time.Time   `json:"last_seen_at"`
+}
+
+type PortVlan struct {
+	ID               uuid.UUID `json:"id"`
+	DeviceID         uuid.UUID `json:"device_id"`
+	IfIndex          int32     `json:"if_index"`
+	VlanID           int32     `json:"vlan_id"`
+	Tagged           bool      `json:"tagged"`
+	CollectionSource string    `json:"collection_source"`
+	LastSeenAt       time.Time `json:"last_seen_at"`
+}
+
 type Subnet struct {
 	ID         uuid.UUID    `json:"id"`
 	LocationID uuid.UUID    `json:"location_id"`
@@ -104,4 +198,25 @@ type Subnet struct {
 	Metadata   []byte       `json:"metadata"`
 	CreatedAt  time.Time    `json:"created_at"`
 	UpdatedAt  time.Time    `json:"updated_at"`
+}
+
+type TopologyLink struct {
+	ID             uuid.UUID   `json:"id"`
+	LocalDeviceID  uuid.UUID   `json:"local_device_id"`
+	LocalIfIndex   *int32      `json:"local_if_index"`
+	LocalIfName    *string     `json:"local_if_name"`
+	RemoteDeviceID *uuid.UUID  `json:"remote_device_id"`
+	RemoteIp       *netip.Addr `json:"remote_ip"`
+	RemoteSysName  *string     `json:"remote_sys_name"`
+	LinkSource     string      `json:"link_source"`
+	LastSeenAt     time.Time   `json:"last_seen_at"`
+}
+
+type Vlan struct {
+	ID               uuid.UUID `json:"id"`
+	DeviceID         uuid.UUID `json:"device_id"`
+	VlanID           int32     `json:"vlan_id"`
+	Name             *string   `json:"name"`
+	CollectionSource string    `json:"collection_source"`
+	LastSeenAt       time.Time `json:"last_seen_at"`
 }

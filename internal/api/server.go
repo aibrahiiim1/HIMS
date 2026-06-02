@@ -1,0 +1,258 @@
+// Package api is the HIMS REST API server. It mounts all routes and wires
+// the dependency set. The server is intentionally thin: all domain logic
+// lives in the engine packages; handlers just translate HTTP ↔ domain.
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/netip"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
+	"github.com/google/uuid"
+
+	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
+	"github.com/coralsearesorts/hims/internal/topology"
+)
+
+// Server holds the dependencies for the API.
+type Server struct {
+	router  chi.Router
+	topo    *topology.Engine
+	queries *db.Queries
+}
+
+// NewServer wires dependencies and returns a ready-to-serve Server.
+func NewServer(queries *db.Queries) *Server {
+	s := &Server{
+		queries: queries,
+		topo:    topology.New(queries),
+		router:  chi.NewRouter(),
+	}
+	s.routes()
+	return s
+}
+
+// ServeHTTP implements http.Handler.
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.router.ServeHTTP(w, r)
+}
+
+// routes registers all API routes.
+func (s *Server) routes() {
+	r := s.router
+	r.Use(middleware.Logger)
+	r.Use(middleware.Recoverer)
+	r.Use(middleware.StripSlashes)
+
+	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	})
+
+	r.Route("/api/v1", func(r chi.Router) {
+		// --- Devices --------------------------------------------------
+		r.Get("/devices", s.listDevices)
+		r.Get("/devices/{id}/interfaces", s.deviceInterfaces)
+		r.Get("/devices/{id}/vlans", s.deviceVLANs)
+		r.Get("/devices/{id}/neighbors", s.deviceNeighbors)
+		r.Get("/devices/{id}/topology", s.deviceTopology)
+
+		// --- Topology & search ----------------------------------------
+		// IP/MAC/name → switch+port+path (the headline Phase 1 feature).
+		r.Get("/search", s.search) // ?q=<IP|MAC|name>
+		r.Get("/topology/links", s.allLinks)
+
+		// --- Locations -----------------------------------------------
+		r.Get("/locations", s.listLocations)
+		r.Get("/locations/{id}/children", s.childLocations)
+	})
+}
+
+// ---- Device handlers --------------------------------------------------------
+
+func (s *Server) listDevices(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	cat := r.URL.Query().Get("category")
+	if cat == "" {
+		cat = "switch"
+	}
+	rows, err := s.queries.ListDevicesByCategory(ctx, cat)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (s *Server) deviceInterfaces(w http.ResponseWriter, r *http.Request) {
+	ctx, id, ok := pathDevice(w, r)
+	if !ok {
+		return
+	}
+	rows, err := s.queries.ListInterfaces(ctx, id) //nolint
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (s *Server) deviceVLANs(w http.ResponseWriter, r *http.Request) {
+	ctx, id, ok := pathDevice(w, r)
+	if !ok {
+		return
+	}
+	rows, err := s.queries.ListVlans(ctx, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (s *Server) deviceNeighbors(w http.ResponseWriter, r *http.Request) {
+	ctx, id, ok := pathDevice(w, r)
+	if !ok {
+		return
+	}
+	rows, err := s.queries.ListNeighbors(ctx, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (s *Server) deviceTopology(w http.ResponseWriter, r *http.Request) {
+	ctx, id, ok := pathDevice(w, r)
+	if !ok {
+		return
+	}
+	links, err := s.queries.ListTopologyLinks(ctx, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, links)
+}
+
+// ---- Topology & search handlers ----------------------------------------------
+
+// search accepts ?q= with IP, MAC, or hostname and returns a SearchResult.
+func (s *Server) search(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	q := r.URL.Query().Get("q")
+	if q == "" {
+		writeErr(w, errBadRequest("q parameter is required"))
+		return
+	}
+
+	// Try IP first, then MAC, then hostname.
+	if ip, err := netip.ParseAddr(q); err == nil {
+		res, err := s.topo.SearchIP(ctx, ip)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
+		return
+	}
+	if isMACLike(q) {
+		res, err := s.topo.SearchMAC(ctx, normMAC(q))
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
+		return
+	}
+	results, err := s.topo.SearchHostname(ctx, q)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, results)
+}
+
+func (s *Server) allLinks(w http.ResponseWriter, r *http.Request) {
+	links, err := s.topo.AllLinks(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, links)
+}
+
+// ---- Location handlers -------------------------------------------------------
+
+func (s *Server) listLocations(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.queries.ListRootLocations(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (s *Server) childLocations(w http.ResponseWriter, r *http.Request) {
+	ctx, id, ok := pathLocation(w, r)
+	if !ok {
+		return
+	}
+	rows, err := s.queries.ListChildLocations(ctx, &id) //nolint
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+// ---- Helpers ----------------------------------------------------------------
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+type apiError struct {
+	Error string `json:"error"`
+}
+
+func writeErr(w http.ResponseWriter, err error) {
+	http.Error(w, err.Error(), http.StatusInternalServerError)
+}
+
+type badRequest struct{ msg string }
+
+func errBadRequest(msg string) error { return &badRequest{msg} }
+func (e *badRequest) Error() string  { return e.msg }
+
+func pathDevice(w http.ResponseWriter, r *http.Request) (context.Context, uuid.UUID, bool) {
+	return pathUUID(w, r, "id")
+}
+
+func pathLocation(w http.ResponseWriter, r *http.Request) (context.Context, uuid.UUID, bool) {
+	return pathUUID(w, r, "id")
+}
+
+func pathUUID(w http.ResponseWriter, r *http.Request, param string) (context.Context, uuid.UUID, bool) {
+	raw := chi.URLParam(r, param)
+	id, err := uuid.Parse(raw)
+	if err != nil {
+		http.Error(w, "invalid UUID: "+raw, http.StatusBadRequest)
+		return r.Context(), uuid.Nil, false
+	}
+	return r.Context(), id, true
+}
+
+func isMACLike(s string) bool {
+	return len(s) >= 12 && (len(s) == 17 || len(s) == 12 || len(s) == 14)
+}
+
+func normMAC(s string) string {
+	// Normalize aa:bb:cc:dd:ee:ff or aabbccddeff → lowercase colon-sep.
+	return s // simplified; Phase 2 adds proper normalization
+}

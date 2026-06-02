@@ -75,6 +75,11 @@ type Facts struct {
 	KV map[string]string
 	// Raw is the unparsed snapshot kept for audit/debug.
 	Raw map[string]any
+	// Typed collections for switch inventory.
+	Interfaces []InterfaceSnap
+	VLANs      []VLANSnap
+	MACs       []MACSnap
+	Neighbors  []NeighborSnap
 }
 
 // Collector is the optional capability a driver gains once the Phase 1
@@ -86,9 +91,59 @@ type Collector interface {
 	Collect(sess Session, p Probe) (Facts, error)
 }
 
-// Session is the transport handle a Collector uses. Defined as a marker in
-// Phase 0; the SNMP/SSH transport implements it in Phase 1.
-type Session interface{ isSession() }
+// Session is the transport handle a Collector uses. Phase 1 SNMP transport
+// implements this. Implementations embed SessionBase to satisfy the interface.
+type Session interface{ IsSession() }
+
+// SessionBase is an embeddable marker satisfying Session. Embed it in
+// concrete session types (e.g. aruba.Session) so they satisfy this interface
+// without needing to import or implement anything beyond embedding.
+type SessionBase struct{}
+
+// IsSession implements Session.
+func (*SessionBase) IsSession() {}
+
+// InterfaceSnap is a single interface's inventory from one poll.
+type InterfaceSnap struct {
+	IfIndex     int32
+	IfName      string
+	IfDescr     string
+	IfAlias     string
+	IfType      int
+	MAC         string
+	SpeedMbps   int
+	AdminStatus int16
+	OperStatus  int16
+	PortRole    string
+}
+
+// VLANSnap is one VLAN from the Q-BRIDGE catalog.
+type VLANSnap struct {
+	VLANID int
+	Name   string
+}
+
+// MACSnap is one FDB row (MAC → port + VLAN).
+type MACSnap struct {
+	MAC     string
+	VLANID  int
+	IfIndex int
+	Status  int
+}
+
+// NeighborSnap is one LLDP/CDP neighbor.
+type NeighborSnap struct {
+	LocalIfIndex int
+	LocalIfName  string
+	RemChassisID string
+	RemPortID    string
+	RemPortDesc  string
+	RemSysName   string
+	RemSysDesc   string
+	// RemMgmtIP is the neighbor's management IP, nil when not advertised.
+	RemMgmtIP *netip.Addr
+	Protocol  string
+}
 
 // Registry holds the registered drivers and resolves the best match for a
 // probe. Safe to build once at startup; reads are lock-free thereafter.

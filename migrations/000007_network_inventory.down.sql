@@ -1,0 +1,7 @@
+DROP TABLE IF EXISTS topology_links;
+DROP TABLE IF EXISTS neighbors;
+DROP TABLE IF EXISTS arp_entries;
+DROP TABLE IF EXISTS mac_addresses;
+DROP TABLE IF EXISTS port_vlans;
+DROP TABLE IF EXISTS vlans;
+DROP TABLE IF EXISTS interfaces;

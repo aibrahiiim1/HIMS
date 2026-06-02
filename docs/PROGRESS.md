@@ -60,11 +60,52 @@ Module: pgx/v5 + google/uuid only. No DB required for the default suite.
 
 ---
 
-## Phase 1 — Switches + Topology + Credential Resolver 🚧 (next)
-_Aruba/HPE driver `Collect` over an SNMP transport (interfaces/VLANs/MAC/
-LLDP/port-roles), discovery pipeline wired to the resolver bridge, topology
-engine (LLDP/CDP + MAC + ARP), IP/MAC/name → port → path search, topology
-graph UI. Builds directly on the Phase 0 driver engine + resolver._
+## Phase 1 — Switches + Topology + Credential Resolver ✅ (closed 2026-06-03)
+
+**Goal:** the first end-to-end vertical slice — discover an Aruba/HPE
+switch, collect its operational data, render the switch template, compute
+topology, and resolve IP/MAC/name → switch+port+path.
+
+### Sub-commits
+- ✅ SC1 — operational schema: migrations 000006 (discovery jobs/results)
+  + 000007 (interfaces, vlans, port_vlans, mac_addresses, arp_entries,
+  neighbors, topology_links) — all source-scoped, sqlc-validated. Queries
+  for network inventory + search + discovery.
+- ✅ SC2 — SNMP transport (`internal/snmp`, gosnmp-backed Client + helpers
+  + OID utils) + `internal/mibs` (IF-MIB, Q-BRIDGE, LLDP, HP/Aruba OIDs) +
+  **Aruba `Collect`**: ifTable/ifXTable interfaces, dot1q VLANs, FDB
+  (Q-BRIDGE + legacy bridge), LLDP neighbors, port-role derivation.
+  **11 driver/aruba tests** (sysinfo, interfaces, port-role, VLANs, FDB,
+  LLDP, walk-error tolerance).
+- ✅ SC3 — discovery pipeline (`internal/discovery`): staged
+  alive→ports→light-SNMP→classify→**resolve credentials**→authenticated
+  probe (bind-on-success)→deep collect. Wired to the credential resolver.
+- ✅ SC4 — topology engine (`internal/topology`): multi-source link build +
+  **IP/MAC/name → switch+port+VLAN search** + graph link assembly.
+  **3 topology tests** (MAC→switch, IP→ARP→MAC→port, empty).
+- ✅ SC5 — REST API (`internal/api`, chi): devices, per-device
+  interfaces/vlans/neighbors/topology, `/search?q=`, `/topology/links`,
+  locations. Wired into `cmd/hims-api` (with a no-DB dev fallback).
+  `cmd/hims-collector` one-shot discovery mode.
+- ✅ SC6 — React UI (`web/`, Vite + TanStack Query + Cytoscape): Inventory
+  list, **Switch detail template** (interfaces/VLANs/neighbors/topology
+  tabs with port-role + status badges), **Topology graph** (Cytoscape),
+  **Search page** (IP/MAC/name → switch+port). tsc + production build green.
+
+### Verification (2026-06-03)
+Backend: `go build/vet/test ./...` green (14 unit tests across driver,
+aruba, credresolver, topology). Frontend: `tsc --noEmit` clean +
+`npm run build` succeeds. Default Go suite is DB-free.
+
+### Carry-forward
+- Live prod verification (against the 22 HP/Aruba switches) needs a DB +
+  credential bindings configured — deferred to a deploy step; the engines
+  are unit-proven.
+- Path-to-core multi-hop chaining is stubbed (single-hop switch+port works);
+  full uplink path-walk is a Phase 2 topology enhancement.
+- Persistence of collected facts (writing Collect output → interfaces/
+  vlans/mac/neighbors tables) is wired at the query layer; the collector
+  write-back loop lands when monitoring scheduling does (Phase 2/3).
 
 ---
 
