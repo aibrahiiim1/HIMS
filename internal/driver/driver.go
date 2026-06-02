@@ -82,6 +82,45 @@ type Facts struct {
 	Neighbors  []NeighborSnap
 	// Server inventory (HOST-RESOURCES-MIB).
 	Storage []StorageSnap
+	// Firewall current-state (FortiGate).
+	FirewallStatus *FirewallStatusSnap
+	VpnTunnels     []VpnTunnelSnap
+	HAMembers      []HAMemberSnap
+	Licenses       []LicenseSnap
+}
+
+// FirewallStatusSnap is the one-row-per-firewall HA + session summary.
+type FirewallStatusSnap struct {
+	HAMode        string // standalone | active-active | active-passive | unknown
+	HAGroupName   string
+	HAMemberCount int32
+	SessionCount  *int64
+}
+
+// VpnTunnelSnap is one IPsec phase-2 tunnel.
+type VpnTunnelSnap struct {
+	TunnelName string
+	P1Name     string
+	RemoteGW   *netip.Addr
+	Status     string // up | down
+	InOctets   *int64
+	OutOctets  *int64
+}
+
+// HAMemberSnap is one HA cluster member (fgHaStatsTable row).
+type HAMemberSnap struct {
+	Serial       string
+	Hostname     string
+	CPUPct       *int32
+	MemPct       *int32
+	SessionCount *int64
+	SyncStatus   string // synchronized | unsynchronized | unknown
+}
+
+// LicenseSnap is one FortiGuard/support contract.
+type LicenseSnap struct {
+	Contract string
+	Expiry   string
 }
 
 // Collector is the optional capability a driver gains once the Phase 1

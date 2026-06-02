@@ -184,7 +184,46 @@ switch** disambiguation. Frontend tsc + build green.
 
 ---
 
+## Phase 4 — FortiGate firewall driver ✅ (closed 2026-06-03)
+
+**Goal:** port the FortiGate work onto the clean architecture, carrying
+every OID lesson validated against the real exported MIB during NIMS — on
+the proven SNMP transport (no new transport infra).
+
+### Sub-commits
+- ✅ SC1 — migration 000009: firewall_status (1/device), firewall_vpn_tunnels,
+  firewall_ha_members, firewall_licenses (all source-scoped) + queries.
+- ✅ SC2 — `internal/mibs/fortinet.go` (validated OIDs + lessons in comments)
+  + **`fortigate` driver**: fingerprint PEN 12356; Collect firmware (regex),
+  CPU/mem %, **disk in MEGABYTES → bytes + derived pct** (not raw-as-pct),
+  sessions; HA mode + group (**fgHaInfo 7**, not 3) + **member-count-from-
+  rows**; VPN tunnels via **composite {tunnel, phase2} index** with
+  **Counter64** octets; license contracts; interfaces via shared collector.
+  Registered.
+- ✅ SC3 — API `/devices/{id}/firewall-status|vpn-tunnels|ha-members|licenses`
+  + **firewall template UI** (`FirewallDetail`: HA summary + resource facts,
+  VPN tunnels up/down, cluster members with sync badges, license contracts).
+  Firewalls nav + route.
+- ✅ SC4 — build/vet/test green; docs; closed.
+
+### Verification (2026-06-03)
+`go build/vet/test ./...` green. New tests (7): fingerprint by PEN + no-match
+for Cisco; **disk-is-MB-not-percent** (54024732672 bytes, 10%); **VPN
+composite-index + Counter64 octets** (2 tunnels, 67.7 GB in); **HA-count-
+from-rows** (serial-less row counts 1, no detail); HA member with serial +
+sync; licenses. Cross-vendor disambiguation now includes fortigate.
+Frontend tsc + build green.
+
+### Every NIMS firewall bug pre-fixed by design
+The fortigate driver was written with the four bugs we hit + fixed in NIMS
+already corrected: disk-MB units, VPN composite index discarding all rows,
+Counter64 octets parsing as nil, and fgHaGroupName at the wrong OID. Tests
+lock each one.
+
+---
+
 ## Later phases ⬜
-See `PLAN.md` §10. Next: **Phase 3b/3c** (virtualization + iLO/iDRAC), then
-firewall (port the proven FortiGate driver), CCTV, wireless, databases/AD,
-peripherals/voice, operations layer, MIB engine + reporting.
+See `PLAN.md` §10. Remaining: **3b/3c** (virtualization + iLO/iDRAC — new
+transports), CCTV, wireless, databases/AD, peripherals/voice, operations
+layer (work orders → spare parts → purchases → expenses → licenses), MIB
+upload engine + reporting/dashboards.

@@ -8,18 +8,21 @@ import (
 	"github.com/coralsearesorts/hims/internal/driver"
 	"github.com/coralsearesorts/hims/internal/driver/aruba"
 	"github.com/coralsearesorts/hims/internal/driver/cisco"
+	"github.com/coralsearesorts/hims/internal/driver/fortigate"
 	"github.com/coralsearesorts/hims/internal/driver/hostsnmp"
 	"github.com/coralsearesorts/hims/internal/driver/huawei"
 )
 
 // Builtin returns a Registry populated with the drivers compiled into this
 // build. Phase 1: Aruba/HPE. Phase 2: Cisco IOS + Huawei VRP. Phase 3a:
-// host_snmp (servers). Later phases append fortigate, hikvision, vmware, …
+// host_snmp (servers). Phase 4: fortigate (firewall). Later phases append
+// hikvision, vmware, …
 func Builtin() *driver.Registry {
 	r := driver.NewRegistry()
 	r.Register(aruba.New())
 	r.Register(cisco.New())
 	r.Register(huawei.New())
 	r.Register(hostsnmp.New())
+	r.Register(fortigate.New())
 	return r
 }

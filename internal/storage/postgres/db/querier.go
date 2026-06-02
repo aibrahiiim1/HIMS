@@ -23,12 +23,15 @@ type Querier interface {
 	CreateLocation(ctx context.Context, arg CreateLocationParams) (Location, error)
 	DeleteLocation(ctx context.Context, id uuid.UUID) error
 	DeleteStaleARP(ctx context.Context, arg DeleteStaleARPParams) error
+	DeleteStaleHAMembers(ctx context.Context, arg DeleteStaleHAMembersParams) error
 	DeleteStaleInterfaces(ctx context.Context, arg DeleteStaleInterfacesParams) error
+	DeleteStaleLicenses(ctx context.Context, arg DeleteStaleLicensesParams) error
 	DeleteStaleMACEntries(ctx context.Context, arg DeleteStaleMACEntriesParams) error
 	DeleteStaleNeighbors(ctx context.Context, arg DeleteStaleNeighborsParams) error
 	DeleteStalePortVlans(ctx context.Context, arg DeleteStalePortVlansParams) error
 	DeleteStaleServerStorage(ctx context.Context, arg DeleteStaleServerStorageParams) error
 	DeleteStaleVlans(ctx context.Context, arg DeleteStaleVlansParams) error
+	DeleteStaleVpnTunnels(ctx context.Context, arg DeleteStaleVpnTunnelsParams) error
 	// First step of the IP→MAC→port→path search.
 	FindMACByIP(ctx context.Context, ipAddress netip.Addr) ([]FindMACByIPRow, error)
 	// Topology search: which switch + port + VLAN carries a MAC?
@@ -36,6 +39,7 @@ type Querier interface {
 	GetCredential(ctx context.Context, id uuid.UUID) (Credential, error)
 	GetDevice(ctx context.Context, id uuid.UUID) (Device, error)
 	GetDiscoveryJob(ctx context.Context, id uuid.UUID) (DiscoveryJob, error)
+	GetFirewallStatus(ctx context.Context, deviceID uuid.UUID) (FirewallStatus, error)
 	GetLocation(ctx context.Context, id uuid.UUID) (Location, error)
 	// Used by the topology graph to build the full picture.
 	ListAllTopologyLinks(ctx context.Context) ([]ListAllTopologyLinksRow, error)
@@ -46,13 +50,16 @@ type Querier interface {
 	ListDevicesByCategory(ctx context.Context, category string) ([]Device, error)
 	ListDiscoveryJobs(ctx context.Context) ([]DiscoveryJob, error)
 	ListDiscoveryResults(ctx context.Context, jobID uuid.UUID) ([]DiscoveryResult, error)
+	ListHAMembers(ctx context.Context, deviceID uuid.UUID) ([]FirewallHaMember, error)
 	ListInterfaces(ctx context.Context, deviceID uuid.UUID) ([]Interface, error)
+	ListLicenses(ctx context.Context, deviceID uuid.UUID) ([]FirewallLicense, error)
 	ListNeighbors(ctx context.Context, deviceID uuid.UUID) ([]Neighbor, error)
 	ListPortVlans(ctx context.Context, deviceID uuid.UUID) ([]PortVlan, error)
 	ListRootLocations(ctx context.Context) ([]Location, error)
 	ListServerStorage(ctx context.Context, deviceID uuid.UUID) ([]ServerStorage, error)
 	ListTopologyLinks(ctx context.Context, localDeviceID uuid.UUID) ([]TopologyLink, error)
 	ListVlans(ctx context.Context, deviceID uuid.UUID) ([]Vlan, error)
+	ListVpnTunnels(ctx context.Context, deviceID uuid.UUID) ([]FirewallVpnTunnel, error)
 	// Identity reconciliation key (multi-hotel safe): same IP can recur across
 	// hotels, so a live device is unique by (primary_ip, location).
 	LiveDeviceByIPAndLocation(ctx context.Context, arg LiveDeviceByIPAndLocationParams) (Device, error)
@@ -76,8 +83,11 @@ type Querier interface {
 	// ---- ARP entries ---------------------------------------------------------
 	UpsertARP(ctx context.Context, arg UpsertARPParams) error
 	UpsertDeviceFact(ctx context.Context, arg UpsertDeviceFactParams) error
+	UpsertFirewallStatus(ctx context.Context, arg UpsertFirewallStatusParams) error
+	UpsertHAMember(ctx context.Context, arg UpsertHAMemberParams) error
 	// ---- Interfaces -----------------------------------------------------------
 	UpsertInterface(ctx context.Context, arg UpsertInterfaceParams) (Interface, error)
+	UpsertLicense(ctx context.Context, arg UpsertLicenseParams) error
 	// ---- MAC address table ---------------------------------------------------
 	UpsertMAC(ctx context.Context, arg UpsertMACParams) error
 	// ---- Neighbors (LLDP/CDP) -----------------------------------------------
@@ -88,6 +98,7 @@ type Querier interface {
 	UpsertTopologyLink(ctx context.Context, arg UpsertTopologyLinkParams) error
 	// ---- VLANs ----------------------------------------------------------------
 	UpsertVlan(ctx context.Context, arg UpsertVlanParams) (Vlan, error)
+	UpsertVpnTunnel(ctx context.Context, arg UpsertVpnTunnelParams) error
 }
 
 var _ Querier = (*Queries)(nil)

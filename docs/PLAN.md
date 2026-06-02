@@ -153,7 +153,10 @@ monitoring_samples (TimescaleDB hypertable).
   - **3b/3c (open)** — virtualization (vSphere/WinRM) + VM→host mapping;
     iLO/iDRAC via Redfish. Both need new transports.
 - **Phase 4 — Firewall** (FortiGate driver — port the proven Fortinet OID
-  work: HA/VPN/sessions/CPU-RAM-disk/license).
+  work: HA/VPN/sessions/CPU-RAM-disk/license). ✅ DONE — fortigate driver
+  with every validated MIB lesson baked in (disk-MB, VPN composite index,
+  Counter64 octets, fgHaGroupName OID, HA-count-from-rows) + firewall
+  template UI. SNMP transport; no new infra.
 - **Phase 5 — CCTV:** NVR/DVR + cameras (ONVIF/RTSP/vendor API).
 - **Phase 6 — Wireless controllers + APs** (UniFi/Omada/Ruckus REST).
 - **Phase 7 — Databases** (SQL/Oracle/PostgreSQL) + AD/DNS/DHCP.

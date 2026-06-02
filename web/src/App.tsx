@@ -3,6 +3,7 @@ import { BrowserRouter, Route, Routes, Link, useLocation } from 'react-router-do
 import { DeviceList } from './pages/DeviceList'
 import { SwitchDetail } from './pages/SwitchDetail'
 import { ServerDetail } from './pages/ServerDetail'
+import { FirewallDetail } from './pages/FirewallDetail'
 import { TopologyPage } from './pages/TopologyPage'
 import { SearchPage } from './pages/SearchPage'
 import './App.css'
@@ -17,6 +18,7 @@ function Nav() {
       <span className="hims-logo">HIMS</span>
       <Link to="/" style={active('/')}>Switches</Link>
       <Link to="/servers" style={active('/servers')}>Servers</Link>
+      <Link to="/firewalls" style={active('/firewalls')}>Firewalls</Link>
       <Link to="/topology" style={active('/topology')}>Topology</Link>
       <Link to="/search" style={active('/search')}>Search</Link>
     </nav>
@@ -32,8 +34,10 @@ export default function App() {
           <Routes>
             <Route path="/" element={<DeviceList category="switch" title="Switches" detailBase="/devices" />} />
             <Route path="/servers" element={<DeviceList category="server" title="Servers" detailBase="/servers" />} />
+            <Route path="/firewalls" element={<DeviceList category="firewall" title="Firewalls" detailBase="/firewalls" />} />
             <Route path="/devices/:id" element={<SwitchDetail />} />
             <Route path="/servers/:id" element={<ServerDetail />} />
+            <Route path="/firewalls/:id" element={<FirewallDetail />} />
             <Route path="/topology" element={<TopologyPage />} />
             <Route path="/search" element={<SearchPage />} />
           </Routes>

@@ -127,6 +127,45 @@ export interface DeviceFact {
   observed_at: string
 }
 
+export interface FirewallStatus {
+  device_id: string
+  ha_mode: string
+  ha_group_name?: string | null
+  ha_member_count: number
+  session_count?: number | null
+  last_seen_at: string
+}
+
+export interface VpnTunnel {
+  id: string
+  device_id: string
+  tunnel_name: string
+  p1_name?: string | null
+  remote_gw?: string | null
+  status: string
+  in_octets?: number | null
+  out_octets?: number | null
+  last_seen_at: string
+}
+
+export interface HAMember {
+  id: string
+  device_id: string
+  serial: string
+  hostname?: string | null
+  cpu_pct?: number | null
+  mem_pct?: number | null
+  session_count?: number | null
+  sync_status: string
+}
+
+export interface License {
+  id: string
+  device_id: string
+  contract: string
+  expiry?: string | null
+}
+
 export interface DeviceRole {
   device_id: string
   role: string

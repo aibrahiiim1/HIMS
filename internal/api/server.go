@@ -61,6 +61,10 @@ func (s *Server) routes() {
 		r.Get("/devices/{id}/storage", s.deviceStorage)
 		r.Get("/devices/{id}/facts", s.deviceFacts)
 		r.Get("/devices/{id}/roles", s.deviceRoles)
+		r.Get("/devices/{id}/firewall-status", s.firewallStatus)
+		r.Get("/devices/{id}/vpn-tunnels", s.vpnTunnels)
+		r.Get("/devices/{id}/ha-members", s.haMembers)
+		r.Get("/devices/{id}/licenses", s.licenses)
 
 		// --- Topology & search ----------------------------------------
 		// IP/MAC/name → switch+port+path (the headline Phase 1 feature).
@@ -173,6 +177,58 @@ func (s *Server) deviceRoles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := s.queries.ListDeviceRoles(ctx, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (s *Server) firewallStatus(w http.ResponseWriter, r *http.Request) {
+	ctx, id, ok := pathDevice(w, r)
+	if !ok {
+		return
+	}
+	row, err := s.queries.GetFirewallStatus(ctx, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, row)
+}
+
+func (s *Server) vpnTunnels(w http.ResponseWriter, r *http.Request) {
+	ctx, id, ok := pathDevice(w, r)
+	if !ok {
+		return
+	}
+	rows, err := s.queries.ListVpnTunnels(ctx, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (s *Server) haMembers(w http.ResponseWriter, r *http.Request) {
+	ctx, id, ok := pathDevice(w, r)
+	if !ok {
+		return
+	}
+	rows, err := s.queries.ListHAMembers(ctx, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (s *Server) licenses(w http.ResponseWriter, r *http.Request) {
+	ctx, id, ok := pathDevice(w, r)
+	if !ok {
+		return
+	}
+	rows, err := s.queries.ListLicenses(ctx, id)
 	if err != nil {
 		writeErr(w, err)
 		return

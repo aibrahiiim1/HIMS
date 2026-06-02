@@ -20,6 +20,7 @@ func TestBuiltin_ClassifiesByVendor(t *testing.T) {
 		{"arubacx", ".1.3.6.1.4.1.47196.4.1.1", "aruba_hpe"},
 		{"cisco", ".1.3.6.1.4.1.9.1.516", "cisco_ios"},
 		{"huawei", ".1.3.6.1.4.1.2011.2.23.1", "huawei_vrp"},
+		{"fortigate", ".1.3.6.1.4.1.12356.101.1.1", "fortigate"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -78,7 +79,7 @@ func TestBuiltin_AllRegistered(t *testing.T) {
 	for _, n := range r.Names() {
 		got[n] = true
 	}
-	for _, want := range []string{"aruba_hpe", "cisco_ios", "huawei_vrp"} {
+	for _, want := range []string{"aruba_hpe", "cisco_ios", "huawei_vrp", "host_snmp", "fortigate"} {
 		if !got[want] {
 			t.Errorf("driver %s not registered", want)
 		}

@@ -122,6 +122,60 @@ type DiscoveryResult struct {
 	ProbedAt  time.Time  `json:"probed_at"`
 }
 
+type FirewallHaMember struct {
+	ID               uuid.UUID `json:"id"`
+	DeviceID         uuid.UUID `json:"device_id"`
+	Serial           string    `json:"serial"`
+	Hostname         *string   `json:"hostname"`
+	CpuPct           *int32    `json:"cpu_pct"`
+	MemPct           *int32    `json:"mem_pct"`
+	SessionCount     *int64    `json:"session_count"`
+	SyncStatus       string    `json:"sync_status"`
+	CollectionSource string    `json:"collection_source"`
+	LastSeenAt       time.Time `json:"last_seen_at"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+type FirewallLicense struct {
+	ID               uuid.UUID `json:"id"`
+	DeviceID         uuid.UUID `json:"device_id"`
+	Contract         string    `json:"contract"`
+	Expiry           *string   `json:"expiry"`
+	CollectionSource string    `json:"collection_source"`
+	LastSeenAt       time.Time `json:"last_seen_at"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+type FirewallStatus struct {
+	ID               uuid.UUID `json:"id"`
+	DeviceID         uuid.UUID `json:"device_id"`
+	HaMode           string    `json:"ha_mode"`
+	HaGroupName      *string   `json:"ha_group_name"`
+	HaMemberCount    int32     `json:"ha_member_count"`
+	SessionCount     *int64    `json:"session_count"`
+	CollectionSource string    `json:"collection_source"`
+	LastSeenAt       time.Time `json:"last_seen_at"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+type FirewallVpnTunnel struct {
+	ID               uuid.UUID   `json:"id"`
+	DeviceID         uuid.UUID   `json:"device_id"`
+	TunnelName       string      `json:"tunnel_name"`
+	P1Name           *string     `json:"p1_name"`
+	RemoteGw         *netip.Addr `json:"remote_gw"`
+	Status           string      `json:"status"`
+	InOctets         *int64      `json:"in_octets"`
+	OutOctets        *int64      `json:"out_octets"`
+	CollectionSource string      `json:"collection_source"`
+	LastSeenAt       time.Time   `json:"last_seen_at"`
+	CreatedAt        time.Time   `json:"created_at"`
+	UpdatedAt        time.Time   `json:"updated_at"`
+}
+
 type Interface struct {
 	ID               uuid.UUID `json:"id"`
 	DeviceID         uuid.UUID `json:"device_id"`
