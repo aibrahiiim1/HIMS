@@ -26,7 +26,12 @@ async function patch<T>(path: string, body: unknown): Promise<T> {
   return r.json()
 }
 
-export const api = { get, post, patch }
+async function del(path: string): Promise<void> {
+  const r = await fetch(`${BASE}${path}`, { method: 'DELETE' })
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${path}`)
+}
+
+export const api = { get, post, patch, del }
 
 // ---- Domain types -----------------------------------------------------------
 
@@ -231,6 +236,36 @@ export interface SystemLicense {
   license_status: string
   support_status: string
   overall_status: string
+}
+
+export interface MonitoringCheck {
+  id: string
+  device_id: string
+  kind: string
+  target_port?: number | null
+  oid?: string | null
+  interval_seconds: number
+  down_threshold: number
+  enabled: boolean
+  last_run_at?: string | null
+  last_status: string
+  last_latency_ms?: number | null
+  consecutive_failures: number
+}
+
+export interface MonitoringSample {
+  time: string
+  check_id: string
+  device_id: string
+  status: string
+  latency_ms?: number | null
+  value_num?: number | null
+  error?: string | null
+}
+
+export interface MonitoringOverviewRow {
+  status: string
+  count: number
 }
 
 export interface Location {

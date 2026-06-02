@@ -25,6 +25,7 @@ type Querier interface {
 	CreateSystem(ctx context.Context, arg CreateSystemParams) (System, error)
 	CreateWorkOrder(ctx context.Context, arg CreateWorkOrderParams) (WorkOrder, error)
 	DeleteLocation(ctx context.Context, id uuid.UUID) error
+	DeleteMonitoringCheck(ctx context.Context, id uuid.UUID) error
 	DeleteStaleARP(ctx context.Context, arg DeleteStaleARPParams) error
 	DeleteStaleHAMembers(ctx context.Context, arg DeleteStaleHAMembersParams) error
 	DeleteStaleInterfaces(ctx context.Context, arg DeleteStaleInterfacesParams) error
@@ -45,8 +46,10 @@ type Querier interface {
 	GetDiscoveryJob(ctx context.Context, id uuid.UUID) (DiscoveryJob, error)
 	GetFirewallStatus(ctx context.Context, deviceID uuid.UUID) (FirewallStatus, error)
 	GetLocation(ctx context.Context, id uuid.UUID) (Location, error)
+	GetMonitoringCheck(ctx context.Context, id uuid.UUID) (MonitoringCheck, error)
 	GetSystem(ctx context.Context, id uuid.UUID) (System, error)
 	GetWorkOrder(ctx context.Context, id uuid.UUID) (WorkOrder, error)
+	InsertMonitoringSample(ctx context.Context, arg InsertMonitoringSampleParams) error
 	// Used by the topology graph to build the full picture.
 	ListAllTopologyLinks(ctx context.Context) ([]ListAllTopologyLinksRow, error)
 	ListChildLocations(ctx context.Context, parentID *uuid.UUID) ([]Location, error)
@@ -54,11 +57,20 @@ type Querier interface {
 	ListDeviceFacts(ctx context.Context, deviceID uuid.UUID) ([]DeviceFact, error)
 	ListDeviceRoles(ctx context.Context, deviceID uuid.UUID) ([]DeviceRole, error)
 	ListDevicesByCategory(ctx context.Context, category string) ([]Device, error)
+	// Devices with a reachable IP but no monitoring check yet — the seeder turns
+	// each into a default TCP check (port chosen by category).
+	ListDevicesNeedingDefaultCheck(ctx context.Context) ([]ListDevicesNeedingDefaultCheckRow, error)
 	ListDiscoveryJobs(ctx context.Context) ([]DiscoveryJob, error)
 	ListDiscoveryResults(ctx context.Context, jobID uuid.UUID) ([]DiscoveryResult, error)
+	// A check is due when enabled and either never run or its interval elapsed.
+	ListDueMonitoringChecks(ctx context.Context) ([]MonitoringCheck, error)
 	ListHAMembers(ctx context.Context, deviceID uuid.UUID) ([]FirewallHaMember, error)
 	ListInterfaces(ctx context.Context, deviceID uuid.UUID) ([]Interface, error)
 	ListLicenses(ctx context.Context, deviceID uuid.UUID) ([]FirewallLicense, error)
+	ListMonitoringChecks(ctx context.Context) ([]MonitoringCheck, error)
+	ListMonitoringChecksByDevice(ctx context.Context, deviceID uuid.UUID) ([]MonitoringCheck, error)
+	ListMonitoringSamplesByCheck(ctx context.Context, arg ListMonitoringSamplesByCheckParams) ([]MonitoringSample, error)
+	ListMonitoringSamplesByDevice(ctx context.Context, arg ListMonitoringSamplesByDeviceParams) ([]MonitoringSample, error)
 	ListNeighbors(ctx context.Context, deviceID uuid.UUID) ([]Neighbor, error)
 	ListPortVlans(ctx context.Context, deviceID uuid.UUID) ([]PortVlan, error)
 	ListRootLocations(ctx context.Context) ([]Location, error)
@@ -73,6 +85,11 @@ type Querier interface {
 	// Identity reconciliation key (multi-hotel safe): same IP can recur across
 	// hotels, so a live device is unique by (primary_ip, location).
 	LiveDeviceByIPAndLocation(ctx context.Context, arg LiveDeviceByIPAndLocationParams) (Device, error)
+	// Live fleet rollup: how many checks sit in each status bucket.
+	MonitoringStatusOverview(ctx context.Context) ([]MonitoringStatusOverviewRow, error)
+	// Persist the rollup the engine computed (status + failure counter) onto the
+	// check after a poll. History rows go to monitoring_samples separately.
+	RecordMonitoringResult(ctx context.Context, arg RecordMonitoringResultParams) (MonitoringCheck, error)
 	// The resolver-assembly query: for a device IP, return every credential in a
 	// group bound to either a subnet that contains the IP (more specific) or a
 	// location anchor, with the binding specificity + member priority so the
@@ -87,7 +104,11 @@ type Querier interface {
 	SearchByMAC(ctx context.Context, mac string) ([]SearchByMACRow, error)
 	// Bind-on-success: record the credential that last authenticated.
 	SetDeviceCredential(ctx context.Context, arg SetDeviceCredentialParams) error
+	SetMonitoringCheckEnabled(ctx context.Context, arg SetMonitoringCheckEnabledParams) (MonitoringCheck, error)
 	TouchDeviceDiscovery(ctx context.Context, arg TouchDeviceDiscoveryParams) error
+	// Reflect the worst current check status onto the device row so device lists
+	// show a live health badge without a per-row sample query.
+	UpdateDeviceMonitoringStatus(ctx context.Context, arg UpdateDeviceMonitoringStatusParams) error
 	UpdateDiscoveryJobStatus(ctx context.Context, arg UpdateDiscoveryJobStatusParams) error
 	UpdateDiscoveryResult(ctx context.Context, arg UpdateDiscoveryResultParams) error
 	UpdateSystem(ctx context.Context, arg UpdateSystemParams) (System, error)
@@ -102,6 +123,9 @@ type Querier interface {
 	UpsertLicense(ctx context.Context, arg UpsertLicenseParams) error
 	// ---- MAC address table ---------------------------------------------------
 	UpsertMAC(ctx context.Context, arg UpsertMACParams) error
+	// Idempotent registration: re-registering the same (device, kind, port)
+	// updates the schedule knobs without resetting the live status counters.
+	UpsertMonitoringCheck(ctx context.Context, arg UpsertMonitoringCheckParams) (MonitoringCheck, error)
 	// ---- Neighbors (LLDP/CDP) -----------------------------------------------
 	UpsertNeighbor(ctx context.Context, arg UpsertNeighborParams) (Neighbor, error)
 	UpsertPortVlan(ctx context.Context, arg UpsertPortVlanParams) error

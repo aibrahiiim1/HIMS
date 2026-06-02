@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 
+	"github.com/coralsearesorts/hims/internal/monitoring"
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
 	"github.com/coralsearesorts/hims/internal/topology"
 )
@@ -21,6 +22,7 @@ import (
 type Server struct {
 	router  chi.Router
 	topo    *topology.Engine
+	mon     *monitoring.Engine
 	queries *db.Queries
 }
 
@@ -29,7 +31,10 @@ func NewServer(queries *db.Queries) *Server {
 	s := &Server{
 		queries: queries,
 		topo:    topology.New(queries),
-		router:  chi.NewRouter(),
+		// The API can seed defaults + run on-demand sweeps; the scheduled
+		// loop lives in the collector. Both share this engine type.
+		mon:    monitoring.NewEngine(queries, monitoring.NewPoller(nil, 0), nil),
+		router: chi.NewRouter(),
 	}
 	s.routes()
 	return s
@@ -65,6 +70,8 @@ func (s *Server) routes() {
 		r.Get("/devices/{id}/vpn-tunnels", s.vpnTunnels)
 		r.Get("/devices/{id}/ha-members", s.haMembers)
 		r.Get("/devices/{id}/licenses", s.licenses)
+		r.Get("/devices/{id}/monitoring/checks", s.deviceMonitoringChecks)
+		r.Get("/devices/{id}/monitoring/samples", s.deviceMonitoringSamples)
 
 		// --- Topology & search ----------------------------------------
 		// IP/MAC/name → switch+port+path (the headline Phase 1 feature).
@@ -82,6 +89,15 @@ func (s *Server) routes() {
 		r.Patch("/work-orders/{id}", s.updateWorkOrder)
 		r.Get("/systems", s.listSystems)
 		r.Post("/systems", s.createSystem)
+
+		// --- Monitoring engine ---------------------------------------
+		r.Get("/monitoring/checks", s.listMonitoringChecks)
+		r.Post("/monitoring/checks", s.registerMonitoringCheck)
+		r.Patch("/monitoring/checks/{id}", s.setMonitoringCheckEnabled)
+		r.Delete("/monitoring/checks/{id}", s.deleteMonitoringCheck)
+		r.Get("/monitoring/overview", s.monitoringOverview)
+		r.Post("/monitoring/seed", s.seedMonitoringDefaults)
+		r.Post("/monitoring/run", s.runMonitoringNow)
 	})
 }
 

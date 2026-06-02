@@ -257,8 +257,62 @@ text until the stock link lands.
 
 ---
 
+## Phase 6 — Monitoring Engine (reachability + history) ✅ (closed 2026-06-03)
+
+**Goal:** stand up the Monitoring Engine (PLAN §2.5, §6) — distinct from
+discovery — that polls registered devices on a short interval and records a
+time-series of reachability samples, rolling a live health badge onto each
+device. Core ships **TCP-reachability** checks: no credentials, no new
+transport (a plain dial), so the engine is honest and runs identically on
+dev and prod.
+
+### Sub-commits
+- ✅ SC1 — migration 000011: `monitoring_checks` (per-device check: kind,
+  port, interval, down_threshold, live rollup columns; UNIQUE(device,kind,
+  port) → idempotent re-register) + `monitoring_samples` (per-poll
+  time-series, device_id denormalized; promoted to a TimescaleDB hypertable
+  via a best-effort DO block when the extension is present, plain table
+  otherwise). sqlc queries + regen.
+- ✅ SC2 — `internal/monitoring` pure core (DB-free, sockets-free):
+  `Evaluate(ok, prevFailures, downThreshold)` hysteresis (success→up/0;
+  failure→warning until threshold, then down; threshold clamped ≥1) +
+  `Worst`/`RollupDevice` for the device badge. Poller does `ProbeTCP` over
+  an injectable `DialFunc`. Tests cover every transition (up→warning→down,
+  recovery clears the counter, threshold=1 has no warning band) + rollup +
+  poller success/failure/invalid-addr + default-port map.
+- ✅ SC3 — `Engine` (RunDue / runOne / rollupDevice / SeedDefaults / Loop)
+  over a narrow `Repo` interface (*db.Queries satisfies it; fake in tests).
+  API: `/monitoring/{checks,overview,seed,run}` + per-device
+  `/monitoring/{checks,samples}`. Collector grows `-monitor` (scheduled
+  sweep loop, signal-aware) + `-seed` flags.
+- ✅ SC4 — UI: **Monitoring** page (status-count tiles, seed + run-now
+  buttons, checks table with live status/latency/fail-count + enable/disable
+  + delete). Nav + route. Build/vet/test + frontend green; closed.
+
+### Verification (2026-06-03)
+`go build/vet/test ./...` green incl. new `monitoring` package (engine
+tests use a fake Repo + fake dialer — no DB, no sockets). Frontend tsc +
+build green. First DELETE write-path in HIMS — added `api.del`.
+
+### Design notes
+- **Transition-at-event:** status hysteresis is computed at the poll, from
+  the prior failure counter — one tested place, no background sweep
+  (cf. memory "evaluate state transitions at transition time").
+- **No-new-transport discipline:** TCP dial reuses what we have. SNMP-metric
+  checks (sysUpTime / CPU / RAM) need the credential-decrypt path in the
+  collector and are deferred to **6B**; the schema already carries
+  `kind='snmp'` + `oid`, so 6B is additive, not a migration.
+
+### Carry-forward → Phase 6B (monitoring enrichment)
+SNMP-metric checks via the credential-decrypt path; sample retention /
+downsampling policy; alert rules over samples (→ the alert→work-order bridge
+in Operations B). UNIQUE(device,kind,port) treats NULL port as distinct, so
+6B's snmp checks need a partial unique index to stay idempotent.
+
+---
+
 ## Later phases ⬜
 See `PLAN.md` §10. Remaining: **Operations B** (spare parts → purchases →
-expenses), **3b/3c** (virtualization + iLO/iDRAC — new transports), CCTV,
-wireless, databases/AD, peripherals/voice, MIB upload engine +
-reporting/dashboards.
+expenses), **Monitoring 6B** (SNMP-metric checks + alert rules), **3b/3c**
+(virtualization + iLO/iDRAC — new transports), CCTV, wireless,
+databases/AD, peripherals/voice, MIB upload engine + reporting/dashboards.

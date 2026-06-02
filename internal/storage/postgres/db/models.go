@@ -217,6 +217,33 @@ type MacAddress struct {
 	LastSeenAt       time.Time `json:"last_seen_at"`
 }
 
+type MonitoringCheck struct {
+	ID                  uuid.UUID  `json:"id"`
+	DeviceID            uuid.UUID  `json:"device_id"`
+	Kind                string     `json:"kind"`
+	TargetPort          *int32     `json:"target_port"`
+	Oid                 *string    `json:"oid"`
+	IntervalSeconds     int32      `json:"interval_seconds"`
+	DownThreshold       int32      `json:"down_threshold"`
+	Enabled             bool       `json:"enabled"`
+	LastRunAt           *time.Time `json:"last_run_at"`
+	LastStatus          string     `json:"last_status"`
+	LastLatencyMs       *float64   `json:"last_latency_ms"`
+	ConsecutiveFailures int32      `json:"consecutive_failures"`
+	CreatedAt           time.Time  `json:"created_at"`
+	UpdatedAt           time.Time  `json:"updated_at"`
+}
+
+type MonitoringSample struct {
+	Time      time.Time `json:"time"`
+	CheckID   uuid.UUID `json:"check_id"`
+	DeviceID  uuid.UUID `json:"device_id"`
+	Status    string    `json:"status"`
+	LatencyMs *float64  `json:"latency_ms"`
+	ValueNum  *float64  `json:"value_num"`
+	Error     *string   `json:"error"`
+}
+
 type Neighbor struct {
 	ID               uuid.UUID   `json:"id"`
 	DeviceID         uuid.UUID   `json:"device_id"`

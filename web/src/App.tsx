@@ -8,6 +8,7 @@ import { TopologyPage } from './pages/TopologyPage'
 import { SearchPage } from './pages/SearchPage'
 import { WorkOrders } from './pages/WorkOrders'
 import { Systems } from './pages/Systems'
+import { Monitoring } from './pages/Monitoring'
 import './App.css'
 
 const qc = new QueryClient({ defaultOptions: { queries: { staleTime: 30_000, retry: 1 } } })
@@ -22,6 +23,7 @@ function Nav() {
       <Link to="/servers" style={active('/servers')}>Servers</Link>
       <Link to="/firewalls" style={active('/firewalls')}>Firewalls</Link>
       <Link to="/topology" style={active('/topology')}>Topology</Link>
+      <Link to="/monitoring" style={active('/monitoring')}>Monitoring</Link>
       <Link to="/search" style={active('/search')}>Search</Link>
       <Link to="/work-orders" style={active('/work-orders')}>Work Orders</Link>
       <Link to="/systems" style={active('/systems')}>Systems</Link>
@@ -43,6 +45,7 @@ export default function App() {
             <Route path="/servers/:id" element={<ServerDetail />} />
             <Route path="/firewalls/:id" element={<FirewallDetail />} />
             <Route path="/topology" element={<TopologyPage />} />
+            <Route path="/monitoring" element={<Monitoring />} />
             <Route path="/search" element={<SearchPage />} />
             <Route path="/work-orders" element={<WorkOrders />} />
             <Route path="/systems" element={<Systems />} />

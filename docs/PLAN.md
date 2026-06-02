@@ -157,6 +157,13 @@ monitoring_samples (TimescaleDB hypertable).
   with every validated MIB lesson baked in (disk-MB, VPN composite index,
   Counter64 octets, fgHaGroupName OID, HA-count-from-rows) + firewall
   template UI. SNMP transport; no new infra.
+- **Monitoring Engine** (built out of order — the platform's live-state
+  spine). ✅ **6 core DONE** — `monitoring_checks` + `monitoring_samples`
+  (TimescaleDB best-effort), pure hysteresis evaluator (up→warning→down +
+  device rollup), TCP-reachability poller, scheduled collector loop
+  (`-monitor`/`-seed`), API + Monitoring UI. **6B (open)** — SNMP-metric
+  checks (need credential-decrypt in the collector) + alert rules over
+  samples → alert→work-order bridge.
 - **Phase 5 — CCTV:** NVR/DVR + cameras (ONVIF/RTSP/vendor API).
 - **Phase 6 — Wireless controllers + APs** (UniFi/Omada/Ruckus REST).
 - **Phase 7 — Databases** (SQL/Oracle/PostgreSQL) + AD/DNS/DHCP.
