@@ -404,6 +404,46 @@ func (q *Queries) ListDevicesByRole(ctx context.Context, role string) ([]Device,
 	return items, nil
 }
 
+const liveDeviceByIP = `-- name: LiveDeviceByIP :one
+SELECT id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location FROM devices
+WHERE primary_ip = $1 AND deleted_at IS NULL
+ORDER BY updated_at DESC
+LIMIT 1
+`
+
+// Reconcile key for an UNSCOPED scan (no site selected): match by primary_ip
+// alone so a re-scan updates the existing device regardless of an
+// operator-assigned location_id, instead of duplicating it. Most-recent wins.
+func (q *Queries) LiveDeviceByIP(ctx context.Context, primaryIp *netip.Addr) (Device, error) {
+	row := q.db.QueryRow(ctx, liveDeviceByIP, primaryIp)
+	var i Device
+	err := row.Scan(
+		&i.ID,
+		&i.LocationID,
+		&i.PrimaryIp,
+		&i.Hostname,
+		&i.Name,
+		&i.Vendor,
+		&i.Model,
+		&i.Serial,
+		&i.OsVersion,
+		&i.Category,
+		&i.Status,
+		&i.Driver,
+		&i.CredentialID,
+		&i.LastDiscoveryAt,
+		&i.LastMonitoringAt,
+		&i.Metadata,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+		&i.Vlan,
+		&i.DeviceClass,
+		&i.Location,
+	)
+	return i, err
+}
+
 const liveDeviceByIPAndLocation = `-- name: LiveDeviceByIPAndLocation :one
 SELECT id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location FROM devices
 WHERE primary_ip = $1 AND location_id IS NOT DISTINCT FROM $2 AND deleted_at IS NULL

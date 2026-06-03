@@ -12,6 +12,15 @@ SELECT * FROM devices
 WHERE deleted_at IS NULL
 ORDER BY category, name;
 
+-- name: LiveDeviceByIP :one
+-- Reconcile key for an UNSCOPED scan (no site selected): match by primary_ip
+-- alone so a re-scan updates the existing device regardless of an
+-- operator-assigned location_id, instead of duplicating it. Most-recent wins.
+SELECT * FROM devices
+WHERE primary_ip = $1 AND deleted_at IS NULL
+ORDER BY updated_at DESC
+LIMIT 1;
+
 -- name: LiveDeviceByIPAndLocation :one
 -- Identity reconciliation key (multi-hotel safe): same IP can recur across
 -- hotels, so a live device is unique by (primary_ip, location). location_id is

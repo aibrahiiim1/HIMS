@@ -184,6 +184,10 @@ type Querier interface {
 	ListWorkOrderParts(ctx context.Context, workOrderID uuid.UUID) ([]WorkOrderPart, error)
 	ListWorkOrders(ctx context.Context) ([]WorkOrder, error)
 	ListWorkOrdersByDevice(ctx context.Context, deviceID *uuid.UUID) ([]WorkOrder, error)
+	// Reconcile key for an UNSCOPED scan (no site selected): match by primary_ip
+	// alone so a re-scan updates the existing device regardless of an
+	// operator-assigned location_id, instead of duplicating it. Most-recent wins.
+	LiveDeviceByIP(ctx context.Context, primaryIp *netip.Addr) (Device, error)
 	// Identity reconciliation key (multi-hotel safe): same IP can recur across
 	// hotels, so a live device is unique by (primary_ip, location). location_id is
 	// matched NULL-safe (IS NOT DISTINCT FROM) so an unscoped scan (no site

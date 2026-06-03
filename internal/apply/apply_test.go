@@ -39,6 +39,12 @@ func (f *fakeWriter) LiveDeviceByIPAndLocation(_ context.Context, _ db.LiveDevic
 	}
 	return db.Device{}, errors.New("not found")
 }
+func (f *fakeWriter) LiveDeviceByIP(_ context.Context, _ *netip.Addr) (db.Device, error) {
+	if f.existing != nil {
+		return *f.existing, nil
+	}
+	return db.Device{}, errors.New("not found")
+}
 func (f *fakeWriter) CreateDevice(_ context.Context, arg db.CreateDeviceParams) (db.Device, error) {
 	f.created = append(f.created, arg)
 	return db.Device{ID: uuid.New(), Name: arg.Name}, nil

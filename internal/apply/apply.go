@@ -32,6 +32,7 @@ const sourceAXL = "axl"
 // it; tests use a fake. Narrow-by-intent so the write set is auditable.
 type Writer interface {
 	LiveDeviceByIPAndLocation(ctx context.Context, arg db.LiveDeviceByIPAndLocationParams) (db.Device, error)
+	LiveDeviceByIP(ctx context.Context, primaryIp *netip.Addr) (db.Device, error)
 	CreateDevice(ctx context.Context, arg db.CreateDeviceParams) (db.Device, error)
 	UpdateDiscoveredDevice(ctx context.Context, arg db.UpdateDiscoveredDeviceParams) (db.Device, error)
 	SetDeviceCredential(ctx context.Context, arg db.SetDeviceCredentialParams) error
@@ -130,12 +131,21 @@ func (a *Applier) Apply(ctx context.Context, res discovery.HostResult, locationI
 }
 
 func (a *Applier) reconcile(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, create db.CreateDeviceParams) (db.Device, error) {
-	// Reconcile by (primary_ip, location). The query matches location NULL-safe
-	// (IS NOT DISTINCT FROM), so an unscoped scan (location_id = NULL) also
-	// reconciles instead of duplicating on every re-scan.
-	existing, err := a.w.LiveDeviceByIPAndLocation(ctx, db.LiveDeviceByIPAndLocationParams{
-		PrimaryIp: &ip, LocationID: locationID,
-	})
+	// Find the existing device to update. With a site selected, key on
+	// (primary_ip, location) — multi-hotel safe. Without a site (unscoped scan),
+	// key on primary_ip ALONE so a re-scan updates the device even if an
+	// operator has since assigned it a location_id (otherwise the NULL-vs-set
+	// location mismatch would create a duplicate). Either way the update touches
+	// only discovered fields, preserving operator-set location_id/vlan/class.
+	var existing db.Device
+	var err error
+	if locationID != nil {
+		existing, err = a.w.LiveDeviceByIPAndLocation(ctx, db.LiveDeviceByIPAndLocationParams{
+			PrimaryIp: &ip, LocationID: locationID,
+		})
+	} else {
+		existing, err = a.w.LiveDeviceByIP(ctx, &ip)
+	}
 	if err == nil {
 		return a.w.UpdateDiscoveredDevice(ctx, db.UpdateDiscoveredDeviceParams{
 			ID: existing.ID, Hostname: create.Hostname, Name: create.Name, Vendor: create.Vendor,
