@@ -1018,12 +1018,36 @@ clusters — v1 fetches the first page. Validate against a real CUCM publisher
 once an AXL application-user credential is bound; confirm paging is sufficient
 for the fleet's phone count or add `first`/`skip` paging.
 
-## Status — entire spec built incl. voice; only live-hardware validation remains
+## Wireless REST: Extreme (ExtremeCloud IQ / XIQ) ✅ (closed 2026-06-03)
+
+Completes the spec's wireless vendor list (UniFi + Omada + Ruckus + **Extreme**),
+reusing the HTTP/JSON Doer pattern + Phase 8 AP tables/UI (no schema/UI change).
+
+- ✅ `internal/extreme` — XIQ client over an injectable Doer: `Login` exchanges
+  credentials for a bearer token (`POST /login` → `access_token`), `ListAPs`
+  GETs `/devices?views=FULL` and filters `device_function=="AP"`
+  (connected→online). Tested: login+token+AP-filter (switch excluded),
+  no-token, HTTP-error paths.
+- ✅ `internal/driver/extreme` — collection-only → `Facts.WLAN`+`APs`; wrong-
+  session guard. Registered in `drivers.Builtin()` + `builtin_test.go`.
+- ✅ collector `-extreme <anchor-ip> [-extreme-base <url>]` (shared
+  `resolveWLANCred` + `cookieJarClient`); apply via Phase 8 → WirelessDetail.
+- ✅ gofmt + go build/vet/test ./... green.
+
+### ⚠️ Live-validation trigger
+XIQ is cloud-hosted; `-extreme` is the anchor IP the operator assigns to the
+controller record. The XIQ base host, token lifetime, and device-list field
+names/paging vary by API revision; the device list paginates (v1 fetches the
+first 100). Validate against a real XIQ tenant once a credential is bound; add
+paging if the AP count exceeds a page. On-prem ExtremeCloud IQ Controller (XCC)
+has a different REST surface and remains deferred to its own phase.
+
+## Status — entire spec built incl. voice + all 4 WLAN vendors; only live-hardware validation remains
 The entire requested scope is shipped, green, committed. Drivers:
 aruba/cisco/huawei (switch SNMP), fortigate (firewall), host_snmp +
 vmware_esxi (servers/virt SNMP), cctv + wlan_controller (banner), redfish_bmc
 (HTTP), vmware_vsphere (govmomi), hyperv (WinRM), onvif_camera (SOAP), unifi
-+ omada + ruckus (REST), cucm (AXL/SOAP voice). Engines: discovery pipeline +
++ omada + ruckus + extreme (REST), cucm (AXL/SOAP voice). Engines: discovery pipeline +
 persist worker + CIDR scan, credential
 resolver + AES-256-GCM crypto, monitoring (TCP + SNMP) + alerting + work-order
 bridge, topology, operations (work orders/parts/purchases/expenses/licenses),

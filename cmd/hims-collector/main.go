@@ -35,6 +35,7 @@ import (
 	"github.com/coralsearesorts/hims/internal/domain"
 	"github.com/coralsearesorts/hims/internal/driver"
 	cucmdrv "github.com/coralsearesorts/hims/internal/driver/cucm"
+	extremedrv "github.com/coralsearesorts/hims/internal/driver/extreme"
 	hypervdrv "github.com/coralsearesorts/hims/internal/driver/hyperv"
 	omadadrv "github.com/coralsearesorts/hims/internal/driver/omada"
 	onvifdrv "github.com/coralsearesorts/hims/internal/driver/onvif"
@@ -43,6 +44,7 @@ import (
 	unifidrv "github.com/coralsearesorts/hims/internal/driver/unifi"
 	vspheredrv "github.com/coralsearesorts/hims/internal/driver/vsphere"
 	"github.com/coralsearesorts/hims/internal/drivers"
+	ec "github.com/coralsearesorts/hims/internal/extreme"
 	"github.com/coralsearesorts/hims/internal/monitoring"
 	oc "github.com/coralsearesorts/hims/internal/omada"
 	ov "github.com/coralsearesorts/hims/internal/onvif"
@@ -74,6 +76,8 @@ func main() {
 	ruckusIP := flag.String("ruckus", "", "collect a Ruckus SmartZone controller's APs AND persist (needs DB + http_basic creds)")
 	cucmIP := flag.String("cucm", "", "collect a Cisco CUCM publisher's phone registry over AXL AND persist (needs DB + http_basic/vendor_api creds)")
 	cucmVer := flag.String("cucm-version", "12.5", "CUCM AXL schema version (e.g. 12.5, 14.0)")
+	extremeIP := flag.String("extreme", "", "collect an ExtremeCloud IQ (XIQ) tenant's APs AND persist (needs DB + http_basic/vendor_api creds)")
+	extremeBase := flag.String("extreme-base", "", "XIQ API base URL (default https://api.extremecloudiq.com)")
 	concurrency := flag.Int("concurrency", 16, "max concurrent hosts during -scan")
 	maxHosts := flag.Int("max-hosts", 4096, "refuse a -scan scope larger than this")
 	location := flag.String("location", "", "location UUID to scope discovered devices to")
@@ -148,6 +152,11 @@ func main() {
 
 	if *cucmIP != "" {
 		runCUCM(reg, *cucmIP, *cucmVer, *location)
+		return
+	}
+
+	if *extremeIP != "" {
+		runExtreme(reg, *extremeIP, *extremeBase, *location)
 		return
 	}
 
@@ -620,6 +629,46 @@ func runCUCM(reg *driver.Registry, ipStr, version, locStr string) {
 		os.Exit(1)
 	}
 	fmt.Printf("CUCM %s persisted as device %s (%d phones)\n", ip, id, len(f.Phones))
+}
+
+// runExtreme collects an ExtremeCloud IQ (XIQ) tenant's AP inventory and
+// persists it against the controller anchor IP. XIQ is cloud-hosted (bearer
+// token via /login); -extreme is the anchor address the operator assigns to
+// the controller record, -extreme-base overrides the XIQ API host.
+func runExtreme(reg *driver.Registry, ipStr, baseURL, locStr string) {
+	ip, err := netip.ParseAddr(ipStr)
+	if err != nil {
+		slog.Error("invalid -extreme IP", "value", ipStr, "error", err)
+		os.Exit(1)
+	}
+	locationID := parseLocationID(locStr)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	queries, cfg, closeDB := buildDiscoverDeps(ctx, reg)
+	defer closeDB()
+
+	user, pass, bound := resolveWLANCred(ctx, cfg, ip, locationID)
+	if user == "" {
+		slog.Error("extreme: no credential resolved", "ip", ip.String())
+		os.Exit(1)
+	}
+	client := ec.NewClient(baseURL, user, pass, cookieJarClient())
+	if err := client.Login(ctx); err != nil {
+		slog.Error("extreme: login failed", "error", err)
+		os.Exit(1)
+	}
+	f, err := extremedrv.New().Collect(&extremedrv.Session{Client: client, Ctx: ctx}, driver.Probe{IP: ip})
+	if err != nil {
+		slog.Error("extreme: collect failed", "error", err)
+		os.Exit(1)
+	}
+	res := discovery.HostResult{IP: ip, Alive: true, MatchedDrv: extremedrv.New(), Match: driver.Match{Confidence: 78, Category: domain.CatWirelessController}, Facts: &f, BoundCred: bound}
+	id, err := apply.New(queries).Apply(ctx, res, locationID)
+	if err != nil {
+		slog.Error("extreme: apply failed", "error", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Extreme (XIQ) %s persisted as device %s (%d APs)\n", ip, id, len(f.APs))
 }
 
 // runUniFi collects a UniFi controller's AP inventory and persists it.

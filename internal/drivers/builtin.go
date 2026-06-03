@@ -11,6 +11,7 @@ import (
 	"github.com/coralsearesorts/hims/internal/driver/cisco"
 	"github.com/coralsearesorts/hims/internal/driver/cucm"
 	"github.com/coralsearesorts/hims/internal/driver/esxi"
+	extremedrv "github.com/coralsearesorts/hims/internal/driver/extreme"
 	"github.com/coralsearesorts/hims/internal/driver/fortigate"
 	"github.com/coralsearesorts/hims/internal/driver/hostsnmp"
 	"github.com/coralsearesorts/hims/internal/driver/huawei"
@@ -40,5 +41,6 @@ func Builtin() *driver.Registry {
 	r.Register(printer.New())
 	r.Register(ups.New())
 	r.Register(cucm.New())
+	r.Register(extremedrv.New())
 	return r
 }
