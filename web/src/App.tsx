@@ -1,5 +1,6 @@
+import { useEffect, useState } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { BrowserRouter, Route, Routes, Link, useLocation } from 'react-router-dom'
+import { BrowserRouter, Route, Routes, Navigate } from 'react-router-dom'
 import { DeviceList } from './pages/DeviceList'
 import { Dashboard } from './pages/Dashboard'
 import { Discovery } from './pages/Discovery'
@@ -26,52 +27,52 @@ import { Mibs } from './pages/Mibs'
 import { Settings } from './pages/Settings'
 import { Inventory } from './pages/Inventory'
 import { Locations } from './pages/Locations'
+import { ComingSoon } from './pages/ComingSoon'
+import { Sidebar } from './components/Sidebar'
+import { Topbar } from './components/Topbar'
+import { useBadges } from './hooks/useBadges'
 import './App.css'
 
 const qc = new QueryClient({ defaultOptions: { queries: { staleTime: 30_000, retry: 1 } } })
 
-function Nav() {
-  const loc = useLocation()
-  const active = (path: string) => (loc.pathname === path ? { borderBottom: '2px solid #90caf9' } : {})
-  return (
-    <nav className="hims-nav">
-      <span className="hims-logo">HIMS</span>
-      <Link to="/dashboard" style={active('/dashboard')}>Dashboard</Link>
-      <Link to="/discovery" style={active('/discovery')}>Discovery</Link>
-      <Link to="/inventory" style={active('/inventory')}>Inventory</Link>
-      <Link to="/" style={active('/')}>Switches</Link>
-      <Link to="/servers" style={active('/servers')}>Servers</Link>
-      <Link to="/virtual-hosts" style={active('/virtual-hosts')}>Virtual Hosts</Link>
-      <Link to="/firewalls" style={active('/firewalls')}>Firewalls</Link>
-      <Link to="/cameras" style={active('/cameras')}>Cameras</Link>
-      <Link to="/nvrs" style={active('/nvrs')}>NVRs</Link>
-      <Link to="/wlan" style={active('/wlan')}>Wireless</Link>
-      <Link to="/printers" style={active('/printers')}>Printers</Link>
-      <Link to="/ups" style={active('/ups')}>UPS</Link>
-      <Link to="/pbx" style={active('/pbx')}>Voice</Link>
-      <Link to="/topology" style={active('/topology')}>Topology</Link>
-      <Link to="/monitoring" style={active('/monitoring')}>Monitoring</Link>
-      <Link to="/alerts" style={active('/alerts')}>Alerts</Link>
-      <Link to="/roles" style={active('/roles')}>Roles</Link>
-      <Link to="/search" style={active('/search')}>Search</Link>
-      <Link to="/work-orders" style={active('/work-orders')}>Work Orders</Link>
-      <Link to="/systems" style={active('/systems')}>Systems</Link>
-      <Link to="/spare-parts" style={active('/spare-parts')}>Parts</Link>
-      <Link to="/expenses" style={active('/expenses')}>Expenses</Link>
-      <Link to="/credentials" style={active('/credentials')}>Credentials</Link>
-      <Link to="/mibs" style={active('/mibs')}>MIBs</Link>
-      <Link to="/locations" style={active('/locations')}>Locations</Link>
-      <Link to="/settings" style={active('/settings')}>Settings</Link>
-    </nav>
-  )
+type Theme = 'light' | 'dark'
+
+function useTheme(): [Theme, () => void] {
+  const [theme, setTheme] = useState<Theme>(() => (localStorage.getItem('nims-theme') as Theme) || 'light')
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme)
+    localStorage.setItem('nims-theme', theme)
+  }, [theme])
+  return [theme, () => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))]
 }
 
-export default function App() {
+function Shell() {
+  const [theme, toggleTheme] = useTheme()
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem('nims-rail-collapsed') === '1')
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const counts = useBadges()
+
+  useEffect(() => {
+    localStorage.setItem('nims-rail-collapsed', collapsed ? '1' : '0')
+  }, [collapsed])
+
+  const shellClass =
+    'app-shell' + (collapsed ? ' is-collapsed' : '') + (drawerOpen ? ' drawer-open' : '')
+
   return (
-    <QueryClientProvider client={qc}>
-      <BrowserRouter>
-        <Nav />
-        <div className="hims-content">
+    <div className={shellClass}>
+      <Sidebar counts={counts} onNavigate={() => setDrawerOpen(false)} />
+      <div className="rail-scrim" onClick={() => setDrawerOpen(false)} />
+      <Topbar
+        collapsed={collapsed}
+        theme={theme}
+        counts={counts}
+        onToggleCollapse={() => setCollapsed((v) => !v)}
+        onToggleDrawer={() => setDrawerOpen((v) => !v)}
+        onToggleTheme={toggleTheme}
+      />
+      <main className="app-main">
+        <div className="app-main-inner">
           <Routes>
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/discovery" element={<Discovery />} />
@@ -94,6 +95,7 @@ export default function App() {
             <Route path="/ups/:id" element={<UPSDetail />} />
             <Route path="/pbx" element={<DeviceList category="pbx" title="Call Managers / PBX" detailBase="/pbx" />} />
             <Route path="/pbx/:id" element={<PbxDetail />} />
+            <Route path="/unknown" element={<DeviceList category="unknown" title="Unknown Devices" detailBase="/devices" />} />
             <Route path="/topology" element={<TopologyPage />} />
             <Route path="/monitoring" element={<Monitoring />} />
             <Route path="/alerts" element={<Alerts />} />
@@ -108,8 +110,20 @@ export default function App() {
             <Route path="/settings" element={<Settings />} />
             <Route path="/inventory" element={<Inventory />} />
             <Route path="/locations" element={<Locations />} />
+            <Route path="/soon/:slug" element={<ComingSoon />} />
+            <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
         </div>
+      </main>
+    </div>
+  )
+}
+
+export default function App() {
+  return (
+    <QueryClientProvider client={qc}>
+      <BrowserRouter>
+        <Shell />
       </BrowserRouter>
     </QueryClientProvider>
   )

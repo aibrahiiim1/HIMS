@@ -298,7 +298,7 @@ function ADTab({ locations, locPath, onLaunch, setMsg }: { locations: Location[]
   const dns = new Set((tree?.ous ?? []).map((o) => o.dn))
   const kids: Record<string, OU[]> = {}
   for (const o of tree?.ous ?? []) { const p = dns.has(parentDN(o.dn)) ? parentDN(o.dn) : '__root__'; (kids[p] ??= []).push(o) }
-  const toggle = (dn: string) => setSel((s) => { const n = new Set(s); n.has(dn) ? n.delete(dn) : n.add(dn); return n })
+  const toggle = (dn: string) => setSel((s) => { const n = new Set(s); if (n.has(dn)) n.delete(dn); else n.add(dn); return n })
 
   const Node = ({ o, depth }: { o: OU; depth: number }) => (
     <div style={{ marginLeft: depth * 18 }}>

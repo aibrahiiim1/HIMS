@@ -68,7 +68,7 @@ export function Inventory() {
   }, [data, cat, classF, locF, q, locPath])
 
   const refresh = () => qc.invalidateQueries({ queryKey: ['devices'] })
-  const toggle = (id: string) => setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
+  const toggle = (id: string) => setSel((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n })
   const allShownSelected = rows.length > 0 && rows.every((d) => sel.has(d.id))
   const toggleAll = () => setSel((s) => {
     const n = new Set(s)

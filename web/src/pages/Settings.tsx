@@ -36,6 +36,9 @@ export function Settings() {
   const q = useQuery({ queryKey: ['settings'], queryFn: () => api.get<Settings>('/settings') })
   const [form, setForm] = useState<Settings>({})
 
+  // Hydrate the editable form once the settings query resolves. This is an
+  // intentional external-state sync (server → local form), not a cascading render.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { if (q.data) setForm(q.data) }, [q.data])
 
   const save = useMutation({
