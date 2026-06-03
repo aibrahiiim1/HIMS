@@ -42,7 +42,18 @@ async function del(path: string): Promise<void> {
   if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${path}`)
 }
 
-export const api = { get, post, patch, put, del }
+// postText sends a raw text body (e.g. text/csv for bulk import).
+async function postText<T>(path: string, body: string, contentType = 'text/csv'): Promise<T> {
+  const r = await fetch(`${BASE}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': contentType },
+    body,
+  })
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${path}`)
+  return r.json()
+}
+
+export const api = { get, post, patch, put, del, postText }
 
 // ---- Domain types -----------------------------------------------------------
 

@@ -16,6 +16,13 @@ const MODE_PLACEHOLDER: Record<ScanMode, string> = {
   cidr: '172.21.96.0/24',
   site_subnets: '(uses every subnet bound to the selected site)',
 }
+// Mirrors the devices.category CHECK constraint (manual/CSV must use a valid one).
+const CATEGORIES = [
+  'unknown', 'switch', 'router', 'firewall', 'access_point', 'wireless_controller',
+  'server', 'virtual_host', 'virtual_machine', 'storage', 'nvr', 'camera', 'printer',
+  'ip_phone', 'pbx', 'voice_gateway', 'database', 'directory', 'dns', 'dhcp',
+  'fingerprint', 'endpoint', 'ups', 'isp_router', 'application',
+]
 
 const jobBadge = (s: string) =>
   s === 'running' ? 'warning' : s === 'completed' ? 'up' : s === 'failed' || s === 'cancelled' ? 'down' : 'unknown'
@@ -73,6 +80,18 @@ export function Discovery() {
 
   const toggleGroup = (id: string) =>
     setGroupIDs((prev) => (prev.includes(id) ? prev.filter((g) => g !== id) : [...prev, id]))
+
+  // --- Manual Add + CSV Import (non-discoverable / bulk assets) ---
+  const [man, setMan] = useState({ name: '', category: 'unknown', primary_ip: '', vendor: '', model: '', serial: '' })
+  const [csv, setCsv] = useState('')
+  const addManual = useMutation({
+    mutationFn: () => api.post('/devices', { ...man, location_id: location || null }),
+    onSuccess: () => { setMan({ name: '', category: 'unknown', primary_ip: '', vendor: '', model: '', serial: '' }); qc.invalidateQueries({ queryKey: ['devices'] }) },
+  })
+  const importCsv = useMutation({
+    mutationFn: () => api.postText<{ created: number; failed: number; errors?: string[] }>('/devices/import-csv', csv),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['devices'] }),
+  })
 
   return (
     <div>
@@ -145,6 +164,55 @@ export function Discovery() {
             ))}
           </div>
         </div>
+      </div>
+
+      <div className="card">
+        <h3>Manual add <span className="muted" style={{ fontSize: 12, fontWeight: 400 }}>— a device that can't be auto-discovered</span></h3>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+          <input style={{ ...input, width: 180 }} placeholder="name *" value={man.name} onChange={(e) => setMan({ ...man, name: e.target.value })} />
+          <select style={{ ...input, width: 150 }} value={man.category} onChange={(e) => setMan({ ...man, category: e.target.value })}>
+            {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <input style={{ ...input, width: 130 }} placeholder="primary IP (opt)" value={man.primary_ip} onChange={(e) => setMan({ ...man, primary_ip: e.target.value })} />
+          <input style={{ ...input, width: 120 }} placeholder="vendor" value={man.vendor} onChange={(e) => setMan({ ...man, vendor: e.target.value })} />
+          <input style={{ ...input, width: 120 }} placeholder="model" value={man.model} onChange={(e) => setMan({ ...man, model: e.target.value })} />
+          <input style={{ ...input, width: 120 }} placeholder="serial" value={man.serial} onChange={(e) => setMan({ ...man, serial: e.target.value })} />
+          <button style={btn} disabled={!man.name.trim() || addManual.isPending} onClick={() => addManual.mutate()}>
+            {addManual.isPending ? 'Adding…' : 'Add device'}
+          </button>
+          {addManual.error && <span className="error-msg">{(addManual.error as Error).message}</span>}
+          {addManual.isSuccess && <span className="badge badge-up">added</span>}
+        </div>
+        <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>Uses the Site dropdown above for location scope. Stamped <code>source=manual</code>.</div>
+      </div>
+
+      <div className="card">
+        <h3>CSV import <span className="muted" style={{ fontSize: 12, fontWeight: 400 }}>— bulk manual assets</span></h3>
+        <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
+          Paste CSV with a header row. Columns (any subset): <code>name</code> (required), category, primary_ip, hostname, vendor, model, serial, os_version, location_id.
+        </div>
+        <textarea
+          style={{ ...input, width: '100%', minHeight: 90, fontFamily: 'monospace', fontSize: 12 }}
+          placeholder={'name,category,primary_ip,vendor\nPatch Panel A,patch_panel,,Generic\nUPS-Lobby,ups,10.0.0.30,APC'}
+          value={csv}
+          onChange={(e) => setCsv(e.target.value)}
+        />
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 6 }}>
+          <button style={btn} disabled={!csv.trim() || importCsv.isPending} onClick={() => importCsv.mutate()}>
+            {importCsv.isPending ? 'Importing…' : 'Import CSV'}
+          </button>
+          {importCsv.error && <span className="error-msg">{(importCsv.error as Error).message}</span>}
+          {importCsv.data && (
+            <span className={`badge badge-${importCsv.data.failed ? 'warning' : 'up'}`}>
+              {importCsv.data.created} created{importCsv.data.failed ? `, ${importCsv.data.failed} failed` : ''}
+            </span>
+          )}
+        </div>
+        {importCsv.data?.errors && importCsv.data.errors.length > 0 && (
+          <ul className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+            {importCsv.data.errors.slice(0, 8).map((e, i) => <li key={i}>{e}</li>)}
+          </ul>
+        )}
       </div>
 
       <div className="card">

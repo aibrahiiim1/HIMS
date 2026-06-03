@@ -82,6 +82,8 @@ func (s *Server) routes() {
 
 		// --- Devices --------------------------------------------------
 		r.Get("/devices", s.listDevices)
+		r.Post("/devices", s.createManualDevice)
+		r.Post("/devices/import-csv", s.importDevicesCSV)
 		r.Get("/devices/{id}/interfaces", s.deviceInterfaces)
 		r.Get("/devices/{id}/vlans", s.deviceVLANs)
 		r.Get("/devices/{id}/neighbors", s.deviceNeighbors)
