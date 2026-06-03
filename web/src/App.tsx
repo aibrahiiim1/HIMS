@@ -6,6 +6,7 @@ import { ServerDetail } from './pages/ServerDetail'
 import { FirewallDetail } from './pages/FirewallDetail'
 import { VirtualHostDetail } from './pages/VirtualHostDetail'
 import { CctvDetail } from './pages/CctvDetail'
+import { WirelessDetail } from './pages/WirelessDetail'
 import { TopologyPage } from './pages/TopologyPage'
 import { SearchPage } from './pages/SearchPage'
 import { WorkOrders } from './pages/WorkOrders'
@@ -31,6 +32,7 @@ function Nav() {
       <Link to="/firewalls" style={active('/firewalls')}>Firewalls</Link>
       <Link to="/cameras" style={active('/cameras')}>Cameras</Link>
       <Link to="/nvrs" style={active('/nvrs')}>NVRs</Link>
+      <Link to="/wlan" style={active('/wlan')}>Wireless</Link>
       <Link to="/topology" style={active('/topology')}>Topology</Link>
       <Link to="/monitoring" style={active('/monitoring')}>Monitoring</Link>
       <Link to="/alerts" style={active('/alerts')}>Alerts</Link>
@@ -62,6 +64,8 @@ export default function App() {
             <Route path="/cameras" element={<DeviceList category="camera" title="Cameras" detailBase="/cctv" />} />
             <Route path="/nvrs" element={<DeviceList category="nvr" title="NVR / DVR" detailBase="/cctv" />} />
             <Route path="/cctv/:id" element={<CctvDetail />} />
+            <Route path="/wlan" element={<DeviceList category="wireless_controller" title="Wireless Controllers" detailBase="/wlan" />} />
+            <Route path="/wlan/:id" element={<WirelessDetail />} />
             <Route path="/topology" element={<TopologyPage />} />
             <Route path="/monitoring" element={<Monitoring />} />
             <Route path="/alerts" element={<Alerts />} />

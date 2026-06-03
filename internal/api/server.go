@@ -83,6 +83,8 @@ func (s *Server) routes() {
 		r.Get("/devices/{id}/vms", s.deviceVMs)
 		r.Get("/devices/{id}/camera", s.deviceCamera)
 		r.Get("/devices/{id}/nvr-channels", s.deviceNVRChannels)
+		r.Get("/devices/{id}/wlan", s.deviceWLAN)
+		r.Get("/devices/{id}/access-points", s.deviceAccessPoints)
 
 		// --- Topology & search ----------------------------------------
 		// IP/MAC/name → switch+port+path (the headline Phase 1 feature).
@@ -269,6 +271,32 @@ func (s *Server) deviceNVRChannels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := s.queries.ListNVRChannels(ctx, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (s *Server) deviceWLAN(w http.ResponseWriter, r *http.Request) {
+	ctx, id, ok := pathDevice(w, r)
+	if !ok {
+		return
+	}
+	row, err := s.queries.GetWLANControllerInfo(ctx, id)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{})
+		return
+	}
+	writeJSON(w, http.StatusOK, row)
+}
+
+func (s *Server) deviceAccessPoints(w http.ResponseWriter, r *http.Request) {
+	ctx, id, ok := pathDevice(w, r)
+	if !ok {
+		return
+	}
+	rows, err := s.queries.ListAccessPoints(ctx, id)
 	if err != nil {
 		writeErr(w, err)
 		return

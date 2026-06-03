@@ -176,7 +176,10 @@ monitoring_samples (TimescaleDB hypertable).
 - **Phase 7 — CCTV ✅ DONE (classification + scaffolding):** `cctv` driver
   (banner/RTSP fingerprint → camera/nvr), `camera_info` + `nvr_channels`
   schema, Cameras/NVRs UI. Deep ONVIF/vendor-REST channel collection deferred.
-- **Phase 6 — Wireless controllers + APs** (UniFi/Omada/Ruckus REST).
+- **Phase 8 — Wireless controllers + APs ✅ DONE (classification +
+  scaffolding):** `wlan_controller` driver (banner+port fingerprint),
+  `wlan_controller_info` + `access_points` schema, Wireless UI. Deep vendor
+  REST (UniFi/Omada/Ruckus) AP/client enumeration deferred.
 - **Phase 7 — Databases** (SQL/Oracle/PostgreSQL) + AD/DNS/DHCP.
 - **Phase 8 — Peripherals** (printers/UPS/fingerprint/IP phones) + voice.
 - **Phase 9 — Operations layer:** work orders → spare parts → purchases →

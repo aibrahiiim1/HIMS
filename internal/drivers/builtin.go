@@ -13,6 +13,7 @@ import (
 	"github.com/coralsearesorts/hims/internal/driver/fortigate"
 	"github.com/coralsearesorts/hims/internal/driver/hostsnmp"
 	"github.com/coralsearesorts/hims/internal/driver/huawei"
+	"github.com/coralsearesorts/hims/internal/driver/wireless"
 )
 
 // Builtin returns a Registry populated with the drivers compiled into this
@@ -28,5 +29,6 @@ func Builtin() *driver.Registry {
 	r.Register(fortigate.New())
 	r.Register(esxi.New())
 	r.Register(cctv.New())
+	r.Register(wireless.New())
 	return r
 }

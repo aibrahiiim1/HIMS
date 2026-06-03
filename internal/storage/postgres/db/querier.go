@@ -79,8 +79,10 @@ type Querier interface {
 	GetMonitoringCheck(ctx context.Context, id uuid.UUID) (MonitoringCheck, error)
 	GetSparePart(ctx context.Context, id uuid.UUID) (SparePart, error)
 	GetSystem(ctx context.Context, id uuid.UUID) (System, error)
+	GetWLANControllerInfo(ctx context.Context, deviceID uuid.UUID) (WlanControllerInfo, error)
 	GetWorkOrder(ctx context.Context, id uuid.UUID) (WorkOrder, error)
 	InsertMonitoringSample(ctx context.Context, arg InsertMonitoringSampleParams) error
+	ListAccessPoints(ctx context.Context, controllerDeviceID uuid.UUID) ([]AccessPoint, error)
 	ListAlertRules(ctx context.Context) ([]AlertRule, error)
 	ListAlerts(ctx context.Context) ([]Alert, error)
 	// Used by the topology graph to build the full picture.
@@ -170,6 +172,7 @@ type Querier interface {
 	UpdateWorkOrder(ctx context.Context, arg UpdateWorkOrderParams) (WorkOrder, error)
 	// ---- ARP entries ---------------------------------------------------------
 	UpsertARP(ctx context.Context, arg UpsertARPParams) error
+	UpsertAccessPoint(ctx context.Context, arg UpsertAccessPointParams) (AccessPoint, error)
 	UpsertCameraInfo(ctx context.Context, arg UpsertCameraInfoParams) (CameraInfo, error)
 	UpsertDeviceFact(ctx context.Context, arg UpsertDeviceFactParams) error
 	UpsertFirewallStatus(ctx context.Context, arg UpsertFirewallStatusParams) error
@@ -194,6 +197,7 @@ type Querier interface {
 	// ---- VLANs ----------------------------------------------------------------
 	UpsertVlan(ctx context.Context, arg UpsertVlanParams) (Vlan, error)
 	UpsertVpnTunnel(ctx context.Context, arg UpsertVpnTunnelParams) error
+	UpsertWLANControllerInfo(ctx context.Context, arg UpsertWLANControllerInfoParams) (WlanControllerInfo, error)
 }
 
 var _ Querier = (*Queries)(nil)

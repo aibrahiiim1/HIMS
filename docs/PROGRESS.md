@@ -514,6 +514,24 @@ credentials are bound and operators need channel inventory. Reachability
 
 ---
 
+## Phase 8 — Wireless controllers + APs ✅ (closed 2026-06-03)
+
+- ✅ `wlan_controller` driver — fingerprints UniFi/Omada/Ruckus/Aruba by HTTP
+  banner + the vendor's mgmt port (78 with port, 60 banner-only). Registered.
+  Tests: UniFi+port, banner-only, no-match.
+- ✅ migration 000016 `wlan_controller_info` + `access_points` (AP inventory,
+  upsert keyed on controller+name) + `/devices/{id}/wlan` + `/access-points`.
+- ✅ UI: **Wireless** nav + `WirelessDetail` (controller summary + AP table;
+  states AP detail awaits vendor REST, controller reachability monitored).
+- ✅ build/vet/test + frontend green; gofmt clean.
+
+### Carry-forward (deferred, with trigger)
+Vendor REST collection (login → AP/SSID/client enumeration) for
+UniFi/Omada/Ruckus. Pure-Go feasible; trigger: when a controller credential
+is bound and operators need AP inventory.
+
+---
+
 ## Later phases ⬜
-See `PLAN.md` §10. Remaining: wireless, databases/AD, peripherals/voice,
-MIB upload engine + reporting/dashboards.
+See `PLAN.md` §10. Remaining: databases/AD, peripherals/voice, MIB upload
+engine + reporting/dashboards.

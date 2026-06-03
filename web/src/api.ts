@@ -278,6 +278,25 @@ export interface ExpenseByLocation {
   count: number
 }
 
+export interface WLANControllerInfo {
+  device_id?: string
+  vendor?: string | null
+  version?: string | null
+  ap_count?: number
+  client_count?: number
+}
+
+export interface AccessPoint {
+  id: string
+  controller_device_id: string
+  name: string
+  mac?: string | null
+  model?: string | null
+  ip?: string | null
+  status: string
+  client_count: number
+}
+
 export interface CameraInfo {
   device_id?: string
   manufacturer?: string | null

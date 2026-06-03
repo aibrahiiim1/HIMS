@@ -11,6 +11,18 @@ import (
 	"github.com/google/uuid"
 )
 
+type AccessPoint struct {
+	ID                 uuid.UUID   `json:"id"`
+	ControllerDeviceID uuid.UUID   `json:"controller_device_id"`
+	Name               string      `json:"name"`
+	Mac                *string     `json:"mac"`
+	Model              *string     `json:"model"`
+	Ip                 *netip.Addr `json:"ip"`
+	Status             string      `json:"status"`
+	ClientCount        int32       `json:"client_count"`
+	LastSeenAt         time.Time   `json:"last_seen_at"`
+}
+
 type Alert struct {
 	ID             uuid.UUID  `json:"id"`
 	RuleID         uuid.UUID  `json:"rule_id"`
@@ -418,6 +430,15 @@ type Vlan struct {
 	Name             *string   `json:"name"`
 	CollectionSource string    `json:"collection_source"`
 	LastSeenAt       time.Time `json:"last_seen_at"`
+}
+
+type WlanControllerInfo struct {
+	DeviceID    uuid.UUID `json:"device_id"`
+	Vendor      *string   `json:"vendor"`
+	Version     *string   `json:"version"`
+	ApCount     int32     `json:"ap_count"`
+	ClientCount int32     `json:"client_count"`
+	LastSeenAt  time.Time `json:"last_seen_at"`
 }
 
 type WorkOrder struct {
