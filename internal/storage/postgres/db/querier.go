@@ -106,6 +106,11 @@ type Querier interface {
 	ListAllTopologyLinks(ctx context.Context) ([]ListAllTopologyLinksRow, error)
 	ListBMCSensors(ctx context.Context, deviceID uuid.UUID) ([]BmcSensor, error)
 	ListChildLocations(ctx context.Context, parentID *uuid.UUID) ([]Location, error)
+	// All credentials as resolver candidates (the "try everything" default for a
+	// scan when the operator selects none). Metadata only — no secret.
+	ListCredentialCandidates(ctx context.Context) ([]ListCredentialCandidatesRow, error)
+	// The operator-selected credentials for a scan, as resolver candidates.
+	ListCredentialCandidatesByIDs(ctx context.Context, dollar_1 []uuid.UUID) ([]ListCredentialCandidatesByIDsRow, error)
 	// Members of an explicit set of groups (the operator-selected scan groups),
 	// returned in the resolver-input shape. priority orders within the explicit
 	// tier; the scan injects these above scope-resolved candidates.

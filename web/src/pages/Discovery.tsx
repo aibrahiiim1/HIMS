@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { api, type DiscoveryJob, type DiscoveryResult, type Location, type CredentialGroup } from '../api'
+import { api, type DiscoveryJob, type DiscoveryResult, type Location, type Credential } from '../api'
 
 type ScanMode = 'single' | 'range' | 'cidr' | 'site_subnets'
 
@@ -46,11 +46,11 @@ export function Discovery() {
   const [mode, setMode] = useState<ScanMode>('cidr')
   const [targets, setTargets] = useState('')
   const [location, setLocation] = useState('')
-  const [groupIDs, setGroupIDs] = useState<string[]>([])
+  const [credIDs, setCredIDs] = useState<string[]>([])
   const [jobID, setJobID] = useState<string | null>(null)
 
   const locations = useQuery({ queryKey: ['locations'], queryFn: () => api.get<Location[]>('/locations') })
-  const groups = useQuery({ queryKey: ['credential-groups'], queryFn: () => api.get<CredentialGroup[]>('/credential-groups') })
+  const creds = useQuery({ queryKey: ['credentials'], queryFn: () => api.get<Credential[]>('/credentials') })
 
   const jobs = useQuery({
     queryKey: ['discovery-jobs'],
@@ -73,13 +73,13 @@ export function Discovery() {
         mode: siteMode ? 'site_subnets' : 'targets',
         targets: siteMode ? '' : targets.trim(),
         location_id: location || null,
-        credential_group_ids: groupIDs,
+        credential_ids: credIDs,
       }),
     onSuccess: (j) => { setTargets(''); setJobID((j as DiscoveryJob).id); qc.invalidateQueries({ queryKey: ['discovery-jobs'] }) },
   })
 
-  const toggleGroup = (id: string) =>
-    setGroupIDs((prev) => (prev.includes(id) ? prev.filter((g) => g !== id) : [...prev, id]))
+  const toggleCred = (id: string) =>
+    setCredIDs((prev) => (prev.includes(id) ? prev.filter((g) => g !== id) : [...prev, id]))
 
   // --- Manual Add + CSV Import (non-discoverable / bulk assets) ---
   const [man, setMan] = useState({ name: '', category: 'unknown', primary_ip: '', vendor: '', model: '', serial: '' })
@@ -156,26 +156,29 @@ export function Discovery() {
         </div>
         {siteMode && <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>{MODE_PLACEHOLDER.site_subnets}</div>}
 
-        {/* Optional credential-group multi-select */}
+        {/* Optional per-credential multi-select. None selected = try ALL. */}
         <div style={{ marginTop: 12 }}>
           <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
-            Credential groups to use (optional — default: site/subnet auto-resolution)
+            Credentials to use ({credIDs.length > 0 ? `${credIDs.length} selected` : 'none selected — auto-tries ALL stored credentials'})
           </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {(groups.data ?? []).length === 0 && <span className="muted" style={{ fontSize: 12 }}>No credential groups defined.</span>}
-            {(groups.data ?? []).map((g) => (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+            {(creds.data ?? []).length === 0 && <span className="muted" style={{ fontSize: 12 }}>No credentials stored — add some on the Credentials page.</span>}
+            {(creds.data ?? []).map((c) => (
               <button
-                key={g.id}
-                onClick={() => toggleGroup(g.id)}
-                title={`${g.member_count} credential(s), ${g.binding_count} binding(s)`}
+                key={c.id}
+                onClick={() => toggleCred(c.id)}
+                title={c.weak ? 'weak / default secret' : c.kind}
                 style={{
                   ...ghost,
-                  ...(groupIDs.includes(g.id) ? { background: '#2e7d32', color: '#fff', borderColor: '#2e7d32' } : {}),
+                  ...(credIDs.includes(c.id) ? { background: '#2e7d32', color: '#fff', borderColor: '#2e7d32' } : {}),
                 }}
               >
-                {g.name} <span style={{ opacity: 0.7 }}>({g.member_count})</span>
+                {c.name} <span style={{ opacity: 0.7 }}>({c.kind}{c.weak ? ' ⚠' : ''})</span>
               </button>
             ))}
+            {credIDs.length > 0 && (
+              <button onClick={() => setCredIDs([])} style={{ ...ghost, borderColor: '#888', color: '#aaa' }}>clear</button>
+            )}
           </div>
         </div>
       </div>

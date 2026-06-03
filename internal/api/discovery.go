@@ -24,14 +24,16 @@ const scanMaxHosts = 4096
 //   - LocationID with Mode "site_subnets": scan every subnet bound to that site
 //   - CIDR: legacy single-CIDR field (back-compat; equivalent to Targets)
 //
-// CredentialGroupIDs optionally pins which credential GROUPS this scan may use
-// (highest-priority tier; the resolver still orders per-probe). Empty =
-// site/subnet scope auto-resolution.
+// CredentialIDs optionally pins which stored credentials this scan may use
+// (highest-priority tier; the resolver still orders + binds per-probe). When
+// empty, the scan auto-tries ALL stored credentials. CredentialGroupIDs is the
+// older group-based selector, still honored if supplied.
 type scanReq struct {
 	Targets            string   `json:"targets"`
 	CIDR               string   `json:"cidr"` // legacy / single-CIDR
 	Mode               string   `json:"mode"` // "targets" | "site_subnets"
 	LocationID         *string  `json:"location_id"`
+	CredentialIDs      []string `json:"credential_ids"`
 	CredentialGroupIDs []string `json:"credential_group_ids"`
 	Concurrency        int      `json:"concurrency"`
 }
@@ -62,9 +64,16 @@ func (s *Server) startScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Optional operator-selected credential groups → explicit candidate tier.
-	extra, err := s.explicitGroups(r.Context(), req.CredentialGroupIDs)
+	// Build the explicit credential tier: the operator-selected credentials, or
+	// (when none are selected) ALL stored credentials — the "auto-detect from
+	// the whole credential list" default. Group selection, if supplied, is
+	// merged in too.
+	extra, err := s.scanCredentialTier(r.Context(), req.CredentialIDs, req.CredentialGroupIDs)
 	if err != nil {
+		if _, ok := err.(*badRequest); ok {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		writeErr(w, err)
 		return
 	}
@@ -140,32 +149,69 @@ func (s *Server) resolveScanHosts(ctx context.Context, req scanReq, locID *uuid.
 // the resolver-input shape, as a single highest-specificity ScopedGroup. The
 // secrets are NOT decrypted here — only the candidate refs are loaded; the
 // pipeline decrypts a credential only when it is about to try it.
-func (s *Server) explicitGroups(ctx context.Context, groupIDStrs []string) ([]credresolver.ScopedGroup, error) {
-	if len(groupIDStrs) == 0 {
-		return nil, nil
-	}
-	ids := make([]uuid.UUID, 0, len(groupIDStrs))
-	for _, str := range groupIDStrs {
-		id, err := uuid.Parse(str)
-		if err != nil {
-			return nil, errBadRequest("invalid credential_group_id: " + str)
+// scanCredentialTier builds the explicit credential candidate tier for a scan:
+// the operator-selected credentials, or — when none are selected — ALL stored
+// credentials (the "auto-detect from the whole credential list" default). Any
+// selected credential groups are merged in as an additional tier. All tiers
+// sit above scope-resolved candidates; the resolver still orders by
+// fingerprint/weakness/priority and binds on first success.
+func (s *Server) scanCredentialTier(ctx context.Context, credIDStrs, groupIDStrs []string) ([]credresolver.ScopedGroup, error) {
+	var out []credresolver.ScopedGroup
+
+	// Credential tier: selected ids, else all.
+	var members []credresolver.CredRef
+	if len(credIDStrs) > 0 {
+		ids := make([]uuid.UUID, 0, len(credIDStrs))
+		for _, str := range credIDStrs {
+			id, err := uuid.Parse(str)
+			if err != nil {
+				return nil, errBadRequest("invalid credential_id: " + str)
+			}
+			ids = append(ids, id)
 		}
-		ids = append(ids, id)
+		rows, err := s.queries.ListCredentialCandidatesByIDs(ctx, ids)
+		if err != nil {
+			return nil, err
+		}
+		for _, m := range rows {
+			members = append(members, credresolver.CredRef{ID: m.ID, Kind: domain.CredentialKind(m.Kind), Weak: m.Weak})
+		}
+	} else {
+		rows, err := s.queries.ListCredentialCandidates(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, m := range rows {
+			members = append(members, credresolver.CredRef{ID: m.ID, Kind: domain.CredentialKind(m.Kind), Weak: m.Weak})
+		}
 	}
-	rows, err := s.queries.ListCredentialGroupMembers(ctx, ids)
-	if err != nil {
-		return nil, err
+	if len(members) > 0 {
+		out = append(out, credresolver.ScopedGroup{Specificity: 100, Members: members})
 	}
-	if len(rows) == 0 {
-		return nil, nil
+
+	// Optional group tier (older selector; still honored if supplied).
+	if len(groupIDStrs) > 0 {
+		ids := make([]uuid.UUID, 0, len(groupIDStrs))
+		for _, str := range groupIDStrs {
+			id, err := uuid.Parse(str)
+			if err != nil {
+				return nil, errBadRequest("invalid credential_group_id: " + str)
+			}
+			ids = append(ids, id)
+		}
+		rows, err := s.queries.ListCredentialGroupMembers(ctx, ids)
+		if err != nil {
+			return nil, err
+		}
+		gm := make([]credresolver.CredRef, 0, len(rows))
+		for _, m := range rows {
+			gm = append(gm, credresolver.CredRef{ID: m.ID, Kind: domain.CredentialKind(m.Kind), Priority: int(m.Priority), Weak: m.Weak})
+		}
+		if len(gm) > 0 {
+			out = append(out, credresolver.ScopedGroup{Specificity: 100, Members: gm})
+		}
 	}
-	members := make([]credresolver.CredRef, 0, len(rows))
-	for _, m := range rows {
-		members = append(members, credresolver.CredRef{
-			ID: m.ID, Kind: domain.CredentialKind(m.Kind), Priority: int(m.Priority), Weak: m.Weak,
-		})
-	}
-	return []credresolver.ScopedGroup{{Specificity: 100, Members: members}}, nil
+	return out, nil
 }
 
 // runScanJob is the background scan worker. It owns its own context (the HTTP

@@ -29,6 +29,15 @@ INSERT INTO credential_bindings (group_id, location_id, subnet_id)
 VALUES ($1, $2, $3)
 RETURNING *;
 
+-- name: ListCredentialCandidates :many
+-- All credentials as resolver candidates (the "try everything" default for a
+-- scan when the operator selects none). Metadata only — no secret.
+SELECT id, kind, weak FROM credentials ORDER BY name;
+
+-- name: ListCredentialCandidatesByIDs :many
+-- The operator-selected credentials for a scan, as resolver candidates.
+SELECT id, kind, weak FROM credentials WHERE id = ANY($1::uuid[]) ORDER BY name;
+
 -- name: ListCredentialGroups :many
 -- Groups with member + binding counts for the scan-time group multi-select.
 SELECT

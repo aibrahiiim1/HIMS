@@ -138,6 +138,69 @@ func (q *Queries) GetCredential(ctx context.Context, id uuid.UUID) (Credential, 
 	return i, err
 }
 
+const listCredentialCandidates = `-- name: ListCredentialCandidates :many
+SELECT id, kind, weak FROM credentials ORDER BY name
+`
+
+type ListCredentialCandidatesRow struct {
+	ID   uuid.UUID `json:"id"`
+	Kind string    `json:"kind"`
+	Weak bool      `json:"weak"`
+}
+
+// All credentials as resolver candidates (the "try everything" default for a
+// scan when the operator selects none). Metadata only — no secret.
+func (q *Queries) ListCredentialCandidates(ctx context.Context) ([]ListCredentialCandidatesRow, error) {
+	rows, err := q.db.Query(ctx, listCredentialCandidates)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListCredentialCandidatesRow{}
+	for rows.Next() {
+		var i ListCredentialCandidatesRow
+		if err := rows.Scan(&i.ID, &i.Kind, &i.Weak); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCredentialCandidatesByIDs = `-- name: ListCredentialCandidatesByIDs :many
+SELECT id, kind, weak FROM credentials WHERE id = ANY($1::uuid[]) ORDER BY name
+`
+
+type ListCredentialCandidatesByIDsRow struct {
+	ID   uuid.UUID `json:"id"`
+	Kind string    `json:"kind"`
+	Weak bool      `json:"weak"`
+}
+
+// The operator-selected credentials for a scan, as resolver candidates.
+func (q *Queries) ListCredentialCandidatesByIDs(ctx context.Context, dollar_1 []uuid.UUID) ([]ListCredentialCandidatesByIDsRow, error) {
+	rows, err := q.db.Query(ctx, listCredentialCandidatesByIDs, dollar_1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListCredentialCandidatesByIDsRow{}
+	for rows.Next() {
+		var i ListCredentialCandidatesByIDsRow
+		if err := rows.Scan(&i.ID, &i.Kind, &i.Weak); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listCredentialGroupMembers = `-- name: ListCredentialGroupMembers :many
 SELECT
     c.id,

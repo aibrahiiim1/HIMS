@@ -264,7 +264,7 @@ The **Discovery** page surfaces every input mode; all reuse the same engine +
 |---|---|---|
 | Single IP / IP Range / CIDR | mode selector + targets field | `POST /discovery/scan` `{targets,mode:"targets",credential_group_ids?}` |
 | Hotel Site Subnets | mode + site dropdown | `POST /discovery/scan` `{mode:"site_subnets",location_id}` |
-| Credential groups (optional) | green chip multi-select | `credential_group_ids[]` (highest-priority tier; empty = scope auto-resolution) |
+| Credentials (optional) | green chip multi-select of stored credentials | `credential_ids[]` — selected creds tried first; **empty = auto-try ALL stored credentials**. (`credential_group_ids[]` still honored.) Resolver orders by fingerprint/weakness + binds on success. |
 | Manual add | form (name + category dropdown) | `POST /devices` (metadata.source=manual) |
 | CSV import | paste textarea | `POST /devices/import-csv` (text/csv; metadata.source=csv_import) |
 | Controller import | kind dropdown + IP (+ omada-cid / cucm-ver / xiq-base) | `POST /discovery/controller-import` → background job |
