@@ -137,10 +137,6 @@ func (d Deps) tryCandidates(
 	ctx context.Context, ip netip.Addr, loc *uuid.UUID, kinds []domain.CredentialKind,
 	try func(user, pass string) (*driver.Facts, bool),
 ) (*driver.Facts, *credresolver.CredRef) {
-	groups, err := d.Fetcher.CredentialCandidates(ctx, ip, loc)
-	if err != nil {
-		return nil, nil
-	}
 	want := func(k domain.CredentialKind) bool {
 		for _, x := range kinds {
 			if x == k {
@@ -149,20 +145,40 @@ func (d Deps) tryCandidates(
 		}
 		return false
 	}
-	for _, g := range groups {
-		for _, m := range g.Members {
-			if !want(m.Kind) {
-				continue
+
+	// Candidate order: scope-resolved credentials first (a bound credential is
+	// the operator's intent for that IP), then ALL stored credentials of the
+	// needed kind as a fallback — so an import works even when the credential
+	// isn't bound to a subnet/location group yet (matches the scan's "try all"
+	// default). Deduped by ID.
+	var refs []credresolver.CredRef
+	if groups, err := d.Fetcher.CredentialCandidates(ctx, ip, loc); err == nil {
+		for _, g := range groups {
+			refs = append(refs, g.Members...)
+		}
+	}
+	if d.Queries != nil {
+		if rows, err := d.Queries.ListCredentialCandidates(ctx); err == nil {
+			for _, r := range rows {
+				refs = append(refs, credresolver.CredRef{ID: r.ID, Kind: domain.CredentialKind(r.Kind), Weak: r.Weak})
 			}
-			dec, err := d.Decrypt(ctx, m.ID)
-			if err != nil {
-				continue
-			}
-			user, pass := splitUserPass(dec.Community)
-			if facts, ok := try(user, pass); ok {
-				c := m
-				return facts, &c
-			}
+		}
+	}
+
+	seen := make(map[uuid.UUID]bool, len(refs))
+	for _, m := range refs {
+		if !want(m.Kind) || seen[m.ID] {
+			continue
+		}
+		seen[m.ID] = true
+		dec, err := d.Decrypt(ctx, m.ID)
+		if err != nil {
+			continue
+		}
+		user, pass := splitUserPass(dec.Community)
+		if facts, ok := try(user, pass); ok {
+			c := m
+			return facts, &c
 		}
 	}
 	return nil, nil
