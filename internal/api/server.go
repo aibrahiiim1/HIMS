@@ -65,6 +65,9 @@ func (s *Server) routes() {
 	})
 
 	r.Route("/api/v1", func(r chi.Router) {
+		// --- Executive dashboard (cross-cutting rollups) -------------
+		r.Get("/dashboard", s.dashboard)
+
 		// --- Devices --------------------------------------------------
 		r.Get("/devices", s.listDevices)
 		r.Get("/devices/{id}/interfaces", s.deviceInterfaces)

@@ -29,6 +29,11 @@ type Querier interface {
 	// ErrNoRows — which the handler maps to "insufficient stock" (409). This is
 	// the atomic-DB-signal pattern: no SELECT-then-UPDATE TOCTOU window.
 	ConsumePartToWorkOrder(ctx context.Context, arg ConsumePartToWorkOrderParams) (WorkOrderPart, error)
+	CountDevicesNeedingAttention(ctx context.Context) (int64, error)
+	// Systems whose license OR support expires within 90 days (or already has).
+	CountExpiringSystems(ctx context.Context) (int64, error)
+	CountOpenAlerts(ctx context.Context) (int64, error)
+	CountOpenWorkOrders(ctx context.Context) (int64, error)
 	// ---- Alert rules ----------------------------------------------------------
 	CreateAlertRule(ctx context.Context, arg CreateAlertRuleParams) (AlertRule, error)
 	CreateCredential(ctx context.Context, arg CreateCredentialParams) (Credential, error)
@@ -62,6 +67,8 @@ type Querier interface {
 	DeleteStaleVlans(ctx context.Context, arg DeleteStaleVlansParams) error
 	DeleteStaleVpnTunnels(ctx context.Context, arg DeleteStaleVpnTunnelsParams) error
 	DeleteSystem(ctx context.Context, id uuid.UUID) error
+	DeviceCountByCategory(ctx context.Context) ([]DeviceCountByCategoryRow, error)
+	DeviceCountByStatus(ctx context.Context) ([]DeviceCountByStatusRow, error)
 	// ---- Expenses (aggregation over the purchases ledger) ---------------------
 	// Expenses derive from the purchases ledger so the totals can never drift
 	// from their source rows. Work-order cost + system cost stay on their own
@@ -172,6 +179,7 @@ type Querier interface {
 	// Bind-on-success: record the credential that last authenticated.
 	SetDeviceCredential(ctx context.Context, arg SetDeviceCredentialParams) error
 	SetMonitoringCheckEnabled(ctx context.Context, arg SetMonitoringCheckEnabledParams) (MonitoringCheck, error)
+	TotalExpenses(ctx context.Context) (float64, error)
 	TouchDeviceDiscovery(ctx context.Context, arg TouchDeviceDiscoveryParams) error
 	// Reflect the worst current check status onto the device row so device lists
 	// show a live health badge without a per-row sample query.

@@ -205,7 +205,9 @@ monitoring_samples (TimescaleDB hypertable).
   SMIv2 reader, OID-chain resolution, unresolved-kept), `mib_files`/
   `mib_objects`/`oid_mappings` schema, upload+parse API, MIBs UI. Full ASN.1
   + test-GET deferred.
-- **Phase 11 — reporting + executive dashboards** (next).
+- **Phase 11 — reporting + executive dashboards ✅ DONE:** reporting
+  count/rollup queries, best-effort `GET /dashboard`, Dashboard UI (headline
+  tiles + breakdown bars). Landing nav item.
 
 Ordering rationale (operator): switches + topology + credential resolver
 are the heart — build them first, then breadth.

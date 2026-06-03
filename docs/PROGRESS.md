@@ -620,6 +620,26 @@ deferred to pair with the per-device monitoring UI follow-up.
 
 ---
 
+## Phase 11 — Reporting + executive dashboards ✅ (closed 2026-06-03)
+
+The cross-cutting rollup over every engine shipped so far.
+
+- ✅ reporting queries: device count by category + by status, open work
+  orders, open alerts, expiring systems (license/support ≤ 90d),
+  devices-needing-attention (down/warning), total expenses.
+- ✅ `GET /dashboard` — assembles inventory (category/status/role), monitoring
+  health, expenses-by-category, and headline counts in one call;
+  **best-effort** (a failed sub-query degrades to an empty section, so an
+  empty DB still renders).
+- ✅ UI: **Dashboard** page (headline tiles with warn colouring +
+  proportional-bar breakdowns for category/status/monitoring/roles/expenses);
+  added as the first nav item, polls every 30s.
+- ✅ build/vet/test + frontend green; gofmt clean.
+
+---
+
 ## Later phases ⬜
-See `PLAN.md` §10. Remaining: reporting/dashboards, peripherals/voice,
-security follow-ups.
+See `PLAN.md` §10. Remaining: **security/UX follow-ups** (per-device
+SNMP-check/bind UI, credential key-rotation tooling, SNMP v3), peripherals/
+voice drivers, and the deferred deep-collection transports (vSphere/govmomi,
+ONVIF, vendor REST, Redfish) — each filed with a trigger in its phase.
