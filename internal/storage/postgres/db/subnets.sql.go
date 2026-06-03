@@ -46,6 +46,15 @@ func (q *Queries) CreateSubnet(ctx context.Context, arg CreateSubnetParams) (Sub
 	return i, err
 }
 
+const deleteSubnet = `-- name: DeleteSubnet :exec
+DELETE FROM subnets WHERE id = $1
+`
+
+func (q *Queries) DeleteSubnet(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteSubnet, id)
+	return err
+}
+
 const listSubnets = `-- name: ListSubnets :many
 SELECT id, location_id, cidr, name, vlan_id, metadata, created_at, updated_at FROM subnets ORDER BY location_id, cidr
 `

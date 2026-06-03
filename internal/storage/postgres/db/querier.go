@@ -85,6 +85,7 @@ type Querier interface {
 	DeleteStaleServerStorage(ctx context.Context, arg DeleteStaleServerStorageParams) error
 	DeleteStaleVlans(ctx context.Context, arg DeleteStaleVlansParams) error
 	DeleteStaleVpnTunnels(ctx context.Context, arg DeleteStaleVpnTunnelsParams) error
+	DeleteSubnet(ctx context.Context, id uuid.UUID) error
 	DeleteSystem(ctx context.Context, id uuid.UUID) error
 	DeviceCountByCategory(ctx context.Context) ([]DeviceCountByCategoryRow, error)
 	DeviceCountByStatus(ctx context.Context) ([]DeviceCountByStatusRow, error)

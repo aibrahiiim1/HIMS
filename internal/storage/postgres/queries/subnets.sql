@@ -8,3 +8,6 @@ SELECT * FROM subnets WHERE location_id = $1 ORDER BY cidr;
 
 -- name: ListSubnets :many
 SELECT * FROM subnets ORDER BY location_id, cidr;
+
+-- name: DeleteSubnet :exec
+DELETE FROM subnets WHERE id = $1;

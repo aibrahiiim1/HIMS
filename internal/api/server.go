@@ -135,6 +135,9 @@ func (s *Server) routes() {
 		r.Delete("/locations/{id}", s.deleteLocation)
 		r.Get("/locations/{id}/children", s.childLocations)
 		r.Get("/locations/{id}/subnets", s.locationSubnets)
+		r.Post("/locations/{id}/subnets", s.createSubnet)
+		r.Get("/subnets", s.listAllSubnets)
+		r.Delete("/subnets/{id}", s.deleteSubnet)
 
 		// --- Operations: work orders + systems/licenses --------------
 		r.Get("/work-orders", s.listWorkOrders)

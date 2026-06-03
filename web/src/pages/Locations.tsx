@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { api, type Location } from '../api'
+import { api, type Location, type Subnet } from '../api'
 
 const KINDS = ['group', 'hotel', 'building', 'floor', 'area', 'room', 'rack', 'office']
 // Suggested child kind for a given parent kind (operator can override).
@@ -20,7 +20,21 @@ const ghost: React.CSSProperties = { padding: '3px 8px', background: 'transparen
 export function Locations() {
   const qc = useQueryClient()
   const { data, isLoading, error } = useQuery({ queryKey: ['locations-all'], queryFn: () => api.get<Location[]>('/locations/all') })
-  const refresh = () => qc.invalidateQueries({ queryKey: ['locations-all'] })
+  const subnets = useQuery({ queryKey: ['subnets-all'], queryFn: () => api.get<Subnet[]>('/subnets') })
+  const refresh = () => { qc.invalidateQueries({ queryKey: ['locations-all'] }); qc.invalidateQueries({ queryKey: ['subnets-all'] }) }
+  const subnetsOf = useMemo(() => {
+    const m: Record<string, Subnet[]> = {}
+    for (const s of subnets.data ?? []) (m[s.location_id] ??= []).push(s)
+    return m
+  }, [subnets.data])
+
+  const [subParent, setSubParent] = useState<string | null>(null)
+  const [subCidr, setSubCidr] = useState('')
+  const addSubnet = useMutation({
+    mutationFn: (locId: string) => api.post(`/locations/${locId}/subnets`, { cidr: subCidr.trim() }),
+    onSuccess: () => { setSubCidr(''); setSubParent(null); refresh() },
+  })
+  const delSubnet = useMutation({ mutationFn: (id: string) => api.del(`/subnets/${id}`), onSuccess: refresh })
 
   const [addParent, setAddParent] = useState<string | 'root' | null>(null)
   const [addKind, setAddKind] = useState('group')
@@ -81,11 +95,30 @@ export function Locations() {
               {loc.code && <span className="muted" style={{ fontSize: 11 }}>[{loc.code}]</span>}
               {kids.length > 0 && <span className="muted" style={{ fontSize: 11 }}>· {kids.length}</span>}
               <button style={ghost} onClick={() => openAdd(loc.id, loc.kind)}>+ child</button>
+              <button style={ghost} onClick={() => { setSubParent(subParent === loc.id ? null : loc.id); setSubCidr('') }}>+ subnet</button>
               <button style={ghost} onClick={() => { setEditId(loc.id); setEditName(loc.name) }}>rename</button>
               <button style={{ ...ghost, color: '#ef9a9a', borderColor: '#ef9a9a' }} onClick={() => { if (confirm(`Delete "${loc.name}" and everything under it?`)) del.mutate(loc.id) }}>delete</button>
             </>
           )}
         </div>
+        {/* Subnets attached to this node — feed By-Site scan + credential scope */}
+        {(subnetsOf[loc.id] ?? []).length > 0 && (
+          <div style={{ marginLeft: 24, display: 'flex', flexWrap: 'wrap', gap: 6, padding: '2px 0' }}>
+            {(subnetsOf[loc.id] ?? []).map((s) => (
+              <span key={s.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '1px 8px', border: '1px solid #2e7d32', borderRadius: 10, fontSize: 11, fontFamily: 'monospace' }}>
+                🌐 {s.cidr}
+                <button onClick={() => delSubnet.mutate(s.id)} title="remove subnet" style={{ background: 'none', border: 'none', color: '#ef9a9a', cursor: 'pointer', fontSize: 13, lineHeight: 1 }}>×</button>
+              </span>
+            ))}
+          </div>
+        )}
+        {subParent === loc.id && (
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', margin: '4px 0 4px 24px' }}>
+            <input style={{ ...input, width: 180 }} placeholder="CIDR e.g. 172.21.96.0/24" value={subCidr} autoFocus onChange={(e) => setSubCidr(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && subCidr.trim()) addSubnet.mutate(loc.id) }} />
+            <button style={btn} disabled={!subCidr.trim() || addSubnet.isPending} onClick={() => addSubnet.mutate(loc.id)}>Add subnet</button>
+            <button style={ghost} onClick={() => setSubParent(null)}>Cancel</button>
+          </div>
+        )}
         {addParent === loc.id && <AddForm parent={loc.id} />}
         {kids.map((k) => <Node key={k.id} loc={k} depth={depth + 1} />)}
       </div>
