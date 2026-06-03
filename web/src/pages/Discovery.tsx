@@ -218,28 +218,79 @@ function ControllersTab({ locations, locPath, onLaunch, setMsg }: { locations: L
   )
 }
 
-// ---------- Active Directory ----------
+// ---------- Active Directory (connect → OU tree → import) ----------
+type OU = { dn: string; name: string }
+type ADBrowse = { base_dn: string; ous: OU[] }
+// parent DN = the DN with its first RDN removed.
+const parentDN = (dn: string) => dn.slice(dn.indexOf(',') + 1)
+
 function ADTab({ locations, locPath, onLaunch, setMsg }: { locations: Location[]; locPath: Record<string, string>; onLaunch: (j: DiscoveryJob) => void; setMsg: (s: string) => void }) {
-  const [ad, setAd] = useState({ dc_host: '', base_dn: '', location_id: '' })
-  const run = useMutation({
-    mutationFn: () => api.post<DiscoveryJob>('/discovery/ad-import', { ...ad, location_id: ad.location_id || null }),
-    onSuccess: (j) => { onLaunch(j as DiscoveryJob); setMsg('AD import launched — see Jobs.') },
+  const [host, setHost] = useState('')
+  const [locId, setLocId] = useState('')
+  const [tree, setTree] = useState<ADBrowse | null>(null)
+  const [sel, setSel] = useState<Set<string>>(new Set())
+
+  const connect = useMutation({
+    mutationFn: () => api.post<ADBrowse>('/discovery/ad/browse', { dc_host: host.trim() }),
+    onSuccess: (t) => { setTree(t as ADBrowse); setSel(new Set()); setMsg(`Connected — ${(t as ADBrowse).ous.length} OUs under ${(t as ADBrowse).base_dn}.`) },
+    onError: (e) => { setTree(null); setMsg((e as Error).message) },
+  })
+  const importOUs = useMutation({
+    mutationFn: async () => {
+      let last: DiscoveryJob | null = null
+      for (const dn of sel) last = await api.post<DiscoveryJob>('/discovery/ad-import', { dc_host: host.trim(), base_dn: dn, location_id: locId || null })
+      return last
+    },
+    onSuccess: (j) => { if (j) onLaunch(j as DiscoveryJob); setMsg(`Launched AD import for ${sel.size} OU(s) — see Jobs.`) },
     onError: (e) => setMsg((e as Error).message),
   })
-  return (
-    <div className="card">
-      <h3>Active Directory import <span className="muted" style={{ fontSize: 12, fontWeight: 400 }}>— computers from an OU subtree (LDAP)</span></h3>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-        <input style={{ ...input, width: 200 }} placeholder="DC host (dc01.corp.local)" value={ad.dc_host} onChange={(e) => setAd({ ...ad, dc_host: e.target.value })} />
-        <input style={{ ...input, width: 320 }} placeholder="base DN (OU=HotelA,DC=corp,DC=local)" value={ad.base_dn} onChange={(e) => setAd({ ...ad, base_dn: e.target.value })} />
-        <select style={{ ...input, width: 200 }} value={ad.location_id} onChange={(e) => setAd({ ...ad, location_id: e.target.value })}>
-          <option value="">Site scope (optional)…</option>
-          {locations.map((l) => <option key={l.id} value={l.id}>{locPath[l.id]}</option>)}
-        </select>
-        <button style={btn} disabled={!ad.dc_host.trim() || !ad.base_dn.trim() || run.isPending} onClick={() => run.mutate()}>Import from AD</button>
-      </div>
-      <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>Needs an <code>ldap</code> credential scoped to the DC. A graphical OU browser is coming next; for now enter the base DN directly.</div>
+
+  // build children map by parent DN (roots = OUs whose parent isn't in the set)
+  const dns = new Set((tree?.ous ?? []).map((o) => o.dn))
+  const kids: Record<string, OU[]> = {}
+  for (const o of tree?.ous ?? []) { const p = dns.has(parentDN(o.dn)) ? parentDN(o.dn) : '__root__'; (kids[p] ??= []).push(o) }
+  const toggle = (dn: string) => setSel((s) => { const n = new Set(s); n.has(dn) ? n.delete(dn) : n.add(dn); return n })
+
+  const Node = ({ o, depth }: { o: OU; depth: number }) => (
+    <div style={{ marginLeft: depth * 18 }}>
+      <label style={{ display: 'flex', gap: 6, alignItems: 'center', padding: '2px 0', cursor: 'pointer' }}>
+        <input type="checkbox" checked={sel.has(o.dn)} onChange={() => toggle(o.dn)} />
+        <span>📁 {o.name}</span>
+        <span className="muted" style={{ fontSize: 11 }}>{o.dn}</span>
+      </label>
+      {(kids[o.dn] ?? []).map((k) => <Node key={k.dn} o={k} depth={depth + 1} />)}
     </div>
+  )
+
+  return (
+    <>
+      <div className="card">
+        <h3>Active Directory <span className="muted" style={{ fontSize: 12, fontWeight: 400 }}>— connect, browse OUs, import computers</span></h3>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+          <input style={{ ...input, width: 220 }} placeholder="DC host (dc01.corp.local)" value={host} onChange={(e) => setHost(e.target.value)} />
+          <button style={btn} disabled={!host.trim() || connect.isPending} onClick={() => connect.mutate()}>{connect.isPending ? 'Connecting…' : 'Connect'}</button>
+        </div>
+        <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>Needs an <code>ldap</code> credential scoped to the DC's IP (Credentials page). Connect reads the directory root and lists its OUs.</div>
+      </div>
+
+      {tree && (
+        <div className="card">
+          <h3>OU tree <span className="muted" style={{ fontSize: 12, fontWeight: 400 }}>— {tree.base_dn}</span></h3>
+          {tree.ous.length === 0 && <div className="muted">No OUs found under the directory root.</div>}
+          <div style={{ maxHeight: 360, overflow: 'auto', border: '1px solid #2a2a2a', borderRadius: 6, padding: 8 }}>
+            {(kids['__root__'] ?? []).map((o) => <Node key={o.dn} o={o} depth={0} />)}
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 10, flexWrap: 'wrap' }}>
+            <span className="muted" style={{ fontSize: 12 }}>{sel.size} OU(s) selected → assign to</span>
+            <select style={{ ...input, width: 220 }} value={locId} onChange={(e) => setLocId(e.target.value)}>
+              <option value="">Site scope (optional)…</option>
+              {locations.map((l) => <option key={l.id} value={l.id}>{locPath[l.id]}</option>)}
+            </select>
+            <button style={btn} disabled={sel.size === 0 || importOUs.isPending} onClick={() => importOUs.mutate()}>{importOUs.isPending ? 'Importing…' : `Import selected (${sel.size})`}</button>
+          </div>
+        </div>
+      )}
+    </>
   )
 }
 

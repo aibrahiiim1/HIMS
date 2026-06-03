@@ -415,6 +415,71 @@ func CUCM(ctx context.Context, d Deps, ip netip.Addr, loc *uuid.UUID, version st
 	return Result{DeviceID: id, Summary: fmt.Sprintf("%d phones", len(facts.Phones))}, nil
 }
 
+// ADBrowseResult is the OU tree (flat) for the graphical AD browser.
+type ADBrowseResult struct {
+	BaseDN string        `json:"base_dn"`
+	OUs    []adimport.OU `json:"ous"`
+}
+
+// ADBrowse binds to the DC (resolving an ldap credential scoped to its IP) and
+// returns the OU subtree under baseDN. When baseDN is empty it reads the
+// directory's defaultNamingContext (the domain root) from RootDSE.
+func ADBrowse(ctx context.Context, d Deps, host, baseDN string) (ADBrowseResult, error) {
+	user, pass, err := d.resolveLDAP(ctx, host)
+	if err != nil {
+		return ADBrowseResult{}, err
+	}
+	conn, err := ldap.DialURL("ldap://" + host + ":389")
+	if err != nil {
+		return ADBrowseResult{}, fmt.Errorf("adbrowse: LDAP dial failed: %w", err)
+	}
+	defer conn.Close()
+	if err := conn.Bind(user, pass); err != nil {
+		return ADBrowseResult{}, fmt.Errorf("adbrowse: LDAP bind failed: %w", err)
+	}
+	if strings.TrimSpace(baseDN) == "" {
+		res, err := conn.Search(ldap.NewSearchRequest("", ldap.ScopeBaseObject, ldap.NeverDerefAliases, 0, 0, false,
+			"(objectClass=*)", []string{"defaultNamingContext"}, nil))
+		if err != nil || len(res.Entries) == 0 {
+			return ADBrowseResult{}, fmt.Errorf("adbrowse: could not read directory root (RootDSE): %v", err)
+		}
+		baseDN = res.Entries[0].GetAttributeValue("defaultNamingContext")
+	}
+	ous, err := adimport.SearchOUs(conn, baseDN)
+	if err != nil {
+		return ADBrowseResult{}, fmt.Errorf("adbrowse: OU search failed: %w", err)
+	}
+	return ADBrowseResult{BaseDN: baseDN, OUs: ous}, nil
+}
+
+// resolveLDAP resolves an ldap credential scoped to the DC's IP.
+func (d Deps) resolveLDAP(ctx context.Context, host string) (user, pass string, err error) {
+	var dcAddr netip.Addr
+	if hosts, _ := net.LookupHost(host); len(hosts) > 0 {
+		for _, s := range hosts {
+			if a, e := netip.ParseAddr(s); e == nil {
+				dcAddr = a
+				break
+			}
+		}
+	}
+	if dcAddr.IsValid() {
+		groups, _ := d.Fetcher.CredentialCandidates(ctx, dcAddr, nil)
+		for _, g := range groups {
+			for _, m := range g.Members {
+				if m.Kind != domain.CredLDAP {
+					continue
+				}
+				if dec, e := d.Decrypt(ctx, m.ID); e == nil {
+					u, p := splitUserPass(dec.Community)
+					return u, p, nil
+				}
+			}
+		}
+	}
+	return "", "", fmt.Errorf("no ldap credential resolved for DC %s", host)
+}
+
 // ADImport imports AD computer objects over LDAP from a base DN and persists
 // them (reconcile by primary_ip+location). Computers that don't resolve to an
 // IPv4 are skipped + counted. Resolves an ldap credential scoped to the DC IP.
@@ -422,36 +487,9 @@ func ADImport(ctx context.Context, d Deps, host, baseDN string, loc *uuid.UUID) 
 	if baseDN == "" {
 		return ADResult{}, fmt.Errorf("adimport: baseDN is required")
 	}
-	// Resolve an ldap credential scoped to the DC's IP.
-	var dcAddr netip.Addr
-	if hosts, _ := net.LookupHost(host); len(hosts) > 0 {
-		for _, s := range hosts {
-			if a, err := netip.ParseAddr(s); err == nil {
-				dcAddr = a
-				break
-			}
-		}
-	}
-	var user, pass string
-	if dcAddr.IsValid() {
-		groups, _ := d.Fetcher.CredentialCandidates(ctx, dcAddr, loc)
-		for _, g := range groups {
-			for _, m := range g.Members {
-				if m.Kind != domain.CredLDAP {
-					continue
-				}
-				if dec, err := d.Decrypt(ctx, m.ID); err == nil {
-					user, pass = splitUserPass(dec.Community)
-					break
-				}
-			}
-			if user != "" {
-				break
-			}
-		}
-	}
-	if user == "" {
-		return ADResult{}, fmt.Errorf("adimport: no ldap credential resolved for DC %s", host)
+	user, pass, err := d.resolveLDAP(ctx, host)
+	if err != nil {
+		return ADResult{}, fmt.Errorf("adimport: %w", err)
 	}
 
 	conn, err := ldap.DialURL("ldap://" + host + ":389")

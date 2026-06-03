@@ -97,6 +97,36 @@ func (s *Server) runControllerImport(jobID uuid.UUID, kind string, ip netip.Addr
 	})
 }
 
+type adBrowseReq struct {
+	DCHost string `json:"dc_host"`
+	BaseDN string `json:"base_dn"` // optional; empty = directory root (RootDSE)
+}
+
+// browseAD binds the DC and returns its OU tree for the graphical browser.
+func (s *Server) browseAD(w http.ResponseWriter, r *http.Request) {
+	if s.fetcher == nil || s.cipher == nil {
+		http.Error(w, "AD browse not configured (needs DB + encryption key)", http.StatusServiceUnavailable)
+		return
+	}
+	var req adBrowseReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.DCHost == "" {
+		http.Error(w, "dc_host is required", http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	res, err := collect.ADBrowse(ctx, s.collectDeps(ctx), req.DCHost, req.BaseDN)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
 type adImportReq struct {
 	DCHost     string  `json:"dc_host"`
 	BaseDN     string  `json:"base_dn"`

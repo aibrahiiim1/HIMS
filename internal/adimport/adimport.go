@@ -41,6 +41,47 @@ const ComputerFilter = "(objectClass=computer)"
 // computerAttrs are the attributes we request.
 var computerAttrs = []string{"cn", "sAMAccountName", "dNSHostName", "operatingSystem", "operatingSystemVersion", "userAccountControl"}
 
+// OU is an Active Directory organizational unit (for the graphical browser).
+type OU struct {
+	DN   string // distinguishedName, e.g. "OU=Floor1,OU=HotelA,DC=corp,DC=local"
+	Name string // ou / name
+}
+
+// OUFilter matches organizational units.
+const OUFilter = "(objectClass=organizationalUnit)"
+
+// SearchOUs enumerates the OU subtree under baseDN (the tree to pick from).
+func SearchOUs(s Searcher, baseDN string) ([]OU, error) {
+	req := ldap.NewSearchRequest(
+		baseDN, ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 0, 0, false,
+		OUFilter, []string{"ou", "name", "distinguishedName"}, nil,
+	)
+	res, err := s.Search(req)
+	if err != nil {
+		return nil, err
+	}
+	return ParseOUs(res.Entries), nil
+}
+
+// ParseOUs maps LDAP entries to OU records (pure; the tested core).
+func ParseOUs(entries []*ldap.Entry) []OU {
+	out := make([]OU, 0, len(entries))
+	for _, e := range entries {
+		name := e.GetAttributeValue("ou")
+		if name == "" {
+			name = e.GetAttributeValue("name")
+		}
+		dn := e.GetAttributeValue("distinguishedName")
+		if dn == "" {
+			dn = e.DN
+		}
+		if dn != "" {
+			out = append(out, OU{DN: dn, Name: name})
+		}
+	}
+	return out
+}
+
 // SearchComputers runs the computer query under baseDN (an OU or domain root)
 // and parses the results. baseDN scopes the import to a site's OU subtree.
 func SearchComputers(s Searcher, baseDN string) ([]Computer, error) {
