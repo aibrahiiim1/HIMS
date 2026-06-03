@@ -180,7 +180,14 @@ monitoring_samples (TimescaleDB hypertable).
   scaffolding):** `wlan_controller` driver (banner+port fingerprint),
   `wlan_controller_info` + `access_points` schema, Wireless UI. Deep vendor
   REST (UniFi/Omada/Ruckus) AP/client enumeration deferred.
-- **Phase 7 — Databases** (SQL/Oracle/PostgreSQL) + AD/DNS/DHCP.
+- **Phase 9 — Databases + AD/DNS/DHCP ✅ DONE (role cut):** broadened
+  port→role inference (+web/file servers), fleet `RoleSummary` +
+  `ListDevicesByRole` APIs, Roles UI (tiles → drill-down). Deep confirmation
+  (LDAP bind / SQL handshake) deferred.
+- **⚠️ BACKLOG-PERSIST (high priority):** wire the **discovery→persist apply
+  worker** — nothing currently calls `CreateDevice`/`AddDeviceRole`/inventory
+  writers, so read-path UIs are empty until this integrator lands. It turns
+  the shipped engines + drivers into a live system.
 - **Phase 8 — Peripherals** (printers/UPS/fingerprint/IP phones) + voice.
 - **Phase 9 — Operations layer:** work orders → spare parts → purchases →
   expenses → licenses/contracts; alert → work-order bridge.

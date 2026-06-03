@@ -48,3 +48,22 @@ func TestInferRoles_NoServicePorts(t *testing.T) {
 		t.Errorf("ssh/https alone infer no service roles, got %v", roles)
 	}
 }
+
+func TestInferRoles_FileAndWeb(t *testing.T) {
+	roles := InferRoles([]int{80, 445, 2049})
+	for _, want := range []domain.DeviceRole{domain.RoleWebServer, domain.RoleFileServer} {
+		if !hasRole(roles, want) {
+			t.Errorf("expected role %s, got %v", want, roles)
+		}
+	}
+	// 445 and 2049 must not double-add file_server.
+	n := 0
+	for _, r := range roles {
+		if r == domain.RoleFileServer {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("file_server added %d times; want 1", n)
+	}
+}

@@ -278,6 +278,11 @@ export interface ExpenseByLocation {
   count: number
 }
 
+export interface RoleSummaryRow {
+  role: string
+  count: number
+}
+
 export interface WLANControllerInfo {
   device_id?: string
   vendor?: string | null

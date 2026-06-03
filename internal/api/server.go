@@ -91,6 +91,10 @@ func (s *Server) routes() {
 		r.Get("/search", s.search) // ?q=<IP|MAC|name>
 		r.Get("/topology/links", s.allLinks)
 
+		// --- Roles (CMDB role cut: databases, AD/DNS/DHCP, …) --------
+		r.Get("/roles/summary", s.roleSummary)
+		r.Get("/roles/{role}/devices", s.devicesByRole)
+
 		// --- Locations -----------------------------------------------
 		r.Get("/locations", s.listLocations)
 		r.Get("/locations/{id}/children", s.childLocations)
@@ -362,6 +366,31 @@ func (s *Server) licenses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := s.queries.ListLicenses(ctx, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+// ---- Role handlers -----------------------------------------------------------
+
+func (s *Server) roleSummary(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.queries.RoleSummary(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (s *Server) devicesByRole(w http.ResponseWriter, r *http.Request) {
+	role := chi.URLParam(r, "role")
+	if role == "" {
+		writeErr(w, errBadRequest("role is required"))
+		return
+	}
+	rows, err := s.queries.ListDevicesByRole(r.Context(), role)
 	if err != nil {
 		writeErr(w, err)
 		return

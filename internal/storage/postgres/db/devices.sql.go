@@ -233,6 +233,53 @@ func (q *Queries) ListDevicesByCategory(ctx context.Context, category string) ([
 	return items, nil
 }
 
+const listDevicesByRole = `-- name: ListDevicesByRole :many
+SELECT d.id, d.location_id, d.primary_ip, d.hostname, d.name, d.vendor, d.model, d.serial, d.os_version, d.category, d.status, d.driver, d.credential_id, d.last_discovery_at, d.last_monitoring_at, d.metadata, d.created_at, d.updated_at, d.deleted_at FROM devices d
+JOIN device_roles r ON r.device_id = d.id
+WHERE r.role = $1
+ORDER BY d.name
+`
+
+func (q *Queries) ListDevicesByRole(ctx context.Context, role string) ([]Device, error) {
+	rows, err := q.db.Query(ctx, listDevicesByRole, role)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Device{}
+	for rows.Next() {
+		var i Device
+		if err := rows.Scan(
+			&i.ID,
+			&i.LocationID,
+			&i.PrimaryIp,
+			&i.Hostname,
+			&i.Name,
+			&i.Vendor,
+			&i.Model,
+			&i.Serial,
+			&i.OsVersion,
+			&i.Category,
+			&i.Status,
+			&i.Driver,
+			&i.CredentialID,
+			&i.LastDiscoveryAt,
+			&i.LastMonitoringAt,
+			&i.Metadata,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const liveDeviceByIPAndLocation = `-- name: LiveDeviceByIPAndLocation :one
 SELECT id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at FROM devices
 WHERE primary_ip = $1 AND location_id = $2 AND deleted_at IS NULL
@@ -270,6 +317,39 @@ func (q *Queries) LiveDeviceByIPAndLocation(ctx context.Context, arg LiveDeviceB
 		&i.DeletedAt,
 	)
 	return i, err
+}
+
+const roleSummary = `-- name: RoleSummary :many
+SELECT role, COUNT(*) AS count
+FROM device_roles
+GROUP BY role
+ORDER BY count DESC, role
+`
+
+type RoleSummaryRow struct {
+	Role  string `json:"role"`
+	Count int64  `json:"count"`
+}
+
+// Fleet-wide role rollup: how many devices hold each role (the CMDB role cut).
+func (q *Queries) RoleSummary(ctx context.Context) ([]RoleSummaryRow, error) {
+	rows, err := q.db.Query(ctx, roleSummary)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []RoleSummaryRow{}
+	for rows.Next() {
+		var i RoleSummaryRow
+		if err := rows.Scan(&i.Role, &i.Count); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const setDeviceCredential = `-- name: SetDeviceCredential :exec

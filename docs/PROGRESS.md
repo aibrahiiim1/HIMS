@@ -532,6 +532,39 @@ is bound and operators need AP inventory.
 
 ---
 
+## Phase 9 — Databases + AD/DNS/DHCP roles ✅ (closed 2026-06-03)
+
+The multi-role CMDB cut. Role *inference* largely landed in 3a; this phase
+broadens it and makes roles a first-class fleet view.
+
+- ✅ broadened `InferRoles` (port→role): added web_server (80) + file_server
+  (445/2049) alongside the existing DNS/DHCP/DC/SQL/Oracle/PostgreSQL. Bare
+  443 deliberately excluded (too many appliances). Tests: file+web, no
+  double-add of file_server.
+- ✅ fleet role queries `RoleSummary` (count per role) + `ListDevicesByRole`;
+  APIs `/roles/summary` + `/roles/{role}/devices`.
+- ✅ UI: **Roles** page (role-count tiles → drill-down device list).
+- ✅ build/vet/test + frontend green; gofmt clean.
+
+### ⚠️ Cross-cutting finding → BACKLOG (high priority): discovery→persist apply worker
+Reconnaissance during this phase confirmed `CreateDevice`/`AddDeviceRole`/the
+inventory writers are **not called by any production path** — HIMS has the
+discovery pipeline (probe→classify→collect `Facts`) and the storage layer,
+but the **apply worker** that persists discovered devices + facts + roles +
+inventory into the DB is not yet wired. Consequence: every read-path UI
+(devices, roles, monitoring seed, topology) reads tables that nothing
+populates until this lands. **This is now the highest-value next build** —
+it's the integrator that turns all the engines + drivers shipped so far into
+a live system. Trigger: before any real fleet onboarding. Filed as
+BACKLOG-PERSIST.
+
+### Carry-forward
+Deep role confirmation (LDAP bind, SQL handshake) — needs those transports;
+deferred. Role auto-application happens inside the persist worker above.
+
+---
+
 ## Later phases ⬜
-See `PLAN.md` §10. Remaining: databases/AD, peripherals/voice, MIB upload
-engine + reporting/dashboards.
+See `PLAN.md` §10. Remaining: **discovery→persist apply worker
+(BACKLOG-PERSIST, high priority)**, MIB upload engine, reporting/dashboards,
+peripherals/voice, security follow-ups.

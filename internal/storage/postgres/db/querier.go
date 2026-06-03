@@ -92,6 +92,7 @@ type Querier interface {
 	ListDeviceFacts(ctx context.Context, deviceID uuid.UUID) ([]DeviceFact, error)
 	ListDeviceRoles(ctx context.Context, deviceID uuid.UUID) ([]DeviceRole, error)
 	ListDevicesByCategory(ctx context.Context, category string) ([]Device, error)
+	ListDevicesByRole(ctx context.Context, role string) ([]Device, error)
 	// Devices with a reachable IP but no monitoring check yet — the seeder turns
 	// each into a default TCP check (port chosen by category).
 	ListDevicesNeedingDefaultCheck(ctx context.Context) ([]ListDevicesNeedingDefaultCheckRow, error)
@@ -150,6 +151,8 @@ type Querier interface {
 	ResolveCandidatesForIP(ctx context.Context, arg ResolveCandidatesForIPParams) ([]ResolveCandidatesForIPRow, error)
 	// Auto-resolve: any un-resolved alert whose check has recovered to 'up'.
 	ResolveRecoveredAlerts(ctx context.Context) ([]ResolveRecoveredAlertsRow, error)
+	// Fleet-wide role rollup: how many devices hold each role (the CMDB role cut).
+	RoleSummary(ctx context.Context) ([]RoleSummaryRow, error)
 	SearchByHostname(ctx context.Context, hostname *string) ([]SearchByHostnameRow, error)
 	// Primary search entry point for the IP → MAC → port path resolution.
 	SearchByIP(ctx context.Context, primaryIp *netip.Addr) (SearchByIPRow, error)

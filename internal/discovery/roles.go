@@ -36,5 +36,13 @@ func InferRoles(openPorts []int) []domain.DeviceRole {
 	if has(5432) {
 		add(domain.RolePostgreSQL)
 	}
+	// File services: SMB (445) or NFS (2049). A bare management 443 is NOT a
+	// web-server signal (too many appliances expose 443) — plain HTTP (80) is.
+	if has(445) || has(2049) {
+		add(domain.RoleFileServer)
+	}
+	if has(80) {
+		add(domain.RoleWebServer)
+	}
 	return roles
 }

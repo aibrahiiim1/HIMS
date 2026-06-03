@@ -45,3 +45,16 @@ ON CONFLICT (device_id, role) DO NOTHING;
 
 -- name: ListDeviceRoles :many
 SELECT * FROM device_roles WHERE device_id = $1 ORDER BY role;
+
+-- name: RoleSummary :many
+-- Fleet-wide role rollup: how many devices hold each role (the CMDB role cut).
+SELECT role, COUNT(*) AS count
+FROM device_roles
+GROUP BY role
+ORDER BY count DESC, role;
+
+-- name: ListDevicesByRole :many
+SELECT d.* FROM devices d
+JOIN device_roles r ON r.device_id = d.id
+WHERE r.role = $1
+ORDER BY d.name;
