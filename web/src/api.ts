@@ -309,6 +309,15 @@ export interface PrinterSupply {
   pct?: number | null
 }
 
+export interface PhoneExtension {
+  id: string
+  device_id: string
+  name: string
+  model?: string | null
+  description?: string | null
+  device_pool?: string | null
+}
+
 export interface BMCInfo {
   device_id?: string
   vendor?: string | null

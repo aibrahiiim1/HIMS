@@ -375,6 +375,17 @@ type OidMapping struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+type PbxPhone struct {
+	ID               uuid.UUID `json:"id"`
+	DeviceID         uuid.UUID `json:"device_id"`
+	Name             string    `json:"name"`
+	Model            *string   `json:"model"`
+	Description      *string   `json:"description"`
+	DevicePool       *string   `json:"device_pool"`
+	CollectionSource string    `json:"collection_source"`
+	LastSeenAt       time.Time `json:"last_seen_at"`
+}
+
 type PortVlan struct {
 	ID               uuid.UUID `json:"id"`
 	DeviceID         uuid.UUID `json:"device_id"`

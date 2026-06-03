@@ -101,6 +101,16 @@ type Facts struct {
 	PrinterSupplies []PrinterSupplySnap
 	// UPS status (UPS-MIB).
 	UPS *UPSSnap
+	// PBX phone registry (Cisco CUCM AXL).
+	Phones []PhoneSnap
+}
+
+// PhoneSnap is one phone registered to a PBX / call manager.
+type PhoneSnap struct {
+	Name        string
+	Model       string
+	Description string
+	DevicePool  string
 }
 
 // UPSSnap is a UPS's current battery/load status (one row per device).

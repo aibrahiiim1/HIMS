@@ -63,6 +63,7 @@ type Querier interface {
 	DeleteStaleLicenses(ctx context.Context, arg DeleteStaleLicensesParams) error
 	DeleteStaleMACEntries(ctx context.Context, arg DeleteStaleMACEntriesParams) error
 	DeleteStaleNeighbors(ctx context.Context, arg DeleteStaleNeighborsParams) error
+	DeleteStalePbxPhones(ctx context.Context, arg DeleteStalePbxPhonesParams) error
 	DeleteStalePortVlans(ctx context.Context, arg DeleteStalePortVlansParams) error
 	DeleteStalePrinterSupplies(ctx context.Context, arg DeleteStalePrinterSuppliesParams) error
 	DeleteStaleServerStorage(ctx context.Context, arg DeleteStaleServerStorageParams) error
@@ -134,6 +135,7 @@ type Querier interface {
 	ListNVRChannels(ctx context.Context, nvrDeviceID uuid.UUID) ([]NvrChannel, error)
 	ListNeighbors(ctx context.Context, deviceID uuid.UUID) ([]Neighbor, error)
 	ListOIDMappings(ctx context.Context) ([]OidMapping, error)
+	ListPbxPhones(ctx context.Context, deviceID uuid.UUID) ([]PbxPhone, error)
 	ListPortVlans(ctx context.Context, deviceID uuid.UUID) ([]PortVlan, error)
 	ListPrinterSupplies(ctx context.Context, deviceID uuid.UUID) ([]PrinterSupply, error)
 	ListPurchases(ctx context.Context) ([]Purchase, error)
@@ -220,6 +222,7 @@ type Querier interface {
 	UpsertNVRChannel(ctx context.Context, arg UpsertNVRChannelParams) (NvrChannel, error)
 	// ---- Neighbors (LLDP/CDP) -----------------------------------------------
 	UpsertNeighbor(ctx context.Context, arg UpsertNeighborParams) (Neighbor, error)
+	UpsertPbxPhone(ctx context.Context, arg UpsertPbxPhoneParams) error
 	UpsertPortVlan(ctx context.Context, arg UpsertPortVlanParams) error
 	UpsertPrinterSupply(ctx context.Context, arg UpsertPrinterSupplyParams) error
 	UpsertServerStorage(ctx context.Context, arg UpsertServerStorageParams) error

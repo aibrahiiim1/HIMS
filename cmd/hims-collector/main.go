@@ -30,9 +30,11 @@ import (
 	"github.com/coralsearesorts/hims/internal/alerting"
 	"github.com/coralsearesorts/hims/internal/apply"
 	"github.com/coralsearesorts/hims/internal/credresolver"
+	"github.com/coralsearesorts/hims/internal/cucm"
 	"github.com/coralsearesorts/hims/internal/discovery"
 	"github.com/coralsearesorts/hims/internal/domain"
 	"github.com/coralsearesorts/hims/internal/driver"
+	cucmdrv "github.com/coralsearesorts/hims/internal/driver/cucm"
 	hypervdrv "github.com/coralsearesorts/hims/internal/driver/hyperv"
 	omadadrv "github.com/coralsearesorts/hims/internal/driver/omada"
 	onvifdrv "github.com/coralsearesorts/hims/internal/driver/onvif"
@@ -70,6 +72,8 @@ func main() {
 	omadaIP := flag.String("omada", "", "collect a TP-Link Omada controller's APs AND persist (needs DB + http_basic creds)")
 	omadaCID := flag.String("omada-cid", "", "Omada controller id (from /api/info)")
 	ruckusIP := flag.String("ruckus", "", "collect a Ruckus SmartZone controller's APs AND persist (needs DB + http_basic creds)")
+	cucmIP := flag.String("cucm", "", "collect a Cisco CUCM publisher's phone registry over AXL AND persist (needs DB + http_basic/vendor_api creds)")
+	cucmVer := flag.String("cucm-version", "12.5", "CUCM AXL schema version (e.g. 12.5, 14.0)")
 	concurrency := flag.Int("concurrency", 16, "max concurrent hosts during -scan")
 	maxHosts := flag.Int("max-hosts", 4096, "refuse a -scan scope larger than this")
 	location := flag.String("location", "", "location UUID to scope discovered devices to")
@@ -139,6 +143,11 @@ func main() {
 
 	if *ruckusIP != "" {
 		runRuckus(reg, *ruckusIP, *location)
+		return
+	}
+
+	if *cucmIP != "" {
+		runCUCM(reg, *cucmIP, *cucmVer, *location)
 		return
 	}
 
@@ -576,6 +585,41 @@ func runRuckus(reg *driver.Registry, ipStr, locStr string) {
 		os.Exit(1)
 	}
 	fmt.Printf("Ruckus %s persisted as device %s (%d APs)\n", ip, id, len(f.APs))
+}
+
+// runCUCM collects a Cisco CUCM publisher's phone registry over AXL (SOAP) and
+// persists it. AXL is HTTP Basic per-request (no session login); the AXL
+// service runs on Tomcat 8443. Resolves an http_basic/vendor_api credential.
+func runCUCM(reg *driver.Registry, ipStr, version, locStr string) {
+	ip, err := netip.ParseAddr(ipStr)
+	if err != nil {
+		slog.Error("invalid -cucm IP", "value", ipStr, "error", err)
+		os.Exit(1)
+	}
+	locationID := parseLocationID(locStr)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	queries, cfg, closeDB := buildDiscoverDeps(ctx, reg)
+	defer closeDB()
+
+	user, pass, bound := resolveWLANCred(ctx, cfg, ip, locationID)
+	if user == "" {
+		slog.Error("cucm: no credential resolved", "ip", ip.String())
+		os.Exit(1)
+	}
+	client := cucm.NewClient("https://"+ip.String()+":8443", user, pass, version, cookieJarClient())
+	f, err := cucmdrv.New().Collect(&cucmdrv.Session{Client: client, Ctx: ctx}, driver.Probe{IP: ip})
+	if err != nil {
+		slog.Error("cucm: collect failed", "error", err)
+		os.Exit(1)
+	}
+	res := discovery.HostResult{IP: ip, Alive: true, MatchedDrv: cucmdrv.New(), Match: driver.Match{Confidence: 75, Category: domain.CatPBX}, Facts: &f, BoundCred: bound}
+	id, err := apply.New(queries).Apply(ctx, res, locationID)
+	if err != nil {
+		slog.Error("cucm: apply failed", "error", err)
+		os.Exit(1)
+	}
+	fmt.Printf("CUCM %s persisted as device %s (%d phones)\n", ip, id, len(f.Phones))
 }
 
 // runUniFi collects a UniFi controller's AP inventory and persists it.

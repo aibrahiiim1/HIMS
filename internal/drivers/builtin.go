@@ -9,6 +9,7 @@ import (
 	"github.com/coralsearesorts/hims/internal/driver/aruba"
 	"github.com/coralsearesorts/hims/internal/driver/cctv"
 	"github.com/coralsearesorts/hims/internal/driver/cisco"
+	"github.com/coralsearesorts/hims/internal/driver/cucm"
 	"github.com/coralsearesorts/hims/internal/driver/esxi"
 	"github.com/coralsearesorts/hims/internal/driver/fortigate"
 	"github.com/coralsearesorts/hims/internal/driver/hostsnmp"
@@ -38,5 +39,6 @@ func Builtin() *driver.Registry {
 	r.Register(vspheredrv.New())
 	r.Register(printer.New())
 	r.Register(ups.New())
+	r.Register(cucm.New())
 	return r
 }

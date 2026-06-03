@@ -985,15 +985,49 @@ Parsers tested against documented-shape samples; token/session flows + device
 shapes vary by controller version. Validate against real controllers once
 credentials are bound.
 
-## Status — entire spec built; all 3 WLAN vendors; only voice + live-hardware remain
+## Voice: CUCM AXL phone registry ✅ (closed 2026-06-03)
+
+Adds the PBX / call-manager template — the registered-phone inventory pulled
+from Cisco Unified Communications Manager over AXL (SOAP). Reuses the ONVIF
+SOAP-over-Doer pattern; the SOAP-response parsing is the tested core.
+
+- ✅ `internal/cucm` — thin AXL client over an injectable `Doer`: POSTs
+  `listPhone` (searchCriteria name=%, returnedTags name/model/description/
+  devicePoolName) to `/axl/` with HTTP Basic + `SOAPAction: CUCM:DB ver=<v>
+  listPhone`; `parsePhones` walks `Body>listPhoneResponse>return>phone`.
+  Tested against a sample `listPhoneResponse` + SOAP-fault + 401 paths.
+- ✅ `internal/driver/cucm` — fingerprint ("cisco unified"/"communication-
+  manager" banner → `CatPBX`, conf 75); collection-only `Collect` →
+  `Facts.Phones` + `KV[phone_count]`. Wrong-session guard.
+- ✅ `driver.PhoneSnap` + `Facts.Phones`; migration `000021_pbx_phones`
+  (UNIQUE(device_id,name), source `axl`, stale-prune by last_seen);
+  `pbx.sql` upsert/list/delete-stale + sqlc regen.
+- ✅ `internal/apply` — `UpsertPbxPhone` + `DeleteStalePbxPhones` (source
+  `axl`); Writer interface + fakeWriter. Registered in `drivers.Builtin()`
+  + `builtin_test.go`.
+- ✅ API `GET /devices/{id}/phones`; `web/src/api.ts` `PhoneExtension`;
+  `PbxDetail` page + `/pbx` nav/route (DeviceList category `pbx`).
+- ✅ collector `-cucm <ip> [-cucm-version 12.5]` (shared `resolveWLANCred`
+  + `cookieJarClient`) → apply → PbxDetail.
+- ✅ gofmt + go build/vet/test ./... green; frontend tsc + build green.
+
+### ⚠️ Live-validation trigger
+No real CUCM available. The AXL schema version in the SOAPAction + namespace
+must match the CUCM release (8.x–15.x), and `listPhone` is paged on large
+clusters — v1 fetches the first page. Validate against a real CUCM publisher
+once an AXL application-user credential is bound; confirm paging is sufficient
+for the fleet's phone count or add `first`/`skip` paging.
+
+## Status — entire spec built incl. voice; only live-hardware validation remains
 The entire requested scope is shipped, green, committed. Drivers:
 aruba/cisco/huawei (switch SNMP), fortigate (firewall), host_snmp +
 vmware_esxi (servers/virt SNMP), cctv + wlan_controller (banner), redfish_bmc
 (HTTP), vmware_vsphere (govmomi), hyperv (WinRM), onvif_camera (SOAP), unifi
-(REST). Engines: discovery pipeline + persist worker + CIDR scan, credential
++ omada + ruckus (REST), cucm (AXL/SOAP voice). Engines: discovery pipeline +
+persist worker + CIDR scan, credential
 resolver + AES-256-GCM crypto, monitoring (TCP + SNMP) + alerting + work-order
 bridge, topology, operations (work orders/parts/purchases/expenses/licenses),
 MIB upload, reporting/dashboard. Remaining = explicitly deferred-with-trigger:
-SNMP v3; Omada/Ruckus REST; scan job-record API/UI; AD-import; per-physical-
-drive (Redfish) + GetStreamUri (ONVIF) + vCenter-multi-host (vSphere); and the
-live-hardware validations for every credentialed collector.
+scan job-record API/UI; per-physical-drive (Redfish) + GetStreamUri (ONVIF) +
+vCenter-multi-host (vSphere) + CUCM AXL paging; and the live-hardware
+validations for every credentialed collector.

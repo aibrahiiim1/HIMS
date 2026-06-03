@@ -103,6 +103,7 @@ func (s *Server) routes() {
 		r.Get("/devices/{id}/bmc", s.deviceBMC)
 		r.Get("/devices/{id}/bmc-sensors", s.deviceBMCSensors)
 		r.Get("/devices/{id}/printer-supplies", s.devicePrinterSupplies)
+		r.Get("/devices/{id}/phones", s.devicePhones)
 		r.Get("/devices/{id}/ups", s.deviceUPS)
 
 		// --- Topology & search ----------------------------------------
@@ -367,6 +368,19 @@ func (s *Server) devicePrinterSupplies(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := s.queries.ListPrinterSupplies(ctx, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (s *Server) devicePhones(w http.ResponseWriter, r *http.Request) {
+	ctx, id, ok := pathDevice(w, r)
+	if !ok {
+		return
+	}
+	rows, err := s.queries.ListPbxPhones(ctx, id)
 	if err != nil {
 		writeErr(w, err)
 		return

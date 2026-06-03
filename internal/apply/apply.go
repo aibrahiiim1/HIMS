@@ -26,6 +26,7 @@ import (
 )
 
 const sourceSNMP = "snmp"
+const sourceAXL = "axl"
 
 // Writer is the persistence surface the applier needs. *db.Queries satisfies
 // it; tests use a fake. Narrow-by-intent so the write set is auditable.
@@ -66,6 +67,8 @@ type Writer interface {
 	UpsertAccessPoint(ctx context.Context, arg db.UpsertAccessPointParams) (db.AccessPoint, error)
 	UpsertPrinterSupply(ctx context.Context, arg db.UpsertPrinterSupplyParams) error
 	DeleteStalePrinterSupplies(ctx context.Context, arg db.DeleteStalePrinterSuppliesParams) error
+	UpsertPbxPhone(ctx context.Context, arg db.UpsertPbxPhoneParams) error
+	DeleteStalePbxPhones(ctx context.Context, arg db.DeleteStalePbxPhonesParams) error
 	UpsertUPSStatus(ctx context.Context, arg db.UpsertUPSStatusParams) error
 }
 
@@ -256,6 +259,18 @@ func (a *Applier) applyFacts(ctx context.Context, devID uuid.UUID, f *driver.Fac
 			DeviceID: devID, Manufacturer: nonEmpty(f.Camera.Manufacturer), Model: nonEmpty(f.Camera.Model),
 			Resolution: nonEmpty(f.Camera.Resolution), RtspUrl: nonEmpty(f.Camera.RTSPUrl), OnvifUrl: nonEmpty(f.Camera.ONVIFUrl),
 		})
+	}
+
+	// PBX phone registry (Cisco CUCM AXL).
+	if len(f.Phones) > 0 {
+		for _, p := range f.Phones {
+			_ = a.w.UpsertPbxPhone(ctx, db.UpsertPbxPhoneParams{
+				DeviceID: devID, Name: p.Name, Model: nonEmpty(p.Model),
+				Description: nonEmpty(p.Description), DevicePool: nonEmpty(p.DevicePool),
+				CollectionSource: sourceAXL, LastSeenAt: poll,
+			})
+		}
+		_ = a.w.DeleteStalePbxPhones(ctx, db.DeleteStalePbxPhonesParams{DeviceID: devID, LastSeenAt: poll, CollectionSource: sourceAXL})
 	}
 
 	// Virtual machines (vSphere host→VM map).

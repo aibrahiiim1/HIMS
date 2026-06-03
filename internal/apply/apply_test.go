@@ -139,6 +139,10 @@ func (f *fakeWriter) DeleteStalePrinterSupplies(_ context.Context, _ db.DeleteSt
 	return nil
 }
 func (f *fakeWriter) UpsertUPSStatus(_ context.Context, _ db.UpsertUPSStatusParams) error { return nil }
+func (f *fakeWriter) UpsertPbxPhone(_ context.Context, _ db.UpsertPbxPhoneParams) error   { return nil }
+func (f *fakeWriter) DeleteStalePbxPhones(_ context.Context, _ db.DeleteStalePbxPhonesParams) error {
+	return nil
+}
 
 type fakeSwitch struct{}
 
