@@ -97,14 +97,12 @@ export function Inventory() {
     onSuccess: (r) => { setMsg(`Updated ${(r as { updated: number }).updated} device(s).`); setAsg({ vlan: '', class: '', location: '' }); refresh() },
     onError: (e) => setMsg((e as Error).message),
   })
-  const doAssign = () => {
+  // Each field is assigned independently — VLAN, Class, and Location are set by
+  // their own button so the operator changes exactly one classification at a time.
+  const assignField = (field: 'vlan' | 'class' | 'location', value: string) => {
     if (sel.size === 0) return
-    const body: { ids: string[]; vlan?: string; class?: string; location?: string } = { ids: [...sel] }
-    if (asg.vlan.trim()) body.vlan = asg.vlan.trim()
-    if (asg.class.trim()) body.class = asg.class.trim()
-    if (asg.location.trim()) body.location = asg.location.trim()
-    if (body.vlan === undefined && body.class === undefined && body.location === undefined) { setMsg('Enter a VLAN, Class, or Location to assign.'); return }
-    assign.mutate(body)
+    if (!value.trim()) { setMsg(`Enter a ${field} value to assign.`); return }
+    assign.mutate({ ids: [...sel], [field]: value.trim() })
   }
 
   const doDeleteSelected = () => {
@@ -140,15 +138,22 @@ export function Inventory() {
           <button style={danger} disabled={sel.size === 0 || del.isPending} onClick={doDeleteSelected}>Delete selected ({sel.size})</button>
         </div>
 
-        {/* Bulk-assign bar — appears when rows are selected */}
+        {/* Bulk-assign — each classification has its own independent action */}
         {sel.size > 0 && (
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', padding: '8px 0', borderTop: '1px solid #2a2a2a' }}>
-            <span className="muted" style={{ fontSize: 12 }}>Assign to {sel.size} selected:</span>
-            <input style={{ ...input, width: 90 }} placeholder="vlan" value={asg.vlan} onChange={(e) => setAsg({ ...asg, vlan: e.target.value })} />
-            <input style={{ ...input, width: 130 }} placeholder="class" value={asg.class} onChange={(e) => setAsg({ ...asg, class: e.target.value })} />
-            <input style={{ ...input, width: 160 }} placeholder="location" value={asg.location} onChange={(e) => setAsg({ ...asg, location: e.target.value })} />
-            <button style={btn} disabled={assign.isPending} onClick={doAssign}>Assign</button>
-            <span className="muted" style={{ fontSize: 11 }}>(blank fields are left unchanged)</span>
+          <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap', padding: '8px 0', borderTop: '1px solid #2a2a2a' }}>
+            <span className="muted" style={{ fontSize: 12 }}>Assign to {sel.size} selected →</span>
+            <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+              <input style={{ ...input, width: 100 }} placeholder="VLAN" value={asg.vlan} onChange={(e) => setAsg({ ...asg, vlan: e.target.value })} />
+              <button style={btn} disabled={assign.isPending} onClick={() => assignField('vlan', asg.vlan)}>Set VLAN</button>
+            </div>
+            <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+              <input style={{ ...input, width: 130 }} placeholder="Class" value={asg.class} onChange={(e) => setAsg({ ...asg, class: e.target.value })} />
+              <button style={btn} disabled={assign.isPending} onClick={() => assignField('class', asg.class)}>Set Class</button>
+            </div>
+            <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+              <input style={{ ...input, width: 160 }} placeholder="Location" value={asg.location} onChange={(e) => setAsg({ ...asg, location: e.target.value })} />
+              <button style={btn} disabled={assign.isPending} onClick={() => assignField('location', asg.location)}>Set Location</button>
+            </div>
           </div>
         )}
         {msg && <div className="muted" style={{ fontSize: 12 }}>{msg}</div>}
