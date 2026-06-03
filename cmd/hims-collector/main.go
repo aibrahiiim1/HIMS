@@ -34,14 +34,18 @@ import (
 	"github.com/coralsearesorts/hims/internal/domain"
 	"github.com/coralsearesorts/hims/internal/driver"
 	hypervdrv "github.com/coralsearesorts/hims/internal/driver/hyperv"
+	omadadrv "github.com/coralsearesorts/hims/internal/driver/omada"
 	onvifdrv "github.com/coralsearesorts/hims/internal/driver/onvif"
 	rfdrv "github.com/coralsearesorts/hims/internal/driver/redfish"
+	ruckusdrv "github.com/coralsearesorts/hims/internal/driver/ruckus"
 	unifidrv "github.com/coralsearesorts/hims/internal/driver/unifi"
 	vspheredrv "github.com/coralsearesorts/hims/internal/driver/vsphere"
 	"github.com/coralsearesorts/hims/internal/drivers"
 	"github.com/coralsearesorts/hims/internal/monitoring"
+	oc "github.com/coralsearesorts/hims/internal/omada"
 	ov "github.com/coralsearesorts/hims/internal/onvif"
 	rf "github.com/coralsearesorts/hims/internal/redfish"
+	rc "github.com/coralsearesorts/hims/internal/ruckus"
 	"github.com/coralsearesorts/hims/internal/scan"
 	"github.com/coralsearesorts/hims/internal/secret"
 	"github.com/coralsearesorts/hims/internal/storage/postgres"
@@ -63,6 +67,9 @@ func main() {
 	unifiIP := flag.String("unifi", "", "collect a UniFi controller's APs AND persist (needs DB + http_basic creds)")
 	adServer := flag.String("adimport", "", "import AD computer objects over LDAP from this DC host AND persist (needs DB + ldap creds)")
 	adBaseDN := flag.String("basedn", "", "AD base DN / OU subtree to import (e.g. OU=HotelA,DC=corp,DC=local)")
+	omadaIP := flag.String("omada", "", "collect a TP-Link Omada controller's APs AND persist (needs DB + http_basic creds)")
+	omadaCID := flag.String("omada-cid", "", "Omada controller id (from /api/info)")
+	ruckusIP := flag.String("ruckus", "", "collect a Ruckus SmartZone controller's APs AND persist (needs DB + http_basic creds)")
 	concurrency := flag.Int("concurrency", 16, "max concurrent hosts during -scan")
 	maxHosts := flag.Int("max-hosts", 4096, "refuse a -scan scope larger than this")
 	location := flag.String("location", "", "location UUID to scope discovered devices to")
@@ -122,6 +129,16 @@ func main() {
 
 	if *adServer != "" {
 		runADImport(reg, *adServer, *adBaseDN, *location)
+		return
+	}
+
+	if *omadaIP != "" {
+		runOmada(reg, *omadaIP, *omadaCID, *location)
+		return
+	}
+
+	if *ruckusIP != "" {
+		runRuckus(reg, *ruckusIP, *location)
 		return
 	}
 
@@ -447,6 +464,118 @@ func runVSphere(reg *driver.Registry, ipStr, locStr string) {
 	}
 	fmt.Printf("ESXi %s persisted as device %s (%d VMs, %d datastores)\n",
 		ip, id, len(facts.VMs), len(facts.Storage))
+}
+
+// resolveWLANCred resolves an http_basic/vendor_api credential for a WLAN
+// controller IP and returns the split user/password + the bound ref. Shared by
+// the UniFi/Omada/Ruckus collect paths.
+func resolveWLANCred(ctx context.Context, cfg discovery.PipelineConfig, ip netip.Addr, locationID *uuid.UUID) (user, pass string, bound *credresolver.CredRef) {
+	groups, err := cfg.Fetcher.CredentialCandidates(ctx, ip, locationID)
+	if err != nil {
+		return "", "", nil
+	}
+	for _, g := range groups {
+		for _, m := range g.Members {
+			if m.Kind != domain.CredHTTPBasic && m.Kind != domain.CredVendorAPI {
+				continue
+			}
+			if dec, err := cfg.Decrypt(ctx, m.ID); err == nil {
+				u, p := splitUserPass(dec.Community)
+				c := m
+				return u, p, &c
+			}
+		}
+	}
+	return "", "", nil
+}
+
+// cookieJarClient builds an HTTPS client with a cookie jar (TLS-insecure for
+// mgmt-LAN self-signed certs).
+func cookieJarClient() *http.Client {
+	jar, _ := cookiejar.New(nil)
+	return &http.Client{
+		Timeout:   20 * time.Second,
+		Jar:       jar,
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}, //nolint:gosec
+	}
+}
+
+// runOmada collects a TP-Link Omada controller's APs and persists them.
+func runOmada(reg *driver.Registry, ipStr, cid, locStr string) {
+	ip, err := netip.ParseAddr(ipStr)
+	if err != nil {
+		slog.Error("invalid -omada IP", "value", ipStr, "error", err)
+		os.Exit(1)
+	}
+	if cid == "" {
+		slog.Error("omada: -omada-cid is required (controller id from /api/info)")
+		os.Exit(1)
+	}
+	locationID := parseLocationID(locStr)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	queries, cfg, closeDB := buildDiscoverDeps(ctx, reg)
+	defer closeDB()
+
+	user, pass, bound := resolveWLANCred(ctx, cfg, ip, locationID)
+	if user == "" {
+		slog.Error("omada: no credential resolved", "ip", ip.String())
+		os.Exit(1)
+	}
+	client := oc.NewClient("https://"+ip.String()+":8043", cid, "Default", user, pass, cookieJarClient())
+	if err := client.Login(ctx); err != nil {
+		slog.Error("omada: login failed", "error", err)
+		os.Exit(1)
+	}
+	f, err := omadadrv.New().Collect(&omadadrv.Session{Client: client, Ctx: ctx}, driver.Probe{IP: ip})
+	if err != nil {
+		slog.Error("omada: collect failed", "error", err)
+		os.Exit(1)
+	}
+	res := discovery.HostResult{IP: ip, Alive: true, MatchedDrv: omadadrv.New(), Match: driver.Match{Confidence: 78, Category: domain.CatWirelessController}, Facts: &f, BoundCred: bound}
+	id, err := apply.New(queries).Apply(ctx, res, locationID)
+	if err != nil {
+		slog.Error("omada: apply failed", "error", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Omada %s persisted as device %s (%d APs)\n", ip, id, len(f.APs))
+}
+
+// runRuckus collects a Ruckus SmartZone controller's APs and persists them.
+func runRuckus(reg *driver.Registry, ipStr, locStr string) {
+	ip, err := netip.ParseAddr(ipStr)
+	if err != nil {
+		slog.Error("invalid -ruckus IP", "value", ipStr, "error", err)
+		os.Exit(1)
+	}
+	locationID := parseLocationID(locStr)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	queries, cfg, closeDB := buildDiscoverDeps(ctx, reg)
+	defer closeDB()
+
+	user, pass, bound := resolveWLANCred(ctx, cfg, ip, locationID)
+	if user == "" {
+		slog.Error("ruckus: no credential resolved", "ip", ip.String())
+		os.Exit(1)
+	}
+	client := rc.NewClient("https://"+ip.String()+":8443", "", user, pass, cookieJarClient())
+	if err := client.Login(ctx); err != nil {
+		slog.Error("ruckus: login failed", "error", err)
+		os.Exit(1)
+	}
+	f, err := ruckusdrv.New().Collect(&ruckusdrv.Session{Client: client, Ctx: ctx}, driver.Probe{IP: ip})
+	if err != nil {
+		slog.Error("ruckus: collect failed", "error", err)
+		os.Exit(1)
+	}
+	res := discovery.HostResult{IP: ip, Alive: true, MatchedDrv: ruckusdrv.New(), Match: driver.Match{Confidence: 78, Category: domain.CatWirelessController}, Facts: &f, BoundCred: bound}
+	id, err := apply.New(queries).Apply(ctx, res, locationID)
+	if err != nil {
+		slog.Error("ruckus: apply failed", "error", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Ruckus %s persisted as device %s (%d APs)\n", ip, id, len(f.APs))
 }
 
 // runUniFi collects a UniFi controller's AP inventory and persists it.

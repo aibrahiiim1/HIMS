@@ -965,7 +965,27 @@ resolution need a real domain. Trigger: first AD credential bound — validate
 against the fleet DC (LDAPS/port 636 + paged results for >1000 objects are the
 likely real-world extensions v1 omits).
 
-## Status — full platform + onboarding + ALL 4 deep deps + SNMP v3 + peripherals + AD-import
+## Wireless REST: Omada + Ruckus ✅ (closed 2026-06-03)
+
+Completes the spec's wireless vendor list (UniFi + Omada + Ruckus), reusing the
+HTTP/JSON Doer pattern + Phase 8 AP tables/UI (no schema/UI change).
+
+- ✅ `internal/omada` — token login + `/sites/{site}/devices` (Csrf-Token);
+  `parseDevices` filters `type=ap`, status≥1→online. Tested.
+- ✅ `internal/ruckus` — SmartZone session + `/wsg/api/public/v9_1/aps`;
+  `parseAPs` ("Online"→online). Tested.
+- ✅ `internal/driver/{omada,ruckus}` — collection-only → `Facts.WLAN`+`APs`.
+  Tested.
+- ✅ collector `-omada <ip> -omada-cid <id>` + `-ruckus <ip>` (shared
+  `resolveWLANCred` + `cookieJarClient`); apply via Phase 8 → WirelessDetail.
+- ✅ gofmt + go build/vet/test ./... green.
+
+### ⚠️ Live-validation trigger
+Parsers tested against documented-shape samples; token/session flows + device
+shapes vary by controller version. Validate against real controllers once
+credentials are bound.
+
+## Status — entire spec built; all 3 WLAN vendors; only voice + live-hardware remain
 The entire requested scope is shipped, green, committed. Drivers:
 aruba/cisco/huawei (switch SNMP), fortigate (firewall), host_snmp +
 vmware_esxi (servers/virt SNMP), cctv + wlan_controller (banner), redfish_bmc
