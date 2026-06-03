@@ -22,6 +22,7 @@ import (
 	"github.com/coralsearesorts/hims/internal/discovery"
 	"github.com/coralsearesorts/hims/internal/drivers"
 	"github.com/coralsearesorts/hims/internal/monitoring"
+	"github.com/coralsearesorts/hims/internal/secret"
 	"github.com/coralsearesorts/hims/internal/storage/postgres"
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
 )
@@ -116,6 +117,17 @@ func runMonitoring(loop, seed bool, tick time.Duration) {
 
 	queries := db.New(pool)
 	engine := monitoring.NewEngine(queries, monitoring.NewPoller(nil, 3*time.Second), slog.Default())
+	// SNMP-metric checks need to decrypt the device's bound community. With no
+	// key, the engine still runs TCP reachability and skips snmp checks.
+	if k := os.Getenv("HIMS_ENCRYPTION_KEY"); k != "" {
+		c, err := secret.NewCipher(k)
+		if err != nil {
+			slog.Error("invalid HIMS_ENCRYPTION_KEY", "error", err)
+			os.Exit(1)
+		}
+		engine.Cipher = c
+		slog.Info("snmp-metric monitoring enabled", "key_id", c.KeyID())
+	}
 	// Chain alerting after each sweep: evaluate rules against the freshly
 	// updated check statuses (opens alerts, bridges to work orders, resolves
 	// recovered). Dependency inversion keeps monitoring unaware of alerting.

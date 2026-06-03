@@ -2,13 +2,18 @@ package monitoring
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/coralsearesorts/hims/internal/secret"
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
 )
+
+// errNoCredential marks an snmp check on a device with no bound credential.
+var errNoCredential = errors.New("no bound credential")
 
 // Repo is the slice of the storage layer the engine needs. *db.Queries
 // satisfies it; tests use a fake. Keeping it narrow documents the engine's
@@ -22,6 +27,7 @@ type Repo interface {
 	UpdateDeviceMonitoringStatus(ctx context.Context, arg db.UpdateDeviceMonitoringStatusParams) error
 	ListDevicesNeedingDefaultCheck(ctx context.Context) ([]db.ListDevicesNeedingDefaultCheckRow, error)
 	UpsertMonitoringCheck(ctx context.Context, arg db.UpsertMonitoringCheckParams) (db.MonitoringCheck, error)
+	GetCredential(ctx context.Context, id uuid.UUID) (db.Credential, error)
 }
 
 // Engine runs the scheduled monitoring loop.
@@ -34,6 +40,11 @@ type Engine struct {
 	// the alerting engine (evaluate rules against the just-updated statuses)
 	// without monitoring importing alerting (dependency inversion).
 	AfterSweep func(ctx context.Context)
+
+	// Cipher, if set, lets snmp-metric checks decrypt the device's bound
+	// community in-memory. When nil, snmp checks are skipped (the API-side
+	// engine runs reachability only; the collector wires a cipher).
+	Cipher *secret.Cipher
 }
 
 // NewEngine wires the engine. A nil logger uses the slog default.
@@ -89,9 +100,9 @@ func (e *Engine) RunDue(ctx context.Context) (int, error) {
 		if ctx.Err() != nil {
 			return polled, ctx.Err()
 		}
-		// Phase 6 core executes TCP checks only; snmp-metric checks (6B)
-		// need credential decrypt and are left untouched.
-		if c.Kind != "tcp" {
+		// snmp checks need a cipher to decrypt the bound community; without
+		// one (e.g. the API-side engine) they're skipped, not failed.
+		if c.Kind == "snmp" && e.Cipher == nil {
 			continue
 		}
 		e.runOne(ctx, c)
@@ -100,7 +111,7 @@ func (e *Engine) RunDue(ctx context.Context) (int, error) {
 	return polled, nil
 }
 
-// runOne polls a single TCP check and persists the outcome.
+// runOne probes a single check (by kind) and persists the outcome.
 func (e *Engine) runOne(ctx context.Context, c db.MonitoringCheck) {
 	dev, err := e.repo.GetDevice(ctx, c.DeviceID)
 	if err != nil {
@@ -108,20 +119,26 @@ func (e *Engine) runOne(ctx context.Context, c db.MonitoringCheck) {
 		return
 	}
 	if dev.PrimaryIp == nil || !dev.PrimaryIp.IsValid() {
-		return // nothing to dial
-	}
-	port := 443
-	if c.TargetPort != nil {
-		port = int(*c.TargetPort)
+		return // nothing to probe
 	}
 
-	res := e.poller.ProbeTCP(ctx, *dev.PrimaryIp, port)
+	var res Result
+	switch c.Kind {
+	case "snmp":
+		res = e.probeSNMP(ctx, dev, c)
+	default: // "tcp"
+		port := 443
+		if c.TargetPort != nil {
+			port = int(*c.TargetPort)
+		}
+		res = e.poller.ProbeTCP(ctx, *dev.PrimaryIp, port)
+	}
+
 	status, failures := Evaluate(res.OK, int(c.ConsecutiveFailures), int(c.DownThreshold))
-
 	latencyMs := float64(res.Latency.Microseconds()) / 1000.0
 	var errStr *string
 	if res.Err != nil {
-		s := res.Err.Error()
+		s := res.Err.Error() // a transport error string; never a secret
 		errStr = &s
 	}
 
@@ -138,12 +155,38 @@ func (e *Engine) runOne(ctx context.Context, c db.MonitoringCheck) {
 		DeviceID:  c.DeviceID,
 		Status:    string(status),
 		LatencyMs: &latencyMs,
+		ValueNum:  res.Value,
 		Error:     errStr,
 	}); err != nil {
 		e.log.Warn("monitoring: insert sample failed", "check", c.ID, "error", err)
 	}
 
 	e.rollupDevice(ctx, c.DeviceID)
+}
+
+// probeSNMP resolves the device's bound credential, decrypts the community
+// in-memory, and polls the check's OID. The community is never logged.
+func (e *Engine) probeSNMP(ctx context.Context, dev db.Device, c db.MonitoringCheck) Result {
+	if dev.CredentialID == nil {
+		return Result{OK: false, Err: errNoCredential}
+	}
+	cred, err := e.repo.GetCredential(ctx, *dev.CredentialID)
+	if err != nil {
+		return Result{OK: false, Err: err}
+	}
+	community, err := e.Cipher.Open(cred.EncryptedBlob, cred.KeyID)
+	if err != nil {
+		return Result{OK: false, Err: err} // decrypt/keyID error — no secret in the message
+	}
+	port := 161
+	if c.TargetPort != nil {
+		port = int(*c.TargetPort)
+	}
+	oid := ""
+	if c.Oid != nil {
+		oid = *c.Oid
+	}
+	return e.poller.ProbeSNMP(ctx, *dev.PrimaryIp, port, string(community), oid)
 }
 
 // rollupDevice recomputes the device's status from all its checks and writes

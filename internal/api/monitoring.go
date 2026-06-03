@@ -12,11 +12,12 @@ import (
 // ---- Monitoring: checks ----------------------------------------------------
 
 type registerCheckReq struct {
-	DeviceID        string `json:"device_id"`
-	Kind            string `json:"kind"`             // tcp (snmp reserved for 6B)
-	TargetPort      *int32 `json:"target_port"`      // optional; derived from category if absent
-	IntervalSeconds int32  `json:"interval_seconds"` // default 60
-	DownThreshold   int32  `json:"down_threshold"`   // default 2
+	DeviceID        string  `json:"device_id"`
+	Kind            string  `json:"kind"`             // tcp | snmp
+	TargetPort      *int32  `json:"target_port"`      // optional; derived from category if absent
+	OID             *string `json:"oid"`              // snmp only; defaults to sysUpTime
+	IntervalSeconds int32   `json:"interval_seconds"` // default 60
+	DownThreshold   int32   `json:"down_threshold"`   // default 2
 }
 
 func (s *Server) listMonitoringChecks(w http.ResponseWriter, r *http.Request) {
@@ -40,20 +41,33 @@ func (s *Server) registerMonitoringCheck(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	kind := orDefault(req.Kind, "tcp")
-	if kind != "tcp" {
-		http.Error(w, "only kind=tcp is supported in this phase", http.StatusBadRequest)
+	if kind != "tcp" && kind != "snmp" {
+		http.Error(w, "kind must be tcp or snmp", http.StatusBadRequest)
 		return
 	}
 	port := req.TargetPort
 	if port == nil {
-		// Derive from device category (e.g. switch→22, firewall→443).
-		dev, err := s.queries.GetDevice(r.Context(), *id)
-		if err != nil {
-			writeErr(w, err)
-			return
+		if kind == "snmp" {
+			p := int32(161)
+			port = &p
+		} else {
+			// Derive from device category (e.g. switch→22, firewall→443).
+			dev, err := s.queries.GetDevice(r.Context(), *id)
+			if err != nil {
+				writeErr(w, err)
+				return
+			}
+			p := int32(monitoring.DefaultPort(string(dev.Category)))
+			port = &p
 		}
-		p := int32(monitoring.DefaultPort(string(dev.Category)))
-		port = &p
+	}
+	var oid *string
+	if kind == "snmp" {
+		o := monitoring.SysUpTimeOID
+		if req.OID != nil && *req.OID != "" {
+			o = *req.OID
+		}
+		oid = &o
 	}
 	interval := req.IntervalSeconds
 	if interval < 10 {
@@ -67,6 +81,7 @@ func (s *Server) registerMonitoringCheck(w http.ResponseWriter, r *http.Request)
 		DeviceID:        *id,
 		Kind:            kind,
 		TargetPort:      port,
+		Oid:             oid,
 		IntervalSeconds: interval,
 		DownThreshold:   threshold,
 		Enabled:         true,

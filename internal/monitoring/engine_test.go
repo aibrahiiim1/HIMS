@@ -2,6 +2,7 @@ package monitoring
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"net"
 	"net/netip"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/coralsearesorts/hims/internal/secret"
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
 )
 
@@ -23,6 +25,7 @@ type fakeRepo struct {
 	devStatus map[uuid.UUID]string
 	needSeed  []db.ListDevicesNeedingDefaultCheckRow
 	upserts   []db.UpsertMonitoringCheckParams
+	creds     map[uuid.UUID]db.Credential
 }
 
 func (f *fakeRepo) ListDueMonitoringChecks(context.Context) ([]db.MonitoringCheck, error) {
@@ -66,6 +69,12 @@ func (f *fakeRepo) ListDevicesNeedingDefaultCheck(context.Context) ([]db.ListDev
 func (f *fakeRepo) UpsertMonitoringCheck(_ context.Context, arg db.UpsertMonitoringCheckParams) (db.MonitoringCheck, error) {
 	f.upserts = append(f.upserts, arg)
 	return db.MonitoringCheck{}, nil
+}
+func (f *fakeRepo) GetCredential(_ context.Context, id uuid.UUID) (db.Credential, error) {
+	if c, ok := f.creds[id]; ok {
+		return c, nil
+	}
+	return db.Credential{}, errors.New("credential not found")
 }
 
 func deviceOf(f *fakeRepo, checkID uuid.UUID) uuid.UUID {
@@ -152,6 +161,49 @@ func TestRunDue_SkipsNonTCP(t *testing.T) {
 	n, _ := e.RunDue(context.Background())
 	if n != 0 || len(f.samples) != 0 {
 		t.Fatalf("snmp check should be skipped in core; n=%d samples=%d", n, len(f.samples))
+	}
+}
+
+func TestRunDue_SNMPMetricWithCipher(t *testing.T) {
+	cipher, err := secret.NewCipher(base64.StdEncoding.EncodeToString(make([]byte, 32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob, keyID, _ := cipher.Seal([]byte("s3cr3t-community"))
+
+	devID, chkID, credID := uuid.New(), uuid.New(), uuid.New()
+	ip := netip.MustParseAddr("10.0.0.20")
+	oid := "1.3.6.1.2.1.1.3.0"
+	chk := db.MonitoringCheck{ID: chkID, DeviceID: devID, Kind: "snmp", Oid: &oid, DownThreshold: 1, LastStatus: "unknown"}
+	f := &fakeRepo{
+		due:      []db.MonitoringCheck{chk},
+		devices:  map[uuid.UUID]db.Device{devID: {ID: devID, PrimaryIp: &ip, Category: "switch", CredentialID: &credID}},
+		byDevice: map[uuid.UUID][]db.MonitoringCheck{devID: {chk}},
+		creds:    map[uuid.UUID]db.Credential{credID: {ID: credID, EncryptedBlob: blob, KeyID: keyID, Kind: "snmp_v2c"}},
+	}
+	withFakeSNMP(t, &fakeSNMP{value: uint64(98765)}, nil)
+	e := NewEngine(f, NewPoller(nil, time.Second), nil)
+	e.Cipher = cipher
+
+	n, err := e.RunDue(context.Background())
+	if err != nil || n != 1 {
+		t.Fatalf("RunDue = %d,%v; want 1,nil", n, err)
+	}
+	if f.recorded[0].LastStatus != string(StatusUp) {
+		t.Fatalf("snmp check status = %q; want up", f.recorded[0].LastStatus)
+	}
+	if len(f.samples) != 1 || f.samples[0].ValueNum == nil || *f.samples[0].ValueNum != 98765 {
+		t.Fatalf("snmp sample value not recorded: %+v", f.samples)
+	}
+}
+
+func TestRunDue_SNMPSkippedWithoutCipher(t *testing.T) {
+	chk := db.MonitoringCheck{ID: uuid.New(), DeviceID: uuid.New(), Kind: "snmp"}
+	f := &fakeRepo{due: []db.MonitoringCheck{chk}}
+	e := NewEngine(f, NewPoller(nil, time.Second), nil) // no cipher
+	n, _ := e.RunDue(context.Background())
+	if n != 0 || len(f.samples) != 0 {
+		t.Fatalf("snmp check should skip without cipher; n=%d samples=%d", n, len(f.samples))
 	}
 }
 

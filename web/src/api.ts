@@ -278,6 +278,16 @@ export interface ExpenseByLocation {
   count: number
 }
 
+// Credential is metadata-only — the secret and encrypted blob never leave
+// the server.
+export interface Credential {
+  id: string
+  name: string
+  kind: string
+  weak: boolean
+  created_at: string
+}
+
 export interface AlertRule {
   id: string
   name: string

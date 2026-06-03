@@ -6,6 +6,8 @@ import (
 	"net"
 	"net/netip"
 	"time"
+
+	"github.com/coralsearesorts/hims/internal/snmp"
 )
 
 // DefaultPorts maps a device category to the TCP port the reachability check
@@ -45,7 +47,12 @@ type Result struct {
 	OK      bool
 	Latency time.Duration
 	Err     error
+	Value   *float64 // numeric value for metric probes (e.g. SNMP gauge)
 }
+
+// SysUpTimeOID is the default OID an SNMP metric check polls when none is set
+// — a reachable, always-present liveness signal (sysUpTime.0, in ticks).
+const SysUpTimeOID = "1.3.6.1.2.1.1.3.0"
 
 // Poller executes reachability probes. It holds only a dialer + timeout, so
 // it is cheap to construct and safe for concurrent use.
@@ -86,4 +93,68 @@ func (p *Poller) ProbeTCP(ctx context.Context, addr netip.Addr, port int) Result
 	}
 	_ = conn.Close()
 	return Result{OK: true, Latency: latency}
+}
+
+// ProbeSNMP does an SNMP GET of one OID using the supplied community. Success
+// (a value comes back) is the liveness signal; a numeric value is recorded.
+// The community is used only in-memory and never logged. snmpClientFactory is
+// overridable in tests so this runs without a real agent.
+func (p *Poller) ProbeSNMP(ctx context.Context, addr netip.Addr, port int, community, oid string) Result {
+	if !addr.IsValid() {
+		return Result{OK: false, Err: fmt.Errorf("invalid address")}
+	}
+	if oid == "" {
+		oid = SysUpTimeOID
+	}
+	if port <= 0 {
+		port = 161
+	}
+	cl, err := snmpClientFactory(snmp.Target{
+		Addr:      addr,
+		Port:      uint16(port),
+		Version:   snmp.V2c,
+		Community: community,
+		Timeout:   p.timeout,
+	})
+	if err != nil {
+		return Result{OK: false, Err: err}
+	}
+	defer cl.Close()
+
+	start := time.Now()
+	if err := cl.Connect(ctx); err != nil {
+		return Result{OK: false, Latency: time.Since(start), Err: err}
+	}
+	pdus, err := cl.Get(ctx, oid)
+	latency := time.Since(start)
+	if err != nil {
+		return Result{OK: false, Latency: latency, Err: err}
+	}
+	if len(pdus) == 0 {
+		return Result{OK: false, Latency: latency, Err: fmt.Errorf("no value for %s", oid)}
+	}
+	return Result{OK: true, Latency: latency, Value: anyFloat(pdus[0].Value)}
+}
+
+// snmpClientFactory builds an SNMP client; overridable in tests.
+var snmpClientFactory = func(t snmp.Target) (snmp.Client, error) { return snmp.NewClient(t) }
+
+// anyFloat coerces the common SNMP numeric types to a float64 pointer.
+func anyFloat(v any) *float64 {
+	var f float64
+	switch n := v.(type) {
+	case int:
+		f = float64(n)
+	case int64:
+		f = float64(n)
+	case uint:
+		f = float64(n)
+	case uint32:
+		f = float64(n)
+	case uint64:
+		f = float64(n)
+	default:
+		return nil
+	}
+	return &f
 }

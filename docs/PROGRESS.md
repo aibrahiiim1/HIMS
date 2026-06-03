@@ -415,8 +415,56 @@ share, so it gets its own phase.
 
 ---
 
+## 6C — Credential crypto + SNMP-metric monitoring ✅ (closed 2026-06-03)
+
+**Goal:** the encryption-at-rest infrastructure the platform needs to hold
+credentials safely, and the SNMP-metric monitoring checks that depend on it
+(the half of the original 6B that was split out).
+
+### Sub-commits
+- ✅ SC1 — `internal/secret`: AES-256-GCM `Cipher` keyed from a base64 32-byte
+  env key. `Seal` returns (nonce‖ciphertext‖tag, KeyID); `Open` verifies the
+  KeyID then authenticates+decrypts. KeyID = first-4-bytes-hex of SHA-256(key)
+  — a rotation tag that reveals nothing. Tests: round-trip, fresh-nonce-per-
+  call, tamper-detected, wrong-key (`ErrKeyMismatch`), bad-key.
+- ✅ SC2 — credentials API: `POST /credentials` seals the secret before it
+  touches the DB; `GET /credentials` and the create response return a
+  **metadata-only DTO** (id/name/kind/weak/created_at) — the blob, key id, and
+  plaintext never leave the server. `PUT /devices/{id}/credential` binds a
+  credential to a device. Weak SNMP communities (public/private/community)
+  auto-flagged. Cipher wired into the API + collector from `HIMS_ENCRYPTION_KEY`
+  (absent ⇒ credential writes 503, everything else still serves).
+- ✅ SC3 — SNMP-metric checks: poller gains `ProbeSNMP` (SNMP GET over an
+  overridable client factory; records a numeric value). The monitoring engine
+  dispatches by kind — snmp checks decrypt the device's bound community
+  **in-memory** (never logged) and poll the check's OID (default sysUpTime).
+  No cipher ⇒ snmp checks skipped (API-side engine stays reachability-only;
+  the collector wires the cipher). Register endpoint now accepts `kind=snmp`
+  + `oid`. Tests: ProbeSNMP success/timeout; engine snmp-with-cipher records
+  value + up; snmp-skipped-without-cipher.
+- ✅ SC4 — UI: **Credentials** page (create with masked secret input + list
+  metadata with weak badge). Nav + route. gofmt + build/vet/test + frontend
+  green; closed.
+
+### Verification (2026-06-03)
+`go build/vet/test ./...` green incl. new `secret` package + monitoring snmp
+tests. Frontend tsc + build green. gofmt clean.
+
+### Security invariants held
+- Plaintext secrets are sealed before the DB and opened only in memory at
+  point of use; never logged, returned, or rendered.
+- Credentials are returned as metadata-only DTOs — blob + key id never leave
+  the server. SNMP communities never appear in logs or sample error strings.
+- Encryption key lives only in `HIMS_ENCRYPTION_KEY` (env), never in DB/git.
+
+### Carry-forward
+- Per-device SNMP-check registration + credential-bind UI (backend API is
+  done; discovery already binds on success — UI is a small follow-up).
+- Key rotation tooling (KeyID already tags each blob for it); SNMP v3.
+
+---
+
 ## Later phases ⬜
-See `PLAN.md` §10. Remaining: **6C** (credential crypto + SNMP-metric
-checks), **3b/3c** (virtualization + iLO/iDRAC — new transports), CCTV,
-wireless, databases/AD, peripherals/voice, MIB upload engine +
-reporting/dashboards.
+See `PLAN.md` §10. Remaining: **3b/3c** (virtualization + iLO/iDRAC — new
+transports), CCTV, wireless, databases/AD, peripherals/voice, MIB upload
+engine + reporting/dashboards.

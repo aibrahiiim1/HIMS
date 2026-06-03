@@ -11,6 +11,7 @@ import (
 
 	"github.com/coralsearesorts/hims/internal/api"
 	"github.com/coralsearesorts/hims/internal/drivers"
+	"github.com/coralsearesorts/hims/internal/secret"
 	"github.com/coralsearesorts/hims/internal/storage/postgres"
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
 )
@@ -45,7 +46,23 @@ func main() {
 	defer pool.Close()
 
 	queries := db.New(pool)
-	srv := api.NewServer(queries)
+
+	// Encryption-at-rest for credential secrets. Without a key the API still
+	// serves; credential writes return 503 until HIMS_ENCRYPTION_KEY is set.
+	var cipher *secret.Cipher
+	if k := os.Getenv("HIMS_ENCRYPTION_KEY"); k != "" {
+		c, err := secret.NewCipher(k)
+		if err != nil {
+			slog.Error("invalid HIMS_ENCRYPTION_KEY", "error", err)
+			os.Exit(1)
+		}
+		cipher = c
+		slog.Info("credential encryption enabled", "key_id", c.KeyID())
+	} else {
+		slog.Warn("HIMS_ENCRYPTION_KEY not set; credential writes disabled")
+	}
+
+	srv := api.NewServer(queries, cipher)
 
 	addr := os.Getenv("HIMS_ADDR")
 	if addr == "" {

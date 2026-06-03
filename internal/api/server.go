@@ -15,6 +15,7 @@ import (
 
 	"github.com/coralsearesorts/hims/internal/alerting"
 	"github.com/coralsearesorts/hims/internal/monitoring"
+	"github.com/coralsearesorts/hims/internal/secret"
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
 	"github.com/coralsearesorts/hims/internal/topology"
 )
@@ -25,11 +26,14 @@ type Server struct {
 	topo    *topology.Engine
 	mon     *monitoring.Engine
 	alerts  *alerting.Engine
+	cipher  *secret.Cipher // nil when no encryption key is configured
 	queries *db.Queries
 }
 
-// NewServer wires dependencies and returns a ready-to-serve Server.
-func NewServer(queries *db.Queries) *Server {
+// NewServer wires dependencies and returns a ready-to-serve Server. cipher
+// may be nil (no HIMS_ENCRYPTION_KEY set) — credential writes then return
+// 503; everything else still serves.
+func NewServer(queries *db.Queries, cipher *secret.Cipher) *Server {
 	s := &Server{
 		queries: queries,
 		topo:    topology.New(queries),
@@ -37,6 +41,7 @@ func NewServer(queries *db.Queries) *Server {
 		// loop lives in the collector. Both share this engine type.
 		mon:    monitoring.NewEngine(queries, monitoring.NewPoller(nil, 0), nil),
 		alerts: alerting.NewEngine(queries, nil),
+		cipher: cipher,
 		router: chi.NewRouter(),
 	}
 	s.routes()
@@ -126,6 +131,11 @@ func (s *Server) routes() {
 		r.Post("/alerts/evaluate", s.evaluateAlerts)
 		r.Post("/alerts/{id}/ack", s.acknowledgeAlert)
 		r.Post("/alerts/{id}/resolve", s.resolveAlert)
+
+		// --- Credentials (encrypted at rest; secrets never returned) -
+		r.Get("/credentials", s.listCredentials)
+		r.Post("/credentials", s.createCredential)
+		r.Put("/devices/{id}/credential", s.bindDeviceCredential)
 	})
 }
 

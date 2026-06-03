@@ -165,9 +165,11 @@ monitoring_samples (TimescaleDB hypertable).
   ✅ **6B DONE** — rule-based alerting engine (`alert_rules` + `alerts`,
   atomic open via partial-unique-index, auto-resolve on recovery) + the
   **alert→work-order bridge** (a firing rule auto-creates a linked WO).
-  Chained after each sweep via an `AfterSweep` hook. **6C (open)** —
-  credential **encryption-at-rest + decrypt** infrastructure, then
-  SNMP-metric checks (sysUpTime / CPU / RAM) that depend on it.
+  Chained after each sweep via an `AfterSweep` hook.
+  ✅ **6C DONE** — credential **encryption-at-rest** (`internal/secret`,
+  AES-256-GCM keyed from env) + credentials API (seal-on-create, metadata-only
+  reads) + device bind, then **SNMP-metric checks** (engine decrypts the bound
+  community in-memory and polls an OID). Communities never logged/returned.
 - **Phase 5 — CCTV:** NVR/DVR + cameras (ONVIF/RTSP/vendor API).
 - **Phase 6 — Wireless controllers + APs** (UniFi/Omada/Ruckus REST).
 - **Phase 7 — Databases** (SQL/Oracle/PostgreSQL) + AD/DNS/DHCP.

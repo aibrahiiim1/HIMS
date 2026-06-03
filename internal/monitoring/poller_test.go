@@ -7,7 +7,56 @@ import (
 	"net/netip"
 	"testing"
 	"time"
+
+	"github.com/coralsearesorts/hims/internal/snmp"
 )
+
+// fakeSNMP is an in-memory snmp.Client for ProbeSNMP tests.
+type fakeSNMP struct {
+	connectErr error
+	getErr     error
+	value      any
+}
+
+func (f *fakeSNMP) Connect(context.Context) error { return f.connectErr }
+func (f *fakeSNMP) Get(_ context.Context, oids ...string) ([]snmp.PDU, error) {
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
+	return []snmp.PDU{{OID: oids[0], Value: f.value}}, nil
+}
+func (f *fakeSNMP) BulkWalk(context.Context, string, snmp.WalkFunc) error { return nil }
+func (f *fakeSNMP) Walk(context.Context, string, snmp.WalkFunc) error     { return nil }
+func (f *fakeSNMP) Close() error                                          { return nil }
+
+// withFakeSNMP swaps the client factory for the duration of a test.
+func withFakeSNMP(t *testing.T, c snmp.Client, err error) {
+	t.Helper()
+	orig := snmpClientFactory
+	snmpClientFactory = func(snmp.Target) (snmp.Client, error) { return c, err }
+	t.Cleanup(func() { snmpClientFactory = orig })
+}
+
+func TestProbeSNMP_Success(t *testing.T) {
+	withFakeSNMP(t, &fakeSNMP{value: uint64(123456)}, nil)
+	p := NewPoller(nil, time.Second)
+	r := p.ProbeSNMP(context.Background(), netip.MustParseAddr("10.0.0.5"), 161, "community", "")
+	if !r.OK || r.Err != nil {
+		t.Fatalf("ProbeSNMP = %+v; want OK", r)
+	}
+	if r.Value == nil || *r.Value != 123456 {
+		t.Fatalf("value = %v; want 123456", r.Value)
+	}
+}
+
+func TestProbeSNMP_GetError(t *testing.T) {
+	withFakeSNMP(t, &fakeSNMP{getErr: snmp.ErrTimeout}, nil)
+	p := NewPoller(nil, time.Second)
+	r := p.ProbeSNMP(context.Background(), netip.MustParseAddr("10.0.0.5"), 161, "community", "1.2.3")
+	if r.OK {
+		t.Fatalf("ProbeSNMP OK on get error; want failure")
+	}
+}
 
 // fakeConn is a no-op net.Conn; only Close is exercised by the poller.
 type fakeConn struct{ net.Conn }
