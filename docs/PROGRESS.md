@@ -938,7 +938,34 @@ UPS-MIB parsing is unit-tested; validate battery/runtime/load against a real
 UPS once a credential is bound. Voice (CUCM/IP-phones) remains the last
 peripherals/voice sub-area.
 
-## Status — full platform + onboarding + ALL 4 deep deps + SNMP v3 + printers + UPS
+## AD-import — LDAP computer-object discovery scope ✅ (closed 2026-06-03)
+
+The AD-primary Windows discovery the spec calls for, as an **optional**
+accelerator alongside IP-range scanning (HIMS stays AD-independent).
+
+- ✅ `internal/adimport` — `Searcher` interface (go-ldap, injectable) +
+  `SearchComputers(base DN)` + pure `ParseComputers` (sAMAccountName/cn,
+  dNSHostName, operatingSystem, userAccountControl→enabled) + `classifyOS`
+  (Server→server, else endpoint). Tested with hand-built `ldap.Entry`s:
+  server-vs-endpoint, disabled-bit (UAC 0x2), cn-fallback + nameless-skip,
+  baseDN passthrough, UAC logic.
+- ✅ collector `-adimport <dc-host> -basedn <DN> [-location]` — resolves an
+  `ldap` credential (`bindUser:password`) scoped to the DC, binds, searches the
+  OU subtree, resolves each computer's dNSHostName → IPv4, and applies via the
+  existing worker (reconcile by primary_ip+location). Computers without a
+  resolvable IP are skipped + counted.
+- ✅ apply now derives category from `Match.Category` even with no driver
+  matched (so AD's OS-based category sticks); no schema/UI change — imported
+  devices appear in the Servers list, Roles, dashboard, and search.
+- ✅ go mod tidy; gofmt + go build/vet/test ./... green.
+
+### ⚠️ Live-validation trigger
+Entry-parsing + classification are unit-tested; the LDAP bind/search + DNS
+resolution need a real domain. Trigger: first AD credential bound — validate
+against the fleet DC (LDAPS/port 636 + paged results for >1000 objects are the
+likely real-world extensions v1 omits).
+
+## Status — full platform + onboarding + ALL 4 deep deps + SNMP v3 + peripherals + AD-import
 The entire requested scope is shipped, green, committed. Drivers:
 aruba/cisco/huawei (switch SNMP), fortigate (firewall), host_snmp +
 vmware_esxi (servers/virt SNMP), cctv + wlan_controller (banner), redfish_bmc

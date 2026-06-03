@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/netip"
@@ -20,10 +21,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/go-ldap/ldap/v3"
 	"github.com/google/uuid"
 	"github.com/masterzen/winrm"
 	"github.com/vmware/govmomi"
 
+	"github.com/coralsearesorts/hims/internal/adimport"
 	"github.com/coralsearesorts/hims/internal/alerting"
 	"github.com/coralsearesorts/hims/internal/apply"
 	"github.com/coralsearesorts/hims/internal/credresolver"
@@ -58,6 +61,8 @@ func main() {
 	hypervIP := flag.String("hyperv", "", "collect a Hyper-V host's VMs over WinRM AND persist (needs DB + winrm creds)")
 	onvifIP := flag.String("onvif", "", "collect an IP camera's ONVIF inventory AND persist (needs DB + onvif/http_basic creds)")
 	unifiIP := flag.String("unifi", "", "collect a UniFi controller's APs AND persist (needs DB + http_basic creds)")
+	adServer := flag.String("adimport", "", "import AD computer objects over LDAP from this DC host AND persist (needs DB + ldap creds)")
+	adBaseDN := flag.String("basedn", "", "AD base DN / OU subtree to import (e.g. OU=HotelA,DC=corp,DC=local)")
 	concurrency := flag.Int("concurrency", 16, "max concurrent hosts during -scan")
 	maxHosts := flag.Int("max-hosts", 4096, "refuse a -scan scope larger than this")
 	location := flag.String("location", "", "location UUID to scope discovered devices to")
@@ -112,6 +117,11 @@ func main() {
 
 	if *unifiIP != "" {
 		runUniFi(reg, *unifiIP, *location)
+		return
+	}
+
+	if *adServer != "" {
+		runADImport(reg, *adServer, *adBaseDN, *location)
 		return
 	}
 
@@ -579,6 +589,110 @@ func runONVIF(reg *driver.Registry, ipStr, locStr string) {
 		os.Exit(1)
 	}
 	fmt.Printf("Camera %s persisted as device %s (%s %s)\n", ip, id, facts.Camera.Manufacturer, facts.Camera.Model)
+}
+
+// runADImport imports AD computer objects over LDAP and persists them as
+// devices. Resolves an ldap credential (secret = "bindUser:password") for the
+// DC, binds, searches the base DN, resolves each computer's DNS name to an IP,
+// and applies via the existing worker (reconcile by primary_ip+location).
+// Computers that don't resolve to an IP are skipped + counted.
+func runADImport(reg *driver.Registry, host, baseDN, locStr string) {
+	if baseDN == "" {
+		slog.Error("adimport: -basedn is required (e.g. OU=HotelA,DC=corp,DC=local)")
+		os.Exit(1)
+	}
+	locationID := parseLocationID(locStr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	queries, cfg, closeDB := buildDiscoverDeps(ctx, reg)
+	defer closeDB()
+
+	// Resolve an ldap credential scoped to the DC's IP.
+	dcIPs, _ := net.LookupHost(host)
+	var dcAddr netip.Addr
+	for _, s := range dcIPs {
+		if a, err := netip.ParseAddr(s); err == nil {
+			dcAddr = a
+			break
+		}
+	}
+	var user, pass string
+	if dcAddr.IsValid() {
+		groups, _ := cfg.Fetcher.CredentialCandidates(ctx, dcAddr, locationID)
+		for _, g := range groups {
+			for _, m := range g.Members {
+				if m.Kind != domain.CredLDAP {
+					continue
+				}
+				if dec, err := cfg.Decrypt(ctx, m.ID); err == nil {
+					user, pass = splitUserPass(dec.Community)
+					break
+				}
+			}
+			if user != "" {
+				break
+			}
+		}
+	}
+	if user == "" {
+		slog.Error("adimport: no ldap credential resolved for the DC", "host", host)
+		os.Exit(1)
+	}
+
+	conn, err := ldap.DialURL("ldap://" + host + ":389")
+	if err != nil {
+		slog.Error("adimport: LDAP dial failed", "error", err)
+		os.Exit(1)
+	}
+	defer conn.Close()
+	if err := conn.Bind(user, pass); err != nil {
+		slog.Error("adimport: LDAP bind failed", "error", err)
+		os.Exit(1)
+	}
+
+	computers, err := adimport.SearchComputers(conn, baseDN)
+	if err != nil {
+		slog.Error("adimport: search failed", "error", err)
+		os.Exit(1)
+	}
+
+	applier := apply.New(queries)
+	imported, skipped := 0, 0
+	for _, c := range computers {
+		ip := resolveFirstIP(c.DNSHostName)
+		if !ip.IsValid() {
+			skipped++
+			continue // no IP → can't reconcile; surfaced via the count
+		}
+		ver := c.OSVersion
+		res := discovery.HostResult{
+			IP: ip, Alive: true,
+			Match: driver.Match{Category: c.Category},
+			Facts: &driver.Facts{Hostname: c.Name, OSVersion: ver, Vendor: "Microsoft", KV: map[string]string{"ad.os": c.OS}},
+		}
+		if _, err := applier.Apply(ctx, res, locationID); err == nil {
+			imported++
+		}
+	}
+	fmt.Printf("AD import from %s (%s) — %d computers: %d imported, %d skipped(no DNS/IP)\n",
+		host, baseDN, len(computers), imported, skipped)
+}
+
+func resolveFirstIP(host string) netip.Addr {
+	if host == "" {
+		return netip.Addr{}
+	}
+	ips, err := net.LookupHost(host)
+	if err != nil {
+		return netip.Addr{}
+	}
+	for _, s := range ips {
+		if a, err := netip.ParseAddr(s); err == nil && a.Is4() {
+			return a
+		}
+	}
+	return netip.Addr{}
 }
 
 // winrmRunner adapts a masterzen/winrm client to the hyperv.Runner interface.

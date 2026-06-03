@@ -87,8 +87,10 @@ func (a *Applier) Apply(ctx context.Context, res discovery.HostResult, locationI
 	}
 	poll := a.now()
 
+	// Category comes from the match — a driver fingerprint, or a caller like
+	// AD-import that knows the category from the OS even with no driver.
 	category := string(domain.CatUnknown)
-	if res.MatchedDrv != nil {
+	if res.Match.Category != "" {
 		category = string(res.Match.Category)
 	}
 	var driverName *string
