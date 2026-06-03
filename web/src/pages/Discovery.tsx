@@ -112,17 +112,64 @@ function NetworkScan({ locations, locPath, creds, onLaunch, setMsg }: { location
       {siteMode && <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>{MODE_PH.site_subnets}</div>}
 
       <div style={{ marginTop: 12 }}>
-        <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Credentials ({credIDs.length > 0 ? `${credIDs.length} selected` : 'none — auto-tries ALL stored credentials'})</div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-          {creds.length === 0 && <span className="muted" style={{ fontSize: 12 }}>No credentials — add them on the Credentials page.</span>}
-          {creds.map((c) => (
-            <button key={c.id} onClick={() => toggleCred(c.id)} title={c.kind} style={{ ...ghost, ...(credIDs.includes(c.id) ? { background: '#2e7d32', color: '#fff', borderColor: '#2e7d32' } : {}) }}>
-              {c.name} <span style={{ opacity: 0.7 }}>({c.kind})</span>
-            </button>
-          ))}
-          {credIDs.length > 0 && <button onClick={() => setCredIDs([])} style={{ ...ghost, borderColor: '#888', color: '#aaa' }}>clear</button>}
-        </div>
+        <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Credentials to try</div>
+        <CredentialPicker creds={creds} selected={credIDs} onChange={setCredIDs} toggle={toggleCred} />
       </div>
+    </div>
+  )
+}
+
+// CredentialPicker — a compact multi-select dropdown for credentials (scales to
+// many): a summary button opens a searchable, scrollable checkbox panel.
+// Empty selection = auto-try ALL stored credentials.
+function CredentialPicker({ creds, selected, onChange, toggle }: { creds: Credential[]; selected: string[]; onChange: (ids: string[]) => void; toggle: (id: string) => void }) {
+  const [open, setOpen] = useState(false)
+  const [q, setQ] = useState('')
+  const sel = new Set(selected)
+  const shown = creds.filter((c) => !q.trim() || c.name.toLowerCase().includes(q.toLowerCase()) || c.kind.includes(q.toLowerCase()))
+  const summary = selected.length === 0 ? 'All stored credentials (auto)' : `${selected.length} selected`
+
+  if (creds.length === 0) return <span className="muted" style={{ fontSize: 12 }}>No credentials — add them on the Credentials page.</span>
+
+  return (
+    <div style={{ position: 'relative', maxWidth: 460 }}>
+      <button onClick={() => setOpen((v) => !v)} style={{ ...input, width: '100%', textAlign: 'left', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff', color: '#222' }}>
+        <span>{summary}</span><span style={{ opacity: 0.6 }}>{open ? '▲' : '▼'}</span>
+      </button>
+
+      {/* selected chips preview under the button */}
+      {selected.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
+          {selected.map((id) => { const c = creds.find((x) => x.id === id); return (
+            <span key={id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '1px 7px', borderRadius: 10, fontSize: 11, background: '#2e7d32', color: '#fff' }}>
+              {c?.name ?? id}<span onClick={() => toggle(id)} style={{ cursor: 'pointer', fontWeight: 700 }}>×</span>
+            </span>
+          )})}
+          <button onClick={() => onChange([])} style={{ ...ghost, fontSize: 11, padding: '1px 7px' }}>clear all</button>
+        </div>
+      )}
+
+      {open && (
+        <div style={{ position: 'absolute', zIndex: 20, top: '100%', left: 0, right: 0, marginTop: 4, background: '#1b1b1b', border: '1px solid #444', borderRadius: 8, boxShadow: '0 6px 20px rgba(0,0,0,.4)', padding: 8 }}>
+          <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+            <input autoFocus style={{ ...input, flex: 1 }} placeholder="search credentials…" value={q} onChange={(e) => setQ(e.target.value)} />
+            <button style={ghost} onClick={() => onChange(shown.map((c) => c.id))}>all</button>
+            <button style={ghost} onClick={() => onChange([])}>none</button>
+          </div>
+          <div style={{ maxHeight: 220, overflow: 'auto' }}>
+            {shown.length === 0 && <div className="muted" style={{ fontSize: 12, padding: 4 }}>No match.</div>}
+            {shown.map((c) => (
+              <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 6px', borderRadius: 6, cursor: 'pointer', background: sel.has(c.id) ? '#223' : 'transparent' }}>
+                <input type="checkbox" checked={sel.has(c.id)} onChange={() => toggle(c.id)} />
+                <span style={{ flex: 1 }}>{c.name}</span>
+                <span className="muted" style={{ fontSize: 11 }}>{c.kind}{c.weak ? ' ⚠' : ''}</span>
+              </label>
+            ))}
+          </div>
+          <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>Leave empty to auto-try all. Selected creds are tried first.</div>
+          <div style={{ textAlign: 'right', marginTop: 4 }}><button style={ghost} onClick={() => setOpen(false)}>Done</button></div>
+        </div>
+      )}
     </div>
   )
 }
