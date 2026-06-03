@@ -10,6 +10,8 @@ const btn: React.CSSProperties = { padding: '8px 16px', background: '#1565c0', c
 const ghost: React.CSSProperties = { padding: '4px 10px', background: 'transparent', color: '#90caf9', border: '1px solid #90caf9', borderRadius: 6, cursor: 'pointer', fontSize: 12 }
 const danger: React.CSSProperties = { padding: '4px 10px', background: 'transparent', color: '#ef9a9a', border: '1px solid #ef9a9a', borderRadius: 6, cursor: 'pointer', fontSize: 12 }
 const input: React.CSSProperties = { padding: '8px 10px', border: '1px solid #ccc', borderRadius: 6, fontSize: 13 }
+// readable on the white dropdown panel
+const pickerBtn: React.CSSProperties = { padding: '3px 10px', background: '#f0f4f8', color: '#1565c0', border: '1px solid #90caf9', borderRadius: 6, cursor: 'pointer', fontSize: 12 }
 
 const TABS = ['Network scan', 'Import', 'Controllers', 'Active Directory', 'Jobs'] as const
 type Tab = typeof TABS[number]
@@ -150,24 +152,24 @@ function CredentialPicker({ creds, selected, onChange, toggle }: { creds: Creden
       )}
 
       {open && (
-        <div style={{ position: 'absolute', zIndex: 20, top: '100%', left: 0, right: 0, marginTop: 4, background: '#1b1b1b', border: '1px solid #444', borderRadius: 8, boxShadow: '0 6px 20px rgba(0,0,0,.4)', padding: 8 }}>
+        <div style={{ position: 'absolute', zIndex: 20, top: '100%', left: 0, right: 0, marginTop: 4, background: '#fff', color: '#222', border: '1px solid #bbb', borderRadius: 8, boxShadow: '0 6px 20px rgba(0,0,0,.25)', padding: 8 }}>
           <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
-            <input autoFocus style={{ ...input, flex: 1 }} placeholder="search credentials…" value={q} onChange={(e) => setQ(e.target.value)} />
-            <button style={ghost} onClick={() => onChange(shown.map((c) => c.id))}>all</button>
-            <button style={ghost} onClick={() => onChange([])}>none</button>
+            <input autoFocus style={{ ...input, flex: 1, background: '#fff', color: '#222' }} placeholder="search credentials…" value={q} onChange={(e) => setQ(e.target.value)} />
+            <button style={pickerBtn} onClick={() => onChange(shown.map((c) => c.id))}>all</button>
+            <button style={pickerBtn} onClick={() => onChange([])}>none</button>
           </div>
           <div style={{ maxHeight: 220, overflow: 'auto' }}>
-            {shown.length === 0 && <div className="muted" style={{ fontSize: 12, padding: 4 }}>No match.</div>}
+            {shown.length === 0 && <div style={{ fontSize: 12, padding: 4, color: '#888' }}>No match.</div>}
             {shown.map((c) => (
-              <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 6px', borderRadius: 6, cursor: 'pointer', background: sel.has(c.id) ? '#223' : 'transparent' }}>
+              <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 6px', borderRadius: 6, cursor: 'pointer', background: sel.has(c.id) ? '#e3f2fd' : 'transparent' }}>
                 <input type="checkbox" checked={sel.has(c.id)} onChange={() => toggle(c.id)} />
-                <span style={{ flex: 1 }}>{c.name}</span>
-                <span className="muted" style={{ fontSize: 11 }}>{c.kind}{c.weak ? ' ⚠' : ''}</span>
+                <span style={{ flex: 1, color: '#222' }}>{c.name}</span>
+                <span style={{ fontSize: 11, color: '#777' }}>{c.kind}{c.weak ? ' ⚠' : ''}</span>
               </label>
             ))}
           </div>
-          <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>Leave empty to auto-try all. Selected creds are tried first.</div>
-          <div style={{ textAlign: 'right', marginTop: 4 }}><button style={ghost} onClick={() => setOpen(false)}>Done</button></div>
+          <div style={{ fontSize: 11, marginTop: 6, color: '#777' }}>Leave empty to auto-try all. Selected creds are tried first.</div>
+          <div style={{ textAlign: 'right', marginTop: 4 }}><button style={pickerBtn} onClick={() => setOpen(false)}>Done</button></div>
         </div>
       )}
     </div>
