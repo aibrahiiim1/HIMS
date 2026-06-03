@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { BrowserRouter, Route, Routes, Link, useLocation } from 'react-router-dom'
 import { DeviceList } from './pages/DeviceList'
 import { Dashboard } from './pages/Dashboard'
+import { Discovery } from './pages/Discovery'
 import { SwitchDetail } from './pages/SwitchDetail'
 import { ServerDetail } from './pages/ServerDetail'
 import { FirewallDetail } from './pages/FirewallDetail'
@@ -30,6 +31,7 @@ function Nav() {
     <nav className="hims-nav">
       <span className="hims-logo">HIMS</span>
       <Link to="/dashboard" style={active('/dashboard')}>Dashboard</Link>
+      <Link to="/discovery" style={active('/discovery')}>Discovery</Link>
       <Link to="/" style={active('/')}>Switches</Link>
       <Link to="/servers" style={active('/servers')}>Servers</Link>
       <Link to="/virtual-hosts" style={active('/virtual-hosts')}>Virtual Hosts</Link>
@@ -60,6 +62,7 @@ export default function App() {
         <div className="hims-content">
           <Routes>
             <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/discovery" element={<Discovery />} />
             <Route path="/" element={<DeviceList category="switch" title="Switches" detailBase="/devices" />} />
             <Route path="/servers" element={<DeviceList category="server" title="Servers" detailBase="/servers" />} />
             <Route path="/firewalls" element={<DeviceList category="firewall" title="Firewalls" detailBase="/firewalls" />} />

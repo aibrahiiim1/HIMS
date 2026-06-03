@@ -14,6 +14,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/coralsearesorts/hims/internal/alerting"
+	"github.com/coralsearesorts/hims/internal/discovery"
+	"github.com/coralsearesorts/hims/internal/driver"
 	"github.com/coralsearesorts/hims/internal/monitoring"
 	"github.com/coralsearesorts/hims/internal/secret"
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
@@ -26,23 +28,28 @@ type Server struct {
 	topo    *topology.Engine
 	mon     *monitoring.Engine
 	alerts  *alerting.Engine
-	cipher  *secret.Cipher // nil when no encryption key is configured
+	cipher  *secret.Cipher             // nil when no encryption key is configured
+	reg     *driver.Registry           // nil disables operator-launched scans
+	fetcher discovery.CandidateFetcher // credential scope resolver for scans
 	queries *db.Queries
 }
 
 // NewServer wires dependencies and returns a ready-to-serve Server. cipher
 // may be nil (no HIMS_ENCRYPTION_KEY set) — credential writes then return
-// 503; everything else still serves.
-func NewServer(queries *db.Queries, cipher *secret.Cipher) *Server {
+// 503. reg + fetcher may be nil — operator-launched scans then return 503;
+// everything else still serves.
+func NewServer(queries *db.Queries, cipher *secret.Cipher, reg *driver.Registry, fetcher discovery.CandidateFetcher) *Server {
 	s := &Server{
 		queries: queries,
 		topo:    topology.New(queries),
 		// The API can seed defaults + run on-demand sweeps; the scheduled
 		// loop lives in the collector. Both share this engine type.
-		mon:    monitoring.NewEngine(queries, monitoring.NewPoller(nil, 0), nil),
-		alerts: alerting.NewEngine(queries, nil),
-		cipher: cipher,
-		router: chi.NewRouter(),
+		mon:     monitoring.NewEngine(queries, monitoring.NewPoller(nil, 0), nil),
+		alerts:  alerting.NewEngine(queries, nil),
+		cipher:  cipher,
+		reg:     reg,
+		fetcher: fetcher,
+		router:  chi.NewRouter(),
 	}
 	s.routes()
 	return s
@@ -67,6 +74,11 @@ func (s *Server) routes() {
 	r.Route("/api/v1", func(r chi.Router) {
 		// --- Executive dashboard (cross-cutting rollups) -------------
 		r.Get("/dashboard", s.dashboard)
+
+		// --- Discovery (operator-launched subnet scans) --------------
+		r.Get("/discovery/jobs", s.listDiscoveryJobs)
+		r.Post("/discovery/scan", s.startScan)
+		r.Get("/discovery/jobs/{id}", s.getDiscoveryJob)
 
 		// --- Devices --------------------------------------------------
 		r.Get("/devices", s.listDevices)

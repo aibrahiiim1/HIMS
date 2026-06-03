@@ -682,10 +682,38 @@ Extends the per-IP persist path to whole-fleet onboarding.
   the same shared deps.
 - ✅ build/vet/test green; gofmt clean.
 
+### Carry-forward → ✅ DONE next commit (scan API + Discovery UI)
+Persist a `discovery_jobs` + per-host `discovery_results` record per scan + an
+API/UI to launch + watch scans — shipped below. AD-import scope source still
+deferred.
+
+---
+
+## Scan API + Discovery UI ✅ (closed 2026-06-03)
+
+Operator-facing subnet scanning (no longer CLI-only).
+
+- ✅ API: `POST /discovery/scan {cidr, location_id, concurrency}` validates +
+  expands the scope, creates a `discovery_jobs` row (status running), and
+  launches a **background goroutine** (own 30-min context, not the request's)
+  — returns 202 + the job immediately. `GET /discovery/jobs` +
+  `/discovery/jobs/{id}` (job + per-host results).
+- ✅ Background runner: `scan.Scope` over the hosts; per IP runs the pipeline
+  + apply worker, records a `discovery_results` row for each **alive** host
+  (outcome enrolled / classified / alive / failed, with driver+category+device
+  link), and finalizes the job (completed/failed + found_count). Reuses the
+  server cipher for in-memory credential decrypt (community never logged).
+- ✅ `NewServer` extended with the driver registry + credential scope-resolver
+  fetcher; nil-safe (scans return 503 if unconfigured). `cmd/hims-api` wires
+  `drivers.Builtin()` + `postgres.New(pool)`.
+- ✅ UI: **Discovery** page (CIDR + optional location scan form; jobs table
+  polling every 5s for live status/counts; per-job results table with outcome
+  badges). Nav item after Dashboard.
+- ✅ build/vet/test + frontend green; gofmt clean.
+
 ### Carry-forward
-Persist a `discovery_jobs` + per-host `discovery_results` record per scan (the
-schema exists from migration 000006) + an API/UI to launch scans and watch
-progress; AD-import scope source.
+Job cancellation endpoint; AD-import scope source; subnet-stored scopes
+(subnet_id) instead of ad-hoc CIDR; results pagination for very large scans.
 
 ---
 

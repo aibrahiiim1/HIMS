@@ -62,7 +62,8 @@ func main() {
 		slog.Warn("HIMS_ENCRYPTION_KEY not set; credential writes disabled")
 	}
 
-	srv := api.NewServer(queries, cipher)
+	// drivers + credential scope-resolver enable operator-launched scans.
+	srv := api.NewServer(queries, cipher, reg, postgres.New(pool))
 
 	addr := os.Getenv("HIMS_ADDR")
 	if addr == "" {

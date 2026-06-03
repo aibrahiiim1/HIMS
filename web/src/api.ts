@@ -289,6 +289,31 @@ export interface ExpenseByLocation {
   count: number
 }
 
+export interface DiscoveryJob {
+  id: string
+  location_id?: string | null
+  scope_cidr?: string | null
+  status: string
+  started_at?: string | null
+  finished_at?: string | null
+  host_count: number
+  found_count: number
+  error?: string | null
+  created_at: string
+}
+
+export interface DiscoveryResult {
+  id: string
+  job_id: string
+  ip: string
+  outcome: string
+  device_id?: string | null
+  driver?: string | null
+  category?: string | null
+  error?: string | null
+  probed_at: string
+}
+
 export interface MibFile {
   id: string
   name: string
