@@ -95,6 +95,29 @@ func (q *Queries) CreateDevice(ctx context.Context, arg CreateDeviceParams) (Dev
 	return i, err
 }
 
+const deleteDevice = `-- name: DeleteDevice :exec
+DELETE FROM devices WHERE id = $1
+`
+
+// Hard delete (cascades to inventory child rows via FK ON DELETE CASCADE).
+func (q *Queries) DeleteDevice(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteDevice, id)
+	return err
+}
+
+const deleteDevices = `-- name: DeleteDevices :execrows
+DELETE FROM devices WHERE id = ANY($1::uuid[])
+`
+
+// Bulk hard delete (multi-select). Returns the number of rows removed.
+func (q *Queries) DeleteDevices(ctx context.Context, dollar_1 []uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteDevices, dollar_1)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getDevice = `-- name: GetDevice :one
 SELECT id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at FROM devices WHERE id = $1 AND deleted_at IS NULL
 `
@@ -428,6 +451,62 @@ type TouchDeviceDiscoveryParams struct {
 func (q *Queries) TouchDeviceDiscovery(ctx context.Context, arg TouchDeviceDiscoveryParams) error {
 	_, err := q.db.Exec(ctx, touchDeviceDiscovery, arg.ID, arg.LastDiscoveryAt)
 	return err
+}
+
+const updateDevice = `-- name: UpdateDevice :one
+UPDATE devices SET
+    name = $2, category = $3, vendor = $4, model = $5, serial = $6,
+    os_version = $7, hostname = $8, updated_at = now()
+WHERE id = $1 AND deleted_at IS NULL
+RETURNING id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at
+`
+
+type UpdateDeviceParams struct {
+	ID        uuid.UUID `json:"id"`
+	Name      string    `json:"name"`
+	Category  string    `json:"category"`
+	Vendor    *string   `json:"vendor"`
+	Model     *string   `json:"model"`
+	Serial    *string   `json:"serial"`
+	OsVersion *string   `json:"os_version"`
+	Hostname  *string   `json:"hostname"`
+}
+
+// Operator edit of a device's identity fields (Inventory CRUD).
+func (q *Queries) UpdateDevice(ctx context.Context, arg UpdateDeviceParams) (Device, error) {
+	row := q.db.QueryRow(ctx, updateDevice,
+		arg.ID,
+		arg.Name,
+		arg.Category,
+		arg.Vendor,
+		arg.Model,
+		arg.Serial,
+		arg.OsVersion,
+		arg.Hostname,
+	)
+	var i Device
+	err := row.Scan(
+		&i.ID,
+		&i.LocationID,
+		&i.PrimaryIp,
+		&i.Hostname,
+		&i.Name,
+		&i.Vendor,
+		&i.Model,
+		&i.Serial,
+		&i.OsVersion,
+		&i.Category,
+		&i.Status,
+		&i.Driver,
+		&i.CredentialID,
+		&i.LastDiscoveryAt,
+		&i.LastMonitoringAt,
+		&i.Metadata,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
 }
 
 const updateDiscoveredDevice = `-- name: UpdateDiscoveredDevice :one

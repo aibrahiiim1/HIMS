@@ -37,6 +37,22 @@ UPDATE devices SET
 WHERE id = $1
 RETURNING *;
 
+-- name: UpdateDevice :one
+-- Operator edit of a device's identity fields (Inventory CRUD).
+UPDATE devices SET
+    name = $2, category = $3, vendor = $4, model = $5, serial = $6,
+    os_version = $7, hostname = $8, updated_at = now()
+WHERE id = $1 AND deleted_at IS NULL
+RETURNING *;
+
+-- name: DeleteDevice :exec
+-- Hard delete (cascades to inventory child rows via FK ON DELETE CASCADE).
+DELETE FROM devices WHERE id = $1;
+
+-- name: DeleteDevices :execrows
+-- Bulk hard delete (multi-select). Returns the number of rows removed.
+DELETE FROM devices WHERE id = ANY($1::uuid[]);
+
 -- name: SetDeviceCredential :exec
 -- Bind-on-success: record the credential that last authenticated.
 UPDATE devices SET credential_id = $2, updated_at = now() WHERE id = $1;

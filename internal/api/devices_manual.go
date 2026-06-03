@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/coralsearesorts/hims/internal/domain"
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
 )
@@ -88,6 +90,96 @@ func manualDeviceParams(req manualDeviceReq) (db.CreateDeviceParams, error) {
 		CredentialID: nil,
 		Metadata:     []byte(`{"source":"manual"}`),
 	}, nil
+}
+
+type updateDeviceReq struct {
+	Name      string `json:"name"`
+	Category  string `json:"category"`
+	Vendor    string `json:"vendor"`
+	Model     string `json:"model"`
+	Serial    string `json:"serial"`
+	OSVersion string `json:"os_version"`
+	Hostname  string `json:"hostname"`
+}
+
+// updateDevice handles PATCH /devices/{id} — operator edit of identity fields.
+func (s *Server) updateDevice(w http.ResponseWriter, r *http.Request) {
+	ctx, id, ok := pathDevice(w, r)
+	if !ok {
+		return
+	}
+	var req updateDeviceReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Name) == "" {
+		http.Error(w, "name is required", http.StatusBadRequest)
+		return
+	}
+	cat := strings.TrimSpace(req.Category)
+	if cat == "" {
+		cat = string(domain.CatUnknown)
+	}
+	if !validCategory(cat) {
+		http.Error(w, "invalid category "+strconv.Quote(cat)+"; use one of: "+strings.Join(categoryList, ", "), http.StatusBadRequest)
+		return
+	}
+	dev, err := s.queries.UpdateDevice(ctx, db.UpdateDeviceParams{
+		ID: id, Name: strings.TrimSpace(req.Name), Category: cat,
+		Vendor: strPtr(req.Vendor), Model: strPtr(req.Model), Serial: strPtr(req.Serial),
+		OsVersion: strPtr(req.OSVersion), Hostname: strPtr(req.Hostname),
+	})
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, dev)
+}
+
+// deleteDevice handles DELETE /devices/{id} — hard delete (cascades inventory).
+func (s *Server) deleteDevice(w http.ResponseWriter, r *http.Request) {
+	ctx, id, ok := pathDevice(w, r)
+	if !ok {
+		return
+	}
+	if err := s.queries.DeleteDevice(ctx, id); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+type bulkDeleteReq struct {
+	IDs []string `json:"ids"`
+}
+
+// bulkDeleteDevices handles POST /devices/bulk-delete — multi-select delete.
+func (s *Server) bulkDeleteDevices(w http.ResponseWriter, r *http.Request) {
+	var req bulkDeleteReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	ids := make([]uuid.UUID, 0, len(req.IDs))
+	for _, str := range req.IDs {
+		id, err := uuid.Parse(str)
+		if err != nil {
+			http.Error(w, "invalid device id: "+str, http.StatusBadRequest)
+			return
+		}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		http.Error(w, "no ids provided", http.StatusBadRequest)
+		return
+	}
+	n, err := s.queries.DeleteDevices(r.Context(), ids)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int64{"deleted": n})
 }
 
 // csvImportResult summarizes a bulk import run.

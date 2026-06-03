@@ -52,6 +52,10 @@ type Querier interface {
 	CreateSystem(ctx context.Context, arg CreateSystemParams) (System, error)
 	CreateWorkOrder(ctx context.Context, arg CreateWorkOrderParams) (WorkOrder, error)
 	DeleteAlertRule(ctx context.Context, id uuid.UUID) error
+	// Hard delete (cascades to inventory child rows via FK ON DELETE CASCADE).
+	DeleteDevice(ctx context.Context, id uuid.UUID) error
+	// Bulk hard delete (multi-select). Returns the number of rows removed.
+	DeleteDevices(ctx context.Context, dollar_1 []uuid.UUID) (int64, error)
 	DeleteLocation(ctx context.Context, id uuid.UUID) error
 	DeleteMonitoringCheck(ctx context.Context, id uuid.UUID) error
 	DeleteOIDMapping(ctx context.Context, id uuid.UUID) error
@@ -210,6 +214,8 @@ type Querier interface {
 	TouchDeviceDiscovery(ctx context.Context, arg TouchDeviceDiscoveryParams) error
 	// Used by key rotation: re-seal the secret under a new key + KeyID.
 	UpdateCredentialSecret(ctx context.Context, arg UpdateCredentialSecretParams) error
+	// Operator edit of a device's identity fields (Inventory CRUD).
+	UpdateDevice(ctx context.Context, arg UpdateDeviceParams) (Device, error)
 	// Reflect the worst current check status onto the device row so device lists
 	// show a live health badge without a per-row sample query.
 	UpdateDeviceMonitoringStatus(ctx context.Context, arg UpdateDeviceMonitoringStatusParams) error
