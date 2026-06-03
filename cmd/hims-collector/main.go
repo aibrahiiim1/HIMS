@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/vmware/govmomi"
 
 	"github.com/coralsearesorts/hims/internal/alerting"
 	"github.com/coralsearesorts/hims/internal/apply"
@@ -25,6 +27,7 @@ import (
 	"github.com/coralsearesorts/hims/internal/domain"
 	"github.com/coralsearesorts/hims/internal/driver"
 	rfdrv "github.com/coralsearesorts/hims/internal/driver/redfish"
+	vspheredrv "github.com/coralsearesorts/hims/internal/driver/vsphere"
 	"github.com/coralsearesorts/hims/internal/drivers"
 	"github.com/coralsearesorts/hims/internal/monitoring"
 	rf "github.com/coralsearesorts/hims/internal/redfish"
@@ -42,6 +45,7 @@ func main() {
 	discover := flag.String("discover", "", "discover an IP AND persist it to the CMDB (needs DB + creds)")
 	scanCIDR := flag.String("scan", "", "discover AND persist every host in a CIDR (needs DB + creds)")
 	redfishIP := flag.String("redfish", "", "collect a server BMC (iLO/iDRAC) over Redfish AND persist (needs DB + http_basic creds)")
+	vsphereIP := flag.String("vsphere", "", "collect an ESXi host's VMs + datastores over the vSphere API AND persist (needs DB + creds)")
 	concurrency := flag.Int("concurrency", 16, "max concurrent hosts during -scan")
 	maxHosts := flag.Int("max-hosts", 4096, "refuse a -scan scope larger than this")
 	location := flag.String("location", "", "location UUID to scope discovered devices to")
@@ -76,6 +80,11 @@ func main() {
 
 	if *redfishIP != "" {
 		runRedfish(reg, *redfishIP, *location)
+		return
+	}
+
+	if *vsphereIP != "" {
+		runVSphere(reg, *vsphereIP, *location)
 		return
 	}
 
@@ -328,6 +337,79 @@ func runRedfish(reg *driver.Registry, ipStr, locStr string) {
 	}
 	fmt.Printf("BMC %s persisted as device %s (vendor=%s, controller=%s, health=%s)\n",
 		ip, id, facts.BMC.Vendor, facts.BMC.ControllerKind, facts.BMC.Health)
+}
+
+// runVSphere collects an ESXi host's VMs + datastores over the vSphere API and
+// persists them to the host's device. Resolves scoped vendor_api/http_basic
+// credentials (secret = "username:password"), connects via govmomi, runs the
+// vsphere driver + apply worker.
+func runVSphere(reg *driver.Registry, ipStr, locStr string) {
+	ip, err := netip.ParseAddr(ipStr)
+	if err != nil {
+		slog.Error("invalid -vsphere IP", "value", ipStr, "error", err)
+		os.Exit(1)
+	}
+	locationID := parseLocationID(locStr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	queries, cfg, closeDB := buildDiscoverDeps(ctx, reg)
+	defer closeDB()
+
+	groups, err := cfg.Fetcher.CredentialCandidates(ctx, ip, locationID)
+	if err != nil {
+		slog.Error("vsphere: credential resolve failed", "error", err)
+		os.Exit(1)
+	}
+
+	d := vspheredrv.New()
+	var facts *driver.Facts
+	var bound *credresolver.CredRef
+	for _, g := range groups {
+		for _, m := range g.Members {
+			if m.Kind != domain.CredHTTPBasic && m.Kind != domain.CredVendorAPI {
+				continue
+			}
+			dec, err := cfg.Decrypt(ctx, m.ID)
+			if err != nil {
+				continue
+			}
+			user, pass := splitUserPass(dec.Community)
+			u := &url.URL{Scheme: "https", Host: ip.String(), Path: "/sdk", User: url.UserPassword(user, pass)}
+			gc, err := govmomi.NewClient(ctx, u, true) // insecure: mgmt LAN self-signed certs
+			if err != nil {
+				continue
+			}
+			f, err := d.Collect(&vspheredrv.Session{Client: gc.Client, Ctx: ctx}, driver.Probe{IP: ip})
+			_ = gc.Logout(ctx)
+			if err != nil {
+				continue
+			}
+			c := m
+			facts, bound = &f, &c
+			break
+		}
+		if facts != nil {
+			break
+		}
+	}
+	if facts == nil {
+		slog.Error("vsphere: no credential collected this host", "ip", ip.String())
+		os.Exit(1)
+	}
+
+	res := discovery.HostResult{
+		IP: ip, Alive: true, MatchedDrv: d,
+		Match: driver.Match{Confidence: 71, Category: domain.CatVirtualHost},
+		Facts: facts, BoundCred: bound,
+	}
+	id, err := apply.New(queries).Apply(ctx, res, locationID)
+	if err != nil {
+		slog.Error("vsphere: apply failed", "error", err)
+		os.Exit(1)
+	}
+	fmt.Printf("ESXi %s persisted as device %s (%d VMs, %d datastores)\n",
+		ip, id, len(facts.VMs), len(facts.Storage))
 }
 
 // splitUserPass splits a "username:password" secret on the first colon.

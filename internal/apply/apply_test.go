@@ -29,6 +29,7 @@ type fakeWriter struct {
 	neighbors  []db.UpsertNeighborParams
 	bmcInfo    []db.UpsertBMCInfoParams
 	bmcSensors []db.UpsertBMCSensorParams
+	vms        []db.UpsertVMParams
 	staleCalls int
 }
 
@@ -117,6 +118,10 @@ func (f *fakeWriter) UpsertBMCSensor(_ context.Context, arg db.UpsertBMCSensorPa
 }
 func (f *fakeWriter) DeleteStaleBMCSensors(_ context.Context, _ db.DeleteStaleBMCSensorsParams) error {
 	return nil
+}
+func (f *fakeWriter) UpsertVM(_ context.Context, arg db.UpsertVMParams) (db.VirtualMachine, error) {
+	f.vms = append(f.vms, arg)
+	return db.VirtualMachine{}, nil
 }
 
 type fakeSwitch struct{}

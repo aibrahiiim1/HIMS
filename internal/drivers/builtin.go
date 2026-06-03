@@ -14,6 +14,7 @@ import (
 	"github.com/coralsearesorts/hims/internal/driver/hostsnmp"
 	"github.com/coralsearesorts/hims/internal/driver/huawei"
 	"github.com/coralsearesorts/hims/internal/driver/redfish"
+	vspheredrv "github.com/coralsearesorts/hims/internal/driver/vsphere"
 	"github.com/coralsearesorts/hims/internal/driver/wireless"
 )
 
@@ -32,5 +33,6 @@ func Builtin() *driver.Registry {
 	r.Register(cctv.New())
 	r.Register(wireless.New())
 	r.Register(redfish.New())
+	r.Register(vspheredrv.New())
 	return r
 }

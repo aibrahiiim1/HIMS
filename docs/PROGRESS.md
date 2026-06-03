@@ -762,6 +762,36 @@ arbitrary facts — adding a "bmc.health != OK" rule type is a follow-up); link 
 BMC device to its OS-side device (BMC has its own mgmt IP). This HTTP client +
 http_basic path is the reusable base for the vendor-REST drivers next.
 
+---
+
+## vSphere — ESXi host→VM map + datastores (govmomi) ✅ (closed 2026-06-03)
+
+First external-dependency deep-collection phase. Adds `github.com/vmware/
+govmomi` — chosen because it ships the **vcsim simulator**, so the collector
+is fully tested against an in-memory vCenter with no real hardware.
+
+- ✅ `internal/vsphere` — `Collect(ctx, *vim25.Client)` retrieves VMs (name,
+  power, vCPU, memory, guest OS, IP) + datastores (capacity/free) via a
+  ContainerView over the root folder; normalizes power state to our schema's
+  vocabulary. **Tested against `simulator.Test` (vcsim)**.
+- ✅ `internal/driver/vsphere` — `vmware_vsphere` driver: ESXi/vSphere HTTPS-
+  banner fingerprint (→ virtual_host, conf 71) + govmomi-session `Collect`
+  mapping inventory into `driver.Facts` (VMs + datastores-as-storage).
+  Registered. Tested via vcsim + fingerprint + wrong-session.
+- ✅ `Facts.VMs` + apply persists via `UpsertVM` (power-state clamp, IP parse)
+  into the existing `virtual_machines` table — so the **VirtualHostDetail VM
+  section now populates** (no UI change). Datastores reuse `Facts.Storage`.
+- ✅ collector `-vsphere <ip> [-location]` — resolves scoped vendor_api/
+  http_basic creds, connects via `govmomi.NewClient` to `https://<ip>/sdk`,
+  collects + applies. Password used only in memory.
+- ✅ go mod tidy; gofmt + go build/vet/test ./... green; frontend tsc green.
+
+### ⚠️ Live-validation trigger
+Validated against vcsim (the canonical govmomi test double), **not a real
+ESXi 7/8 or vCenter**. Trigger: first vSphere credential bound. v1 targets a
+single ESXi `/sdk`; carry-forward: vCenter multi-host walk, port groups/VLANs/
+host NICs, VM↔managed-device linking, an API/UI collect trigger.
+
 ## Status — listed roadmap + the fleet-onboarding path complete
 Every queued phase plus the discovery→persist integrator and now whole-subnet
 scanning are shipped, green, committed. Remaining work is all

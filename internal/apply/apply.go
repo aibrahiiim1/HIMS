@@ -59,6 +59,8 @@ type Writer interface {
 	UpsertBMCInfo(ctx context.Context, arg db.UpsertBMCInfoParams) error
 	UpsertBMCSensor(ctx context.Context, arg db.UpsertBMCSensorParams) error
 	DeleteStaleBMCSensors(ctx context.Context, arg db.DeleteStaleBMCSensorsParams) error
+
+	UpsertVM(ctx context.Context, arg db.UpsertVMParams) (db.VirtualMachine, error)
 }
 
 // Applier persists discovery results.
@@ -204,6 +206,35 @@ func (a *Applier) applyFacts(ctx context.Context, devID uuid.UUID, f *driver.Fac
 
 	a.applyFirewall(ctx, devID, f, poll)
 	a.applyBMC(ctx, devID, f, poll)
+
+	// Virtual machines (vSphere host→VM map).
+	for _, vm := range f.VMs {
+		_, _ = a.w.UpsertVM(ctx, db.UpsertVMParams{
+			HostDeviceID: devID, Name: vm.Name, PowerState: orDefaultPower(vm.PowerState),
+			Vcpu: i32ptr(vm.VCPU), MemMb: i32ptr(vm.MemMB), GuestOs: nonEmpty(vm.GuestOS),
+			PrimaryIp: parseIP(vm.IP),
+		})
+	}
+}
+
+func orDefaultPower(s string) string {
+	switch s {
+	case "on", "off", "suspended":
+		return s
+	default:
+		return "unknown"
+	}
+}
+
+func parseIP(s string) *netip.Addr {
+	if s == "" {
+		return nil
+	}
+	a, err := netip.ParseAddr(s)
+	if err != nil {
+		return nil
+	}
+	return &a
 }
 
 // applyBMC persists the Redfish out-of-band controller summary + sensors.

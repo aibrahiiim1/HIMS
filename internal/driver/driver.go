@@ -90,6 +90,18 @@ type Facts struct {
 	// BMC out-of-band inventory + health (Redfish: iLO/iDRAC).
 	BMC        *BMCSnap
 	BMCSensors []BMCSensorSnap
+	// Virtual machines (vSphere host→VM map).
+	VMs []VMSnap
+}
+
+// VMSnap is one virtual machine under a virtualization host.
+type VMSnap struct {
+	Name       string
+	PowerState string // on | off | suspended | unknown
+	VCPU       int32
+	MemMB      int32
+	GuestOS    string
+	IP         string
 }
 
 // BMCSnap is a server's out-of-band controller summary (one row per device).
