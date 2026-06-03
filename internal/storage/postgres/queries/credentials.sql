@@ -9,6 +9,17 @@ SELECT * FROM credentials WHERE id = $1;
 -- name: ListCredentials :many
 SELECT * FROM credentials ORDER BY name;
 
+-- name: UpdateCredentialMeta :one
+-- Rename + weak-flag update (Credentials CRUD edit).
+UPDATE credentials SET name = $2, weak = $3, updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: DeleteCredential :exec
+-- Removing a credential un-binds it from devices (FK ON DELETE SET NULL) and
+-- drops its group memberships (FK ON DELETE CASCADE).
+DELETE FROM credentials WHERE id = $1;
+
 -- name: UpdateCredentialSecret :exec
 -- Used by key rotation: re-seal the secret under a new key + KeyID.
 UPDATE credentials SET encrypted_blob = $2, key_id = $3, updated_at = now()

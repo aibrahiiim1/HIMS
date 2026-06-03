@@ -52,6 +52,9 @@ type Querier interface {
 	CreateSystem(ctx context.Context, arg CreateSystemParams) (System, error)
 	CreateWorkOrder(ctx context.Context, arg CreateWorkOrderParams) (WorkOrder, error)
 	DeleteAlertRule(ctx context.Context, id uuid.UUID) error
+	// Removing a credential un-binds it from devices (FK ON DELETE SET NULL) and
+	// drops its group memberships (FK ON DELETE CASCADE).
+	DeleteCredential(ctx context.Context, id uuid.UUID) error
 	// Hard delete (cascades to inventory child rows via FK ON DELETE CASCADE).
 	DeleteDevice(ctx context.Context, id uuid.UUID) error
 	// Bulk hard delete (multi-select). Returns the number of rows removed.
@@ -212,6 +215,8 @@ type Querier interface {
 	SetMonitoringCheckEnabled(ctx context.Context, arg SetMonitoringCheckEnabledParams) (MonitoringCheck, error)
 	TotalExpenses(ctx context.Context) (float64, error)
 	TouchDeviceDiscovery(ctx context.Context, arg TouchDeviceDiscoveryParams) error
+	// Rename + weak-flag update (Credentials CRUD edit).
+	UpdateCredentialMeta(ctx context.Context, arg UpdateCredentialMetaParams) (Credential, error)
 	// Used by key rotation: re-seal the secret under a new key + KeyID.
 	UpdateCredentialSecret(ctx context.Context, arg UpdateCredentialSecretParams) error
 	// Operator edit of a device's identity fields (Inventory CRUD).

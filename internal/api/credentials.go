@@ -85,6 +85,71 @@ func (s *Server) createCredential(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, toCredentialDTO(c))
 }
 
+type updateCredentialReq struct {
+	Name   string `json:"name"`   // rename (optional)
+	Secret string `json:"secret"` // rotate the secret (optional; re-sealed)
+}
+
+// updateCredential handles PATCH /credentials/{id} — rename and/or rotate the
+// secret. The secret is re-sealed; the plaintext is never logged or returned.
+func (s *Server) updateCredential(w http.ResponseWriter, r *http.Request) {
+	ctx, id, ok := pathUUID(w, r, "id")
+	if !ok {
+		return
+	}
+	var req updateCredentialReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	cur, err := s.queries.GetCredential(ctx, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		name = cur.Name
+	}
+	weak := cur.Weak
+	if req.Secret != "" {
+		if s.cipher == nil {
+			http.Error(w, "encryption key not configured (set HIMS_ENCRYPTION_KEY)", http.StatusServiceUnavailable)
+			return
+		}
+		blob, keyID, err := s.cipher.Seal([]byte(req.Secret))
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		if err := s.queries.UpdateCredentialSecret(ctx, db.UpdateCredentialSecretParams{ID: id, EncryptedBlob: blob, KeyID: keyID}); err != nil {
+			writeErr(w, err)
+			return
+		}
+		weak = isWeakSecret(cur.Kind, req.Secret)
+	}
+	c, err := s.queries.UpdateCredentialMeta(ctx, db.UpdateCredentialMetaParams{ID: id, Name: name, Weak: weak})
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toCredentialDTO(c))
+}
+
+// deleteCredential handles DELETE /credentials/{id}. It un-binds the credential
+// from any devices (FK SET NULL) and drops its group memberships (FK CASCADE).
+func (s *Server) deleteCredential(w http.ResponseWriter, r *http.Request) {
+	ctx, id, ok := pathUUID(w, r, "id")
+	if !ok {
+		return
+	}
+	if err := s.queries.DeleteCredential(ctx, id); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 type bindCredentialReq struct {
 	CredentialID *string `json:"credential_id"` // null clears the binding
 }

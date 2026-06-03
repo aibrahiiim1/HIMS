@@ -11,11 +11,27 @@ const btn: React.CSSProperties = {
 const input: React.CSSProperties = {
   padding: '8px 10px', border: '1px solid #ccc', borderRadius: 6, fontSize: 13, width: '100%',
 }
+const cell: React.CSSProperties = { padding: '6px 8px', border: '1px solid #ccc', borderRadius: 6, fontSize: 13 }
+const ghost: React.CSSProperties = { padding: '3px 8px', background: 'transparent', color: '#90caf9', border: '1px solid #90caf9', borderRadius: 6, cursor: 'pointer', fontSize: 12 }
 
 export function Credentials() {
   const qc = useQueryClient()
   const [show, setShow] = useState(false)
+  const [edit, setEdit] = useState<string | null>(null)
+  const [editName, setEditName] = useState('')
+  const [editSecret, setEditSecret] = useState('')
   const list = useQuery({ queryKey: ['credentials'], queryFn: () => api.get<Credential[]>('/credentials') })
+  const refresh = () => qc.invalidateQueries({ queryKey: ['credentials'] })
+
+  const save = useMutation({
+    mutationFn: (id: string) => api.patch(`/credentials/${id}`, { name: editName, secret: editSecret }),
+    onSuccess: () => { setEdit(null); setEditSecret(''); refresh() },
+  })
+  const del = useMutation({
+    mutationFn: (id: string) => api.del(`/credentials/${id}`),
+    onSuccess: refresh,
+  })
+  const startEdit = (c: Credential) => { setEdit(c.id); setEditName(c.name); setEditSecret('') }
 
   return (
     <div>
@@ -38,18 +54,39 @@ export function Credentials() {
         {list.data && list.data.length === 0 && <div className="muted">No credentials yet.</div>}
         {list.data && list.data.length > 0 && (
           <table>
-            <thead><tr><th>Name</th><th>Kind</th><th>Weak</th><th>Created</th></tr></thead>
+            <thead><tr><th>Name</th><th>Kind</th><th>Weak</th><th>Created</th><th></th></tr></thead>
             <tbody>
               {list.data.map((c) => (
-                <tr key={c.id}>
-                  <td><strong>{c.name}</strong></td>
-                  <td>{c.kind}</td>
-                  <td>{c.weak ? <span className="badge badge-warning">weak</span> : '—'}</td>
-                  <td>{c.created_at?.slice(0, 10)}</td>
-                </tr>
+                edit === c.id ? (
+                  <tr key={c.id} style={{ background: '#1a2733' }}>
+                    <td><input style={cell} value={editName} onChange={(e) => setEditName(e.target.value)} /></td>
+                    <td>{c.kind}</td>
+                    <td colSpan={2}>
+                      <input style={{ ...cell, width: 220 }} type="password" placeholder="new secret (leave blank to keep)" value={editSecret} onChange={(e) => setEditSecret(e.target.value)} autoComplete="new-password" />
+                    </td>
+                    <td style={{ whiteSpace: 'nowrap' }}>
+                      <button style={btn} disabled={!editName || save.isPending} onClick={() => save.mutate(c.id)}>Save</button>{' '}
+                      <button style={ghost} onClick={() => setEdit(null)}>Cancel</button>
+                    </td>
+                  </tr>
+                ) : (
+                  <tr key={c.id}>
+                    <td><strong>{c.name}</strong></td>
+                    <td>{c.kind}</td>
+                    <td>{c.weak ? <span className="badge badge-warning">weak</span> : '—'}</td>
+                    <td>{c.created_at?.slice(0, 10)}</td>
+                    <td style={{ whiteSpace: 'nowrap' }}>
+                      <button style={ghost} onClick={() => startEdit(c)}>Edit</button>{' '}
+                      <button style={{ ...ghost, color: '#ef9a9a', borderColor: '#ef9a9a' }} onClick={() => { if (confirm(`Delete credential "${c.name}"? It will be unbound from any devices.`)) del.mutate(c.id) }}>Delete</button>
+                    </td>
+                  </tr>
+                )
               ))}
             </tbody>
           </table>
+        )}
+        {(save.error || del.error) && (
+          <div className="error-msg" style={{ marginTop: 8 }}>{((save.error || del.error) as Error).message}</div>
         )}
       </div>
     </div>

@@ -117,6 +117,17 @@ func (q *Queries) CreateCredentialGroup(ctx context.Context, arg CreateCredentia
 	return i, err
 }
 
+const deleteCredential = `-- name: DeleteCredential :exec
+DELETE FROM credentials WHERE id = $1
+`
+
+// Removing a credential un-binds it from devices (FK ON DELETE SET NULL) and
+// drops its group memberships (FK ON DELETE CASCADE).
+func (q *Queries) DeleteCredential(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteCredential, id)
+	return err
+}
+
 const getCredential = `-- name: GetCredential :one
 SELECT id, name, kind, encrypted_blob, key_id, weak, metadata, created_at, updated_at FROM credentials WHERE id = $1
 `
@@ -388,6 +399,36 @@ func (q *Queries) ResolveCandidatesForIP(ctx context.Context, arg ResolveCandida
 		return nil, err
 	}
 	return items, nil
+}
+
+const updateCredentialMeta = `-- name: UpdateCredentialMeta :one
+UPDATE credentials SET name = $2, weak = $3, updated_at = now()
+WHERE id = $1
+RETURNING id, name, kind, encrypted_blob, key_id, weak, metadata, created_at, updated_at
+`
+
+type UpdateCredentialMetaParams struct {
+	ID   uuid.UUID `json:"id"`
+	Name string    `json:"name"`
+	Weak bool      `json:"weak"`
+}
+
+// Rename + weak-flag update (Credentials CRUD edit).
+func (q *Queries) UpdateCredentialMeta(ctx context.Context, arg UpdateCredentialMetaParams) (Credential, error) {
+	row := q.db.QueryRow(ctx, updateCredentialMeta, arg.ID, arg.Name, arg.Weak)
+	var i Credential
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Kind,
+		&i.EncryptedBlob,
+		&i.KeyID,
+		&i.Weak,
+		&i.Metadata,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const updateCredentialSecret = `-- name: UpdateCredentialSecret :exec
