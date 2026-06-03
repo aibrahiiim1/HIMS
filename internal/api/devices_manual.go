@@ -1,6 +1,8 @@
 package api
 
 import (
+	"bytes"
+	"context"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
@@ -11,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/xuri/excelize/v2"
 
 	"github.com/coralsearesorts/hims/internal/domain"
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
@@ -249,25 +252,78 @@ type csvImportResult struct {
 // subset, in any order): name, category, primary_ip, hostname, vendor, model,
 // serial, os_version, location_id. "name" is required per row. Rows that fail
 // are reported but do not abort the batch.
+// importDevicesCSV handles POST /devices/import-csv (pasted text/csv body).
 func (s *Server) importDevicesCSV(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	reader := csv.NewReader(io.LimitReader(r.Body, 8<<20))
-	reader.FieldsPerRecord = -1 // tolerate ragged rows
+	reader.FieldsPerRecord = -1
 	reader.TrimLeadingSpace = true
-
-	header, err := reader.Read()
+	rows, err := reader.ReadAll()
 	if err != nil {
-		http.Error(w, "empty or invalid CSV (need a header row): "+err.Error(), http.StatusBadRequest)
+		http.Error(w, "invalid CSV: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	s.importRows(w, r, rows)
+}
+
+// importDevicesFile handles POST /devices/import-file (multipart "file") for a
+// .csv or .xlsx upload — same columns + location resolution as the paste path.
+func (s *Server) importDevicesFile(w http.ResponseWriter, r *http.Request) {
+	f, hdr, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "no file uploaded (field 'file'): "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, 16<<20))
+	if err != nil {
+		http.Error(w, "read failed: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	var rows [][]string
+	if strings.HasSuffix(strings.ToLower(hdr.Filename), ".xlsx") {
+		rows, err = xlsxRows(data)
+	} else {
+		rows, err = csv.NewReader(bytes.NewReader(data)).ReadAll()
+	}
+	if err != nil {
+		http.Error(w, "parse failed: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	s.importRows(w, r, rows)
+}
+
+// xlsxRows reads the first worksheet of an .xlsx file into rows.
+func xlsxRows(data []byte) ([][]string, error) {
+	xl, err := excelize.OpenReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	defer xl.Close()
+	sheets := xl.GetSheetList()
+	if len(sheets) == 0 {
+		return nil, fmt.Errorf("workbook has no sheets")
+	}
+	return xl.GetRows(sheets[0])
+}
+
+// importRows is the shared bulk-import core: row 0 is the header (any subset of
+// the recognized columns), "name" required; "location" cells resolve to a tree
+// node by name or full path. Per-row failures are reported; the batch continues.
+func (s *Server) importRows(w http.ResponseWriter, r *http.Request, rows [][]string) {
+	if len(rows) < 1 {
+		http.Error(w, "empty file (need a header row)", http.StatusBadRequest)
 		return
 	}
 	colIdx := map[string]int{}
-	for i, h := range header {
+	for i, h := range rows[0] {
 		colIdx[strings.ToLower(strings.TrimSpace(h))] = i
 	}
 	if _, ok := colIdx["name"]; !ok {
-		http.Error(w, "CSV must have a 'name' column", http.StatusBadRequest)
+		http.Error(w, "file must have a 'name' column", http.StatusBadRequest)
 		return
 	}
+	locByKey := s.locationLookup(r.Context()) // name/path (lowercased) -> id
 
 	get := func(row []string, key string) string {
 		if i, ok := colIdx[key]; ok && i < len(row) {
@@ -275,43 +331,73 @@ func (s *Server) importDevicesCSV(w http.ResponseWriter, r *http.Request) {
 		}
 		return ""
 	}
-
 	res := csvImportResult{}
-	line := 1
-	for {
-		row, err := reader.Read()
-		if err == io.EOF {
-			break
+	for n := 1; n < len(rows); n++ {
+		row := rows[n]
+		line := n + 1
+		if strings.TrimSpace(strings.Join(row, "")) == "" {
+			continue // skip blank rows
 		}
-		line++
-		if err != nil {
-			res.Failed++
-			res.Errors = append(res.Errors, fmt.Sprintf("line %d: %v", line, err))
-			continue
-		}
-		var locPtr *string
-		if v := get(row, "location_id"); v != "" {
-			locPtr = &v
-		}
-		params, perr := manualDeviceParams(manualDeviceReq{
+		req := manualDeviceReq{
 			Name: get(row, "name"), Category: get(row, "category"), PrimaryIP: get(row, "primary_ip"),
 			Hostname: get(row, "hostname"), Vendor: get(row, "vendor"), Model: get(row, "model"),
-			Serial: get(row, "serial"), OSVersion: get(row, "os_version"), LocationID: locPtr,
-		})
+			Serial: get(row, "serial"), OSVersion: get(row, "os_version"),
+			VLAN: get(row, "vlan"), Class: get(row, "class"),
+		}
+		// "location" column: resolve a tree node by name or path; else keep as a
+		// free-text label. "location_id" column (a uuid) wins if present.
+		if lid := get(row, "location_id"); lid != "" {
+			req.LocationID = &lid
+		} else if loc := get(row, "location"); loc != "" {
+			if id, ok := locByKey[strings.ToLower(loc)]; ok {
+				ids := id
+				req.LocationID = &ids
+			} else {
+				req.Location = loc
+			}
+		}
+		params, perr := manualDeviceParams(req)
 		if perr != nil {
 			res.Failed++
-			res.Errors = append(res.Errors, fmt.Sprintf("line %d: %v", line, perr))
+			res.Errors = append(res.Errors, fmt.Sprintf("row %d: %v", line, perr))
 			continue
 		}
-		params.Metadata = []byte(`{"source":"csv_import"}`)
+		params.Metadata = []byte(`{"source":"import"}`)
 		if _, err := s.queries.CreateDevice(r.Context(), params); err != nil {
 			res.Failed++
-			res.Errors = append(res.Errors, fmt.Sprintf("line %d (%s): %v", line, params.Name, err))
+			res.Errors = append(res.Errors, fmt.Sprintf("row %d (%s): %v", line, params.Name, err))
 			continue
 		}
 		res.Created++
 	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+// locationLookup builds a lowercased {name|path -> id} map for import resolution.
+func (s *Server) locationLookup(ctx context.Context) map[string]string {
+	out := map[string]string{}
+	locs, err := s.queries.ListLocations(ctx)
+	if err != nil {
+		return out
+	}
+	byID := map[uuid.UUID]db.Location{}
+	for _, l := range locs {
+		byID[l.ID] = l
+	}
+	var path func(l db.Location) string
+	path = func(l db.Location) string {
+		if l.ParentID != nil {
+			if p, ok := byID[*l.ParentID]; ok {
+				return path(p) + " / " + l.Name
+			}
+		}
+		return l.Name
+	}
+	for _, l := range locs {
+		out[strings.ToLower(l.Name)] = l.ID.String()
+		out[strings.ToLower(path(l))] = l.ID.String()
+	}
+	return out
 }
 
 // categoryList mirrors the devices.category CHECK constraint (migration

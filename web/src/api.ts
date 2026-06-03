@@ -53,7 +53,15 @@ async function postText<T>(path: string, body: string, contentType = 'text/csv')
   return r.json()
 }
 
-export const api = { get, post, patch, put, del, postText }
+// postForm sends multipart/form-data (file uploads). The browser sets the
+// Content-Type boundary; do not set it manually.
+async function postForm<T>(path: string, body: FormData): Promise<T> {
+  const r = await fetch(`${BASE}${path}`, { method: 'POST', body })
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${path}`)
+  return r.json()
+}
+
+export const api = { get, post, patch, put, del, postText, postForm }
 
 // ---- Domain types -----------------------------------------------------------
 

@@ -139,7 +139,12 @@ function ImportTab({ locations, locPath, setMsg, qc }: { locations: Location[]; 
   })
   const importCsv = useMutation({
     mutationFn: () => api.postText<{ created: number; failed: number; errors?: string[] }>('/devices/import-csv', csv),
-    onSuccess: (r) => { const x = r as { created: number; failed: number }; setMsg(`CSV import: ${x.created} created, ${x.failed} failed.`); refresh() },
+    onSuccess: (r) => { const x = r as { created: number; failed: number }; setMsg(`Import: ${x.created} created, ${x.failed} failed.`); refresh() },
+    onError: (e) => setMsg((e as Error).message),
+  })
+  const importFile = useMutation({
+    mutationFn: (file: File) => { const fd = new FormData(); fd.append('file', file); return api.postForm<{ created: number; failed: number; errors?: string[] }>('/devices/import-file', fd) },
+    onSuccess: (r) => { const x = r as { created: number; failed: number }; setMsg(`Import: ${x.created} created, ${x.failed} failed.`); refresh() },
     onError: (e) => setMsg((e as Error).message),
   })
 
@@ -165,15 +170,21 @@ function ImportTab({ locations, locPath, setMsg, qc }: { locations: Location[]; 
         <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
           Header row + any subset of: <code>name</code> (required), category, primary_ip, hostname, vendor, model, serial, os_version, vlan, class, location (name or path). Paste below, or upload a .csv file.
         </div>
-        <input type="file" accept=".csv,text/csv" style={{ fontSize: 12, marginBottom: 6 }} onChange={async (e) => { const f = e.target.files?.[0]; if (f) setCsv(await f.text()) }} />
-        <textarea style={{ ...input, width: '100%', minHeight: 90, fontFamily: 'monospace', fontSize: 12 }} placeholder={'name,category,primary_ip,location\nPatch Panel A,patch_panel,,CHR\nUPS-Lobby,ups,10.0.0.30,CHR'} value={csv} onChange={(e) => setCsv(e.target.value)} />
+        <div style={{ marginBottom: 8 }}>
+          <label style={{ ...btn, display: 'inline-block' }}>
+            Upload .csv / .xlsx
+            <input type="file" accept=".csv,.xlsx" style={{ display: 'none' }} onChange={(e) => { const f = e.target.files?.[0]; if (f) importFile.mutate(f); e.target.value = '' }} />
+          </label>
+          <span className="muted" style={{ fontSize: 12, marginLeft: 8 }}>{importFile.isPending ? 'Importing…' : 'Excel or CSV file — imported directly.'}</span>
+        </div>
+        <div className="muted" style={{ fontSize: 12, margin: '6px 0' }}>…or paste CSV:</div>
+        <textarea style={{ ...input, width: '100%', minHeight: 80, fontFamily: 'monospace', fontSize: 12 }} placeholder={'name,category,primary_ip,location\nPatch Panel A,patch_panel,,CHR\nUPS-Lobby,ups,10.0.0.30,CHR'} value={csv} onChange={(e) => setCsv(e.target.value)} />
         <div style={{ marginTop: 6 }}>
-          <button style={btn} disabled={!csv.trim() || importCsv.isPending} onClick={() => importCsv.mutate()}>{importCsv.isPending ? 'Importing…' : 'Import CSV'}</button>
-          {importCsv.data?.errors && importCsv.data.errors.length > 0 && (
-            <ul className="muted" style={{ fontSize: 12, marginTop: 6 }}>{importCsv.data.errors.slice(0, 10).map((x, i) => <li key={i}>{x}</li>)}</ul>
+          <button style={btn} disabled={!csv.trim() || importCsv.isPending} onClick={() => importCsv.mutate()}>{importCsv.isPending ? 'Importing…' : 'Import pasted CSV'}</button>
+          {(importCsv.data?.errors || importFile.data?.errors) && (
+            <ul className="muted" style={{ fontSize: 12, marginTop: 6 }}>{((importCsv.data?.errors || importFile.data?.errors) ?? []).slice(0, 10).map((x, i) => <li key={i}>{x}</li>)}</ul>
           )}
         </div>
-        <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>Excel (.xlsx) import is coming next — for now save the sheet as CSV.</div>
       </div>
     </>
   )
