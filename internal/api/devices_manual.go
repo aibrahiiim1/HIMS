@@ -160,6 +160,49 @@ func (s *Server) deleteDevice(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+type bulkAssignReq struct {
+	IDs      []string `json:"ids"`
+	VLAN     *string  `json:"vlan"`
+	Class    *string  `json:"class"`
+	Location *string  `json:"location"`
+}
+
+// bulkAssignDevices handles POST /devices/bulk-assign — set vlan/class/location
+// on a multi-selection. Only fields present (non-null) in the request are
+// changed; the rest are kept (COALESCE).
+func (s *Server) bulkAssignDevices(w http.ResponseWriter, r *http.Request) {
+	var req bulkAssignReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	ids := make([]uuid.UUID, 0, len(req.IDs))
+	for _, str := range req.IDs {
+		id, err := uuid.Parse(str)
+		if err != nil {
+			http.Error(w, "invalid device id: "+str, http.StatusBadRequest)
+			return
+		}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		http.Error(w, "no ids provided", http.StatusBadRequest)
+		return
+	}
+	if req.VLAN == nil && req.Class == nil && req.Location == nil {
+		http.Error(w, "provide at least one of vlan, class, location", http.StatusBadRequest)
+		return
+	}
+	n, err := s.queries.BulkAssignClassification(r.Context(), db.BulkAssignClassificationParams{
+		Ids: ids, Vlan: req.VLAN, DeviceClass: req.Class, Location: req.Location,
+	})
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int64{"updated": n})
+}
+
 type bulkDeleteReq struct {
 	IDs []string `json:"ids"`
 }

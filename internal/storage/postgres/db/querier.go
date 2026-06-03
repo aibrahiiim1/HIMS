@@ -22,6 +22,10 @@ type Querier interface {
 	// The CHECK (quantity >= 0) constraint rejects negative results.
 	AdjustSparePartStock(ctx context.Context, arg AdjustSparePartStockParams) (SparePart, error)
 	BindCredentialGroup(ctx context.Context, arg BindCredentialGroupParams) (CredentialBinding, error)
+	// Assign vlan/device_class/location to many devices at once (multi-select).
+	// Only the provided (non-null) fields are changed — COALESCE keeps the rest —
+	// so an operator can set just location, just class, just vlan, or any combo.
+	BulkAssignClassification(ctx context.Context, arg BulkAssignClassificationParams) (int64, error)
 	// ---- Work-order parts (stock consumption) ---------------------------------
 	// Atomic: decrement stock AND record the consumption in ONE statement. The
 	// UPDATE's WHERE quantity >= $3 is the precondition; if it fails to match,

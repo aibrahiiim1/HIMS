@@ -30,6 +30,38 @@ func (q *Queries) AddDeviceRole(ctx context.Context, arg AddDeviceRoleParams) er
 	return err
 }
 
+const bulkAssignClassification = `-- name: BulkAssignClassification :execrows
+UPDATE devices SET
+    vlan = COALESCE($1, vlan),
+    device_class = COALESCE($2, device_class),
+    location = COALESCE($3, location),
+    updated_at = now()
+WHERE id = ANY($4::uuid[]) AND deleted_at IS NULL
+`
+
+type BulkAssignClassificationParams struct {
+	Vlan        *string     `json:"vlan"`
+	DeviceClass *string     `json:"device_class"`
+	Location    *string     `json:"location"`
+	Ids         []uuid.UUID `json:"ids"`
+}
+
+// Assign vlan/device_class/location to many devices at once (multi-select).
+// Only the provided (non-null) fields are changed — COALESCE keeps the rest —
+// so an operator can set just location, just class, just vlan, or any combo.
+func (q *Queries) BulkAssignClassification(ctx context.Context, arg BulkAssignClassificationParams) (int64, error) {
+	result, err := q.db.Exec(ctx, bulkAssignClassification,
+		arg.Vlan,
+		arg.DeviceClass,
+		arg.Location,
+		arg.Ids,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const createDevice = `-- name: CreateDevice :one
 INSERT INTO devices (
     location_id, primary_ip, hostname, name, vendor, model, serial,

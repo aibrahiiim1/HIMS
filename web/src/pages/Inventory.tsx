@@ -22,10 +22,14 @@ const ghost: React.CSSProperties = { padding: '3px 8px', background: 'transparen
 export function Inventory() {
   const qc = useQueryClient()
   const [cat, setCat] = useState('all')
+  const [classF, setClassF] = useState('all')
+  const [locF, setLocF] = useState('all')
   const [q, setQ] = useState('')
   const [sel, setSel] = useState<Set<string>>(new Set())
   const [editing, setEditing] = useState<Device | null>(null)
   const [msg, setMsg] = useState('')
+  // bulk-assign inputs (applied to the current selection)
+  const [asg, setAsg] = useState({ vlan: '', class: '', location: '' })
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['devices', 'all'],
@@ -38,16 +42,23 @@ export function Inventory() {
     return m
   }, [data])
   const cats = useMemo(() => Object.keys(counts).sort(), [counts])
+  const classes = useMemo(() => [...new Set((data ?? []).map((d) => d.device_class).filter(Boolean) as string[])].sort(), [data])
+  const locations = useMemo(() => [...new Set((data ?? []).map((d) => d.location).filter(Boolean) as string[])].sort(), [data])
 
   const rows = useMemo(() => {
     let r = data ?? []
     if (cat !== 'all') r = r.filter((d) => d.category === cat)
+    if (classF !== 'all') r = r.filter((d) => (d.device_class ?? '') === classF)
+    if (locF !== 'all') r = r.filter((d) => (d.location ?? '') === locF)
     if (q.trim()) {
       const t = q.toLowerCase()
-      r = r.filter((d) => d.name.toLowerCase().includes(t) || (d.primary_ip ?? '').includes(t) || (d.vendor ?? '').toLowerCase().includes(t))
+      r = r.filter((d) =>
+        d.name.toLowerCase().includes(t) || (d.primary_ip ?? '').includes(t) ||
+        (d.vendor ?? '').toLowerCase().includes(t) || (d.vlan ?? '').toLowerCase().includes(t) ||
+        (d.device_class ?? '').toLowerCase().includes(t) || (d.location ?? '').toLowerCase().includes(t))
     }
     return r
-  }, [data, cat, q])
+  }, [data, cat, classF, locF, q])
 
   const refresh = () => qc.invalidateQueries({ queryKey: ['devices'] })
   const toggle = (id: string) => setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
@@ -81,6 +92,21 @@ export function Inventory() {
     onError: (e) => setMsg((e as Error).message),
   })
 
+  const assign = useMutation({
+    mutationFn: (body: { ids: string[]; vlan?: string; class?: string; location?: string }) => api.post<{ updated: number }>('/devices/bulk-assign', body),
+    onSuccess: (r) => { setMsg(`Updated ${(r as { updated: number }).updated} device(s).`); setAsg({ vlan: '', class: '', location: '' }); refresh() },
+    onError: (e) => setMsg((e as Error).message),
+  })
+  const doAssign = () => {
+    if (sel.size === 0) return
+    const body: { ids: string[]; vlan?: string; class?: string; location?: string } = { ids: [...sel] }
+    if (asg.vlan.trim()) body.vlan = asg.vlan.trim()
+    if (asg.class.trim()) body.class = asg.class.trim()
+    if (asg.location.trim()) body.location = asg.location.trim()
+    if (body.vlan === undefined && body.class === undefined && body.location === undefined) { setMsg('Enter a VLAN, Class, or Location to assign.'); return }
+    assign.mutate(body)
+  }
+
   const doDeleteSelected = () => {
     if (sel.size === 0) return
     if (confirm(`Delete ${sel.size} device(s)? This also removes their collected inventory and cannot be undone.`)) del.mutate([...sel])
@@ -96,15 +122,35 @@ export function Inventory() {
       <div className="card">
         <h2>Inventory <span className="muted" style={{ fontSize: 13, fontWeight: 400 }}>— every device, all categories</span></h2>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
-          <select style={{ ...input, width: 220 }} value={cat} onChange={(e) => setCat(e.target.value)}>
+          <select style={{ ...input, width: 170 }} value={cat} onChange={(e) => setCat(e.target.value)}>
             <option value="all">All categories ({(data ?? []).length})</option>
             {cats.map((c) => <option key={c} value={c}>{c} ({counts[c]})</option>)}
           </select>
-          <input style={{ ...input, width: 220 }} placeholder="filter by name / IP / vendor" value={q} onChange={(e) => setQ(e.target.value)} />
+          <select style={{ ...input, width: 150 }} value={classF} onChange={(e) => setClassF(e.target.value)}>
+            <option value="all">All classes</option>
+            {classes.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <select style={{ ...input, width: 170 }} value={locF} onChange={(e) => setLocF(e.target.value)}>
+            <option value="all">All locations</option>
+            {locations.map((l) => <option key={l} value={l}>{l}</option>)}
+          </select>
+          <input style={{ ...input, width: 200 }} placeholder="search name / IP / vlan / class / loc" value={q} onChange={(e) => setQ(e.target.value)} />
           <div style={{ flex: 1 }} />
           <button style={btn} disabled={sel.size === 0 || rescan.isPending} onClick={doRescanSelected}>Re-scan selected ({sel.size})</button>
           <button style={danger} disabled={sel.size === 0 || del.isPending} onClick={doDeleteSelected}>Delete selected ({sel.size})</button>
         </div>
+
+        {/* Bulk-assign bar — appears when rows are selected */}
+        {sel.size > 0 && (
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', padding: '8px 0', borderTop: '1px solid #2a2a2a' }}>
+            <span className="muted" style={{ fontSize: 12 }}>Assign to {sel.size} selected:</span>
+            <input style={{ ...input, width: 90 }} placeholder="vlan" value={asg.vlan} onChange={(e) => setAsg({ ...asg, vlan: e.target.value })} />
+            <input style={{ ...input, width: 130 }} placeholder="class" value={asg.class} onChange={(e) => setAsg({ ...asg, class: e.target.value })} />
+            <input style={{ ...input, width: 160 }} placeholder="location" value={asg.location} onChange={(e) => setAsg({ ...asg, location: e.target.value })} />
+            <button style={btn} disabled={assign.isPending} onClick={doAssign}>Assign</button>
+            <span className="muted" style={{ fontSize: 11 }}>(blank fields are left unchanged)</span>
+          </div>
+        )}
         {msg && <div className="muted" style={{ fontSize: 12 }}>{msg}</div>}
       </div>
 

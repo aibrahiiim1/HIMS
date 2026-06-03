@@ -47,6 +47,17 @@ UPDATE devices SET
 WHERE id = $1 AND deleted_at IS NULL
 RETURNING *;
 
+-- name: BulkAssignClassification :execrows
+-- Assign vlan/device_class/location to many devices at once (multi-select).
+-- Only the provided (non-null) fields are changed — COALESCE keeps the rest —
+-- so an operator can set just location, just class, just vlan, or any combo.
+UPDATE devices SET
+    vlan = COALESCE(sqlc.narg('vlan'), vlan),
+    device_class = COALESCE(sqlc.narg('device_class'), device_class),
+    location = COALESCE(sqlc.narg('location'), location),
+    updated_at = now()
+WHERE id = ANY(sqlc.arg('ids')::uuid[]) AND deleted_at IS NULL;
+
 -- name: DeleteDevice :exec
 -- Hard delete (cascades to inventory child rows via FK ON DELETE CASCADE).
 DELETE FROM devices WHERE id = $1;
