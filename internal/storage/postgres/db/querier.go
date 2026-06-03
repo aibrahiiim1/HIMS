@@ -64,6 +64,8 @@ type Querier interface {
 	DeleteDevice(ctx context.Context, id uuid.UUID) error
 	// Bulk hard delete (multi-select). Returns the number of rows removed.
 	DeleteDevices(ctx context.Context, dollar_1 []uuid.UUID) (int64, error)
+	// Removes a job and its results (discovery_results FK ON DELETE CASCADE).
+	DeleteDiscoveryJob(ctx context.Context, id uuid.UUID) error
 	DeleteLocation(ctx context.Context, id uuid.UUID) error
 	DeleteLookup(ctx context.Context, id uuid.UUID) error
 	DeleteMonitoringCheck(ctx context.Context, id uuid.UUID) error

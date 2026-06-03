@@ -321,6 +321,60 @@ func (s *Server) listDiscoveryJobs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, rows)
 }
 
+// deleteDiscoveryJob removes a job + its results.
+func (s *Server) deleteDiscoveryJob(w http.ResponseWriter, r *http.Request) {
+	ctx, id, ok := pathUUID(w, r, "id")
+	if !ok {
+		return
+	}
+	if err := s.queries.DeleteDiscoveryJob(ctx, id); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// rerunDiscoveryJob re-runs a prior scan job over its original scope (the saved
+// scope_cidr, scoped to its location), as a fresh job.
+func (s *Server) rerunDiscoveryJob(w http.ResponseWriter, r *http.Request) {
+	if s.reg == nil || s.fetcher == nil {
+		http.Error(w, "discovery not configured on this server", http.StatusServiceUnavailable)
+		return
+	}
+	ctx, id, ok := pathUUID(w, r, "id")
+	if !ok {
+		return
+	}
+	prev, err := s.queries.GetDiscoveryJob(ctx, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if prev.ScopeCidr == nil {
+		http.Error(w, "this job has no re-runnable network scope (controller/AD imports aren't re-run here)", http.StatusBadRequest)
+		return
+	}
+	hosts, err := discovery.ExpandCIDR(*prev.ScopeCidr, scanMaxHosts)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	extra, err := s.scanCredentialTier(ctx, nil, nil) // all stored creds (same default as a fresh scan)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	snmpTO, portTO, defConc := s.scanSettings(ctx)
+	job, err := s.queries.CreateDiscoveryJob(ctx, db.CreateDiscoveryJobParams{LocationID: prev.LocationID, ScopeCidr: prev.ScopeCidr})
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	_ = s.queries.UpdateDiscoveryJobStatus(ctx, db.UpdateDiscoveryJobStatusParams{ID: job.ID, Status: "running", HostCount: int32(len(hosts)), FoundCount: 0})
+	go s.runScanJob(job.ID, hosts, prev.LocationID, defConc, extra, snmpTO, portTO)
+	writeJSON(w, http.StatusAccepted, job)
+}
+
 func (s *Server) getDiscoveryJob(w http.ResponseWriter, r *http.Request) {
 	ctx, id, ok := pathUUID(w, r, "id")
 	if !ok {

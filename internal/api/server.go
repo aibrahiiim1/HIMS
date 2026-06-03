@@ -81,6 +81,8 @@ func (s *Server) routes() {
 		r.Post("/discovery/controller-import", s.startControllerImport)
 		r.Post("/discovery/ad-import", s.startADImport)
 		r.Get("/discovery/jobs/{id}", s.getDiscoveryJob)
+		r.Delete("/discovery/jobs/{id}", s.deleteDiscoveryJob)
+		r.Post("/discovery/jobs/{id}/rerun", s.rerunDiscoveryJob)
 
 		// --- Devices --------------------------------------------------
 		r.Get("/devices", s.listDevices)

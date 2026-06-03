@@ -81,6 +81,16 @@ func (q *Queries) CreateDiscoveryResult(ctx context.Context, arg CreateDiscovery
 	return i, err
 }
 
+const deleteDiscoveryJob = `-- name: DeleteDiscoveryJob :exec
+DELETE FROM discovery_jobs WHERE id = $1
+`
+
+// Removes a job and its results (discovery_results FK ON DELETE CASCADE).
+func (q *Queries) DeleteDiscoveryJob(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteDiscoveryJob, id)
+	return err
+}
+
 const getDiscoveryJob = `-- name: GetDiscoveryJob :one
 SELECT id, location_id, subnet_id, scope_cidr, status, started_at, finished_at, host_count, found_count, error, metadata, created_at FROM discovery_jobs WHERE id = $1
 `

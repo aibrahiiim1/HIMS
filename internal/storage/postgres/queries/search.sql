@@ -60,3 +60,7 @@ SELECT * FROM discovery_jobs WHERE id = $1;
 
 -- name: ListDiscoveryJobs :many
 SELECT * FROM discovery_jobs ORDER BY created_at DESC LIMIT 50;
+
+-- name: DeleteDiscoveryJob :exec
+-- Removes a job and its results (discovery_results FK ON DELETE CASCADE).
+DELETE FROM discovery_jobs WHERE id = $1;
