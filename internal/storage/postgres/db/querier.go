@@ -37,6 +37,8 @@ type Querier interface {
 	CreateDiscoveryJob(ctx context.Context, arg CreateDiscoveryJobParams) (DiscoveryJob, error)
 	CreateDiscoveryResult(ctx context.Context, arg CreateDiscoveryResultParams) (DiscoveryResult, error)
 	CreateLocation(ctx context.Context, arg CreateLocationParams) (Location, error)
+	CreateMibFile(ctx context.Context, arg CreateMibFileParams) (MibFile, error)
+	CreateOIDMapping(ctx context.Context, arg CreateOIDMappingParams) (OidMapping, error)
 	// ---- Purchases ------------------------------------------------------------
 	CreatePurchase(ctx context.Context, arg CreatePurchaseParams) (Purchase, error)
 	// ---- Spare parts ----------------------------------------------------------
@@ -46,6 +48,7 @@ type Querier interface {
 	DeleteAlertRule(ctx context.Context, id uuid.UUID) error
 	DeleteLocation(ctx context.Context, id uuid.UUID) error
 	DeleteMonitoringCheck(ctx context.Context, id uuid.UUID) error
+	DeleteOIDMapping(ctx context.Context, id uuid.UUID) error
 	DeletePurchase(ctx context.Context, id uuid.UUID) error
 	DeleteSparePart(ctx context.Context, id uuid.UUID) error
 	DeleteStaleARP(ctx context.Context, arg DeleteStaleARPParams) error
@@ -81,6 +84,7 @@ type Querier interface {
 	GetSystem(ctx context.Context, id uuid.UUID) (System, error)
 	GetWLANControllerInfo(ctx context.Context, deviceID uuid.UUID) (WlanControllerInfo, error)
 	GetWorkOrder(ctx context.Context, id uuid.UUID) (WorkOrder, error)
+	InsertMibObject(ctx context.Context, arg InsertMibObjectParams) error
 	InsertMonitoringSample(ctx context.Context, arg InsertMonitoringSampleParams) error
 	ListAccessPoints(ctx context.Context, controllerDeviceID uuid.UUID) ([]AccessPoint, error)
 	ListAlertRules(ctx context.Context) ([]AlertRule, error)
@@ -109,12 +113,15 @@ type Querier interface {
 	ListInterfaces(ctx context.Context, deviceID uuid.UUID) ([]Interface, error)
 	ListLicenses(ctx context.Context, deviceID uuid.UUID) ([]FirewallLicense, error)
 	ListLowStockParts(ctx context.Context) ([]SparePart, error)
+	ListMibFiles(ctx context.Context) ([]MibFile, error)
+	ListMibObjects(ctx context.Context, mibFileID uuid.UUID) ([]MibObject, error)
 	ListMonitoringChecks(ctx context.Context) ([]MonitoringCheck, error)
 	ListMonitoringChecksByDevice(ctx context.Context, deviceID uuid.UUID) ([]MonitoringCheck, error)
 	ListMonitoringSamplesByCheck(ctx context.Context, arg ListMonitoringSamplesByCheckParams) ([]MonitoringSample, error)
 	ListMonitoringSamplesByDevice(ctx context.Context, arg ListMonitoringSamplesByDeviceParams) ([]MonitoringSample, error)
 	ListNVRChannels(ctx context.Context, nvrDeviceID uuid.UUID) ([]NvrChannel, error)
 	ListNeighbors(ctx context.Context, deviceID uuid.UUID) ([]Neighbor, error)
+	ListOIDMappings(ctx context.Context) ([]OidMapping, error)
 	ListPortVlans(ctx context.Context, deviceID uuid.UUID) ([]PortVlan, error)
 	ListPurchases(ctx context.Context) ([]Purchase, error)
 	ListRootLocations(ctx context.Context) ([]Location, error)
@@ -159,6 +166,7 @@ type Querier interface {
 	// Finds the switch(es) that have this MAC in their FDB, then joins the
 	// interface for port + VLAN detail.
 	SearchByMAC(ctx context.Context, mac string) ([]SearchByMACRow, error)
+	SearchMibObjects(ctx context.Context, name string) ([]MibObject, error)
 	SetAlertRuleEnabled(ctx context.Context, arg SetAlertRuleEnabledParams) (AlertRule, error)
 	SetAlertWorkOrder(ctx context.Context, arg SetAlertWorkOrderParams) error
 	// Bind-on-success: record the credential that last authenticated.

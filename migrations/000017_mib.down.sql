@@ -1,0 +1,3 @@
+DROP TABLE IF EXISTS oid_mappings;
+DROP TABLE IF EXISTS mib_objects;
+DROP TABLE IF EXISTS mib_files;

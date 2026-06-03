@@ -278,6 +278,34 @@ export interface ExpenseByLocation {
   count: number
 }
 
+export interface MibFile {
+  id: string
+  name: string
+  object_count: number
+  unresolved: number
+  uploaded_at: string
+}
+
+export interface MibObject {
+  id: string
+  mib_file_id: string
+  name: string
+  oid: string
+  syntax?: string | null
+  kind: string
+  unresolved: boolean
+}
+
+export interface OIDMapping {
+  id: string
+  oid: string
+  label: string
+  metric_key?: string | null
+  vendor?: string | null
+  template?: string | null
+  notes?: string | null
+}
+
 export interface RoleSummaryRow {
   role: string
   count: number

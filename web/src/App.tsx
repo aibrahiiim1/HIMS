@@ -17,6 +17,7 @@ import { SpareParts } from './pages/SpareParts'
 import { Expenses } from './pages/Expenses'
 import { Credentials } from './pages/Credentials'
 import { Roles } from './pages/Roles'
+import { Mibs } from './pages/Mibs'
 import './App.css'
 
 const qc = new QueryClient({ defaultOptions: { queries: { staleTime: 30_000, retry: 1 } } })
@@ -44,6 +45,7 @@ function Nav() {
       <Link to="/spare-parts" style={active('/spare-parts')}>Parts</Link>
       <Link to="/expenses" style={active('/expenses')}>Expenses</Link>
       <Link to="/credentials" style={active('/credentials')}>Credentials</Link>
+      <Link to="/mibs" style={active('/mibs')}>MIBs</Link>
     </nav>
   )
 }
@@ -78,6 +80,7 @@ export default function App() {
             <Route path="/spare-parts" element={<SpareParts />} />
             <Route path="/expenses" element={<Expenses />} />
             <Route path="/credentials" element={<Credentials />} />
+            <Route path="/mibs" element={<Mibs />} />
           </Routes>
         </div>
       </BrowserRouter>

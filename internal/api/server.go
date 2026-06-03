@@ -145,6 +145,14 @@ func (s *Server) routes() {
 		r.Get("/credentials", s.listCredentials)
 		r.Post("/credentials", s.createCredential)
 		r.Put("/devices/{id}/credential", s.bindDeviceCredential)
+
+		// --- MIB upload engine ---------------------------------------
+		r.Get("/mibs", s.listMibFiles)
+		r.Post("/mibs", s.uploadMib)
+		r.Get("/mibs/{id}/objects", s.listMibObjects)
+		r.Get("/oid-mappings", s.listOIDMappings)
+		r.Post("/oid-mappings", s.createOIDMapping)
+		r.Delete("/oid-mappings/{id}", s.deleteOIDMapping)
 	})
 }
 

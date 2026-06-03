@@ -201,7 +201,11 @@ monitoring_samples (TimescaleDB hypertable).
     (by category / location, derived from the ledger).
   - **alert→work-order bridge ✅ DONE** in Monitoring 6B — a firing alert
     rule auto-creates a linked work order.
-- **Phase 10 — MIB upload engine, reporting, executive dashboards.**
+- **Phase 10 — MIB upload engine ✅ DONE:** `internal/mibparse` (pragmatic
+  SMIv2 reader, OID-chain resolution, unresolved-kept), `mib_files`/
+  `mib_objects`/`oid_mappings` schema, upload+parse API, MIBs UI. Full ASN.1
+  + test-GET deferred.
+- **Phase 11 — reporting + executive dashboards** (next).
 
 Ordering rationale (operator): switches + topology + credential resolver
 are the heart — build them first, then breadth.

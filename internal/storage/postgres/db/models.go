@@ -267,6 +267,24 @@ type MacAddress struct {
 	LastSeenAt       time.Time `json:"last_seen_at"`
 }
 
+type MibFile struct {
+	ID          uuid.UUID `json:"id"`
+	Name        string    `json:"name"`
+	ObjectCount int32     `json:"object_count"`
+	Unresolved  int32     `json:"unresolved"`
+	UploadedAt  time.Time `json:"uploaded_at"`
+}
+
+type MibObject struct {
+	ID         uuid.UUID `json:"id"`
+	MibFileID  uuid.UUID `json:"mib_file_id"`
+	Name       string    `json:"name"`
+	Oid        string    `json:"oid"`
+	Syntax     *string   `json:"syntax"`
+	Kind       string    `json:"kind"`
+	Unresolved bool      `json:"unresolved"`
+}
+
 type MonitoringCheck struct {
 	ID                  uuid.UUID  `json:"id"`
 	DeviceID            uuid.UUID  `json:"device_id"`
@@ -319,6 +337,17 @@ type NvrChannel struct {
 	CameraDeviceID *uuid.UUID  `json:"camera_device_id"`
 	Status         string      `json:"status"`
 	LastSeenAt     time.Time   `json:"last_seen_at"`
+}
+
+type OidMapping struct {
+	ID        uuid.UUID `json:"id"`
+	Oid       string    `json:"oid"`
+	Label     string    `json:"label"`
+	MetricKey *string   `json:"metric_key"`
+	Vendor    *string   `json:"vendor"`
+	Template  *string   `json:"template"`
+	Notes     *string   `json:"notes"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type PortVlan struct {

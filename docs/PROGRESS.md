@@ -592,6 +592,34 @@ the `HostResult` a discovery run produces and writes it into the CMDB.
 
 ---
 
+## Phase 10 — MIB upload engine ✅ (closed 2026-06-03)
+
+Self-contained, no new transport (reuses SNMP). Upload a MIB → parse into an
+OID library → bind OIDs to metrics/templates.
+
+- ✅ `internal/mibparse` — pragmatic SMIv2 reader: extracts OBJECT IDENTIFIER
+  nodes + OBJECT-TYPE leaves and resolves each `{ parent N }` to a dotted
+  numeric OID against a seeded base tree (iso/org/.../enterprises/system) +
+  in-file definitions, with a cycle guard. Names that can't reduce to a
+  numeric root are kept and flagged `Unresolved` (operator sees them, not
+  dropped). Tests: enterprise-chain resolve (fortinet→…→fgSysVersion),
+  OBJECT-TYPE kind+syntax, unresolved-parent-kept, empty-input error.
+- ✅ migration 000017 `mib_files` + `mib_objects` + `oid_mappings`
+  (OID→label/metric/vendor/template binding, upsert on (oid, metric_key)).
+- ✅ API: POST `/mibs` (parse+store, returns parsed/unresolved counts), GET
+  `/mibs`, `/mibs/{id}/objects`, `/oid-mappings` GET/POST/DELETE.
+- ✅ UI: **MIBs** page (paste-and-parse upload, file list with unresolved
+  badge, OID object table, OID-mapping bind form + list).
+- ✅ build/vet/test + frontend green; gofmt clean.
+
+### Carry-forward
+Full ASN.1 grammar (IMPORTS resolution across MIBs, table INDEX, ranges) — the
+pragmatic reader covers the common node/leaf assignments; a complete parser is
+deferred. Test-GET an OID against a live device (reuses the SNMP poller) —
+deferred to pair with the per-device monitoring UI follow-up.
+
+---
+
 ## Later phases ⬜
-See `PLAN.md` §10. Remaining: MIB upload engine, reporting/dashboards,
-peripherals/voice, security follow-ups.
+See `PLAN.md` §10. Remaining: reporting/dashboards, peripherals/voice,
+security follow-ups.
