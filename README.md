@@ -34,6 +34,7 @@ Greenfield, under active construction. See:
 - [`docs/PLAN.md`](docs/PLAN.md) — full architecture + phased roadmap.
 - [`docs/PROGRESS.md`](docs/PROGRESS.md) — what's done, per phase.
 - [`docs/HANDOVER.md`](docs/HANDOVER.md) — how to build/run + how to continue.
+- [`docs/RUNBOOK.md`](docs/RUNBOOK.md) — per-collector operational runbook + live-validation criteria.
 
 ## Build
 ```
