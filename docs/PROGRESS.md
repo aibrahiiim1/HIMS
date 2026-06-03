@@ -838,11 +838,37 @@ Digest validated against the OASIS vector; parsing against sample SOAP. Not
 validated against a real camera (vendor namespace/field variance). Trigger:
 first ONVIF credential bound; add GetStreamUri (RTSP URL) which v1 omits.
 
-## Status — listed roadmap + onboarding + 3 of 4 deep-collection deps complete
-Every queued phase + the discovery→persist integrator + whole-subnet scanning +
-**Redfish, vSphere (vcsim-tested), Hyper-V (parser-tested), and ONVIF
-(digest+parser-tested)** are shipped, green, committed. **One deep-collection
-dep remains: wireless vendor REST (UniFi/Omada/Ruckus)** — last in the
-controlled order. Plus SNMP v3, scan job-record API/UI, AD-import,
-peripherals/voice, and the documented live-validation triggers for the
-hardware-dependent collectors (Redfish/vSphere/Hyper-V/ONVIF).
+## UniFi — wireless controller REST (AP inventory) ✅ (closed 2026-06-03)
+
+Fourth (final) deep-collection transport. Reuses the HTTP/JSON Doer pattern;
+the device-list parser is the tested core.
+
+- ✅ `internal/unifi` — `Client` over an injectable Doer: `Login` (POST
+  /api/login, cookie-jar session) + `ListAPs` (GET /api/s/<site>/stat/device)
+  **filtering to `type=uap`**, state→online/offline, num_sta→client count.
+  Tested (uap filter, online/offline, login-fail, device-error).
+- ✅ `internal/driver/unifi` — `unifi` collection-only driver (Fingerprint
+  NoMatch; wlan_controller classifies). Collect → `Facts.WLAN` + `Facts.APs`.
+- ✅ apply persists via `UpsertWLANControllerInfo` + `UpsertAccessPoint` → the
+  Phase 8 tables, so **WirelessDetail populates** (no UI change). collector
+  `-unifi <ip>` (cookie-jar HTTPS to :8443).
+- ✅ gofmt + go build/vet/test ./... green.
+
+### ⚠️ Live-validation trigger + deferrals
+Parser tested against sample UniFi JSON; not validated against a real
+controller (login varies: legacy `/api/login` vs UniFi-OS `/api/auth/login`).
+**Omada + Ruckus deferred** — distinct APIs (Omada needs an Omada-ID + token;
+Ruckus SmartZone is a different REST surface), each its own future phase.
+
+## Status — full platform + onboarding + ALL 4 deep-collection deps complete
+The entire requested scope is shipped, green, committed. Drivers:
+aruba/cisco/huawei (switch SNMP), fortigate (firewall), host_snmp +
+vmware_esxi (servers/virt SNMP), cctv + wlan_controller (banner), redfish_bmc
+(HTTP), vmware_vsphere (govmomi), hyperv (WinRM), onvif_camera (SOAP), unifi
+(REST). Engines: discovery pipeline + persist worker + CIDR scan, credential
+resolver + AES-256-GCM crypto, monitoring (TCP + SNMP) + alerting + work-order
+bridge, topology, operations (work orders/parts/purchases/expenses/licenses),
+MIB upload, reporting/dashboard. Remaining = explicitly deferred-with-trigger:
+SNMP v3; Omada/Ruckus REST; scan job-record API/UI; AD-import; per-physical-
+drive (Redfish) + GetStreamUri (ONVIF) + vCenter-multi-host (vSphere); and the
+live-hardware validations for every credentialed collector.

@@ -94,6 +94,27 @@ type Facts struct {
 	VMs []VMSnap
 	// Camera inventory (ONVIF).
 	Camera *CameraSnap
+	// Wireless controller + AP inventory (vendor REST: UniFi/Omada/Ruckus).
+	WLAN *WLANSnap
+	APs  []APSnap
+}
+
+// WLANSnap is a wireless controller summary.
+type WLANSnap struct {
+	Vendor      string
+	Version     string
+	APCount     int32
+	ClientCount int32
+}
+
+// APSnap is one access point under a controller.
+type APSnap struct {
+	Name        string
+	MAC         string
+	Model       string
+	IP          string
+	Status      string // online | offline | unknown
+	ClientCount int32
 }
 
 // CameraSnap is an IP camera's ONVIF inventory (one row per device).

@@ -62,6 +62,8 @@ type Writer interface {
 
 	UpsertVM(ctx context.Context, arg db.UpsertVMParams) (db.VirtualMachine, error)
 	UpsertCameraInfo(ctx context.Context, arg db.UpsertCameraInfoParams) (db.CameraInfo, error)
+	UpsertWLANControllerInfo(ctx context.Context, arg db.UpsertWLANControllerInfoParams) (db.WlanControllerInfo, error)
+	UpsertAccessPoint(ctx context.Context, arg db.UpsertAccessPointParams) (db.AccessPoint, error)
 }
 
 // Applier persists discovery results.
@@ -208,6 +210,20 @@ func (a *Applier) applyFacts(ctx context.Context, devID uuid.UUID, f *driver.Fac
 	a.applyFirewall(ctx, devID, f, poll)
 	a.applyBMC(ctx, devID, f, poll)
 
+	// Wireless controller + APs (vendor REST).
+	if f.WLAN != nil {
+		_, _ = a.w.UpsertWLANControllerInfo(ctx, db.UpsertWLANControllerInfoParams{
+			DeviceID: devID, Vendor: nonEmpty(f.WLAN.Vendor), Version: nonEmpty(f.WLAN.Version),
+			ApCount: f.WLAN.APCount, ClientCount: f.WLAN.ClientCount,
+		})
+	}
+	for _, ap := range f.APs {
+		_, _ = a.w.UpsertAccessPoint(ctx, db.UpsertAccessPointParams{
+			ControllerDeviceID: devID, Name: ap.Name, Mac: nonEmpty(ap.MAC), Model: nonEmpty(ap.Model),
+			Ip: parseIP(ap.IP), Status: orDefaultAPStatus(ap.Status), ClientCount: ap.ClientCount,
+		})
+	}
+
 	// Camera inventory (ONVIF).
 	if f.Camera != nil {
 		_, _ = a.w.UpsertCameraInfo(ctx, db.UpsertCameraInfoParams{
@@ -229,6 +245,15 @@ func (a *Applier) applyFacts(ctx context.Context, devID uuid.UUID, f *driver.Fac
 func orDefaultPower(s string) string {
 	switch s {
 	case "on", "off", "suspended":
+		return s
+	default:
+		return "unknown"
+	}
+}
+
+func orDefaultAPStatus(s string) string {
+	switch s {
+	case "online", "offline":
 		return s
 	default:
 		return "unknown"

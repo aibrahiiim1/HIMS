@@ -126,6 +126,12 @@ func (f *fakeWriter) UpsertVM(_ context.Context, arg db.UpsertVMParams) (db.Virt
 func (f *fakeWriter) UpsertCameraInfo(_ context.Context, _ db.UpsertCameraInfoParams) (db.CameraInfo, error) {
 	return db.CameraInfo{}, nil
 }
+func (f *fakeWriter) UpsertWLANControllerInfo(_ context.Context, _ db.UpsertWLANControllerInfoParams) (db.WlanControllerInfo, error) {
+	return db.WlanControllerInfo{}, nil
+}
+func (f *fakeWriter) UpsertAccessPoint(_ context.Context, _ db.UpsertAccessPointParams) (db.AccessPoint, error) {
+	return db.AccessPoint{}, nil
+}
 
 type fakeSwitch struct{}
 

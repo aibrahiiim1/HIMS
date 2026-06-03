@@ -6,9 +6,12 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"net/http/cookiejar"
 	"net/netip"
 	"net/url"
 	"os"
@@ -30,6 +33,7 @@ import (
 	hypervdrv "github.com/coralsearesorts/hims/internal/driver/hyperv"
 	onvifdrv "github.com/coralsearesorts/hims/internal/driver/onvif"
 	rfdrv "github.com/coralsearesorts/hims/internal/driver/redfish"
+	unifidrv "github.com/coralsearesorts/hims/internal/driver/unifi"
 	vspheredrv "github.com/coralsearesorts/hims/internal/driver/vsphere"
 	"github.com/coralsearesorts/hims/internal/drivers"
 	"github.com/coralsearesorts/hims/internal/monitoring"
@@ -39,6 +43,7 @@ import (
 	"github.com/coralsearesorts/hims/internal/secret"
 	"github.com/coralsearesorts/hims/internal/storage/postgres"
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
+	uc "github.com/coralsearesorts/hims/internal/unifi"
 )
 
 func main() {
@@ -52,6 +57,7 @@ func main() {
 	vsphereIP := flag.String("vsphere", "", "collect an ESXi host's VMs + datastores over the vSphere API AND persist (needs DB + creds)")
 	hypervIP := flag.String("hyperv", "", "collect a Hyper-V host's VMs over WinRM AND persist (needs DB + winrm creds)")
 	onvifIP := flag.String("onvif", "", "collect an IP camera's ONVIF inventory AND persist (needs DB + onvif/http_basic creds)")
+	unifiIP := flag.String("unifi", "", "collect a UniFi controller's APs AND persist (needs DB + http_basic creds)")
 	concurrency := flag.Int("concurrency", 16, "max concurrent hosts during -scan")
 	maxHosts := flag.Int("max-hosts", 4096, "refuse a -scan scope larger than this")
 	location := flag.String("location", "", "location UUID to scope discovered devices to")
@@ -101,6 +107,11 @@ func main() {
 
 	if *onvifIP != "" {
 		runONVIF(reg, *onvifIP, *location)
+		return
+	}
+
+	if *unifiIP != "" {
+		runUniFi(reg, *unifiIP, *location)
 		return
 	}
 
@@ -426,6 +437,82 @@ func runVSphere(reg *driver.Registry, ipStr, locStr string) {
 	}
 	fmt.Printf("ESXi %s persisted as device %s (%d VMs, %d datastores)\n",
 		ip, id, len(facts.VMs), len(facts.Storage))
+}
+
+// runUniFi collects a UniFi controller's AP inventory and persists it.
+// Resolves scoped http_basic credentials (secret = "username:password"), logs
+// in via a cookie-jar HTTP client, lists APs, applies. UniFi controllers
+// listen on 8443 (https) by default. Omada/Ruckus use different APIs (deferred).
+func runUniFi(reg *driver.Registry, ipStr, locStr string) {
+	ip, err := netip.ParseAddr(ipStr)
+	if err != nil {
+		slog.Error("invalid -unifi IP", "value", ipStr, "error", err)
+		os.Exit(1)
+	}
+	locationID := parseLocationID(locStr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	queries, cfg, closeDB := buildDiscoverDeps(ctx, reg)
+	defer closeDB()
+
+	groups, err := cfg.Fetcher.CredentialCandidates(ctx, ip, locationID)
+	if err != nil {
+		slog.Error("unifi: credential resolve failed", "error", err)
+		os.Exit(1)
+	}
+
+	d := unifidrv.New()
+	var facts *driver.Facts
+	var bound *credresolver.CredRef
+	for _, g := range groups {
+		for _, m := range g.Members {
+			if m.Kind != domain.CredHTTPBasic && m.Kind != domain.CredVendorAPI {
+				continue
+			}
+			dec, err := cfg.Decrypt(ctx, m.ID)
+			if err != nil {
+				continue
+			}
+			user, pass := splitUserPass(dec.Community)
+			jar, _ := cookiejar.New(nil)
+			httpc := &http.Client{
+				Timeout:   20 * time.Second,
+				Jar:       jar,
+				Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}, //nolint:gosec // controller self-signed cert on mgmt LAN
+			}
+			client := uc.NewClient("https://"+ip.String()+":8443", "default", user, pass, httpc)
+			if err := client.Login(ctx); err != nil {
+				continue
+			}
+			f, err := d.Collect(&unifidrv.Session{Client: client, Ctx: ctx}, driver.Probe{IP: ip})
+			if err != nil {
+				continue
+			}
+			c := m
+			facts, bound = &f, &c
+			break
+		}
+		if facts != nil {
+			break
+		}
+	}
+	if facts == nil {
+		slog.Error("unifi: no credential collected this controller", "ip", ip.String())
+		os.Exit(1)
+	}
+
+	res := discovery.HostResult{
+		IP: ip, Alive: true, MatchedDrv: d,
+		Match: driver.Match{Confidence: 78, Category: domain.CatWirelessController},
+		Facts: facts, BoundCred: bound,
+	}
+	id, err := apply.New(queries).Apply(ctx, res, locationID)
+	if err != nil {
+		slog.Error("unifi: apply failed", "error", err)
+		os.Exit(1)
+	}
+	fmt.Printf("UniFi %s persisted as device %s (%d APs)\n", ip, id, len(facts.APs))
 }
 
 // runONVIF collects an IP camera's ONVIF inventory and persists it. Resolves
