@@ -131,29 +131,32 @@ func (a *Applier) Apply(ctx context.Context, res discovery.HostResult, locationI
 }
 
 func (a *Applier) reconcile(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, create db.CreateDeviceParams) (db.Device, error) {
-	// Find the existing device to update. With a site selected, key on
-	// (primary_ip, location) — multi-hotel safe. Without a site (unscoped scan),
-	// key on primary_ip ALONE so a re-scan updates the device even if an
-	// operator has since assigned it a location_id (otherwise the NULL-vs-set
-	// location mismatch would create a duplicate). Either way the update touches
-	// only discovered fields, preserving operator-set location_id/vlan/class.
-	var existing db.Device
-	var err error
-	if locationID != nil {
-		existing, err = a.w.LiveDeviceByIPAndLocation(ctx, db.LiveDeviceByIPAndLocationParams{
-			PrimaryIp: &ip, LocationID: locationID,
-		})
-	} else {
-		existing, err = a.w.LiveDeviceByIP(ctx, &ip)
-	}
-	if err == nil {
+	// ONE live device per IP. Match by primary_ip alone (not by scope), so the
+	// same physical device scanned with a site, without a site, or by a
+	// different job always updates the SAME row — never a duplicate. The update
+	// touches only discovered fields, preserving operator-set
+	// location_id/vlan/class. A DB unique index on primary_ip (live, non-null)
+	// is the hard backstop; if a concurrent job wins the insert race, we catch
+	// the conflict and update instead.
+	update := func(id uuid.UUID) (db.Device, error) {
 		return a.w.UpdateDiscoveredDevice(ctx, db.UpdateDiscoveredDeviceParams{
-			ID: existing.ID, Hostname: create.Hostname, Name: create.Name, Vendor: create.Vendor,
+			ID: id, Hostname: create.Hostname, Name: create.Name, Vendor: create.Vendor,
 			Model: create.Model, Serial: create.Serial, OsVersion: create.OsVersion,
 			Category: create.Category, Driver: create.Driver, Status: create.Status,
 		})
 	}
-	return a.w.CreateDevice(ctx, create)
+	if existing, err := a.w.LiveDeviceByIP(ctx, &ip); err == nil {
+		return update(existing.ID)
+	}
+	dev, err := a.w.CreateDevice(ctx, create)
+	if err != nil {
+		// Lost an insert race (unique index). Re-find and update instead.
+		if existing, e2 := a.w.LiveDeviceByIP(ctx, &ip); e2 == nil {
+			return update(existing.ID)
+		}
+		return db.Device{}, err
+	}
+	return dev, nil
 }
 
 // applyFacts upserts KV facts + every inventory collection, then prunes rows
