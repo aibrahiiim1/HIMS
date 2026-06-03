@@ -12,7 +12,6 @@ package discovery
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -90,44 +89,50 @@ const explicitTierSpecificity = 100
 func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg PipelineConfig) HostResult { //nolint:gocritic
 	r := HostResult{IP: ip}
 
-	// Step 1: Is the host alive?
-	if !ping(ctx, ip, cfg.PingTimeout) {
-		return r // not alive — nothing to collect
-	}
-	r.Alive = true
-
-	// Step 2: Light port scan. Management ports for switches/servers plus
-	// the service ports the role-inference engine keys on (DNS/DC/DB).
+	// Step 1: TCP port scan — management ports for switches/servers plus the
+	// service ports the role-inference engine keys on (DNS/DC/DB).
 	r.OpenPorts = scanPorts(ctx, ip, []int{22, 23, 53, 80, 88, 161, 389, 443, 1433, 1521, 3389, 5432, 8080})
+	r.Probe = driver.Probe{IP: ip, OpenTCPPorts: r.OpenPorts}
 
-	// Step 3: SNMP light probe for sysDescr + sysObjectID (cheap, uses port 161).
-	var community string
-	r.Probe = driver.Probe{
-		IP:           ip,
-		OpenTCPPorts: r.OpenPorts,
+	// Step 2: Resolve credential candidates (scope-bound + operator-selected /
+	// all-stored, the latter injected by the scan as ExtraGroups).
+	groups, ferr := cfg.Fetcher.CredentialCandidates(ctx, ip, locationID)
+	if ferr != nil {
+		r.Error = fmt.Errorf("fetch credentials: %w", ferr)
 	}
-	if hasPort(r.OpenPorts, 161) || true { // always try SNMP even when port isn't in scan
-		community, r.Probe.SNMPSysDescr, r.Probe.SNMPSysObjectID = lightSNMPProbe(ctx, ip, cfg.SNMPTimeout)
-	}
-
-	// Step 4: Driver classification.
-	r.MatchedDrv, r.Match = cfg.Registry.Best(r.Probe)
-	if r.MatchedDrv == nil {
-		return r // unrecognized device — enrolled as "unknown" by the caller
-	}
-
-	// Step 5: Credential resolution + authenticated probe (SNMP bind-on-success).
-	groups, err := cfg.Fetcher.CredentialCandidates(ctx, ip, locationID)
-	if err != nil {
-		r.Error = fmt.Errorf("fetch credentials: %w", err)
-		return r
-	}
-	// Operator-selected scan groups join as the highest-specificity tier.
 	groups = append(groups, cfg.ExtraGroups...)
-	fp := credresolver.Fingerprint{SNMP: community != "" || hasPort(r.OpenPorts, 161)}
-	candidates := credresolver.Resolve(credresolver.Input{Fingerprint: fp, Groups: groups})
+	candidates := credresolver.Resolve(credresolver.Input{
+		Fingerprint: credresolver.Fingerprint{SNMP: true}, Groups: groups,
+	})
 
-	var authSess driver.Session
+	// Step 3: SNMP probe for sysDescr + sysObjectID. Try the resolved/selected
+	// SNMP credentials FIRST — a switch using a real community must classify, so
+	// classification cannot rely on public/private alone — then fall back to the
+	// default communities. The first that answers gives the probe data, a live
+	// session for deep collection, and (for a stored credential) the bind.
+	var authCli snmp.Client
+	probe := func(tgt snmp.Target) bool {
+		cli, err := snmp.NewClient(tgt)
+		if err != nil {
+			return false
+		}
+		if err := cli.Connect(ctx); err != nil {
+			_ = cli.Close()
+			return false
+		}
+		pdus, err := cli.Get(ctx, "1.3.6.1.2.1.1.1.0", "1.3.6.1.2.1.1.2.0")
+		if err != nil || len(pdus) < 1 {
+			_ = cli.Close()
+			return false
+		}
+		r.Probe.SNMPSysDescr = snmp.PDUString(pdus[0])
+		if len(pdus) > 1 {
+			r.Probe.SNMPSysObjectID = snmp.PDUString(pdus[1])
+		}
+		authCli = cli
+		return true
+	}
+
 	for _, cand := range candidates {
 		if cand.Kind != domain.CredSNMPv2c && cand.Kind != domain.CredSNMPv3 {
 			continue
@@ -140,67 +145,52 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 		if cand.Kind == domain.CredSNMPv3 && dec.V3 != nil {
 			tgt = snmp.Target{Addr: ip, Version: snmp.V3, V3: dec.V3, Timeout: cfg.SNMPTimeout}
 		}
-		cli, err := snmp.NewClient(tgt)
-		if err != nil {
-			continue
+		if probe(tgt) {
+			c := cand
+			r.BoundCred = &c // bind-on-success (only for stored credentials)
+			break
 		}
-		if err := cli.Connect(ctx); err != nil {
-			_ = cli.Close()
-			continue
+	}
+	if authCli == nil { // fallback: default communities, no bind
+		for _, comm := range []string{"public", "private"} {
+			if probe(snmp.Target{Addr: ip, Version: snmp.V2c, Community: comm, Timeout: cfg.SNMPTimeout}) {
+				break
+			}
 		}
-		// Verify with a quick Get — if it succeeds, we have a working credential.
-		pdus, err := cli.Get(ctx, "1.3.6.1.2.1.1.1.0")
-		if err != nil || len(pdus) == 0 {
-			_ = cli.Close()
-			continue
+	}
+	snmpAnswered := r.Probe.SNMPSysDescr != "" || r.Probe.SNMPSysObjectID != ""
+
+	// Step 4: Aliveness. A host is enrolled only if it actually responded — an
+	// open TCP port or an SNMP answer. This stops a subnet scan from enrolling
+	// every empty address as an "unknown" device.
+	r.Alive = len(r.OpenPorts) > 0 || snmpAnswered
+	if !r.Alive {
+		if authCli != nil {
+			_ = authCli.Close()
 		}
-		// Success — bind this credential.
-		c := cand
-		r.BoundCred = &c
-		authSess = &swsnmp.Session{Client: cli, Ctx: ctx}
-		break
+		return r
 	}
 
-	if authSess == nil {
-		return r // could not authenticate — enrolled with no facts
-	}
+	// Step 5: Driver classification (now informed by the real-credential probe).
+	r.MatchedDrv, r.Match = cfg.Registry.Best(r.Probe)
 
-	// Step 6: Deep collection.
-	if col, ok := r.MatchedDrv.(driver.Collector); ok {
-		facts, err := col.Collect(authSess, r.Probe)
-		if err == nil {
-			r.Facts = &facts
-		} else {
-			r.Error = err
+	// Step 6: Deep collection — only when a driver matched AND we hold a live
+	// authenticated SNMP session.
+	if authCli != nil {
+		if col, ok := r.MatchedDrv.(driver.Collector); ok {
+			facts, err := col.Collect(&swsnmp.Session{Client: authCli, Ctx: ctx}, r.Probe)
+			if err == nil {
+				r.Facts = &facts
+			} else {
+				r.Error = err
+			}
 		}
+		_ = authCli.Close()
 	}
 	return r
 }
 
 // --- Transport helpers --------------------------------------------------------
-
-func ping(ctx context.Context, ip netip.Addr, timeout time.Duration) bool {
-	if timeout <= 0 {
-		timeout = 2 * time.Second
-	}
-	conn, err := net.DialTimeout("ip4:icmp", ip.String(), timeout)
-	if err == nil {
-		_ = conn.Close()
-		return true
-	}
-	// Fallback: try TCP port 22 or 161 to confirm "alive" without raw ICMP.
-	tctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	d := &net.Dialer{}
-	for _, port := range []string{"22", "161", "80"} {
-		c, err := d.DialContext(tctx, "tcp", ip.String()+":"+port)
-		if err == nil {
-			_ = c.Close()
-			return true
-		}
-	}
-	return false
-}
 
 func scanPorts(ctx context.Context, ip netip.Addr, ports []int) []int {
 	open := make([]int, 0, len(ports))
@@ -226,34 +216,6 @@ func hasPort(ports []int, port int) bool {
 	}
 	return false
 }
-
-func lightSNMPProbe(ctx context.Context, ip netip.Addr, timeout time.Duration) (community, sysDescr, sysOID string) {
-	for _, comm := range []string{"public", "private"} {
-		tgt := snmp.Target{Addr: ip, Version: snmp.V2c, Community: comm, Timeout: timeout}
-		cli, err := snmp.NewClient(tgt)
-		if err != nil {
-			continue
-		}
-		if err := cli.Connect(ctx); err != nil {
-			continue
-		}
-		pdus, err := cli.Get(ctx, "1.3.6.1.2.1.1.1.0", "1.3.6.1.2.1.1.2.0")
-		_ = cli.Close()
-		if err != nil || len(pdus) < 2 {
-			continue
-		}
-		sysDescr = snmp.PDUString(pdus[0])
-		sysOID = snmp.PDUString(pdus[1])
-		if sysDescr != "" || sysOID != "" {
-			community = comm
-			return
-		}
-	}
-	return
-}
-
-// errNoAuth is a sentinel for "no credential succeeded".
-var errNoAuth = errors.New("discovery: no credential authenticated")
 
 // ScopeRange is a sequence of IPs to scan; the engine generates them from a
 // CIDR or an explicit list.
