@@ -12,6 +12,7 @@ import (
 	"github.com/coralsearesorts/hims/internal/driver/cucm"
 	"github.com/coralsearesorts/hims/internal/driver/esxi"
 	extremedrv "github.com/coralsearesorts/hims/internal/driver/extreme"
+	extremeswdrv "github.com/coralsearesorts/hims/internal/driver/extremesw"
 	"github.com/coralsearesorts/hims/internal/driver/fortigate"
 	"github.com/coralsearesorts/hims/internal/driver/hostsnmp"
 	"github.com/coralsearesorts/hims/internal/driver/huawei"
@@ -44,5 +45,6 @@ func Builtin() *driver.Registry {
 	r.Register(cucm.New())
 	r.Register(extremedrv.New())
 	r.Register(webapp.New())
+	r.Register(extremeswdrv.New())
 	return r
 }

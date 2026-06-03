@@ -61,6 +61,13 @@ const (
 	CiscoEnterprise  = "1.3.6.1.4.1.9."
 	HuaweiEnterprise = "1.3.6.1.4.1.2011."
 
+	// Extreme Networks switch enterprise OID prefixes.
+	//   .45   = legacy Nortel/Bay/Avaya line, now Extreme ERS (e.g. ERS 3600);
+	//           the user's ERS 3650/3626 report sysObjectID .1.3.6.1.4.1.45.3.83.x
+	//   .1916 = Extreme EXOS (Summit/X-series)
+	ExtremeERSEnterprise  = "1.3.6.1.4.1.45."
+	ExtremeEXOSEnterprise = "1.3.6.1.4.1.1916."
+
 	// --- CISCO-CDP-MIB (cdpCacheTable) ------------------------------------
 	// Index is (cdpCacheIfIndex, cdpCacheDeviceIndex) — 2 elements.
 	CdpCacheEntry         = "1.3.6.1.4.1.9.9.23.1.2.1.1"
