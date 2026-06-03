@@ -28,10 +28,12 @@ import (
 	"github.com/coralsearesorts/hims/internal/domain"
 	"github.com/coralsearesorts/hims/internal/driver"
 	hypervdrv "github.com/coralsearesorts/hims/internal/driver/hyperv"
+	onvifdrv "github.com/coralsearesorts/hims/internal/driver/onvif"
 	rfdrv "github.com/coralsearesorts/hims/internal/driver/redfish"
 	vspheredrv "github.com/coralsearesorts/hims/internal/driver/vsphere"
 	"github.com/coralsearesorts/hims/internal/drivers"
 	"github.com/coralsearesorts/hims/internal/monitoring"
+	ov "github.com/coralsearesorts/hims/internal/onvif"
 	rf "github.com/coralsearesorts/hims/internal/redfish"
 	"github.com/coralsearesorts/hims/internal/scan"
 	"github.com/coralsearesorts/hims/internal/secret"
@@ -49,6 +51,7 @@ func main() {
 	redfishIP := flag.String("redfish", "", "collect a server BMC (iLO/iDRAC) over Redfish AND persist (needs DB + http_basic creds)")
 	vsphereIP := flag.String("vsphere", "", "collect an ESXi host's VMs + datastores over the vSphere API AND persist (needs DB + creds)")
 	hypervIP := flag.String("hyperv", "", "collect a Hyper-V host's VMs over WinRM AND persist (needs DB + winrm creds)")
+	onvifIP := flag.String("onvif", "", "collect an IP camera's ONVIF inventory AND persist (needs DB + onvif/http_basic creds)")
 	concurrency := flag.Int("concurrency", 16, "max concurrent hosts during -scan")
 	maxHosts := flag.Int("max-hosts", 4096, "refuse a -scan scope larger than this")
 	location := flag.String("location", "", "location UUID to scope discovered devices to")
@@ -93,6 +96,11 @@ func main() {
 
 	if *hypervIP != "" {
 		runHyperV(reg, *hypervIP, *location)
+		return
+	}
+
+	if *onvifIP != "" {
+		runONVIF(reg, *onvifIP, *location)
 		return
 	}
 
@@ -418,6 +426,72 @@ func runVSphere(reg *driver.Registry, ipStr, locStr string) {
 	}
 	fmt.Printf("ESXi %s persisted as device %s (%d VMs, %d datastores)\n",
 		ip, id, len(facts.VMs), len(facts.Storage))
+}
+
+// runONVIF collects an IP camera's ONVIF inventory and persists it. Resolves
+// scoped onvif/http_basic credentials (secret = "username:password"), verifies
+// GetDeviceInformation, applies. The password is used only in memory.
+func runONVIF(reg *driver.Registry, ipStr, locStr string) {
+	ip, err := netip.ParseAddr(ipStr)
+	if err != nil {
+		slog.Error("invalid -onvif IP", "value", ipStr, "error", err)
+		os.Exit(1)
+	}
+	locationID := parseLocationID(locStr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	queries, cfg, closeDB := buildDiscoverDeps(ctx, reg)
+	defer closeDB()
+
+	groups, err := cfg.Fetcher.CredentialCandidates(ctx, ip, locationID)
+	if err != nil {
+		slog.Error("onvif: credential resolve failed", "error", err)
+		os.Exit(1)
+	}
+
+	d := onvifdrv.New()
+	var facts *driver.Facts
+	var bound *credresolver.CredRef
+	for _, g := range groups {
+		for _, m := range g.Members {
+			if m.Kind != domain.CredONVIF && m.Kind != domain.CredHTTPBasic {
+				continue
+			}
+			dec, err := cfg.Decrypt(ctx, m.ID)
+			if err != nil {
+				continue
+			}
+			user, pass := splitUserPass(dec.Community)
+			client := ov.NewClient("http://"+ip.String(), user, pass, nil)
+			f, err := d.Collect(&onvifdrv.Session{Client: client, Ctx: ctx}, driver.Probe{IP: ip})
+			if err != nil {
+				continue
+			}
+			c := m
+			facts, bound = &f, &c
+			break
+		}
+		if facts != nil {
+			break
+		}
+	}
+	if facts == nil {
+		slog.Error("onvif: no credential collected this camera", "ip", ip.String())
+		os.Exit(1)
+	}
+
+	res := discovery.HostResult{
+		IP: ip, Alive: true, MatchedDrv: d,
+		Match: driver.Match{Confidence: 75, Category: domain.CatCamera},
+		Facts: facts, BoundCred: bound,
+	}
+	id, err := apply.New(queries).Apply(ctx, res, locationID)
+	if err != nil {
+		slog.Error("onvif: apply failed", "error", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Camera %s persisted as device %s (%s %s)\n", ip, id, facts.Camera.Manufacturer, facts.Camera.Model)
 }
 
 // winrmRunner adapts a masterzen/winrm client to the hyperv.Runner interface.

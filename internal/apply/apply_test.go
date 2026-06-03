@@ -123,6 +123,9 @@ func (f *fakeWriter) UpsertVM(_ context.Context, arg db.UpsertVMParams) (db.Virt
 	f.vms = append(f.vms, arg)
 	return db.VirtualMachine{}, nil
 }
+func (f *fakeWriter) UpsertCameraInfo(_ context.Context, _ db.UpsertCameraInfoParams) (db.CameraInfo, error) {
+	return db.CameraInfo{}, nil
+}
 
 type fakeSwitch struct{}
 

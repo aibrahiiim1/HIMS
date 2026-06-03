@@ -92,6 +92,17 @@ type Facts struct {
 	BMCSensors []BMCSensorSnap
 	// Virtual machines (vSphere host→VM map).
 	VMs []VMSnap
+	// Camera inventory (ONVIF).
+	Camera *CameraSnap
+}
+
+// CameraSnap is an IP camera's ONVIF inventory (one row per device).
+type CameraSnap struct {
+	Manufacturer string
+	Model        string
+	Resolution   string
+	RTSPUrl      string
+	ONVIFUrl     string
 }
 
 // VMSnap is one virtual machine under a virtualization host.

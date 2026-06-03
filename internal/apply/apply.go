@@ -61,6 +61,7 @@ type Writer interface {
 	DeleteStaleBMCSensors(ctx context.Context, arg db.DeleteStaleBMCSensorsParams) error
 
 	UpsertVM(ctx context.Context, arg db.UpsertVMParams) (db.VirtualMachine, error)
+	UpsertCameraInfo(ctx context.Context, arg db.UpsertCameraInfoParams) (db.CameraInfo, error)
 }
 
 // Applier persists discovery results.
@@ -206,6 +207,14 @@ func (a *Applier) applyFacts(ctx context.Context, devID uuid.UUID, f *driver.Fac
 
 	a.applyFirewall(ctx, devID, f, poll)
 	a.applyBMC(ctx, devID, f, poll)
+
+	// Camera inventory (ONVIF).
+	if f.Camera != nil {
+		_, _ = a.w.UpsertCameraInfo(ctx, db.UpsertCameraInfoParams{
+			DeviceID: devID, Manufacturer: nonEmpty(f.Camera.Manufacturer), Model: nonEmpty(f.Camera.Model),
+			Resolution: nonEmpty(f.Camera.Resolution), RtspUrl: nonEmpty(f.Camera.RTSPUrl), OnvifUrl: nonEmpty(f.Camera.ONVIFUrl),
+		})
+	}
 
 	// Virtual machines (vSphere host→VM map).
 	for _, vm := range f.VMs {

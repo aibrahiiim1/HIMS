@@ -816,11 +816,33 @@ Parser tested against sample Get-VM JSON; the **WinRM transport** can't be
 simulated and is unvalidated. Trigger: first winrm credential bound on a real
 Hyper-V host.
 
-## Status — listed roadmap + onboarding + 2 of 4 deep-collection deps complete
+## ONVIF — camera device-info + media profiles ✅ (closed 2026-06-03)
+
+Third deep-collection transport. Rather than depend on a heavyweight ONVIF
+library, HIMS rolls a **thin SOAP client over an injectable Doer** (the proven
+Redfish pattern), making the WS-Security digest + XML parsing unit-testable
+with no camera.
+
+- ✅ `internal/onvif` — SOAP client: WS-Security UsernameToken **PasswordDigest**
+  (`Base64(SHA1(nonce+created+password))`) + SOAP POST + parse
+  `GetDeviceInformation` + `GetProfiles` (best-effort). Tested with sample
+  Hikvision-shaped SOAP + the **canonical OASIS WS-Security digest vector**.
+- ✅ `internal/driver/onvif` — `onvif_camera` collection-only driver
+  (Fingerprint NoMatch; cctv classifies). Collect → `Facts.Camera`. Tested.
+- ✅ `Facts.Camera` + apply → `camera_info` (Phase 7 table), so **CctvDetail
+  populates** (no UI change). collector `-onvif <ip>`.
+- ✅ go mod tidy (own SOAP, no heavy lib retained); gofmt + build/vet/test green.
+
+### ⚠️ Live-validation trigger
+Digest validated against the OASIS vector; parsing against sample SOAP. Not
+validated against a real camera (vendor namespace/field variance). Trigger:
+first ONVIF credential bound; add GetStreamUri (RTSP URL) which v1 omits.
+
+## Status — listed roadmap + onboarding + 3 of 4 deep-collection deps complete
 Every queued phase + the discovery→persist integrator + whole-subnet scanning +
-**Redfish (iLO/iDRAC), vSphere (govmomi/vcsim-tested), and Hyper-V (WinRM,
-parser-tested)** are shipped, green, committed. Remaining deep-collection
-deps: **ONVIF (cameras)** and **wireless vendor REST (UniFi/Omada/Ruckus)** —
-next in the controlled order. Plus SNMP v3, scan job-record API/UI, AD-import,
+**Redfish, vSphere (vcsim-tested), Hyper-V (parser-tested), and ONVIF
+(digest+parser-tested)** are shipped, green, committed. **One deep-collection
+dep remains: wireless vendor REST (UniFi/Omada/Ruckus)** — last in the
+controlled order. Plus SNMP v3, scan job-record API/UI, AD-import,
 peripherals/voice, and the documented live-validation triggers for the
-hardware-dependent collectors.
+hardware-dependent collectors (Redfish/vSphere/Hyper-V/ONVIF).
