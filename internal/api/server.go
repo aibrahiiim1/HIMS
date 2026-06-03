@@ -80,6 +80,7 @@ func (s *Server) routes() {
 		r.Get("/devices/{id}/licenses", s.licenses)
 		r.Get("/devices/{id}/monitoring/checks", s.deviceMonitoringChecks)
 		r.Get("/devices/{id}/monitoring/samples", s.deviceMonitoringSamples)
+		r.Get("/devices/{id}/vms", s.deviceVMs)
 
 		// --- Topology & search ----------------------------------------
 		// IP/MAC/name → switch+port+path (the headline Phase 1 feature).
@@ -226,6 +227,19 @@ func (s *Server) deviceFacts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := s.queries.ListDeviceFacts(ctx, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (s *Server) deviceVMs(w http.ResponseWriter, r *http.Request) {
+	ctx, id, ok := pathDevice(w, r)
+	if !ok {
+		return
+	}
+	rows, err := s.queries.ListVMsByHost(ctx, id)
 	if err != nil {
 		writeErr(w, err)
 		return

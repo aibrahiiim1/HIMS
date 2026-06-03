@@ -464,7 +464,34 @@ tests. Frontend tsc + build green. gofmt clean.
 
 ---
 
+## 3b/3c — Virtualization (ESXi) + BMC scaffolding ✅ (closed 2026-06-03)
+
+**Goal:** classify + monitor virtualization hosts and lay the VM-inventory
+foundation, with the heavy transports honestly deferred.
+
+- ✅ `vmware_esxi` driver — fingerprints the VMware enterprise OID
+  (`.1.3.6.1.4.1.6876`, authoritative 90) or an ESXi sysDescr (70); collects
+  host CPU/RAM/datastore + interfaces via the shared swsnmp collectors
+  (`virtual_host` template). Registered in the builtin set. Tests: OID match,
+  descr heuristic, no-match, name/template.
+- ✅ migration 000014 `virtual_machines` (host→VM, power/vcpu/mem/guest OS,
+  upsert keyed on host+name) + `/devices/{id}/vms` API.
+- ✅ UI: **Virtual Hosts** nav + `VirtualHostDetail` (host resources +
+  datastores + VM section that explains VM enumeration awaits the API
+  transport). Reachability + SNMP-metric monitoring already cover these hosts.
+- ✅ build/vet/test + frontend green; gofmt clean.
+
+### Carry-forward (deep transports — explicitly deferred, with triggers)
+- **VM enumeration** (per-VM power/vCPU/guest OS, host→VM map) via the
+  vSphere API (govmomi) — trigger: when a vCenter/ESXi credential is bound
+  and operators need VM inventory. New external dep + transport.
+- **Hyper-V** host/VM via WinRM — trigger: first Hyper-V host in inventory.
+- **iLO/iDRAC out-of-band** via Redfish (HTTP/JSON) — modelled as server
+  enrichment (bmc.* facts); trigger: when BMC credentials are bound. Pure-Go
+  feasible, deferred only for scope.
+
+---
+
 ## Later phases ⬜
-See `PLAN.md` §10. Remaining: **3b/3c** (virtualization + iLO/iDRAC — new
-transports), CCTV, wireless, databases/AD, peripherals/voice, MIB upload
-engine + reporting/dashboards.
+See `PLAN.md` §10. Remaining: CCTV, wireless, databases/AD, peripherals/voice,
+MIB upload engine + reporting/dashboards.

@@ -117,6 +117,7 @@ type Querier interface {
 	ListSpareParts(ctx context.Context) ([]SparePart, error)
 	ListSystems(ctx context.Context) ([]System, error)
 	ListTopologyLinks(ctx context.Context, localDeviceID uuid.UUID) ([]TopologyLink, error)
+	ListVMsByHost(ctx context.Context, hostDeviceID uuid.UUID) ([]VirtualMachine, error)
 	ListVlans(ctx context.Context, deviceID uuid.UUID) ([]Vlan, error)
 	ListVpnTunnels(ctx context.Context, deviceID uuid.UUID) ([]FirewallVpnTunnel, error)
 	ListWorkOrderEvents(ctx context.Context, workOrderID uuid.UUID) ([]WorkOrderEvent, error)
@@ -184,6 +185,8 @@ type Querier interface {
 	UpsertServerStorage(ctx context.Context, arg UpsertServerStorageParams) error
 	// ---- Topology links ------------------------------------------------------
 	UpsertTopologyLink(ctx context.Context, arg UpsertTopologyLinkParams) error
+	// Upsert keyed on (host, name): re-collecting refreshes state without dups.
+	UpsertVM(ctx context.Context, arg UpsertVMParams) (VirtualMachine, error)
 	// ---- VLANs ----------------------------------------------------------------
 	UpsertVlan(ctx context.Context, arg UpsertVlanParams) (Vlan, error)
 	UpsertVpnTunnel(ctx context.Context, arg UpsertVpnTunnelParams) error

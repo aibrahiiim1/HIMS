@@ -150,8 +150,11 @@ monitoring_samples (TimescaleDB hypertable).
   - **3a ✅ DONE** — servers via SNMP HOST-RESOURCES (CPU/RAM/disk +
     interfaces), `host_snmp` driver, port-based role inference, server
     template UI.
-  - **3b/3c (open)** — virtualization (vSphere/WinRM) + VM→host mapping;
-    iLO/iDRAC via Redfish. Both need new transports.
+  - **3b/3c ✅ DONE (host-level)** — `vmware_esxi` driver (VMware OID →
+    virtual_host, host CPU/RAM/datastore via SNMP), `virtual_machines` schema
+    + VM API + Virtual Hosts UI. VM enumeration (vSphere/govmomi),
+    Hyper-V/WinRM, and iLO/iDRAC Redfish are deferred with triggers (need new
+    transports/libs).
 - **Phase 4 — Firewall** (FortiGate driver — port the proven Fortinet OID
   work: HA/VPN/sessions/CPU-RAM-disk/license). ✅ DONE — fortigate driver
   with every validated MIB lesson baked in (disk-MB, VPN composite index,

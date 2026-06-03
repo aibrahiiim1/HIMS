@@ -278,6 +278,19 @@ export interface ExpenseByLocation {
   count: number
 }
 
+export interface VirtualMachine {
+  id: string
+  host_device_id: string
+  vm_device_id?: string | null
+  name: string
+  power_state: string
+  vcpu?: number | null
+  mem_mb?: number | null
+  guest_os?: string | null
+  primary_ip?: string | null
+  last_seen_at: string
+}
+
 // Credential is metadata-only — the secret and encrypted blob never leave
 // the server.
 export interface Credential {

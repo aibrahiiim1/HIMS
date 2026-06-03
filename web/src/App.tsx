@@ -4,6 +4,7 @@ import { DeviceList } from './pages/DeviceList'
 import { SwitchDetail } from './pages/SwitchDetail'
 import { ServerDetail } from './pages/ServerDetail'
 import { FirewallDetail } from './pages/FirewallDetail'
+import { VirtualHostDetail } from './pages/VirtualHostDetail'
 import { TopologyPage } from './pages/TopologyPage'
 import { SearchPage } from './pages/SearchPage'
 import { WorkOrders } from './pages/WorkOrders'
@@ -25,6 +26,7 @@ function Nav() {
       <span className="hims-logo">HIMS</span>
       <Link to="/" style={active('/')}>Switches</Link>
       <Link to="/servers" style={active('/servers')}>Servers</Link>
+      <Link to="/virtual-hosts" style={active('/virtual-hosts')}>Virtual Hosts</Link>
       <Link to="/firewalls" style={active('/firewalls')}>Firewalls</Link>
       <Link to="/topology" style={active('/topology')}>Topology</Link>
       <Link to="/monitoring" style={active('/monitoring')}>Monitoring</Link>
@@ -51,6 +53,8 @@ export default function App() {
             <Route path="/firewalls" element={<DeviceList category="firewall" title="Firewalls" detailBase="/firewalls" />} />
             <Route path="/devices/:id" element={<SwitchDetail />} />
             <Route path="/servers/:id" element={<ServerDetail />} />
+            <Route path="/virtual-hosts" element={<DeviceList category="virtual_host" title="Virtual Hosts" detailBase="/virtual-hosts" />} />
+            <Route path="/virtual-hosts/:id" element={<VirtualHostDetail />} />
             <Route path="/firewalls/:id" element={<FirewallDetail />} />
             <Route path="/topology" element={<TopologyPage />} />
             <Route path="/monitoring" element={<Monitoring />} />

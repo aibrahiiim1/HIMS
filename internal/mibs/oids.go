@@ -73,6 +73,11 @@ const (
 	NetSnmpEnterprise   = "1.3.6.1.4.1.8072." // net-snmp (Linux/BSD agents)
 	MicrosoftEnterprise = "1.3.6.1.4.1.311."  // Windows SNMP service
 
+	// Virtualization / hardware-vendor enterprise OID prefixes
+	VMwareEnterprise = "1.3.6.1.4.1.6876." // VMware ESXi host SNMP agent
+	HPEServerOID     = "1.3.6.1.4.1.232."  // HP/HPE Insight (iLO host agent)
+	DellEnterprise   = "1.3.6.1.4.1.674."  // Dell OpenManage (iDRAC host agent)
+
 	// --- HOST-RESOURCES-MIB ------------------------------------------------
 	HrSystemUptime    = "1.3.6.1.2.1.25.1.1.0"
 	HrProcessorLoad   = "1.3.6.1.2.1.25.3.3.1.2" // per-CPU load %, walk + average

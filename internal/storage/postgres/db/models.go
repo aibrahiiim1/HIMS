@@ -377,6 +377,19 @@ type TopologyLink struct {
 	LastSeenAt     time.Time   `json:"last_seen_at"`
 }
 
+type VirtualMachine struct {
+	ID           uuid.UUID   `json:"id"`
+	HostDeviceID uuid.UUID   `json:"host_device_id"`
+	VmDeviceID   *uuid.UUID  `json:"vm_device_id"`
+	Name         string      `json:"name"`
+	PowerState   string      `json:"power_state"`
+	Vcpu         *int32      `json:"vcpu"`
+	MemMb        *int32      `json:"mem_mb"`
+	GuestOs      *string     `json:"guest_os"`
+	PrimaryIp    *netip.Addr `json:"primary_ip"`
+	LastSeenAt   time.Time   `json:"last_seen_at"`
+}
+
 type Vlan struct {
 	ID               uuid.UUID `json:"id"`
 	DeviceID         uuid.UUID `json:"device_id"`

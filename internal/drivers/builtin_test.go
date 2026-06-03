@@ -79,7 +79,7 @@ func TestBuiltin_AllRegistered(t *testing.T) {
 	for _, n := range r.Names() {
 		got[n] = true
 	}
-	for _, want := range []string{"aruba_hpe", "cisco_ios", "huawei_vrp", "host_snmp", "fortigate"} {
+	for _, want := range []string{"aruba_hpe", "cisco_ios", "huawei_vrp", "host_snmp", "fortigate", "vmware_esxi"} {
 		if !got[want] {
 			t.Errorf("driver %s not registered", want)
 		}
