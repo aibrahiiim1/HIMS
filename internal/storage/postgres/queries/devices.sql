@@ -6,6 +6,12 @@ SELECT * FROM devices
 WHERE category = $1 AND deleted_at IS NULL
 ORDER BY name;
 
+-- name: ListAllDevices :many
+-- Every live device (the Inventory page), ordered for grouped display.
+SELECT * FROM devices
+WHERE deleted_at IS NULL
+ORDER BY category, name;
+
 -- name: LiveDeviceByIPAndLocation :one
 -- Identity reconciliation key (multi-hotel safe): same IP can recur across
 -- hotels, so a live device is unique by (primary_ip, location). location_id is

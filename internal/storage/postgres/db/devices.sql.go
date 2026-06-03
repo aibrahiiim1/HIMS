@@ -126,6 +126,53 @@ func (q *Queries) GetDevice(ctx context.Context, id uuid.UUID) (Device, error) {
 	return i, err
 }
 
+const listAllDevices = `-- name: ListAllDevices :many
+SELECT id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at FROM devices
+WHERE deleted_at IS NULL
+ORDER BY category, name
+`
+
+// Every live device (the Inventory page), ordered for grouped display.
+func (q *Queries) ListAllDevices(ctx context.Context) ([]Device, error) {
+	rows, err := q.db.Query(ctx, listAllDevices)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Device{}
+	for rows.Next() {
+		var i Device
+		if err := rows.Scan(
+			&i.ID,
+			&i.LocationID,
+			&i.PrimaryIp,
+			&i.Hostname,
+			&i.Name,
+			&i.Vendor,
+			&i.Model,
+			&i.Serial,
+			&i.OsVersion,
+			&i.Category,
+			&i.Status,
+			&i.Driver,
+			&i.CredentialID,
+			&i.LastDiscoveryAt,
+			&i.LastMonitoringAt,
+			&i.Metadata,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDeviceFacts = `-- name: ListDeviceFacts :many
 SELECT id, device_id, key, value, value_json, driver, observed_at FROM device_facts WHERE device_id = $1 ORDER BY key
 `

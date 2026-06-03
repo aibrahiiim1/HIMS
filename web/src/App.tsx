@@ -24,6 +24,7 @@ import { Credentials } from './pages/Credentials'
 import { Roles } from './pages/Roles'
 import { Mibs } from './pages/Mibs'
 import { Settings } from './pages/Settings'
+import { Inventory } from './pages/Inventory'
 import './App.css'
 
 const qc = new QueryClient({ defaultOptions: { queries: { staleTime: 30_000, retry: 1 } } })
@@ -36,6 +37,7 @@ function Nav() {
       <span className="hims-logo">HIMS</span>
       <Link to="/dashboard" style={active('/dashboard')}>Dashboard</Link>
       <Link to="/discovery" style={active('/discovery')}>Discovery</Link>
+      <Link to="/inventory" style={active('/inventory')}>Inventory</Link>
       <Link to="/" style={active('/')}>Switches</Link>
       <Link to="/servers" style={active('/servers')}>Servers</Link>
       <Link to="/virtual-hosts" style={active('/virtual-hosts')}>Virtual Hosts</Link>
@@ -102,6 +104,7 @@ export default function App() {
             <Route path="/credentials" element={<Credentials />} />
             <Route path="/mibs" element={<Mibs />} />
             <Route path="/settings" element={<Settings />} />
+            <Route path="/inventory" element={<Inventory />} />
           </Routes>
         </div>
       </BrowserRouter>

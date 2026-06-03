@@ -102,6 +102,8 @@ type Querier interface {
 	ListAccessPoints(ctx context.Context, controllerDeviceID uuid.UUID) ([]AccessPoint, error)
 	ListAlertRules(ctx context.Context) ([]AlertRule, error)
 	ListAlerts(ctx context.Context) ([]Alert, error)
+	// Every live device (the Inventory page), ordered for grouped display.
+	ListAllDevices(ctx context.Context) ([]Device, error)
 	// Used by the topology graph to build the full picture.
 	ListAllTopologyLinks(ctx context.Context) ([]ListAllTopologyLinksRow, error)
 	ListBMCSensors(ctx context.Context, deviceID uuid.UUID) ([]BmcSensor, error)

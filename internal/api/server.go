@@ -191,6 +191,15 @@ func (s *Server) routes() {
 func (s *Server) listDevices(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	cat := r.URL.Query().Get("category")
+	if cat == "all" {
+		rows, err := s.queries.ListAllDevices(ctx)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, rows)
+		return
+	}
 	if cat == "" {
 		cat = "switch"
 	}
