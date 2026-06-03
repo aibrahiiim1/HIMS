@@ -8,9 +8,11 @@ ORDER BY name;
 
 -- name: LiveDeviceByIPAndLocation :one
 -- Identity reconciliation key (multi-hotel safe): same IP can recur across
--- hotels, so a live device is unique by (primary_ip, location).
+-- hotels, so a live device is unique by (primary_ip, location). location_id is
+-- matched NULL-safe (IS NOT DISTINCT FROM) so an unscoped scan (no site
+-- selected, location_id = NULL) still reconciles instead of duplicating.
 SELECT * FROM devices
-WHERE primary_ip = $1 AND location_id = $2 AND deleted_at IS NULL;
+WHERE primary_ip = $1 AND location_id IS NOT DISTINCT FROM $2 AND deleted_at IS NULL;
 
 -- name: CreateDevice :one
 INSERT INTO devices (

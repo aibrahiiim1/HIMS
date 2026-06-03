@@ -130,19 +130,18 @@ func (a *Applier) Apply(ctx context.Context, res discovery.HostResult, locationI
 }
 
 func (a *Applier) reconcile(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, create db.CreateDeviceParams) (db.Device, error) {
-	// LiveDeviceByIPAndLocation can't match a NULL location, so a location-less
-	// scan always creates (documented edge — single-IP without a site).
-	if locationID != nil {
-		existing, err := a.w.LiveDeviceByIPAndLocation(ctx, db.LiveDeviceByIPAndLocationParams{
-			PrimaryIp: &ip, LocationID: locationID,
+	// Reconcile by (primary_ip, location). The query matches location NULL-safe
+	// (IS NOT DISTINCT FROM), so an unscoped scan (location_id = NULL) also
+	// reconciles instead of duplicating on every re-scan.
+	existing, err := a.w.LiveDeviceByIPAndLocation(ctx, db.LiveDeviceByIPAndLocationParams{
+		PrimaryIp: &ip, LocationID: locationID,
+	})
+	if err == nil {
+		return a.w.UpdateDiscoveredDevice(ctx, db.UpdateDiscoveredDeviceParams{
+			ID: existing.ID, Hostname: create.Hostname, Name: create.Name, Vendor: create.Vendor,
+			Model: create.Model, Serial: create.Serial, OsVersion: create.OsVersion,
+			Category: create.Category, Driver: create.Driver, Status: create.Status,
 		})
-		if err == nil {
-			return a.w.UpdateDiscoveredDevice(ctx, db.UpdateDiscoveredDeviceParams{
-				ID: existing.ID, Hostname: create.Hostname, Name: create.Name, Vendor: create.Vendor,
-				Model: create.Model, Serial: create.Serial, OsVersion: create.OsVersion,
-				Category: create.Category, Driver: create.Driver, Status: create.Status,
-			})
-		}
 	}
 	return a.w.CreateDevice(ctx, create)
 }

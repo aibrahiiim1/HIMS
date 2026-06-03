@@ -167,7 +167,9 @@ type Querier interface {
 	ListWorkOrders(ctx context.Context) ([]WorkOrder, error)
 	ListWorkOrdersByDevice(ctx context.Context, deviceID *uuid.UUID) ([]WorkOrder, error)
 	// Identity reconciliation key (multi-hotel safe): same IP can recur across
-	// hotels, so a live device is unique by (primary_ip, location).
+	// hotels, so a live device is unique by (primary_ip, location). location_id is
+	// matched NULL-safe (IS NOT DISTINCT FROM) so an unscoped scan (no site
+	// selected, location_id = NULL) still reconciles instead of duplicating.
 	LiveDeviceByIPAndLocation(ctx context.Context, arg LiveDeviceByIPAndLocationParams) (Device, error)
 	// Live fleet rollup: how many checks sit in each status bucket.
 	MonitoringStatusOverview(ctx context.Context) ([]MonitoringStatusOverviewRow, error)

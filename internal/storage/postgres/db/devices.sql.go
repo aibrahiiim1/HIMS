@@ -282,7 +282,7 @@ func (q *Queries) ListDevicesByRole(ctx context.Context, role string) ([]Device,
 
 const liveDeviceByIPAndLocation = `-- name: LiveDeviceByIPAndLocation :one
 SELECT id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at FROM devices
-WHERE primary_ip = $1 AND location_id = $2 AND deleted_at IS NULL
+WHERE primary_ip = $1 AND location_id IS NOT DISTINCT FROM $2 AND deleted_at IS NULL
 `
 
 type LiveDeviceByIPAndLocationParams struct {
@@ -291,7 +291,9 @@ type LiveDeviceByIPAndLocationParams struct {
 }
 
 // Identity reconciliation key (multi-hotel safe): same IP can recur across
-// hotels, so a live device is unique by (primary_ip, location).
+// hotels, so a live device is unique by (primary_ip, location). location_id is
+// matched NULL-safe (IS NOT DISTINCT FROM) so an unscoped scan (no site
+// selected, location_id = NULL) still reconciles instead of duplicating.
 func (q *Queries) LiveDeviceByIPAndLocation(ctx context.Context, arg LiveDeviceByIPAndLocationParams) (Device, error) {
 	row := q.db.QueryRow(ctx, liveDeviceByIPAndLocation, arg.PrimaryIp, arg.LocationID)
 	var i Device
