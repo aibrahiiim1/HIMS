@@ -172,8 +172,12 @@ monitoring_samples (TimescaleDB hypertable).
   expenses → licenses/contracts; alert → work-order bridge.
   - **A ✅ DONE** (built early — pure CRUD, high value): work orders
     (asset-linked, lifecycle, timeline, cost) + Systems & Licenses register
-    (live expiry status). **B (open)** — spare parts, purchases, expenses
-    aggregation; alert→work-order bridge.
+    (live expiry status).
+  - **B ✅ DONE** — spare parts (stock + reorder threshold + atomic
+    work-order consumption decrement), purchase ledger, expense rollups
+    (by category / location, derived from the ledger). The
+    **alert→work-order bridge** is the one remaining piece and moves to
+    Monitoring 6B (it needs an alert source).
 - **Phase 10 — MIB upload engine, reporting, executive dashboards.**
 
 Ordering rationale (operator): switches + topology + credential resolver

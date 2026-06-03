@@ -13,7 +13,7 @@ import (
 // expected to listen on, chosen to be a meaningful "is it alive" signal
 // rather than an arbitrary ping.
 var DefaultPorts = map[string]int{
-	"switch":              22,  // SSH mgmt
+	"switch":              22, // SSH mgmt
 	"router":              22,
 	"firewall":            443, // mgmt UI / SSL-VPN
 	"server":              22,

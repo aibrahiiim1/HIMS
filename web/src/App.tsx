@@ -9,6 +9,8 @@ import { SearchPage } from './pages/SearchPage'
 import { WorkOrders } from './pages/WorkOrders'
 import { Systems } from './pages/Systems'
 import { Monitoring } from './pages/Monitoring'
+import { SpareParts } from './pages/SpareParts'
+import { Expenses } from './pages/Expenses'
 import './App.css'
 
 const qc = new QueryClient({ defaultOptions: { queries: { staleTime: 30_000, retry: 1 } } })
@@ -27,6 +29,8 @@ function Nav() {
       <Link to="/search" style={active('/search')}>Search</Link>
       <Link to="/work-orders" style={active('/work-orders')}>Work Orders</Link>
       <Link to="/systems" style={active('/systems')}>Systems</Link>
+      <Link to="/spare-parts" style={active('/spare-parts')}>Parts</Link>
+      <Link to="/expenses" style={active('/expenses')}>Expenses</Link>
     </nav>
   )
 }
@@ -49,6 +53,8 @@ export default function App() {
             <Route path="/search" element={<SearchPage />} />
             <Route path="/work-orders" element={<WorkOrders />} />
             <Route path="/systems" element={<Systems />} />
+            <Route path="/spare-parts" element={<SpareParts />} />
+            <Route path="/expenses" element={<Expenses />} />
           </Routes>
         </div>
       </BrowserRouter>

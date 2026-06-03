@@ -311,8 +311,55 @@ in Operations B). UNIQUE(device,kind,port) treats NULL port as distinct, so
 
 ---
 
+## Operations B — Spare Parts + Purchases + Expenses ✅ (closed 2026-06-03)
+
+**Goal:** complete the operations layer (PLAN §7): spare-parts stock,
+work-order parts consumption, purchase records, and an expense rollup. The
+alert→work-order bridge stays with the alerting engine (it has no alert
+source until Monitoring 6B).
+
+### Sub-commits
+- ✅ SC1 — migration 000012: `spare_parts` (stock + reorder threshold +
+  partial low-stock index) + `work_order_parts` (consumption, unit cost
+  snapshotted at consume time) + `purchases` (capex/opex ledger, optional
+  system/device/location links). sqlc queries + regen.
+- ✅ SC2 — `internal/operations/stock.go` pure `ComputeStockStatus`
+  (out / low / ok) + tests. **Atomic consume**: `ConsumePartToWorkOrder` is
+  a single CTE statement — `UPDATE … WHERE quantity >= n` feeds the INSERT;
+  if the precondition fails the CTE yields no row, the insert is empty, and
+  `:one` returns `ErrNoRows`, which the handler maps to **409 insufficient
+  stock**. No SELECT-then-UPDATE TOCTOU window (atomic-DB-signal pattern).
+- ✅ SC3 — API: spare-parts CRUD + `/stock` adjust + `/low-stock`;
+  work-order `/parts` (stock consume or free-text); purchases list/create/
+  delete; `/expenses/by-category` + `/by-location` (aggregate the purchases
+  ledger). DTOs enrich parts with computed stock status.
+- ✅ SC4 — UI: **Parts** page (stock table + status badges + adjust/delete +
+  create) and **Expenses** page (purchases ledger + create + by-category /
+  by-location rollups with grand total). Nav + routes. gofmt + build/vet/
+  test + frontend green; closed.
+
+### Verification (2026-06-03)
+`go build/vet/test ./...` green incl. stock-status tests. Frontend tsc +
+build green. gofmt clean (also formatted two Phase-6 files flagged in
+passing).
+
+### Design notes
+- **Expenses derive from purchases**, not a separate table — totals can't
+  drift from their source rows. Work-order cost + system cost stay on their
+  own pages (not merged) to avoid double-counting a purchase logged for the
+  same repair/license.
+- **Atomic stock decrement** is the load-bearing correctness piece; it is
+  enforced in SQL, so concurrent consumes can't oversell stock.
+
+### Carry-forward
+- Alert→work-order bridge → with **Monitoring 6B** (needs an alert source).
+- Atomic-consume **integration test** (behind `-tags=integration`) once a DB
+  test harness is wired — the unit layer can't exercise the CTE.
+
+---
+
 ## Later phases ⬜
-See `PLAN.md` §10. Remaining: **Operations B** (spare parts → purchases →
-expenses), **Monitoring 6B** (SNMP-metric checks + alert rules), **3b/3c**
-(virtualization + iLO/iDRAC — new transports), CCTV, wireless,
-databases/AD, peripherals/voice, MIB upload engine + reporting/dashboards.
+See `PLAN.md` §10. Remaining: **Monitoring 6B** (SNMP-metric checks + alert
+rules + alert→work-order bridge), **3b/3c** (virtualization + iLO/iDRAC —
+new transports), CCTV, wireless, databases/AD, peripherals/voice, MIB
+upload engine + reporting/dashboards.

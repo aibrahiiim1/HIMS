@@ -87,8 +87,23 @@ func (s *Server) routes() {
 		r.Post("/work-orders", s.createWorkOrder)
 		r.Get("/work-orders/{id}", s.getWorkOrder)
 		r.Patch("/work-orders/{id}", s.updateWorkOrder)
+		r.Get("/work-orders/{id}/parts", s.listWorkOrderParts)
+		r.Post("/work-orders/{id}/parts", s.addWorkOrderPart)
 		r.Get("/systems", s.listSystems)
 		r.Post("/systems", s.createSystem)
+
+		// --- Operations B: spare parts, purchases, expenses ----------
+		r.Get("/spare-parts", s.listSpareParts)
+		r.Post("/spare-parts", s.createSparePart)
+		r.Get("/spare-parts/low-stock", s.listLowStockParts)
+		r.Patch("/spare-parts/{id}", s.updateSparePart)
+		r.Patch("/spare-parts/{id}/stock", s.adjustSparePartStock)
+		r.Delete("/spare-parts/{id}", s.deleteSparePart)
+		r.Get("/purchases", s.listPurchases)
+		r.Post("/purchases", s.createPurchase)
+		r.Delete("/purchases/{id}", s.deletePurchase)
+		r.Get("/expenses/by-category", s.expensesByCategory)
+		r.Get("/expenses/by-location", s.expensesByLocation)
 
 		// --- Monitoring engine ---------------------------------------
 		r.Get("/monitoring/checks", s.listMonitoringChecks)

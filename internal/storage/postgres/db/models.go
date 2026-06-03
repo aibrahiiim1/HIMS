@@ -270,6 +270,21 @@ type PortVlan struct {
 	LastSeenAt       time.Time `json:"last_seen_at"`
 }
 
+type Purchase struct {
+	ID          uuid.UUID  `json:"id"`
+	Description string     `json:"description"`
+	Vendor      *string    `json:"vendor"`
+	Category    string     `json:"category"`
+	LocationID  *uuid.UUID `json:"location_id"`
+	SystemID    *uuid.UUID `json:"system_id"`
+	DeviceID    *uuid.UUID `json:"device_id"`
+	Amount      float64    `json:"amount"`
+	PurchasedAt time.Time  `json:"purchased_at"`
+	InvoiceRef  *string    `json:"invoice_ref"`
+	Notes       *string    `json:"notes"`
+	CreatedAt   time.Time  `json:"created_at"`
+}
+
 type ServerStorage struct {
 	ID               uuid.UUID `json:"id"`
 	DeviceID         uuid.UUID `json:"device_id"`
@@ -282,6 +297,20 @@ type ServerStorage struct {
 	LastSeenAt       time.Time `json:"last_seen_at"`
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+type SparePart struct {
+	ID          uuid.UUID  `json:"id"`
+	Name        string     `json:"name"`
+	Sku         *string    `json:"sku"`
+	Category    string     `json:"category"`
+	LocationID  *uuid.UUID `json:"location_id"`
+	Quantity    int32      `json:"quantity"`
+	MinQuantity int32      `json:"min_quantity"`
+	UnitCost    float64    `json:"unit_cost"`
+	Notes       *string    `json:"notes"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
 }
 
 type Subnet struct {
@@ -355,4 +384,14 @@ type WorkOrderEvent struct {
 	Note        *string   `json:"note"`
 	Actor       *string   `json:"actor"`
 	CreatedAt   time.Time `json:"created_at"`
+}
+
+type WorkOrderPart struct {
+	ID          uuid.UUID  `json:"id"`
+	WorkOrderID uuid.UUID  `json:"work_order_id"`
+	SparePartID *uuid.UUID `json:"spare_part_id"`
+	Description string     `json:"description"`
+	Quantity    int32      `json:"quantity"`
+	UnitCost    float64    `json:"unit_cost"`
+	CreatedAt   time.Time  `json:"created_at"`
 }

@@ -14,18 +14,36 @@ import (
 type Querier interface {
 	AddCredentialGroupMember(ctx context.Context, arg AddCredentialGroupMemberParams) error
 	AddDeviceRole(ctx context.Context, arg AddDeviceRoleParams) error
+	// A part not tracked in stock (free-text): just record it, no decrement.
+	AddFreeWorkOrderPart(ctx context.Context, arg AddFreeWorkOrderPartParams) (WorkOrderPart, error)
 	AddWorkOrderEvent(ctx context.Context, arg AddWorkOrderEventParams) (WorkOrderEvent, error)
+	// Absolute set of on-hand quantity (a stock count / receiving correction).
+	// The CHECK (quantity >= 0) constraint rejects negative results.
+	AdjustSparePartStock(ctx context.Context, arg AdjustSparePartStockParams) (SparePart, error)
 	BindCredentialGroup(ctx context.Context, arg BindCredentialGroupParams) (CredentialBinding, error)
+	// ---- Work-order parts (stock consumption) ---------------------------------
+	// Atomic: decrement stock AND record the consumption in ONE statement. The
+	// UPDATE's WHERE quantity >= $3 is the precondition; if it fails to match,
+	// the CTE yields no row, the INSERT inserts nothing, and :one returns
+	// ErrNoRows — which the handler maps to "insufficient stock" (409). This is
+	// the atomic-DB-signal pattern: no SELECT-then-UPDATE TOCTOU window.
+	ConsumePartToWorkOrder(ctx context.Context, arg ConsumePartToWorkOrderParams) (WorkOrderPart, error)
 	CreateCredential(ctx context.Context, arg CreateCredentialParams) (Credential, error)
 	CreateCredentialGroup(ctx context.Context, arg CreateCredentialGroupParams) (CredentialGroup, error)
 	CreateDevice(ctx context.Context, arg CreateDeviceParams) (Device, error)
 	CreateDiscoveryJob(ctx context.Context, arg CreateDiscoveryJobParams) (DiscoveryJob, error)
 	CreateDiscoveryResult(ctx context.Context, arg CreateDiscoveryResultParams) (DiscoveryResult, error)
 	CreateLocation(ctx context.Context, arg CreateLocationParams) (Location, error)
+	// ---- Purchases ------------------------------------------------------------
+	CreatePurchase(ctx context.Context, arg CreatePurchaseParams) (Purchase, error)
+	// ---- Spare parts ----------------------------------------------------------
+	CreateSparePart(ctx context.Context, arg CreateSparePartParams) (SparePart, error)
 	CreateSystem(ctx context.Context, arg CreateSystemParams) (System, error)
 	CreateWorkOrder(ctx context.Context, arg CreateWorkOrderParams) (WorkOrder, error)
 	DeleteLocation(ctx context.Context, id uuid.UUID) error
 	DeleteMonitoringCheck(ctx context.Context, id uuid.UUID) error
+	DeletePurchase(ctx context.Context, id uuid.UUID) error
+	DeleteSparePart(ctx context.Context, id uuid.UUID) error
 	DeleteStaleARP(ctx context.Context, arg DeleteStaleARPParams) error
 	DeleteStaleHAMembers(ctx context.Context, arg DeleteStaleHAMembersParams) error
 	DeleteStaleInterfaces(ctx context.Context, arg DeleteStaleInterfacesParams) error
@@ -37,6 +55,13 @@ type Querier interface {
 	DeleteStaleVlans(ctx context.Context, arg DeleteStaleVlansParams) error
 	DeleteStaleVpnTunnels(ctx context.Context, arg DeleteStaleVpnTunnelsParams) error
 	DeleteSystem(ctx context.Context, id uuid.UUID) error
+	// ---- Expenses (aggregation over the purchases ledger) ---------------------
+	// Expenses derive from the purchases ledger so the totals can never drift
+	// from their source rows. Work-order cost + system cost stay on their own
+	// pages (not merged here, to avoid double-counting a purchase logged for the
+	// same repair/license).
+	ExpensesByCategory(ctx context.Context) ([]ExpensesByCategoryRow, error)
+	ExpensesByLocation(ctx context.Context) ([]ExpensesByLocationRow, error)
 	// First step of the IP→MAC→port→path search.
 	FindMACByIP(ctx context.Context, ipAddress netip.Addr) ([]FindMACByIPRow, error)
 	// Topology search: which switch + port + VLAN carries a MAC?
@@ -47,6 +72,7 @@ type Querier interface {
 	GetFirewallStatus(ctx context.Context, deviceID uuid.UUID) (FirewallStatus, error)
 	GetLocation(ctx context.Context, id uuid.UUID) (Location, error)
 	GetMonitoringCheck(ctx context.Context, id uuid.UUID) (MonitoringCheck, error)
+	GetSparePart(ctx context.Context, id uuid.UUID) (SparePart, error)
 	GetSystem(ctx context.Context, id uuid.UUID) (System, error)
 	GetWorkOrder(ctx context.Context, id uuid.UUID) (WorkOrder, error)
 	InsertMonitoringSample(ctx context.Context, arg InsertMonitoringSampleParams) error
@@ -67,19 +93,23 @@ type Querier interface {
 	ListHAMembers(ctx context.Context, deviceID uuid.UUID) ([]FirewallHaMember, error)
 	ListInterfaces(ctx context.Context, deviceID uuid.UUID) ([]Interface, error)
 	ListLicenses(ctx context.Context, deviceID uuid.UUID) ([]FirewallLicense, error)
+	ListLowStockParts(ctx context.Context) ([]SparePart, error)
 	ListMonitoringChecks(ctx context.Context) ([]MonitoringCheck, error)
 	ListMonitoringChecksByDevice(ctx context.Context, deviceID uuid.UUID) ([]MonitoringCheck, error)
 	ListMonitoringSamplesByCheck(ctx context.Context, arg ListMonitoringSamplesByCheckParams) ([]MonitoringSample, error)
 	ListMonitoringSamplesByDevice(ctx context.Context, arg ListMonitoringSamplesByDeviceParams) ([]MonitoringSample, error)
 	ListNeighbors(ctx context.Context, deviceID uuid.UUID) ([]Neighbor, error)
 	ListPortVlans(ctx context.Context, deviceID uuid.UUID) ([]PortVlan, error)
+	ListPurchases(ctx context.Context) ([]Purchase, error)
 	ListRootLocations(ctx context.Context) ([]Location, error)
 	ListServerStorage(ctx context.Context, deviceID uuid.UUID) ([]ServerStorage, error)
+	ListSpareParts(ctx context.Context) ([]SparePart, error)
 	ListSystems(ctx context.Context) ([]System, error)
 	ListTopologyLinks(ctx context.Context, localDeviceID uuid.UUID) ([]TopologyLink, error)
 	ListVlans(ctx context.Context, deviceID uuid.UUID) ([]Vlan, error)
 	ListVpnTunnels(ctx context.Context, deviceID uuid.UUID) ([]FirewallVpnTunnel, error)
 	ListWorkOrderEvents(ctx context.Context, workOrderID uuid.UUID) ([]WorkOrderEvent, error)
+	ListWorkOrderParts(ctx context.Context, workOrderID uuid.UUID) ([]WorkOrderPart, error)
 	ListWorkOrders(ctx context.Context) ([]WorkOrder, error)
 	ListWorkOrdersByDevice(ctx context.Context, deviceID *uuid.UUID) ([]WorkOrder, error)
 	// Identity reconciliation key (multi-hotel safe): same IP can recur across
@@ -111,6 +141,7 @@ type Querier interface {
 	UpdateDeviceMonitoringStatus(ctx context.Context, arg UpdateDeviceMonitoringStatusParams) error
 	UpdateDiscoveryJobStatus(ctx context.Context, arg UpdateDiscoveryJobStatusParams) error
 	UpdateDiscoveryResult(ctx context.Context, arg UpdateDiscoveryResultParams) error
+	UpdateSparePart(ctx context.Context, arg UpdateSparePartParams) (SparePart, error)
 	UpdateSystem(ctx context.Context, arg UpdateSystemParams) (System, error)
 	UpdateWorkOrder(ctx context.Context, arg UpdateWorkOrderParams) (WorkOrder, error)
 	// ---- ARP entries ---------------------------------------------------------

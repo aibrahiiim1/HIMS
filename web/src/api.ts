@@ -238,6 +238,46 @@ export interface SystemLicense {
   overall_status: string
 }
 
+export interface SparePart {
+  id: string
+  name: string
+  sku?: string | null
+  category: string
+  location_id?: string | null
+  quantity: number
+  min_quantity: number
+  unit_cost: number
+  notes?: string | null
+  stock_status: string
+}
+
+export interface Purchase {
+  id: string
+  description: string
+  vendor?: string | null
+  category: string
+  location_id?: string | null
+  system_id?: string | null
+  device_id?: string | null
+  amount: number
+  purchased_at: string
+  invoice_ref?: string | null
+  notes?: string | null
+}
+
+export interface ExpenseByCategory {
+  category: string
+  total: number
+  count: number
+}
+
+export interface ExpenseByLocation {
+  location_id?: string | null
+  location_name?: string | null
+  total: number
+  count: number
+}
+
 export interface MonitoringCheck {
   id: string
   device_id: string
