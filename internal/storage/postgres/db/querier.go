@@ -227,6 +227,8 @@ type Querier interface {
 	SetAlertWorkOrder(ctx context.Context, arg SetAlertWorkOrderParams) error
 	// Bind-on-success: record the credential that last authenticated.
 	SetDeviceCredential(ctx context.Context, arg SetDeviceCredentialParams) error
+	// Stores the scan spec (mode/targets/creds) so the job can be re-run as-is.
+	SetDiscoveryJobMetadata(ctx context.Context, arg SetDiscoveryJobMetadataParams) error
 	SetMonitoringCheckEnabled(ctx context.Context, arg SetMonitoringCheckEnabledParams) (MonitoringCheck, error)
 	TotalExpenses(ctx context.Context) (float64, error)
 	TouchDeviceDiscovery(ctx context.Context, arg TouchDeviceDiscoveryParams) error

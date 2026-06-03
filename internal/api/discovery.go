@@ -99,9 +99,25 @@ func (s *Server) startScan(w http.ResponseWriter, r *http.Request) {
 	_ = s.queries.UpdateDiscoveryJobStatus(r.Context(), db.UpdateDiscoveryJobStatusParams{
 		ID: job.ID, Status: "running", HostCount: int32(len(hosts)), FoundCount: 0,
 	})
+	// Persist the spec so the job can be re-run verbatim (any mode, not just CIDR).
+	if spec, err := json.Marshal(rerunSpec{
+		Mode: req.Mode, Targets: req.Targets, CIDR: req.CIDR,
+		CredentialIDs: req.CredentialIDs, CredentialGroupIDs: req.CredentialGroupIDs,
+	}); err == nil {
+		_ = s.queries.SetDiscoveryJobMetadata(r.Context(), db.SetDiscoveryJobMetadataParams{ID: job.ID, Metadata: spec})
+	}
 
 	go s.runScanJob(job.ID, hosts, locID, concurrency, extra, snmpTO, portTO)
 	writeJSON(w, http.StatusAccepted, job)
+}
+
+// rerunSpec is the scan request persisted in a job's metadata for re-runs.
+type rerunSpec struct {
+	Mode               string   `json:"mode"`
+	Targets            string   `json:"targets"`
+	CIDR               string   `json:"cidr"`
+	CredentialIDs      []string `json:"credential_ids"`
+	CredentialGroupIDs []string `json:"credential_group_ids"`
 }
 
 // resolveScanHosts expands the request's input mode into a host list. It
@@ -350,27 +366,44 @@ func (s *Server) rerunDiscoveryJob(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	if prev.ScopeCidr == nil {
-		http.Error(w, "this job has no re-runnable network scope (controller/AD imports aren't re-run here)", http.StatusBadRequest)
-		return
+	// Rebuild the original request: prefer the persisted spec (covers single IP /
+	// range / list / site modes); fall back to the saved CIDR scope.
+	var req scanReq
+	if len(prev.Metadata) > 0 {
+		var spec rerunSpec
+		if json.Unmarshal(prev.Metadata, &spec) == nil {
+			req = scanReq{Mode: spec.Mode, Targets: spec.Targets, CIDR: spec.CIDR, CredentialIDs: spec.CredentialIDs, CredentialGroupIDs: spec.CredentialGroupIDs}
+		}
 	}
-	hosts, err := discovery.ExpandCIDR(*prev.ScopeCidr, scanMaxHosts)
+	if req.Targets == "" && req.CIDR == "" && req.Mode != "site_subnets" {
+		if prev.ScopeCidr == nil {
+			http.Error(w, "this job has no re-runnable network scope (controller/AD imports aren't re-run here)", http.StatusBadRequest)
+			return
+		}
+		req.CIDR = prev.ScopeCidr.String()
+	}
+	hosts, scopeLabel, err := s.resolveScanHosts(ctx, req, prev.LocationID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	extra, err := s.scanCredentialTier(ctx, nil, nil) // all stored creds (same default as a fresh scan)
+	extra, err := s.scanCredentialTier(ctx, req.CredentialIDs, req.CredentialGroupIDs)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
 	snmpTO, portTO, defConc := s.scanSettings(ctx)
-	job, err := s.queries.CreateDiscoveryJob(ctx, db.CreateDiscoveryJobParams{LocationID: prev.LocationID, ScopeCidr: prev.ScopeCidr})
+	var scopePrefix *netip.Prefix
+	if p, perr := netip.ParsePrefix(scopeLabel); perr == nil {
+		scopePrefix = &p
+	}
+	job, err := s.queries.CreateDiscoveryJob(ctx, db.CreateDiscoveryJobParams{LocationID: prev.LocationID, ScopeCidr: scopePrefix})
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
 	_ = s.queries.UpdateDiscoveryJobStatus(ctx, db.UpdateDiscoveryJobStatusParams{ID: job.ID, Status: "running", HostCount: int32(len(hosts)), FoundCount: 0})
+	_ = s.queries.SetDiscoveryJobMetadata(ctx, db.SetDiscoveryJobMetadataParams{ID: job.ID, Metadata: prev.Metadata})
 	go s.runScanJob(job.ID, hosts, prev.LocationID, defConc, extra, snmpTO, portTO)
 	writeJSON(w, http.StatusAccepted, job)
 }

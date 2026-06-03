@@ -328,6 +328,21 @@ func (q *Queries) SearchByMAC(ctx context.Context, mac string) ([]SearchByMACRow
 	return items, nil
 }
 
+const setDiscoveryJobMetadata = `-- name: SetDiscoveryJobMetadata :exec
+UPDATE discovery_jobs SET metadata = $2 WHERE id = $1
+`
+
+type SetDiscoveryJobMetadataParams struct {
+	ID       uuid.UUID `json:"id"`
+	Metadata []byte    `json:"metadata"`
+}
+
+// Stores the scan spec (mode/targets/creds) so the job can be re-run as-is.
+func (q *Queries) SetDiscoveryJobMetadata(ctx context.Context, arg SetDiscoveryJobMetadataParams) error {
+	_, err := q.db.Exec(ctx, setDiscoveryJobMetadata, arg.ID, arg.Metadata)
+	return err
+}
+
 const updateDiscoveryJobStatus = `-- name: UpdateDiscoveryJobStatus :exec
 UPDATE discovery_jobs
 SET status = $2,

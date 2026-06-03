@@ -32,6 +32,10 @@ INSERT INTO discovery_jobs (location_id, subnet_id, scope_cidr, status)
 VALUES ($1, $2, $3, 'pending')
 RETURNING *;
 
+-- name: SetDiscoveryJobMetadata :exec
+-- Stores the scan spec (mode/targets/creds) so the job can be re-run as-is.
+UPDATE discovery_jobs SET metadata = $2 WHERE id = $1;
+
 -- name: UpdateDiscoveryJobStatus :exec
 UPDATE discovery_jobs
 SET status = $2,
