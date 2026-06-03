@@ -11,6 +11,7 @@ import (
 
 	"github.com/coralsearesorts/hims/internal/apply"
 	"github.com/coralsearesorts/hims/internal/discovery"
+	"github.com/coralsearesorts/hims/internal/domain"
 	"github.com/coralsearesorts/hims/internal/scan"
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
 )
@@ -151,7 +152,15 @@ func (s *Server) scanDecrypt(ctx context.Context, id uuid.UUID) (discovery.Decry
 	if err != nil {
 		return discovery.DecryptedCred{}, err
 	}
-	return discovery.DecryptedCred{ID: id, Community: string(plain), Weak: cred.Weak}, nil
+	dc := discovery.DecryptedCred{ID: id, Kind: domain.CredentialKind(cred.Kind), Weak: cred.Weak}
+	if cred.Kind == string(domain.CredSNMPv3) {
+		if v3, err := discovery.ParseSNMPv3(plain); err == nil {
+			dc.V3 = v3
+		}
+	} else {
+		dc.Community = string(plain)
+	}
+	return dc, nil
 }
 
 func (s *Server) listDiscoveryJobs(w http.ResponseWriter, r *http.Request) {

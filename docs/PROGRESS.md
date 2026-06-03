@@ -860,7 +860,39 @@ controller (login varies: legacy `/api/login` vs UniFi-OS `/api/auth/login`).
 **Omada + Ruckus deferred** — distinct APIs (Omada needs an Omada-ID + token;
 Ruckus SmartZone is a different REST surface), each its own future phase.
 
-## Status — full platform + onboarding + ALL 4 deep-collection deps complete
+## SNMP v3 (USM) — BACKLOG-SNMPV3 ✅ (closed 2026-06-03)
+
+Extends the proven SNMP transport to v3 (RFC 3414 USM) rather than guessing
+new vendor shapes — well-specified + solid gosnmp support, so the config
+build is genuinely testable.
+
+- ✅ `internal/snmp` — `Target.V3` (`V3Params`: security name + auth/priv
+  protocol+key) + `NewClient` builds gosnmp Version3 + UserSecurityModel +
+  `toV3` (MsgFlags from key presence: noAuth→authNoPriv→authPriv; **priv
+  requires auth**; unknown protocol strings fall back to SHA/AES).
+  `ParseV3JSON` decodes the credential blob. Tests: authPriv/authNoPriv/
+  noAuthNoPriv, priv-without-auth guard, protocol-mapping defaults,
+  SecurityLevel, v3-requires-params.
+- ✅ Discovery pipeline auth loop builds a v3 `Target` for `snmp_v3` candidates
+  (decrypt closure parses the JSON blob into `V3Params`); monitoring
+  `probeSNMP` gained a v3 branch (`Poller.ProbeSNMPv3`) so SNMP-metric checks
+  work against v3 devices too. Both collector + API decrypt closures handle
+  the v3 blob.
+- ✅ UI: Credentials create form shows v3 USM fields (security name, auth/priv
+  protocol + key) when kind=`snmp_v3`, assembling the JSON the server seals.
+- ✅ gofmt + go build/vet/test ./... green; frontend tsc + build green.
+
+### Credential secret encodings (now documented)
+- `snmp_v2c`: community string. `snmp_v3`: JSON `{security_name,auth_protocol,
+  auth_key,priv_protocol,priv_key}`. `ssh`/`winrm`/`http_basic`/`onvif`/
+  `vendor_api`: `username:password`.
+
+### ⚠️ Live-validation trigger
+v3 config-building + blob parsing are unit-tested; the USM handshake needs a
+real v3 device. Trigger: first v3 credential bound on the fleet (Aruba/Cisco
+switches commonly support v3).
+
+## Status — full platform + onboarding + ALL 4 deep-collection deps + SNMP v3
 The entire requested scope is shipped, green, committed. Drivers:
 aruba/cisco/huawei (switch SNMP), fortigate (firewall), host_snmp +
 vmware_esxi (servers/virt SNMP), cctv + wlan_controller (banner), redfish_bmc

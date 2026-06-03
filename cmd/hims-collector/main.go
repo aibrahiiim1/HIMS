@@ -717,10 +717,16 @@ func buildDiscoverDeps(ctx context.Context, reg *driver.Registry) (*db.Queries, 
 		if err != nil {
 			return discovery.DecryptedCred{}, err
 		}
-		// plain (the community) is used only here and never logged.
-		return discovery.DecryptedCred{
-			ID: id, Kind: domain.CredentialKind(cred.Kind), Community: string(plain), Weak: cred.Weak,
-		}, nil
+		// plain is used only here and never logged.
+		dc := discovery.DecryptedCred{ID: id, Kind: domain.CredentialKind(cred.Kind), Weak: cred.Weak}
+		if cred.Kind == string(domain.CredSNMPv3) {
+			if v3, err := discovery.ParseSNMPv3(plain); err == nil {
+				dc.V3 = v3
+			}
+		} else {
+			dc.Community = string(plain)
+		}
+		return dc, nil
 	}
 	cfg := discovery.PipelineConfig{
 		Registry: reg, Fetcher: store, Decrypt: decrypt,

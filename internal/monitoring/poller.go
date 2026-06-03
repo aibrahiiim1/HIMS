@@ -103,19 +103,31 @@ func (p *Poller) ProbeSNMP(ctx context.Context, addr netip.Addr, port int, commu
 	if !addr.IsValid() {
 		return Result{OK: false, Err: fmt.Errorf("invalid address")}
 	}
+	return p.probeTarget(ctx, snmp.Target{
+		Addr: addr, Port: uint16(normPort(port)), Version: snmp.V2c, Community: community, Timeout: p.timeout,
+	}, oid)
+}
+
+// ProbeSNMPv3 does an SNMP v3 (USM) GET of one OID. The credentials are used
+// only in-memory and never logged.
+func (p *Poller) ProbeSNMPv3(ctx context.Context, addr netip.Addr, port int, v3 *snmp.V3Params, oid string) Result {
+	if !addr.IsValid() {
+		return Result{OK: false, Err: fmt.Errorf("invalid address")}
+	}
+	if v3 == nil {
+		return Result{OK: false, Err: fmt.Errorf("nil v3 params")}
+	}
+	return p.probeTarget(ctx, snmp.Target{
+		Addr: addr, Port: uint16(normPort(port)), Version: snmp.V3, V3: v3, Timeout: p.timeout,
+	}, oid)
+}
+
+// probeTarget runs a single-OID GET against any SNMP target (v2c or v3).
+func (p *Poller) probeTarget(ctx context.Context, tgt snmp.Target, oid string) Result {
 	if oid == "" {
 		oid = SysUpTimeOID
 	}
-	if port <= 0 {
-		port = 161
-	}
-	cl, err := snmpClientFactory(snmp.Target{
-		Addr:      addr,
-		Port:      uint16(port),
-		Version:   snmp.V2c,
-		Community: community,
-		Timeout:   p.timeout,
-	})
+	cl, err := snmpClientFactory(tgt)
 	if err != nil {
 		return Result{OK: false, Err: err}
 	}
@@ -134,6 +146,13 @@ func (p *Poller) ProbeSNMP(ctx context.Context, addr netip.Addr, port int, commu
 		return Result{OK: false, Latency: latency, Err: fmt.Errorf("no value for %s", oid)}
 	}
 	return Result{OK: true, Latency: latency, Value: anyFloat(pdus[0].Value)}
+}
+
+func normPort(port int) int {
+	if port <= 0 {
+		return 161
+	}
+	return port
 }
 
 // snmpClientFactory builds an SNMP client; overridable in tests.

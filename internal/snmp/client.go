@@ -63,10 +63,24 @@ type Target struct {
 	Addr      netip.Addr
 	Port      uint16
 	Version   Version
-	Community string // v2c
+	Community string // v1/v2c
 	Timeout   time.Duration
 	Retries   int
 	MaxReps   uint32
+	// V3 holds USM parameters; used only when Version == V3.
+	V3 *V3Params
+}
+
+// V3Params are SNMPv3 USM credentials. The auth/priv protocols are strings
+// ("SHA", "SHA256", "MD5", "AES", "AES192", "DES", …) mapped to gosnmp
+// constants by toV3 (see v3.go). Empty auth → noAuthNoPriv; auth without priv
+// → authNoPriv; both → authPriv.
+type V3Params struct {
+	SecurityName string
+	AuthProtocol string
+	AuthKey      string
+	PrivProtocol string
+	PrivKey      string
 }
 
 // WithDefaults fills in sensible zero-value overrides.
@@ -109,21 +123,30 @@ func NewClient(t Target) (Client, error) {
 	if !t.Addr.IsValid() {
 		return nil, errors.New("snmp: target Addr is zero")
 	}
-	ver := gs.Version2c
-	if t.Version == V1 {
-		ver = gs.Version1
-	}
-	return &client{g: &gs.GoSNMP{
+	g := &gs.GoSNMP{
 		Target:             t.Addr.String(),
 		Port:               t.Port,
 		Transport:          "udp",
-		Version:            ver,
 		Community:          t.Community,
 		Timeout:            t.Timeout,
 		Retries:            t.Retries,
 		MaxRepetitions:     t.MaxReps,
 		ExponentialTimeout: false,
-	}}, nil
+	}
+	switch t.Version {
+	case V1:
+		g.Version = gs.Version1
+	case V3:
+		if t.V3 == nil {
+			return nil, errors.New("snmp: v3 target requires V3 params")
+		}
+		g.Version = gs.Version3
+		g.SecurityModel = gs.UserSecurityModel
+		g.MsgFlags, g.SecurityParameters = toV3(t.V3)
+	default:
+		g.Version = gs.Version2c
+	}
+	return &client{g: g}, nil
 }
 
 func (c *client) Connect(_ context.Context) error {

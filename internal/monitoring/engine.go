@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/coralsearesorts/hims/internal/secret"
+	"github.com/coralsearesorts/hims/internal/snmp"
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
 )
 
@@ -174,7 +175,7 @@ func (e *Engine) probeSNMP(ctx context.Context, dev db.Device, c db.MonitoringCh
 	if err != nil {
 		return Result{OK: false, Err: err}
 	}
-	community, err := e.Cipher.Open(cred.EncryptedBlob, cred.KeyID)
+	secret, err := e.Cipher.Open(cred.EncryptedBlob, cred.KeyID)
 	if err != nil {
 		return Result{OK: false, Err: err} // decrypt/keyID error — no secret in the message
 	}
@@ -186,7 +187,14 @@ func (e *Engine) probeSNMP(ctx context.Context, dev db.Device, c db.MonitoringCh
 	if c.Oid != nil {
 		oid = *c.Oid
 	}
-	return e.poller.ProbeSNMP(ctx, *dev.PrimaryIp, port, string(community), oid)
+	if cred.Kind == "snmp_v3" {
+		v3, perr := snmp.ParseV3JSON(secret)
+		if perr != nil {
+			return Result{OK: false, Err: perr}
+		}
+		return e.poller.ProbeSNMPv3(ctx, *dev.PrimaryIp, port, v3, oid)
+	}
+	return e.poller.ProbeSNMP(ctx, *dev.PrimaryIp, port, string(secret), oid)
 }
 
 // rollupDevice recomputes the device's status from all its checks and writes

@@ -52,9 +52,13 @@ type CandidateFetcher interface {
 type DecryptedCred struct {
 	ID        uuid.UUID
 	Kind      domain.CredentialKind
-	Community string // for SNMP v2c
+	Community string         // for SNMP v2c (or "user:password" for http/winrm)
+	V3        *snmp.V3Params // for SNMP v3 (USM)
 	Weak      bool
 }
+
+// ParseSNMPv3 decodes an SNMP v3 credential secret (JSON) into USM params.
+func ParseSNMPv3(secret []byte) (*snmp.V3Params, error) { return snmp.ParseV3JSON(secret) }
 
 // DecryptFn decrypts a credential blob. The pipeline calls it only on the
 // credentials it's about to try — not the entire set.
@@ -120,11 +124,9 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 		if err != nil {
 			continue
 		}
-		tgt := snmp.Target{
-			Addr:      ip,
-			Version:   snmp.V2c,
-			Community: dec.Community,
-			Timeout:   cfg.SNMPTimeout,
+		tgt := snmp.Target{Addr: ip, Version: snmp.V2c, Community: dec.Community, Timeout: cfg.SNMPTimeout}
+		if cand.Kind == domain.CredSNMPv3 && dec.V3 != nil {
+			tgt = snmp.Target{Addr: ip, Version: snmp.V3, V3: dec.V3, Timeout: cfg.SNMPTimeout}
 		}
 		cli, err := snmp.NewClient(tgt)
 		if err != nil {
