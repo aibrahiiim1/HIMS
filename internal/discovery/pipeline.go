@@ -69,10 +69,20 @@ type PipelineConfig struct {
 	Registry *driver.Registry
 	Fetcher  CandidateFetcher
 	Decrypt  DecryptFn
+	// ExtraGroups are operator-selected credential groups for this scan. They
+	// are injected as the highest-specificity candidate tier (above any
+	// scope-resolved bindings), so the resolver still owns ordering and the
+	// no-per-device-picker discipline holds: the operator picks GROUPS for a
+	// scan, not a credential for a device. Empty = pure scope auto-resolution.
+	ExtraGroups []credresolver.ScopedGroup
 	// Timeout for each per-host step.
 	PingTimeout time.Duration
 	SNMPTimeout time.Duration
 }
+
+// explicitTierSpecificity ranks operator-selected groups above subnet (2) and
+// location (1) scope bindings.
+const explicitTierSpecificity = 100
 
 // Run runs the pipeline for a single IP and returns its result.
 // All steps are attempted; errors within optional steps (e.g. deep collect)
@@ -112,6 +122,8 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 		r.Error = fmt.Errorf("fetch credentials: %w", err)
 		return r
 	}
+	// Operator-selected scan groups join as the highest-specificity tier.
+	groups = append(groups, cfg.ExtraGroups...)
 	fp := credresolver.Fingerprint{SNMP: community != "" || hasPort(r.OpenPorts, 161)}
 	candidates := credresolver.Resolve(credresolver.Input{Fingerprint: fp, Groups: groups})
 

@@ -48,6 +48,7 @@ type Querier interface {
 	CreatePurchase(ctx context.Context, arg CreatePurchaseParams) (Purchase, error)
 	// ---- Spare parts ----------------------------------------------------------
 	CreateSparePart(ctx context.Context, arg CreateSparePartParams) (SparePart, error)
+	CreateSubnet(ctx context.Context, arg CreateSubnetParams) (Subnet, error)
 	CreateSystem(ctx context.Context, arg CreateSystemParams) (System, error)
 	CreateWorkOrder(ctx context.Context, arg CreateWorkOrderParams) (WorkOrder, error)
 	DeleteAlertRule(ctx context.Context, id uuid.UUID) error
@@ -105,6 +106,12 @@ type Querier interface {
 	ListAllTopologyLinks(ctx context.Context) ([]ListAllTopologyLinksRow, error)
 	ListBMCSensors(ctx context.Context, deviceID uuid.UUID) ([]BmcSensor, error)
 	ListChildLocations(ctx context.Context, parentID *uuid.UUID) ([]Location, error)
+	// Members of an explicit set of groups (the operator-selected scan groups),
+	// returned in the resolver-input shape. priority orders within the explicit
+	// tier; the scan injects these above scope-resolved candidates.
+	ListCredentialGroupMembers(ctx context.Context, dollar_1 []uuid.UUID) ([]ListCredentialGroupMembersRow, error)
+	// Groups with member + binding counts for the scan-time group multi-select.
+	ListCredentialGroups(ctx context.Context) ([]ListCredentialGroupsRow, error)
 	ListCredentials(ctx context.Context) ([]Credential, error)
 	ListDeviceFacts(ctx context.Context, deviceID uuid.UUID) ([]DeviceFact, error)
 	ListDeviceRoles(ctx context.Context, deviceID uuid.UUID) ([]DeviceRole, error)
@@ -142,6 +149,8 @@ type Querier interface {
 	ListRootLocations(ctx context.Context) ([]Location, error)
 	ListServerStorage(ctx context.Context, deviceID uuid.UUID) ([]ServerStorage, error)
 	ListSpareParts(ctx context.Context) ([]SparePart, error)
+	ListSubnets(ctx context.Context) ([]Subnet, error)
+	ListSubnetsByLocation(ctx context.Context, locationID uuid.UUID) ([]Subnet, error)
 	ListSystems(ctx context.Context) ([]System, error)
 	ListTopologyLinks(ctx context.Context, localDeviceID uuid.UUID) ([]TopologyLink, error)
 	ListVMsByHost(ctx context.Context, hostDeviceID uuid.UUID) ([]VirtualMachine, error)

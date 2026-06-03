@@ -1,6 +1,21 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { api, type DiscoveryJob, type DiscoveryResult } from '../api'
+import { api, type DiscoveryJob, type DiscoveryResult, type Location, type CredentialGroup } from '../api'
+
+type ScanMode = 'single' | 'range' | 'cidr' | 'site_subnets'
+
+const MODE_LABEL: Record<ScanMode, string> = {
+  single: 'Single IP',
+  range: 'IP Range',
+  cidr: 'Subnet / CIDR',
+  site_subnets: 'Hotel Site Subnets',
+}
+const MODE_PLACEHOLDER: Record<ScanMode, string> = {
+  single: '10.20.0.10',
+  range: '172.21.96.1-172.21.96.254  (or 172.21.96.1-254)',
+  cidr: '172.21.96.0/24',
+  site_subnets: '(uses every subnet bound to the selected site)',
+}
 
 const jobBadge = (s: string) =>
   s === 'running' ? 'warning' : s === 'completed' ? 'up' : s === 'failed' || s === 'cancelled' ? 'down' : 'unknown'
@@ -21,9 +36,14 @@ const input: React.CSSProperties = {
 
 export function Discovery() {
   const qc = useQueryClient()
-  const [cidr, setCidr] = useState('')
+  const [mode, setMode] = useState<ScanMode>('cidr')
+  const [targets, setTargets] = useState('')
   const [location, setLocation] = useState('')
+  const [groupIDs, setGroupIDs] = useState<string[]>([])
   const [jobID, setJobID] = useState<string | null>(null)
+
+  const locations = useQuery({ queryKey: ['locations'], queryFn: () => api.get<Location[]>('/locations') })
+  const groups = useQuery({ queryKey: ['credential-groups'], queryFn: () => api.get<CredentialGroup[]>('/credential-groups') })
 
   const jobs = useQuery({
     queryKey: ['discovery-jobs'],
@@ -37,27 +57,93 @@ export function Discovery() {
     refetchInterval: 5000,
   })
 
+  const siteMode = mode === 'site_subnets'
+  const canScan = siteMode ? !!location : !!targets.trim()
+
   const scan = useMutation({
-    mutationFn: () => api.post<DiscoveryJob>('/discovery/scan', { cidr, location_id: location || null }),
-    onSuccess: (j) => { setCidr(''); setJobID((j as DiscoveryJob).id); qc.invalidateQueries({ queryKey: ['discovery-jobs'] }) },
+    mutationFn: () =>
+      api.post<DiscoveryJob>('/discovery/scan', {
+        mode: siteMode ? 'site_subnets' : 'targets',
+        targets: siteMode ? '' : targets.trim(),
+        location_id: location || null,
+        credential_group_ids: groupIDs,
+      }),
+    onSuccess: (j) => { setTargets(''); setJobID((j as DiscoveryJob).id); qc.invalidateQueries({ queryKey: ['discovery-jobs'] }) },
   })
+
+  const toggleGroup = (id: string) =>
+    setGroupIDs((prev) => (prev.includes(id) ? prev.filter((g) => g !== id) : [...prev, id]))
 
   return (
     <div>
       <div className="card">
         <h2>Discovery</h2>
         <p className="muted" style={{ marginBottom: 10 }}>
-          Scan a subnet → each reachable host is fingerprinted, authenticated against scoped
+          Pick an input mode → each reachable host is fingerprinted, authenticated against scoped
           credentials, collected, and persisted to the CMDB. Runs in the background; this page
           polls for progress.
         </p>
+
+        {/* Input-mode selector */}
+        <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
+          {(Object.keys(MODE_LABEL) as ScanMode[]).map((m) => (
+            <button
+              key={m}
+              onClick={() => setMode(m)}
+              style={{
+                ...ghost,
+                ...(mode === m ? { background: '#1565c0', color: '#fff', borderColor: '#1565c0' } : {}),
+              }}
+            >
+              {MODE_LABEL[m]}
+            </button>
+          ))}
+        </div>
+
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-          <input style={{ ...input, width: 200 }} placeholder="CIDR (e.g. 172.21.96.0/24)" value={cidr} onChange={(e) => setCidr(e.target.value)} />
-          <input style={{ ...input, width: 260 }} placeholder="location UUID (optional)" value={location} onChange={(e) => setLocation(e.target.value)} />
-          <button style={btn} disabled={!cidr || scan.isPending} onClick={() => scan.mutate()}>
+          {!siteMode && (
+            <input
+              style={{ ...input, width: 360 }}
+              placeholder={MODE_PLACEHOLDER[mode]}
+              value={targets}
+              onChange={(e) => setTargets(e.target.value)}
+            />
+          )}
+          {/* Site selector — optional for IP modes (credential scope), required for site_subnets */}
+          <select style={{ ...input, width: 220 }} value={location} onChange={(e) => setLocation(e.target.value)}>
+            <option value="">{siteMode ? 'Select a hotel site…' : 'Site scope (optional)'}</option>
+            {(locations.data ?? []).map((l) => (
+              <option key={l.id} value={l.id}>{l.name}</option>
+            ))}
+          </select>
+          <button style={btn} disabled={!canScan || scan.isPending} onClick={() => scan.mutate()}>
             {scan.isPending ? 'Launching…' : 'Start scan'}
           </button>
           {scan.error && <span className="error-msg">{(scan.error as Error).message}</span>}
+        </div>
+        {siteMode && <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>{MODE_PLACEHOLDER.site_subnets}</div>}
+
+        {/* Optional credential-group multi-select */}
+        <div style={{ marginTop: 12 }}>
+          <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+            Credential groups to use (optional — default: site/subnet auto-resolution)
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {(groups.data ?? []).length === 0 && <span className="muted" style={{ fontSize: 12 }}>No credential groups defined.</span>}
+            {(groups.data ?? []).map((g) => (
+              <button
+                key={g.id}
+                onClick={() => toggleGroup(g.id)}
+                title={`${g.member_count} credential(s), ${g.binding_count} binding(s)`}
+                style={{
+                  ...ghost,
+                  ...(groupIDs.includes(g.id) ? { background: '#2e7d32', color: '#fff', borderColor: '#2e7d32' } : {}),
+                }}
+              >
+                {g.name} <span style={{ opacity: 0.7 }}>({g.member_count})</span>
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 

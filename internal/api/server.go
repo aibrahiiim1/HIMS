@@ -118,6 +118,7 @@ func (s *Server) routes() {
 		// --- Locations -----------------------------------------------
 		r.Get("/locations", s.listLocations)
 		r.Get("/locations/{id}/children", s.childLocations)
+		r.Get("/locations/{id}/subnets", s.locationSubnets)
 
 		// --- Operations: work orders + systems/licenses --------------
 		r.Get("/work-orders", s.listWorkOrders)
@@ -164,6 +165,7 @@ func (s *Server) routes() {
 		// --- Credentials (encrypted at rest; secrets never returned) -
 		r.Get("/credentials", s.listCredentials)
 		r.Post("/credentials", s.createCredential)
+		r.Get("/credential-groups", s.listCredentialGroups)
 		r.Put("/devices/{id}/credential", s.bindDeviceCredential)
 
 		// --- MIB upload engine ---------------------------------------
@@ -555,6 +557,32 @@ func (s *Server) childLocations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := s.queries.ListChildLocations(ctx, &id) //nolint
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+// locationSubnets lists the subnets bound to a site (for site-scoped scans).
+func (s *Server) locationSubnets(w http.ResponseWriter, r *http.Request) {
+	ctx, id, ok := pathUUID(w, r, "id")
+	if !ok {
+		return
+	}
+	rows, err := s.queries.ListSubnetsByLocation(ctx, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+// listCredentialGroups lists credential groups with member/binding counts for
+// the scan-time group multi-select. No secrets or credential identities are
+// returned — only group names + counts.
+func (s *Server) listCredentialGroups(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.queries.ListCredentialGroups(r.Context())
 	if err != nil {
 		writeErr(w, err)
 		return

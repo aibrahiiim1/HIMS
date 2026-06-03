@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/coralsearesorts/hims/internal/apply"
+	"github.com/coralsearesorts/hims/internal/credresolver"
 	"github.com/coralsearesorts/hims/internal/discovery"
 	"github.com/coralsearesorts/hims/internal/domain"
 	"github.com/coralsearesorts/hims/internal/scan"
@@ -18,10 +19,21 @@ import (
 
 const scanMaxHosts = 4096
 
+// scanReq drives every network-scan input mode. The operator supplies ONE of:
+//   - Targets: free-text single IP / IP-range / CIDR / mixed list (mode "targets")
+//   - LocationID with Mode "site_subnets": scan every subnet bound to that site
+//   - CIDR: legacy single-CIDR field (back-compat; equivalent to Targets)
+//
+// CredentialGroupIDs optionally pins which credential GROUPS this scan may use
+// (highest-priority tier; the resolver still orders per-probe). Empty =
+// site/subnet scope auto-resolution.
 type scanReq struct {
-	CIDR        string  `json:"cidr"`
-	LocationID  *string `json:"location_id"`
-	Concurrency int     `json:"concurrency"`
+	Targets            string   `json:"targets"`
+	CIDR               string   `json:"cidr"` // legacy / single-CIDR
+	Mode               string   `json:"mode"` // "targets" | "site_subnets"
+	LocationID         *string  `json:"location_id"`
+	CredentialGroupIDs []string `json:"credential_group_ids"`
+	Concurrency        int      `json:"concurrency"`
 }
 
 // startScan launches a background subnet scan and returns the job immediately
@@ -37,24 +49,37 @@ func (s *Server) startScan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	prefix, err := netip.ParsePrefix(req.CIDR)
-	if err != nil {
-		http.Error(w, "invalid cidr: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-	hosts, err := discovery.ExpandCIDR(prefix, scanMaxHosts)
+	locID := parseUUIDPtr(req.LocationID)
+
+	// Resolve the input mode into a host list (+ a scope label for the job).
+	hosts, scopeLabel, err := s.resolveScanHosts(r.Context(), req, locID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	locID := parseUUIDPtr(req.LocationID)
+	if len(hosts) == 0 {
+		http.Error(w, "no hosts in scan scope", http.StatusBadRequest)
+		return
+	}
+
+	// Optional operator-selected credential groups → explicit candidate tier.
+	extra, err := s.explicitGroups(r.Context(), req.CredentialGroupIDs)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+
 	concurrency := req.Concurrency
 	if concurrency < 1 || concurrency > 64 {
 		concurrency = 16
 	}
 
+	var scopePrefix *netip.Prefix
+	if p, perr := netip.ParsePrefix(scopeLabel); perr == nil {
+		scopePrefix = &p
+	}
 	job, err := s.queries.CreateDiscoveryJob(r.Context(), db.CreateDiscoveryJobParams{
-		LocationID: locID, ScopeCidr: &prefix,
+		LocationID: locID, ScopeCidr: scopePrefix,
 	})
 	if err != nil {
 		writeErr(w, err)
@@ -64,18 +89,94 @@ func (s *Server) startScan(w http.ResponseWriter, r *http.Request) {
 		ID: job.ID, Status: "running", HostCount: int32(len(hosts)), FoundCount: 0,
 	})
 
-	go s.runScanJob(job.ID, hosts, locID, concurrency)
+	go s.runScanJob(job.ID, hosts, locID, concurrency, extra)
 	writeJSON(w, http.StatusAccepted, job)
+}
+
+// resolveScanHosts expands the request's input mode into a host list. It
+// returns a scope label (a CIDR string when the scope is a single prefix, for
+// the job record; otherwise a free-text summary).
+func (s *Server) resolveScanHosts(ctx context.Context, req scanReq, locID *uuid.UUID) ([]netip.Addr, string, error) {
+	if req.Mode == "site_subnets" {
+		if locID == nil {
+			return nil, "", errBadRequest("site_subnets mode requires location_id")
+		}
+		subnets, err := s.queries.ListSubnetsByLocation(ctx, *locID)
+		if err != nil {
+			return nil, "", err
+		}
+		if len(subnets) == 0 {
+			return nil, "", errBadRequest("no subnets configured for this site")
+		}
+		var all []netip.Addr
+		for _, sn := range subnets {
+			hosts, err := discovery.ExpandCIDR(sn.Cidr, scanMaxHosts)
+			if err != nil {
+				return nil, "", err
+			}
+			all = append(all, hosts...)
+			if len(all) > scanMaxHosts {
+				return nil, "", errBadRequest("site subnets expand beyond the scan cap; scan a subset")
+			}
+		}
+		return all, "site_subnets", nil
+	}
+
+	spec := req.Targets
+	if spec == "" {
+		spec = req.CIDR // legacy single-CIDR field
+	}
+	if spec == "" {
+		return nil, "", errBadRequest("provide targets (IP / range / CIDR) or location_id with mode=site_subnets")
+	}
+	hosts, err := discovery.ParseTargets(spec, scanMaxHosts)
+	if err != nil {
+		return nil, "", err
+	}
+	return hosts, spec, nil
+}
+
+// explicitGroups loads the operator-selected credential groups' members into
+// the resolver-input shape, as a single highest-specificity ScopedGroup. The
+// secrets are NOT decrypted here — only the candidate refs are loaded; the
+// pipeline decrypts a credential only when it is about to try it.
+func (s *Server) explicitGroups(ctx context.Context, groupIDStrs []string) ([]credresolver.ScopedGroup, error) {
+	if len(groupIDStrs) == 0 {
+		return nil, nil
+	}
+	ids := make([]uuid.UUID, 0, len(groupIDStrs))
+	for _, str := range groupIDStrs {
+		id, err := uuid.Parse(str)
+		if err != nil {
+			return nil, errBadRequest("invalid credential_group_id: " + str)
+		}
+		ids = append(ids, id)
+	}
+	rows, err := s.queries.ListCredentialGroupMembers(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	members := make([]credresolver.CredRef, 0, len(rows))
+	for _, m := range rows {
+		members = append(members, credresolver.CredRef{
+			ID: m.ID, Kind: domain.CredentialKind(m.Kind), Priority: int(m.Priority), Weak: m.Weak,
+		})
+	}
+	return []credresolver.ScopedGroup{{Specificity: 100, Members: members}}, nil
 }
 
 // runScanJob is the background scan worker. It owns its own context (the HTTP
 // request's is long gone) and records per-host outcomes + a final job status.
-func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUID, concurrency int) {
+func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUID, concurrency int, extraGroups []credresolver.ScopedGroup) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
 	cfg := discovery.PipelineConfig{
 		Registry: s.reg, Fetcher: s.fetcher, Decrypt: s.scanDecrypt,
+		ExtraGroups: extraGroups,
 		PingTimeout: 2 * time.Second, SNMPTimeout: 3 * time.Second,
 	}
 	applier := apply.New(s.queries)

@@ -521,3 +521,19 @@ export interface Location {
   name: string
   code?: string | null
 }
+
+export interface Subnet {
+  id: string
+  location_id: string
+  cidr: string
+  name?: string | null
+  vlan_id?: number | null
+}
+
+export interface CredentialGroup {
+  id: string
+  name: string
+  description?: string | null
+  member_count: number
+  binding_count: number
+}

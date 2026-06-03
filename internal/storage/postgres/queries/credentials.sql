@@ -29,6 +29,31 @@ INSERT INTO credential_bindings (group_id, location_id, subnet_id)
 VALUES ($1, $2, $3)
 RETURNING *;
 
+-- name: ListCredentialGroups :many
+-- Groups with member + binding counts for the scan-time group multi-select.
+SELECT
+    g.id,
+    g.name,
+    g.description,
+    (SELECT count(*) FROM credential_group_members m WHERE m.group_id = g.id) AS member_count,
+    (SELECT count(*) FROM credential_bindings b WHERE b.group_id = g.id) AS binding_count
+FROM credential_groups g
+ORDER BY g.name;
+
+-- name: ListCredentialGroupMembers :many
+-- Members of an explicit set of groups (the operator-selected scan groups),
+-- returned in the resolver-input shape. priority orders within the explicit
+-- tier; the scan injects these above scope-resolved candidates.
+SELECT
+    c.id,
+    c.kind,
+    c.weak,
+    m.priority
+FROM credential_group_members m
+JOIN credentials c ON c.id = m.credential_id
+WHERE m.group_id = ANY($1::uuid[])
+ORDER BY m.priority;
+
 -- name: ResolveCandidatesForIP :many
 -- The resolver-assembly query: for a device IP, return every credential in a
 -- group bound to either a subnet that contains the IP (more specific) or a

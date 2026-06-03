@@ -138,6 +138,99 @@ func (q *Queries) GetCredential(ctx context.Context, id uuid.UUID) (Credential, 
 	return i, err
 }
 
+const listCredentialGroupMembers = `-- name: ListCredentialGroupMembers :many
+SELECT
+    c.id,
+    c.kind,
+    c.weak,
+    m.priority
+FROM credential_group_members m
+JOIN credentials c ON c.id = m.credential_id
+WHERE m.group_id = ANY($1::uuid[])
+ORDER BY m.priority
+`
+
+type ListCredentialGroupMembersRow struct {
+	ID       uuid.UUID `json:"id"`
+	Kind     string    `json:"kind"`
+	Weak     bool      `json:"weak"`
+	Priority int32     `json:"priority"`
+}
+
+// Members of an explicit set of groups (the operator-selected scan groups),
+// returned in the resolver-input shape. priority orders within the explicit
+// tier; the scan injects these above scope-resolved candidates.
+func (q *Queries) ListCredentialGroupMembers(ctx context.Context, dollar_1 []uuid.UUID) ([]ListCredentialGroupMembersRow, error) {
+	rows, err := q.db.Query(ctx, listCredentialGroupMembers, dollar_1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListCredentialGroupMembersRow{}
+	for rows.Next() {
+		var i ListCredentialGroupMembersRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Kind,
+			&i.Weak,
+			&i.Priority,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCredentialGroups = `-- name: ListCredentialGroups :many
+SELECT
+    g.id,
+    g.name,
+    g.description,
+    (SELECT count(*) FROM credential_group_members m WHERE m.group_id = g.id) AS member_count,
+    (SELECT count(*) FROM credential_bindings b WHERE b.group_id = g.id) AS binding_count
+FROM credential_groups g
+ORDER BY g.name
+`
+
+type ListCredentialGroupsRow struct {
+	ID           uuid.UUID `json:"id"`
+	Name         string    `json:"name"`
+	Description  *string   `json:"description"`
+	MemberCount  int64     `json:"member_count"`
+	BindingCount int64     `json:"binding_count"`
+}
+
+// Groups with member + binding counts for the scan-time group multi-select.
+func (q *Queries) ListCredentialGroups(ctx context.Context) ([]ListCredentialGroupsRow, error) {
+	rows, err := q.db.Query(ctx, listCredentialGroups)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListCredentialGroupsRow{}
+	for rows.Next() {
+		var i ListCredentialGroupsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Description,
+			&i.MemberCount,
+			&i.BindingCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listCredentials = `-- name: ListCredentials :many
 SELECT id, name, kind, encrypted_blob, key_id, weak, metadata, created_at, updated_at FROM credentials ORDER BY name
 `
