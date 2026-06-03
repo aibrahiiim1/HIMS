@@ -892,7 +892,34 @@ v3 config-building + blob parsing are unit-tested; the USM handshake needs a
 real v3 device. Trigger: first v3 credential bound on the fleet (Aruba/Cisco
 switches commonly support v3).
 
-## Status — full platform + onboarding + ALL 4 deep-collection deps + SNMP v3
+## Peripherals: printers via SNMP + shared-SNMP-session fix ✅ (closed 2026-06-03)
+
+Spec-named peripherals phase (printers), dependency-free + fully testable —
+and it surfaced a pre-existing cross-cutting bug, fixed here.
+
+- ✅ `internal/driver/printer` — `printer_snmp`: banner/sysDescr or port-9100
+  fingerprint → printer; `CollectSupplies` walks Printer-MIB
+  prtMarkerSuppliesTable (level+capacity → pct, honoring the -2 unknown / -3
+  some-remaining sentinels) + prtMarkerLifeCount (lifetime pages). Tested with
+  a fake SNMP client. Registered.
+- ✅ migration 000019 `printer_supplies`; `Facts.PrinterSupplies` +
+  `printer.page_count`; apply persists (upsert + stale-prune). API +
+  **Printers** nav + PrinterDetail (level bars + page count).
+
+### ⚠️ Cross-cutting bug found + FIXED: SNMP driver session type
+Every SNMP driver defined its **own** `Session` struct and asserted to it, but
+the pipeline only ever built an `aruba.Session` — so deep SNMP collection
+**silently failed for cisco/huawei/host_snmp/fortigate/esxi** (and would for
+printer). Never surfaced because the persist path didn't exist until this
+session. **Fixed**: a shared `swsnmp.Session` the pipeline builds, with each
+driver's `Session` now a type **alias** to it (zero test churn). All SNMP
+drivers now collect through the pipeline.
+
+### Live-validation trigger
+Printer-MIB parsing is unit-tested; validate against a real printer once a
+credential is bound. UPS-MIB + voice remain as future peripherals phases.
+
+## Status — full platform + onboarding + ALL 4 deep-collection deps + SNMP v3 + printers
 The entire requested scope is shipped, green, committed. Drivers:
 aruba/cisco/huawei (switch SNMP), fortigate (firewall), host_snmp +
 vmware_esxi (servers/virt SNMP), cctv + wlan_controller (banner), redfish_bmc

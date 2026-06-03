@@ -64,6 +64,8 @@ type Writer interface {
 	UpsertCameraInfo(ctx context.Context, arg db.UpsertCameraInfoParams) (db.CameraInfo, error)
 	UpsertWLANControllerInfo(ctx context.Context, arg db.UpsertWLANControllerInfoParams) (db.WlanControllerInfo, error)
 	UpsertAccessPoint(ctx context.Context, arg db.UpsertAccessPointParams) (db.AccessPoint, error)
+	UpsertPrinterSupply(ctx context.Context, arg db.UpsertPrinterSupplyParams) error
+	DeleteStalePrinterSupplies(ctx context.Context, arg db.DeleteStalePrinterSuppliesParams) error
 }
 
 // Applier persists discovery results.
@@ -222,6 +224,18 @@ func (a *Applier) applyFacts(ctx context.Context, devID uuid.UUID, f *driver.Fac
 			ControllerDeviceID: devID, Name: ap.Name, Mac: nonEmpty(ap.MAC), Model: nonEmpty(ap.Model),
 			Ip: parseIP(ap.IP), Status: orDefaultAPStatus(ap.Status), ClientCount: ap.ClientCount,
 		})
+	}
+
+	// Printer marker supplies (Printer-MIB).
+	if len(f.PrinterSupplies) > 0 {
+		for _, s := range f.PrinterSupplies {
+			_ = a.w.UpsertPrinterSupply(ctx, db.UpsertPrinterSupplyParams{
+				DeviceID: devID, SupplyIndex: s.Index, Description: nonEmpty(s.Description),
+				Level: i64ptr(s.Level), MaxCapacity: i64ptr(s.MaxCapacity), Pct: s.Pct,
+				CollectionSource: sourceSNMP, LastSeenAt: poll,
+			})
+		}
+		_ = a.w.DeleteStalePrinterSupplies(ctx, db.DeleteStalePrinterSuppliesParams{DeviceID: devID, LastSeenAt: poll, CollectionSource: sourceSNMP})
 	}
 
 	// Camera inventory (ONVIF).

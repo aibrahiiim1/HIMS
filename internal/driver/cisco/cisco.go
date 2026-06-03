@@ -4,7 +4,6 @@
 package cisco
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
@@ -12,7 +11,6 @@ import (
 	"github.com/coralsearesorts/hims/internal/driver"
 	"github.com/coralsearesorts/hims/internal/driver/swsnmp"
 	"github.com/coralsearesorts/hims/internal/mibs"
-	"github.com/coralsearesorts/hims/internal/snmp"
 )
 
 // Driver identifies and collects Cisco IOS switches.
@@ -44,12 +42,8 @@ func (*Driver) Fingerprint(p driver.Probe) driver.Match {
 	return driver.NoMatch
 }
 
-// Session is the Cisco collection session (embeds the shared marker).
-type Session struct {
-	driver.SessionBase
-	Client snmp.Client
-	Ctx    context.Context //nolint:containedctx
-}
+// Session aliases the shared SNMP session (swsnmp.Session).
+type Session = swsnmp.Session
 
 // Collect implements driver.Collector. Standard MIBs via swsnmp + CDP, with
 // LLDP merged in when present (mixed-vendor segments).

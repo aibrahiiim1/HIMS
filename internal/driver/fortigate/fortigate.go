@@ -53,12 +53,8 @@ func (*Driver) Fingerprint(p driver.Probe) driver.Match {
 	return driver.NoMatch
 }
 
-// Session is the FortiGate collection session.
-type Session struct {
-	driver.SessionBase
-	Client snmp.Client
-	Ctx    context.Context //nolint:containedctx
-}
+// Session aliases the shared SNMP session (swsnmp.Session).
+type Session = swsnmp.Session
 
 const mib = 1024 * 1024 // FortiGate disk units are binary megabytes
 

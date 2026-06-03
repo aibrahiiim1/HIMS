@@ -64,6 +64,7 @@ type Querier interface {
 	DeleteStaleMACEntries(ctx context.Context, arg DeleteStaleMACEntriesParams) error
 	DeleteStaleNeighbors(ctx context.Context, arg DeleteStaleNeighborsParams) error
 	DeleteStalePortVlans(ctx context.Context, arg DeleteStalePortVlansParams) error
+	DeleteStalePrinterSupplies(ctx context.Context, arg DeleteStalePrinterSuppliesParams) error
 	DeleteStaleServerStorage(ctx context.Context, arg DeleteStaleServerStorageParams) error
 	DeleteStaleVlans(ctx context.Context, arg DeleteStaleVlansParams) error
 	DeleteStaleVpnTunnels(ctx context.Context, arg DeleteStaleVpnTunnelsParams) error
@@ -133,6 +134,7 @@ type Querier interface {
 	ListNeighbors(ctx context.Context, deviceID uuid.UUID) ([]Neighbor, error)
 	ListOIDMappings(ctx context.Context) ([]OidMapping, error)
 	ListPortVlans(ctx context.Context, deviceID uuid.UUID) ([]PortVlan, error)
+	ListPrinterSupplies(ctx context.Context, deviceID uuid.UUID) ([]PrinterSupply, error)
 	ListPurchases(ctx context.Context) ([]Purchase, error)
 	ListRootLocations(ctx context.Context) ([]Location, error)
 	ListServerStorage(ctx context.Context, deviceID uuid.UUID) ([]ServerStorage, error)
@@ -218,6 +220,7 @@ type Querier interface {
 	// ---- Neighbors (LLDP/CDP) -----------------------------------------------
 	UpsertNeighbor(ctx context.Context, arg UpsertNeighborParams) (Neighbor, error)
 	UpsertPortVlan(ctx context.Context, arg UpsertPortVlanParams) error
+	UpsertPrinterSupply(ctx context.Context, arg UpsertPrinterSupplyParams) error
 	UpsertServerStorage(ctx context.Context, arg UpsertServerStorageParams) error
 	// ---- Topology links ------------------------------------------------------
 	UpsertTopologyLink(ctx context.Context, arg UpsertTopologyLinkParams) error

@@ -132,6 +132,12 @@ func (f *fakeWriter) UpsertWLANControllerInfo(_ context.Context, _ db.UpsertWLAN
 func (f *fakeWriter) UpsertAccessPoint(_ context.Context, _ db.UpsertAccessPointParams) (db.AccessPoint, error) {
 	return db.AccessPoint{}, nil
 }
+func (f *fakeWriter) UpsertPrinterSupply(_ context.Context, _ db.UpsertPrinterSupplyParams) error {
+	return nil
+}
+func (f *fakeWriter) DeleteStalePrinterSupplies(_ context.Context, _ db.DeleteStalePrinterSuppliesParams) error {
+	return nil
+}
 
 type fakeSwitch struct{}
 

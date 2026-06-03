@@ -73,6 +73,17 @@ const (
 	NetSnmpEnterprise   = "1.3.6.1.4.1.8072." // net-snmp (Linux/BSD agents)
 	MicrosoftEnterprise = "1.3.6.1.4.1.311."  // Windows SNMP service
 
+	// --- Printer-MIB (RFC 3805) -------------------------------------------
+	// prtMarkerSuppliesTable: per-supply (toner/ink/drum) level + capacity.
+	// Index is (hrDeviceIndex, prtMarkerSuppliesIndex); we key on the last.
+	PrtMarkerSuppliesEntry    = "1.3.6.1.2.1.43.11.1.1"
+	PrtSuppliesColMaxCapacity = 8 // prtMarkerSuppliesMaxCapacity
+	PrtSuppliesColLevel       = 9 // prtMarkerSuppliesLevel (-2 unknown, -3 some-remaining)
+	PrtSuppliesColDescription = 6 // prtMarkerSuppliesDescription
+	// prtMarkerLifeCount (col 4 of prtMarkerEntry): total page count.
+	PrtMarkerLifeCountEntry = "1.3.6.1.2.1.43.10.2.1.4"
+	PrinterMIBRoot          = "1.3.6.1.2.1.43" // presence ⇒ a printer
+
 	// Virtualization / hardware-vendor enterprise OID prefixes
 	VMwareEnterprise = "1.3.6.1.4.1.6876." // VMware ESXi host SNMP agent
 	HPEServerOID     = "1.3.6.1.4.1.232."  // HP/HPE Insight (iLO host agent)

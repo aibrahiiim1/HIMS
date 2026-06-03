@@ -289,6 +289,16 @@ export interface ExpenseByLocation {
   count: number
 }
 
+export interface PrinterSupply {
+  id: string
+  device_id: string
+  supply_index: number
+  description?: string | null
+  level?: number | null
+  max_capacity?: number | null
+  pct?: number | null
+}
+
 export interface BMCInfo {
   device_id?: string
   vendor?: string | null

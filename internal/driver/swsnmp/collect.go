@@ -15,6 +15,16 @@ import (
 	"github.com/coralsearesorts/hims/internal/snmp"
 )
 
+// Session is the shared SNMP collection session every SNMP driver accepts.
+// The discovery pipeline builds one of these on successful auth and hands it
+// to whichever driver matched, so a single concrete type works for all of
+// them (each driver aliases its own Session to this — see e.g. aruba.Session).
+type Session struct {
+	driver.SessionBase
+	Client snmp.Client
+	Ctx    context.Context //nolint:containedctx // deliberate: driver.Session is transport-agnostic
+}
+
 // SysInfo is the basic system identity from SNMPv2-MIB.
 type SysInfo struct {
 	Hostname    string

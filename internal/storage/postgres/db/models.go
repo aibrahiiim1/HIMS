@@ -385,6 +385,18 @@ type PortVlan struct {
 	LastSeenAt       time.Time `json:"last_seen_at"`
 }
 
+type PrinterSupply struct {
+	ID               uuid.UUID `json:"id"`
+	DeviceID         uuid.UUID `json:"device_id"`
+	SupplyIndex      int32     `json:"supply_index"`
+	Description      *string   `json:"description"`
+	Level            *int64    `json:"level"`
+	MaxCapacity      *int64    `json:"max_capacity"`
+	Pct              *int32    `json:"pct"`
+	CollectionSource string    `json:"collection_source"`
+	LastSeenAt       time.Time `json:"last_seen_at"`
+}
+
 type Purchase struct {
 	ID          uuid.UUID  `json:"id"`
 	Description string     `json:"description"`

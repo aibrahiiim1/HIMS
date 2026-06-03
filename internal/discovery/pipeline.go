@@ -24,7 +24,7 @@ import (
 	"github.com/coralsearesorts/hims/internal/credresolver"
 	"github.com/coralsearesorts/hims/internal/domain"
 	"github.com/coralsearesorts/hims/internal/driver"
-	"github.com/coralsearesorts/hims/internal/driver/aruba"
+	"github.com/coralsearesorts/hims/internal/driver/swsnmp"
 	"github.com/coralsearesorts/hims/internal/snmp"
 )
 
@@ -145,7 +145,7 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 		// Success — bind this credential.
 		c := cand
 		r.BoundCred = &c
-		authSess = &aruba.Session{Client: cli, Ctx: ctx}
+		authSess = &swsnmp.Session{Client: cli, Ctx: ctx}
 		break
 	}
 

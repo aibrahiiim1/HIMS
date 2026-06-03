@@ -6,7 +6,6 @@
 package hostsnmp
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
@@ -14,7 +13,6 @@ import (
 	"github.com/coralsearesorts/hims/internal/driver"
 	"github.com/coralsearesorts/hims/internal/driver/swsnmp"
 	"github.com/coralsearesorts/hims/internal/mibs"
-	"github.com/coralsearesorts/hims/internal/snmp"
 )
 
 // Driver identifies and collects SNMP-reachable servers.
@@ -54,11 +52,8 @@ func (*Driver) Fingerprint(p driver.Probe) driver.Match {
 }
 
 // Session is the host_snmp collection session.
-type Session struct {
-	driver.SessionBase
-	Client snmp.Client
-	Ctx    context.Context //nolint:containedctx
-}
+// Session aliases the shared SNMP session (swsnmp.Session).
+type Session = swsnmp.Session
 
 // Collect implements driver.Collector: HOST-RESOURCES (CPU/RAM/disk) +
 // interfaces. RAM total/used land as facts; disk volumes flow as storage

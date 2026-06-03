@@ -11,7 +11,6 @@
 package esxi
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
@@ -19,7 +18,6 @@ import (
 	"github.com/coralsearesorts/hims/internal/driver"
 	"github.com/coralsearesorts/hims/internal/driver/swsnmp"
 	"github.com/coralsearesorts/hims/internal/mibs"
-	"github.com/coralsearesorts/hims/internal/snmp"
 )
 
 // Driver identifies and collects ESXi hosts via SNMP.
@@ -52,11 +50,8 @@ func (*Driver) Fingerprint(p driver.Probe) driver.Match {
 }
 
 // Session is the ESXi collection session.
-type Session struct {
-	driver.SessionBase
-	Client snmp.Client
-	Ctx    context.Context //nolint:containedctx
-}
+// Session aliases the shared SNMP session (swsnmp.Session).
+type Session = swsnmp.Session
 
 // Collect gathers host-level resources (CPU/RAM/datastore) + interfaces via
 // SNMP. VM inventory is left empty here — it arrives with the vSphere-API

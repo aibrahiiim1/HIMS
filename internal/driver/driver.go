@@ -97,6 +97,17 @@ type Facts struct {
 	// Wireless controller + AP inventory (vendor REST: UniFi/Omada/Ruckus).
 	WLAN *WLANSnap
 	APs  []APSnap
+	// Printer marker supplies (Printer-MIB).
+	PrinterSupplies []PrinterSupplySnap
+}
+
+// PrinterSupplySnap is one printer marker supply (toner/ink/drum) reading.
+type PrinterSupplySnap struct {
+	Index       int32
+	Description string
+	Level       int64
+	MaxCapacity int64
+	Pct         *int32 // nil when the device reports unknown/some-remaining
 }
 
 // WLANSnap is a wireless controller summary.
