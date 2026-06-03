@@ -19,6 +19,7 @@ import (
 	"github.com/coralsearesorts/hims/internal/driver/redfish"
 	"github.com/coralsearesorts/hims/internal/driver/ups"
 	vspheredrv "github.com/coralsearesorts/hims/internal/driver/vsphere"
+	"github.com/coralsearesorts/hims/internal/driver/webapp"
 	"github.com/coralsearesorts/hims/internal/driver/wireless"
 )
 
@@ -42,5 +43,6 @@ func Builtin() *driver.Registry {
 	r.Register(ups.New())
 	r.Register(cucm.New())
 	r.Register(extremedrv.New())
+	r.Register(webapp.New())
 	return r
 }

@@ -12,10 +12,15 @@ package discovery
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"net/netip"
+	"regexp"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -163,6 +168,21 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 	}
 	snmpAnswered := r.Probe.SNMPSysDescr != "" || r.Probe.SNMPSysObjectID != ""
 
+	// Step 3b: HTTP banner — for hosts exposing a web port, grab the Server
+	// header + page <title> + a small body snippet so banner-based drivers
+	// (cameras, web apps like Kea/Stork DHCP) can classify a device that has no
+	// SNMP. Cheap: one GET with a short timeout.
+	if httpPort(r.OpenPorts) {
+		if server, title, body := httpBanner(ctx, ip, r.OpenPorts, cfg.PortTimeout); server != "" || title != "" || body != "" {
+			r.Probe.HTTPServer = server
+			if r.Probe.Hints == nil {
+				r.Probe.Hints = map[string]string{}
+			}
+			r.Probe.Hints["http_title"] = title
+			r.Probe.Hints["http_body"] = body
+		}
+	}
+
 	// Step 4: Aliveness. A host is enrolled only if it actually responded — an
 	// open TCP port or an SNMP answer. This stops a subnet scan from enrolling
 	// every empty address as an "unknown" device.
@@ -212,6 +232,67 @@ func scanPorts(ctx context.Context, ip netip.Addr, ports []int, timeout time.Dur
 	}
 	sort.Ints(open)
 	return open
+}
+
+var titleRe = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
+
+// httpPort reports whether any common web port is open.
+func httpPort(ports []int) bool {
+	for _, p := range []int{443, 80, 8443, 8080, 8000} {
+		if hasPort(ports, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// httpBanner does a single GET against the first open web port and returns the
+// Server header, the page <title>, and a lowercased body snippet (≤4KB). It is
+// best-effort: any error yields empty strings. TLS is insecure (mgmt-LAN
+// self-signed certs are normal).
+func httpBanner(ctx context.Context, ip netip.Addr, ports []int, timeout time.Duration) (server, title, body string) {
+	if timeout <= 0 {
+		timeout = 2 * time.Second
+	} else if timeout > 3*time.Second {
+		timeout = 3 * time.Second // keep the scan snappy regardless of SNMP timeout
+	}
+	scheme, port := "https", 443
+	switch {
+	case hasPort(ports, 443):
+		scheme, port = "https", 443
+	case hasPort(ports, 8443):
+		scheme, port = "https", 8443
+	case hasPort(ports, 80):
+		scheme, port = "http", 80
+	case hasPort(ports, 8080):
+		scheme, port = "http", 8080
+	case hasPort(ports, 8000):
+		scheme, port = "http", 8000
+	}
+	client := &http.Client{
+		Timeout:   timeout,
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}, //nolint:gosec
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse // don't chase redirects off-host
+		},
+	}
+	url := fmt.Sprintf("%s://%s:%d/", scheme, ip, port)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", "", ""
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", "", ""
+	}
+	defer resp.Body.Close()
+	server = resp.Header.Get("Server")
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	low := strings.ToLower(string(raw))
+	if m := titleRe.FindStringSubmatch(string(raw)); len(m) > 1 {
+		title = strings.TrimSpace(m[1])
+	}
+	return server, title, low
 }
 
 func hasPort(ports []int, port int) bool {
