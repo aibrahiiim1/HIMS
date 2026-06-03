@@ -358,8 +358,65 @@ passing).
 
 ---
 
+## Monitoring 6B — Alerting engine + alert→work-order bridge ✅ (closed 2026-06-03)
+
+**Goal:** rule-based alerting over the state the monitoring engine produces,
+closing the alert→work-order bridge that Operations B and the Monitoring
+engine both pointed at.
+
+**Scope split (flagged, not silent):** the original 6B was "SNMP-metric
+checks + alert rules". Reconnaissance found **no encryption-at-rest
+implementation exists** (only the `DecryptFn` interface + schema columns), so
+SNMP-metric checks would require building credential-decrypt infrastructure —
+a platform-wide concern, not a monitoring detail. That work is split out to
+**6C**; 6B delivers the alerting half, which needs no crypto and runs on
+existing data.
+
+### Sub-commits
+- ✅ SC1 — migration 000013: `alert_rules` (trigger status + min-failures +
+  optional category filter + severity + `auto_work_order` + WO priority) +
+  `alerts` (open/acknowledged/resolved, `work_order_id` bridge link). A
+  **partial unique index** `(rule_id, check_id) WHERE status <> 'resolved'`
+  makes "open" idempotent — a flapping check can't pile up duplicates.
+- ✅ SC2 — `internal/alerting` pure `Matches(rule, checkState)` predicate
+  (status + failure-floor + category filter) with tests; `Engine.Evaluate`
+  over a narrow `Repo`: resolve-recovered first (freeing the slot), then open
+  newly-matching alerts via `OpenAlert` (ON CONFLICT DO NOTHING → RETURNING
+  yields a row only on a real insert, so the WO bridge fires exactly once),
+  then auto-create + link a work order when the rule flags it. Tests: open+
+  bridge, idempotency, no-WO-when-unflagged, resolve-notes-WO. All fake-repo,
+  no DB.
+- ✅ SC3 — API: `/alert-rules` CRUD + enable, `/alerts` list + `/evaluate` +
+  `{id}/ack` + `{id}/resolve`. Monitoring `Engine` gains an `AfterSweep`
+  hook; the collector chains `alerting.Evaluate` after each sweep (dependency
+  inversion — monitoring never imports alerting).
+- ✅ SC4 — UI: **Alerts** page (active/recent alerts with ack/resolve + WO
+  link indicator; rules table with create form, enable/disable, delete;
+  evaluate-now). Nav + route. gofmt + build/vet/test + frontend green; closed.
+
+### Verification (2026-06-03)
+`go build/vet/test ./...` green incl. new `alerting` package. Frontend tsc +
+build green. gofmt clean.
+
+### Design notes
+- **Atomic open + fire-once bridge:** the partial unique index + ON CONFLICT
+  guarantees one open alert per (rule, check); RETURNING-only-on-insert means
+  the work order spawns exactly once even under repeated sweeps.
+- **Resolve-before-open ordering:** recovered alerts resolve first each pass,
+  so a check that flapped down→up→down in one interval re-opens cleanly.
+- **Dependency inversion:** monitoring exposes an `AfterSweep` callback rather
+  than importing alerting — the engines stay decoupled.
+
+### Carry-forward → 6C
+SNMP-metric checks (sysUpTime / CPU / RAM) + the credential **encryption-at-
+rest + decrypt** path they require (encrypt on credential create, decrypt on
+use in the collector). This is platform infrastructure several engines will
+share, so it gets its own phase.
+
+---
+
 ## Later phases ⬜
-See `PLAN.md` §10. Remaining: **Monitoring 6B** (SNMP-metric checks + alert
-rules + alert→work-order bridge), **3b/3c** (virtualization + iLO/iDRAC —
-new transports), CCTV, wireless, databases/AD, peripherals/voice, MIB
-upload engine + reporting/dashboards.
+See `PLAN.md` §10. Remaining: **6C** (credential crypto + SNMP-metric
+checks), **3b/3c** (virtualization + iLO/iDRAC — new transports), CCTV,
+wireless, databases/AD, peripherals/voice, MIB upload engine +
+reporting/dashboards.

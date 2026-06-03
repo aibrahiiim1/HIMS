@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 
+	"github.com/coralsearesorts/hims/internal/alerting"
 	"github.com/coralsearesorts/hims/internal/monitoring"
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
 	"github.com/coralsearesorts/hims/internal/topology"
@@ -23,6 +24,7 @@ type Server struct {
 	router  chi.Router
 	topo    *topology.Engine
 	mon     *monitoring.Engine
+	alerts  *alerting.Engine
 	queries *db.Queries
 }
 
@@ -34,6 +36,7 @@ func NewServer(queries *db.Queries) *Server {
 		// The API can seed defaults + run on-demand sweeps; the scheduled
 		// loop lives in the collector. Both share this engine type.
 		mon:    monitoring.NewEngine(queries, monitoring.NewPoller(nil, 0), nil),
+		alerts: alerting.NewEngine(queries, nil),
 		router: chi.NewRouter(),
 	}
 	s.routes()
@@ -113,6 +116,16 @@ func (s *Server) routes() {
 		r.Get("/monitoring/overview", s.monitoringOverview)
 		r.Post("/monitoring/seed", s.seedMonitoringDefaults)
 		r.Post("/monitoring/run", s.runMonitoringNow)
+
+		// --- Alerting engine + alert→work-order bridge ---------------
+		r.Get("/alert-rules", s.listAlertRules)
+		r.Post("/alert-rules", s.createAlertRule)
+		r.Patch("/alert-rules/{id}", s.setAlertRuleEnabled)
+		r.Delete("/alert-rules/{id}", s.deleteAlertRule)
+		r.Get("/alerts", s.listAlerts)
+		r.Post("/alerts/evaluate", s.evaluateAlerts)
+		r.Post("/alerts/{id}/ack", s.acknowledgeAlert)
+		r.Post("/alerts/{id}/resolve", s.resolveAlert)
 	})
 }
 

@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/coralsearesorts/hims/internal/alerting"
 	"github.com/coralsearesorts/hims/internal/credresolver"
 	"github.com/coralsearesorts/hims/internal/discovery"
 	"github.com/coralsearesorts/hims/internal/drivers"
@@ -113,7 +114,19 @@ func runMonitoring(loop, seed bool, tick time.Duration) {
 	}
 	defer pool.Close()
 
-	engine := monitoring.NewEngine(db.New(pool), monitoring.NewPoller(nil, 3*time.Second), slog.Default())
+	queries := db.New(pool)
+	engine := monitoring.NewEngine(queries, monitoring.NewPoller(nil, 3*time.Second), slog.Default())
+	// Chain alerting after each sweep: evaluate rules against the freshly
+	// updated check statuses (opens alerts, bridges to work orders, resolves
+	// recovered). Dependency inversion keeps monitoring unaware of alerting.
+	alertEngine := alerting.NewEngine(queries, slog.Default())
+	engine.AfterSweep = func(c context.Context) {
+		if res, err := alertEngine.Evaluate(c); err != nil && c.Err() == nil {
+			slog.Warn("alert evaluation failed", "error", err)
+		} else if res.Opened > 0 || res.Resolved > 0 {
+			slog.Info("alerts evaluated", "opened", res.Opened, "work_orders", res.WorkOrders, "resolved", res.Resolved)
+		}
+	}
 
 	if seed {
 		n, err := engine.SeedDefaults(ctx)

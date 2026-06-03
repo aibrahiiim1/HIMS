@@ -12,6 +12,7 @@ import (
 )
 
 type Querier interface {
+	AcknowledgeAlert(ctx context.Context, id uuid.UUID) (Alert, error)
 	AddCredentialGroupMember(ctx context.Context, arg AddCredentialGroupMemberParams) error
 	AddDeviceRole(ctx context.Context, arg AddDeviceRoleParams) error
 	// A part not tracked in stock (free-text): just record it, no decrement.
@@ -28,6 +29,8 @@ type Querier interface {
 	// ErrNoRows — which the handler maps to "insufficient stock" (409). This is
 	// the atomic-DB-signal pattern: no SELECT-then-UPDATE TOCTOU window.
 	ConsumePartToWorkOrder(ctx context.Context, arg ConsumePartToWorkOrderParams) (WorkOrderPart, error)
+	// ---- Alert rules ----------------------------------------------------------
+	CreateAlertRule(ctx context.Context, arg CreateAlertRuleParams) (AlertRule, error)
 	CreateCredential(ctx context.Context, arg CreateCredentialParams) (Credential, error)
 	CreateCredentialGroup(ctx context.Context, arg CreateCredentialGroupParams) (CredentialGroup, error)
 	CreateDevice(ctx context.Context, arg CreateDeviceParams) (Device, error)
@@ -40,6 +43,7 @@ type Querier interface {
 	CreateSparePart(ctx context.Context, arg CreateSparePartParams) (SparePart, error)
 	CreateSystem(ctx context.Context, arg CreateSystemParams) (System, error)
 	CreateWorkOrder(ctx context.Context, arg CreateWorkOrderParams) (WorkOrder, error)
+	DeleteAlertRule(ctx context.Context, id uuid.UUID) error
 	DeleteLocation(ctx context.Context, id uuid.UUID) error
 	DeleteMonitoringCheck(ctx context.Context, id uuid.UUID) error
 	DeletePurchase(ctx context.Context, id uuid.UUID) error
@@ -76,6 +80,8 @@ type Querier interface {
 	GetSystem(ctx context.Context, id uuid.UUID) (System, error)
 	GetWorkOrder(ctx context.Context, id uuid.UUID) (WorkOrder, error)
 	InsertMonitoringSample(ctx context.Context, arg InsertMonitoringSampleParams) error
+	ListAlertRules(ctx context.Context) ([]AlertRule, error)
+	ListAlerts(ctx context.Context) ([]Alert, error)
 	// Used by the topology graph to build the full picture.
 	ListAllTopologyLinks(ctx context.Context) ([]ListAllTopologyLinksRow, error)
 	ListChildLocations(ctx context.Context, parentID *uuid.UUID) ([]Location, error)
@@ -90,6 +96,11 @@ type Querier interface {
 	ListDiscoveryResults(ctx context.Context, jobID uuid.UUID) ([]DiscoveryResult, error)
 	// A check is due when enabled and either never run or its interval elapsed.
 	ListDueMonitoringChecks(ctx context.Context) ([]MonitoringCheck, error)
+	ListEnabledAlertRules(ctx context.Context) ([]AlertRule, error)
+	// ---- Monitoring state for evaluation --------------------------------------
+	// The evaluator's input: every enabled check joined to its device so rules
+	// can filter by category and alerts can carry a readable device name.
+	ListEnabledChecksWithDevice(ctx context.Context) ([]ListEnabledChecksWithDeviceRow, error)
 	ListHAMembers(ctx context.Context, deviceID uuid.UUID) ([]FirewallHaMember, error)
 	ListInterfaces(ctx context.Context, deviceID uuid.UUID) ([]Interface, error)
 	ListLicenses(ctx context.Context, deviceID uuid.UUID) ([]FirewallLicense, error)
@@ -117,21 +128,31 @@ type Querier interface {
 	LiveDeviceByIPAndLocation(ctx context.Context, arg LiveDeviceByIPAndLocationParams) (Device, error)
 	// Live fleet rollup: how many checks sit in each status bucket.
 	MonitoringStatusOverview(ctx context.Context) ([]MonitoringStatusOverviewRow, error)
+	// ---- Alerts ---------------------------------------------------------------
+	// Atomic open: ON CONFLICT against idx_alerts_one_open means a second open
+	// for the same (rule, check) is a no-op. RETURNING yields a row ONLY on a
+	// real insert, so the engine fires the work-order bridge exactly once.
+	OpenAlert(ctx context.Context, arg OpenAlertParams) (Alert, error)
 	// Persist the rollup the engine computed (status + failure counter) onto the
 	// check after a poll. History rows go to monitoring_samples separately.
 	RecordMonitoringResult(ctx context.Context, arg RecordMonitoringResultParams) (MonitoringCheck, error)
+	ResolveAlert(ctx context.Context, id uuid.UUID) (Alert, error)
 	// The resolver-assembly query: for a device IP, return every credential in a
 	// group bound to either a subnet that contains the IP (more specific) or a
 	// location anchor, with the binding specificity + member priority so the
 	// pure resolver (internal/credresolver) can order them.
 	//   specificity 2 = subnet binding, 1 = location binding.
 	ResolveCandidatesForIP(ctx context.Context, arg ResolveCandidatesForIPParams) ([]ResolveCandidatesForIPRow, error)
+	// Auto-resolve: any un-resolved alert whose check has recovered to 'up'.
+	ResolveRecoveredAlerts(ctx context.Context) ([]ResolveRecoveredAlertsRow, error)
 	SearchByHostname(ctx context.Context, hostname *string) ([]SearchByHostnameRow, error)
 	// Primary search entry point for the IP → MAC → port path resolution.
 	SearchByIP(ctx context.Context, primaryIp *netip.Addr) (SearchByIPRow, error)
 	// Finds the switch(es) that have this MAC in their FDB, then joins the
 	// interface for port + VLAN detail.
 	SearchByMAC(ctx context.Context, mac string) ([]SearchByMACRow, error)
+	SetAlertRuleEnabled(ctx context.Context, arg SetAlertRuleEnabledParams) (AlertRule, error)
+	SetAlertWorkOrder(ctx context.Context, arg SetAlertWorkOrderParams) error
 	// Bind-on-success: record the credential that last authenticated.
 	SetDeviceCredential(ctx context.Context, arg SetDeviceCredentialParams) error
 	SetMonitoringCheckEnabled(ctx context.Context, arg SetMonitoringCheckEnabledParams) (MonitoringCheck, error)

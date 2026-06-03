@@ -278,6 +278,32 @@ export interface ExpenseByLocation {
   count: number
 }
 
+export interface AlertRule {
+  id: string
+  name: string
+  trigger_status: string
+  min_failures: number
+  device_category?: string | null
+  severity: string
+  auto_work_order: boolean
+  work_order_priority: string
+  enabled: boolean
+}
+
+export interface Alert {
+  id: string
+  rule_id: string
+  device_id: string
+  check_id?: string | null
+  severity: string
+  status: string
+  message: string
+  work_order_id?: string | null
+  opened_at: string
+  acknowledged_at?: string | null
+  resolved_at?: string | null
+}
+
 export interface MonitoringCheck {
   id: string
   device_id: string

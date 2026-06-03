@@ -9,6 +9,7 @@ import { SearchPage } from './pages/SearchPage'
 import { WorkOrders } from './pages/WorkOrders'
 import { Systems } from './pages/Systems'
 import { Monitoring } from './pages/Monitoring'
+import { Alerts } from './pages/Alerts'
 import { SpareParts } from './pages/SpareParts'
 import { Expenses } from './pages/Expenses'
 import './App.css'
@@ -26,6 +27,7 @@ function Nav() {
       <Link to="/firewalls" style={active('/firewalls')}>Firewalls</Link>
       <Link to="/topology" style={active('/topology')}>Topology</Link>
       <Link to="/monitoring" style={active('/monitoring')}>Monitoring</Link>
+      <Link to="/alerts" style={active('/alerts')}>Alerts</Link>
       <Link to="/search" style={active('/search')}>Search</Link>
       <Link to="/work-orders" style={active('/work-orders')}>Work Orders</Link>
       <Link to="/systems" style={active('/systems')}>Systems</Link>
@@ -50,6 +52,7 @@ export default function App() {
             <Route path="/firewalls/:id" element={<FirewallDetail />} />
             <Route path="/topology" element={<TopologyPage />} />
             <Route path="/monitoring" element={<Monitoring />} />
+            <Route path="/alerts" element={<Alerts />} />
             <Route path="/search" element={<SearchPage />} />
             <Route path="/work-orders" element={<WorkOrders />} />
             <Route path="/systems" element={<Systems />} />

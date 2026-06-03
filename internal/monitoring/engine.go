@@ -29,6 +29,11 @@ type Engine struct {
 	repo   Repo
 	poller *Poller
 	log    *slog.Logger
+
+	// AfterSweep, if set, runs at the end of each Loop sweep — used to chain
+	// the alerting engine (evaluate rules against the just-updated statuses)
+	// without monitoring importing alerting (dependency inversion).
+	AfterSweep func(ctx context.Context)
 }
 
 // NewEngine wires the engine. A nil logger uses the slog default.
@@ -177,6 +182,9 @@ func (e *Engine) Loop(ctx context.Context, tick time.Duration) error {
 			e.log.Warn("monitoring sweep error", "error", err)
 		} else if n > 0 {
 			e.log.Info("monitoring sweep complete", "polled", n)
+		}
+		if e.AfterSweep != nil && ctx.Err() == nil {
+			e.AfterSweep(ctx)
 		}
 		select {
 		case <-ctx.Done():

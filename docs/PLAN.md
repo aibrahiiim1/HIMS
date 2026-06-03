@@ -161,9 +161,13 @@ monitoring_samples (TimescaleDB hypertable).
   spine). ✅ **6 core DONE** — `monitoring_checks` + `monitoring_samples`
   (TimescaleDB best-effort), pure hysteresis evaluator (up→warning→down +
   device rollup), TCP-reachability poller, scheduled collector loop
-  (`-monitor`/`-seed`), API + Monitoring UI. **6B (open)** — SNMP-metric
-  checks (need credential-decrypt in the collector) + alert rules over
-  samples → alert→work-order bridge.
+  (`-monitor`/`-seed`), API + Monitoring UI.
+  ✅ **6B DONE** — rule-based alerting engine (`alert_rules` + `alerts`,
+  atomic open via partial-unique-index, auto-resolve on recovery) + the
+  **alert→work-order bridge** (a firing rule auto-creates a linked WO).
+  Chained after each sweep via an `AfterSweep` hook. **6C (open)** —
+  credential **encryption-at-rest + decrypt** infrastructure, then
+  SNMP-metric checks (sysUpTime / CPU / RAM) that depend on it.
 - **Phase 5 — CCTV:** NVR/DVR + cameras (ONVIF/RTSP/vendor API).
 - **Phase 6 — Wireless controllers + APs** (UniFi/Omada/Ruckus REST).
 - **Phase 7 — Databases** (SQL/Oracle/PostgreSQL) + AD/DNS/DHCP.
@@ -175,9 +179,9 @@ monitoring_samples (TimescaleDB hypertable).
     (live expiry status).
   - **B ✅ DONE** — spare parts (stock + reorder threshold + atomic
     work-order consumption decrement), purchase ledger, expense rollups
-    (by category / location, derived from the ledger). The
-    **alert→work-order bridge** is the one remaining piece and moves to
-    Monitoring 6B (it needs an alert source).
+    (by category / location, derived from the ledger).
+  - **alert→work-order bridge ✅ DONE** in Monitoring 6B — a firing alert
+    rule auto-creates a linked work order.
 - **Phase 10 — MIB upload engine, reporting, executive dashboards.**
 
 Ordering rationale (operator): switches + topology + credential resolver

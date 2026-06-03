@@ -11,6 +11,34 @@ import (
 	"github.com/google/uuid"
 )
 
+type Alert struct {
+	ID             uuid.UUID  `json:"id"`
+	RuleID         uuid.UUID  `json:"rule_id"`
+	DeviceID       uuid.UUID  `json:"device_id"`
+	CheckID        *uuid.UUID `json:"check_id"`
+	Severity       string     `json:"severity"`
+	Status         string     `json:"status"`
+	Message        string     `json:"message"`
+	WorkOrderID    *uuid.UUID `json:"work_order_id"`
+	OpenedAt       time.Time  `json:"opened_at"`
+	AcknowledgedAt *time.Time `json:"acknowledged_at"`
+	ResolvedAt     *time.Time `json:"resolved_at"`
+}
+
+type AlertRule struct {
+	ID                uuid.UUID `json:"id"`
+	Name              string    `json:"name"`
+	TriggerStatus     string    `json:"trigger_status"`
+	MinFailures       int32     `json:"min_failures"`
+	DeviceCategory    *string   `json:"device_category"`
+	Severity          string    `json:"severity"`
+	AutoWorkOrder     bool      `json:"auto_work_order"`
+	WorkOrderPriority string    `json:"work_order_priority"`
+	Enabled           bool      `json:"enabled"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
+}
+
 type ArpEntry struct {
 	ID               uuid.UUID  `json:"id"`
 	DeviceID         uuid.UUID  `json:"device_id"`
