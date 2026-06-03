@@ -536,6 +536,31 @@ export interface Location {
   code?: string | null
 }
 
+export interface Lookup {
+  id: string
+  kind: string
+  value: string
+}
+
+// locationPaths builds a map of location id -> full path label
+// ("Hotel A / Main Building / IT Office") from a flat locations list.
+export function locationPaths(locs: Location[]): Record<string, string> {
+  const byId: Record<string, Location> = {}
+  for (const l of locs) byId[l.id] = l
+  const cache: Record<string, string> = {}
+  const path = (id: string): string => {
+    if (cache[id]) return cache[id]
+    const l = byId[id]
+    if (!l) return ''
+    const p = l.parent_id ? path(l.parent_id) + ' / ' + l.name : l.name
+    cache[id] = p
+    return p
+  }
+  const out: Record<string, string> = {}
+  for (const l of locs) out[l.id] = path(l.id)
+  return out
+}
+
 export interface Subnet {
   id: string
   location_id: string

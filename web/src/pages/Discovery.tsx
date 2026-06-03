@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { api, type DiscoveryJob, type DiscoveryResult, type Location, type Credential } from '../api'
+import { api, type DiscoveryJob, type DiscoveryResult, type Location, type Credential, locationPaths } from '../api'
 
 type ScanMode = 'single' | 'range' | 'cidr' | 'site_subnets'
 
@@ -49,7 +49,8 @@ export function Discovery() {
   const [credIDs, setCredIDs] = useState<string[]>([])
   const [jobID, setJobID] = useState<string | null>(null)
 
-  const locations = useQuery({ queryKey: ['locations'], queryFn: () => api.get<Location[]>('/locations') })
+  const locations = useQuery({ queryKey: ['locations-all'], queryFn: () => api.get<Location[]>('/locations/all') })
+  const locPath = locationPaths(locations.data ?? [])
   const creds = useQuery({ queryKey: ['credentials'], queryFn: () => api.get<Credential[]>('/credentials') })
 
   const jobs = useQuery({
@@ -143,10 +144,10 @@ export function Discovery() {
             />
           )}
           {/* Site selector — optional for IP modes (credential scope), required for site_subnets */}
-          <select style={{ ...input, width: 220 }} value={location} onChange={(e) => setLocation(e.target.value)}>
-            <option value="">{siteMode ? 'Select a hotel site…' : 'Site scope (optional)'}</option>
+          <select style={{ ...input, width: 280 }} value={location} onChange={(e) => setLocation(e.target.value)}>
+            <option value="">{siteMode ? 'Select a site / hotel…' : 'Site scope (optional)'}</option>
             {(locations.data ?? []).map((l) => (
-              <option key={l.id} value={l.id}>{l.name}</option>
+              <option key={l.id} value={l.id}>{locPath[l.id]} ({l.kind})</option>
             ))}
           </select>
           <button style={btn} disabled={!canScan || scan.isPending} onClick={() => scan.mutate()}>

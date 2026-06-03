@@ -34,7 +34,7 @@ const bulkAssignClassification = `-- name: BulkAssignClassification :execrows
 UPDATE devices SET
     vlan = COALESCE($1, vlan),
     device_class = COALESCE($2, device_class),
-    location = COALESCE($3, location),
+    location_id = COALESCE($3, location_id),
     updated_at = now()
 WHERE id = ANY($4::uuid[]) AND deleted_at IS NULL
 `
@@ -42,7 +42,7 @@ WHERE id = ANY($4::uuid[]) AND deleted_at IS NULL
 type BulkAssignClassificationParams struct {
 	Vlan        *string     `json:"vlan"`
 	DeviceClass *string     `json:"device_class"`
-	Location    *string     `json:"location"`
+	LocationID  *uuid.UUID  `json:"location_id"`
 	Ids         []uuid.UUID `json:"ids"`
 }
 
@@ -53,7 +53,7 @@ func (q *Queries) BulkAssignClassification(ctx context.Context, arg BulkAssignCl
 	result, err := q.db.Exec(ctx, bulkAssignClassification,
 		arg.Vlan,
 		arg.DeviceClass,
-		arg.Location,
+		arg.LocationID,
 		arg.Ids,
 	)
 	if err != nil {
@@ -514,23 +514,24 @@ const updateDevice = `-- name: UpdateDevice :one
 UPDATE devices SET
     name = $2, category = $3, vendor = $4, model = $5, serial = $6,
     os_version = $7, hostname = $8, vlan = $9, device_class = $10,
-    location = $11, updated_at = now()
+    location = $11, location_id = $12, updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
 RETURNING id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location
 `
 
 type UpdateDeviceParams struct {
-	ID          uuid.UUID `json:"id"`
-	Name        string    `json:"name"`
-	Category    string    `json:"category"`
-	Vendor      *string   `json:"vendor"`
-	Model       *string   `json:"model"`
-	Serial      *string   `json:"serial"`
-	OsVersion   *string   `json:"os_version"`
-	Hostname    *string   `json:"hostname"`
-	Vlan        *string   `json:"vlan"`
-	DeviceClass *string   `json:"device_class"`
-	Location    *string   `json:"location"`
+	ID          uuid.UUID  `json:"id"`
+	Name        string     `json:"name"`
+	Category    string     `json:"category"`
+	Vendor      *string    `json:"vendor"`
+	Model       *string    `json:"model"`
+	Serial      *string    `json:"serial"`
+	OsVersion   *string    `json:"os_version"`
+	Hostname    *string    `json:"hostname"`
+	Vlan        *string    `json:"vlan"`
+	DeviceClass *string    `json:"device_class"`
+	Location    *string    `json:"location"`
+	LocationID  *uuid.UUID `json:"location_id"`
 }
 
 // Operator edit of a device's identity fields (Inventory CRUD).
@@ -547,6 +548,7 @@ func (q *Queries) UpdateDevice(ctx context.Context, arg UpdateDeviceParams) (Dev
 		arg.Vlan,
 		arg.DeviceClass,
 		arg.Location,
+		arg.LocationID,
 	)
 	var i Device
 	err := row.Scan(

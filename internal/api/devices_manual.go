@@ -99,16 +99,17 @@ func manualDeviceParams(req manualDeviceReq) (db.CreateDeviceParams, error) {
 }
 
 type updateDeviceReq struct {
-	Name      string `json:"name"`
-	Category  string `json:"category"`
-	Vendor    string `json:"vendor"`
-	Model     string `json:"model"`
-	Serial    string `json:"serial"`
-	OSVersion string `json:"os_version"`
-	Hostname  string `json:"hostname"`
-	VLAN      string `json:"vlan"`
-	Class     string `json:"class"`
-	Location  string `json:"location"`
+	Name       string  `json:"name"`
+	Category   string  `json:"category"`
+	Vendor     string  `json:"vendor"`
+	Model      string  `json:"model"`
+	Serial     string  `json:"serial"`
+	OSVersion  string  `json:"os_version"`
+	Hostname   string  `json:"hostname"`
+	VLAN       string  `json:"vlan"`
+	Class      string  `json:"class"`
+	Location   string  `json:"location"`
+	LocationID *string `json:"location_id"` // locations-tree node
 }
 
 // updateDevice handles PATCH /devices/{id} — operator edit of identity fields.
@@ -139,6 +140,7 @@ func (s *Server) updateDevice(w http.ResponseWriter, r *http.Request) {
 		Vendor: strPtr(req.Vendor), Model: strPtr(req.Model), Serial: strPtr(req.Serial),
 		OsVersion: strPtr(req.OSVersion), Hostname: strPtr(req.Hostname),
 		Vlan: strPtr(req.VLAN), DeviceClass: strPtr(req.Class), Location: strPtr(req.Location),
+		LocationID: parseUUIDPtr(req.LocationID),
 	})
 	if err != nil {
 		writeErr(w, err)
@@ -161,15 +163,15 @@ func (s *Server) deleteDevice(w http.ResponseWriter, r *http.Request) {
 }
 
 type bulkAssignReq struct {
-	IDs      []string `json:"ids"`
-	VLAN     *string  `json:"vlan"`
-	Class    *string  `json:"class"`
-	Location *string  `json:"location"`
+	IDs        []string `json:"ids"`
+	VLAN       *string  `json:"vlan"`
+	Class      *string  `json:"class"`
+	LocationID *string  `json:"location_id"` // a locations-tree node id
 }
 
-// bulkAssignDevices handles POST /devices/bulk-assign — set vlan/class/location
-// on a multi-selection. Only fields present (non-null) in the request are
-// changed; the rest are kept (COALESCE).
+// bulkAssignDevices handles POST /devices/bulk-assign — set vlan/class and/or
+// the location-tree node on a multi-selection. Only fields present (non-null)
+// in the request are changed; the rest are kept (COALESCE).
 func (s *Server) bulkAssignDevices(w http.ResponseWriter, r *http.Request) {
 	var req bulkAssignReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -189,12 +191,12 @@ func (s *Server) bulkAssignDevices(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no ids provided", http.StatusBadRequest)
 		return
 	}
-	if req.VLAN == nil && req.Class == nil && req.Location == nil {
-		http.Error(w, "provide at least one of vlan, class, location", http.StatusBadRequest)
+	if req.VLAN == nil && req.Class == nil && req.LocationID == nil {
+		http.Error(w, "provide at least one of vlan, class, location_id", http.StatusBadRequest)
 		return
 	}
 	n, err := s.queries.BulkAssignClassification(r.Context(), db.BulkAssignClassificationParams{
-		Ids: ids, Vlan: req.VLAN, DeviceClass: req.Class, Location: req.Location,
+		Ids: ids, Vlan: req.VLAN, DeviceClass: req.Class, LocationID: parseUUIDPtr(req.LocationID),
 	})
 	if err != nil {
 		writeErr(w, err)

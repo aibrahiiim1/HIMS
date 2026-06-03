@@ -184,6 +184,9 @@ func (s *Server) routes() {
 		// --- Settings (operator-tunable timeouts / concurrency) ------
 		r.Get("/settings", s.getSettings)
 		r.Put("/settings", s.updateSettings)
+		r.Get("/lookups", s.listLookups)
+		r.Post("/lookups", s.createLookup)
+		r.Delete("/lookups/{id}", s.deleteLookup)
 		r.Put("/devices/{id}/credential", s.bindDeviceCredential)
 
 		// --- MIB upload engine ---------------------------------------

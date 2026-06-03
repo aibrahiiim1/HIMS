@@ -43,7 +43,7 @@ RETURNING *;
 UPDATE devices SET
     name = $2, category = $3, vendor = $4, model = $5, serial = $6,
     os_version = $7, hostname = $8, vlan = $9, device_class = $10,
-    location = $11, updated_at = now()
+    location = $11, location_id = $12, updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
 RETURNING *;
 
@@ -54,7 +54,7 @@ RETURNING *;
 UPDATE devices SET
     vlan = COALESCE(sqlc.narg('vlan'), vlan),
     device_class = COALESCE(sqlc.narg('device_class'), device_class),
-    location = COALESCE(sqlc.narg('location'), location),
+    location_id = COALESCE(sqlc.narg('location_id'), location_id),
     updated_at = now()
 WHERE id = ANY(sqlc.arg('ids')::uuid[]) AND deleted_at IS NULL;
 

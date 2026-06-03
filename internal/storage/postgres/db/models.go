@@ -290,6 +290,13 @@ type Location struct {
 	UpdatedAt time.Time  `json:"updated_at"`
 }
 
+type Lookup struct {
+	ID        uuid.UUID `json:"id"`
+	Kind      string    `json:"kind"`
+	Value     string    `json:"value"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 type MacAddress struct {
 	ID               uuid.UUID `json:"id"`
 	DeviceID         uuid.UUID `json:"device_id"`

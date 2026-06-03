@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { api, type Device } from '../api'
+import { api, type Device, type Lookup, type Location, locationPaths } from '../api'
 
 const DETAIL_BASE: Record<string, string> = {
   switch: '/devices', server: '/servers', virtual_host: '/virtual-hosts', firewall: '/firewalls',
@@ -28,13 +28,18 @@ export function Inventory() {
   const [sel, setSel] = useState<Set<string>>(new Set())
   const [editing, setEditing] = useState<Device | null>(null)
   const [msg, setMsg] = useState('')
-  // bulk-assign inputs (applied to the current selection)
-  const [asg, setAsg] = useState({ vlan: '', class: '', location: '' })
+  // bulk-assign inputs (applied to the current selection) — location is a tree node id
+  const [asg, setAsg] = useState({ vlan: '', class: '', location_id: '' })
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['devices', 'all'],
     queryFn: () => api.get<Device[]>('/devices?category=all'),
   })
+  const classOpts = useQuery({ queryKey: ['lookups', 'class'], queryFn: () => api.get<Lookup[]>('/lookups?kind=class') })
+  const vlanOpts = useQuery({ queryKey: ['lookups', 'vlan'], queryFn: () => api.get<Lookup[]>('/lookups?kind=vlan') })
+  const locs = useQuery({ queryKey: ['locations-all'], queryFn: () => api.get<Location[]>('/locations/all') })
+  const locPath = useMemo(() => locationPaths(locs.data ?? []), [locs.data])
+  const locName = (id?: string | null) => (id ? locPath[id] ?? '—' : '—')
 
   const counts = useMemo(() => {
     const m: Record<string, number> = {}
@@ -43,22 +48,24 @@ export function Inventory() {
   }, [data])
   const cats = useMemo(() => Object.keys(counts).sort(), [counts])
   const classes = useMemo(() => [...new Set((data ?? []).map((d) => d.device_class).filter(Boolean) as string[])].sort(), [data])
-  const locations = useMemo(() => [...new Set((data ?? []).map((d) => d.location).filter(Boolean) as string[])].sort(), [data])
+  // Location filter options: the tree nodes actually in use by devices.
+  const usedLocIDs = useMemo(() => [...new Set((data ?? []).map((d) => d.location_id).filter(Boolean) as string[])]
+    .sort((a, b) => (locPath[a] ?? '').localeCompare(locPath[b] ?? '')), [data, locPath])
 
   const rows = useMemo(() => {
     let r = data ?? []
     if (cat !== 'all') r = r.filter((d) => d.category === cat)
     if (classF !== 'all') r = r.filter((d) => (d.device_class ?? '') === classF)
-    if (locF !== 'all') r = r.filter((d) => (d.location ?? '') === locF)
+    if (locF !== 'all') r = r.filter((d) => (d.location_id ?? '') === locF)
     if (q.trim()) {
       const t = q.toLowerCase()
       r = r.filter((d) =>
         d.name.toLowerCase().includes(t) || (d.primary_ip ?? '').includes(t) ||
         (d.vendor ?? '').toLowerCase().includes(t) || (d.vlan ?? '').toLowerCase().includes(t) ||
-        (d.device_class ?? '').toLowerCase().includes(t) || (d.location ?? '').toLowerCase().includes(t))
+        (d.device_class ?? '').toLowerCase().includes(t) || locName(d.location_id).toLowerCase().includes(t))
     }
     return r
-  }, [data, cat, classF, locF, q])
+  }, [data, cat, classF, locF, q, locPath])
 
   const refresh = () => qc.invalidateQueries({ queryKey: ['devices'] })
   const toggle = (id: string) => setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
@@ -87,22 +94,22 @@ export function Inventory() {
     mutationFn: (d: Device) => api.patch(`/devices/${d.id}`, {
       name: d.name, category: d.category, vendor: d.vendor ?? '', model: d.model ?? '',
       serial: d.serial ?? '', os_version: d.os_version ?? '', hostname: d.hostname ?? '',
+      vlan: d.vlan ?? '', class: d.device_class ?? '', location_id: d.location_id ?? null,
     }),
     onSuccess: () => { setEditing(null); setMsg('Saved.'); refresh() },
     onError: (e) => setMsg((e as Error).message),
   })
 
   const assign = useMutation({
-    mutationFn: (body: { ids: string[]; vlan?: string; class?: string; location?: string }) => api.post<{ updated: number }>('/devices/bulk-assign', body),
-    onSuccess: (r) => { setMsg(`Updated ${(r as { updated: number }).updated} device(s).`); setAsg({ vlan: '', class: '', location: '' }); refresh() },
+    mutationFn: (body: { ids: string[]; vlan?: string; class?: string; location_id?: string }) => api.post<{ updated: number }>('/devices/bulk-assign', body),
+    onSuccess: (r) => { setMsg(`Updated ${(r as { updated: number }).updated} device(s).`); setAsg({ vlan: '', class: '', location_id: '' }); refresh() },
     onError: (e) => setMsg((e as Error).message),
   })
-  // Each field is assigned independently — VLAN, Class, and Location are set by
-  // their own button so the operator changes exactly one classification at a time.
-  const assignField = (field: 'vlan' | 'class' | 'location', value: string) => {
+  // Each classification is assigned independently — its own Set button.
+  const assignField = (field: 'vlan' | 'class' | 'location_id', value: string) => {
     if (sel.size === 0) return
-    if (!value.trim()) { setMsg(`Enter a ${field} value to assign.`); return }
-    assign.mutate({ ids: [...sel], [field]: value.trim() })
+    if (!value) { setMsg(`Choose a ${field === 'location_id' ? 'location' : field} value to assign.`); return }
+    assign.mutate({ ids: [...sel], [field]: value })
   }
 
   const doDeleteSelected = () => {
@@ -128,9 +135,9 @@ export function Inventory() {
             <option value="all">All classes</option>
             {classes.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
-          <select style={{ ...input, width: 170 }} value={locF} onChange={(e) => setLocF(e.target.value)}>
+          <select style={{ ...input, width: 200 }} value={locF} onChange={(e) => setLocF(e.target.value)}>
             <option value="all">All locations</option>
-            {locations.map((l) => <option key={l} value={l}>{l}</option>)}
+            {usedLocIDs.map((id) => <option key={id} value={id}>{locPath[id]}</option>)}
           </select>
           <input style={{ ...input, width: 200 }} placeholder="search name / IP / vlan / class / loc" value={q} onChange={(e) => setQ(e.target.value)} />
           <div style={{ flex: 1 }} />
@@ -143,16 +150,25 @@ export function Inventory() {
           <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap', padding: '8px 0', borderTop: '1px solid #2a2a2a' }}>
             <span className="muted" style={{ fontSize: 12 }}>Assign to {sel.size} selected →</span>
             <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-              <input style={{ ...input, width: 100 }} placeholder="VLAN" value={asg.vlan} onChange={(e) => setAsg({ ...asg, vlan: e.target.value })} />
+              <select style={{ ...input, width: 110 }} value={asg.vlan} onChange={(e) => setAsg({ ...asg, vlan: e.target.value })}>
+                <option value="">VLAN…</option>
+                {(vlanOpts.data ?? []).map((o) => <option key={o.id} value={o.value}>{o.value}</option>)}
+              </select>
               <button style={btn} disabled={assign.isPending} onClick={() => assignField('vlan', asg.vlan)}>Set VLAN</button>
             </div>
             <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-              <input style={{ ...input, width: 130 }} placeholder="Class" value={asg.class} onChange={(e) => setAsg({ ...asg, class: e.target.value })} />
+              <select style={{ ...input, width: 140 }} value={asg.class} onChange={(e) => setAsg({ ...asg, class: e.target.value })}>
+                <option value="">Class…</option>
+                {(classOpts.data ?? []).map((o) => <option key={o.id} value={o.value}>{o.value}</option>)}
+              </select>
               <button style={btn} disabled={assign.isPending} onClick={() => assignField('class', asg.class)}>Set Class</button>
             </div>
             <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-              <input style={{ ...input, width: 160 }} placeholder="Location" value={asg.location} onChange={(e) => setAsg({ ...asg, location: e.target.value })} />
-              <button style={btn} disabled={assign.isPending} onClick={() => assignField('location', asg.location)}>Set Location</button>
+              <select style={{ ...input, width: 200 }} value={asg.location_id} onChange={(e) => setAsg({ ...asg, location_id: e.target.value })}>
+                <option value="">Location…</option>
+                {(locs.data ?? []).map((l) => <option key={l.id} value={l.id}>{locPath[l.id]}</option>)}
+              </select>
+              <button style={btn} disabled={assign.isPending} onClick={() => assignField('location_id', asg.location_id)}>Set Location</button>
             </div>
           </div>
         )}
@@ -186,9 +202,26 @@ export function Inventory() {
                           {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
                         </select>
                       </td>
-                      <td><input style={{ ...input, width: 70 }} value={editing.vlan ?? ''} onChange={(e) => setEditing({ ...editing, vlan: e.target.value })} /></td>
-                      <td><input style={{ ...input, width: 90 }} value={editing.device_class ?? ''} onChange={(e) => setEditing({ ...editing, device_class: e.target.value })} /></td>
-                      <td><input style={{ ...input, width: 110 }} value={editing.location ?? ''} onChange={(e) => setEditing({ ...editing, location: e.target.value })} /></td>
+                      <td>
+                        <select style={{ ...input, width: 90 }} value={editing.vlan ?? ''} onChange={(e) => setEditing({ ...editing, vlan: e.target.value })}>
+                          <option value="">—</option>
+                          {(vlanOpts.data ?? []).map((o) => <option key={o.id} value={o.value}>{o.value}</option>)}
+                          {editing.vlan && !(vlanOpts.data ?? []).some((o) => o.value === editing.vlan) && <option value={editing.vlan}>{editing.vlan}</option>}
+                        </select>
+                      </td>
+                      <td>
+                        <select style={{ ...input, width: 110 }} value={editing.device_class ?? ''} onChange={(e) => setEditing({ ...editing, device_class: e.target.value })}>
+                          <option value="">—</option>
+                          {(classOpts.data ?? []).map((o) => <option key={o.id} value={o.value}>{o.value}</option>)}
+                          {editing.device_class && !(classOpts.data ?? []).some((o) => o.value === editing.device_class) && <option value={editing.device_class}>{editing.device_class}</option>}
+                        </select>
+                      </td>
+                      <td>
+                        <select style={{ ...input, width: 160 }} value={editing.location_id ?? ''} onChange={(e) => setEditing({ ...editing, location_id: e.target.value || null })}>
+                          <option value="">—</option>
+                          {(locs.data ?? []).map((l) => <option key={l.id} value={l.id}>{locPath[l.id]}</option>)}
+                        </select>
+                      </td>
                       <td><input style={{ ...input, width: 90 }} value={editing.vendor ?? ''} onChange={(e) => setEditing({ ...editing, vendor: e.target.value })} /></td>
                       <td>{d.status}</td>
                       <td style={{ whiteSpace: 'nowrap' }}>
@@ -206,7 +239,7 @@ export function Inventory() {
                     <td>{d.category}</td>
                     <td>{d.vlan ?? '—'}</td>
                     <td>{d.device_class ?? '—'}</td>
-                    <td>{d.location ?? '—'}</td>
+                    <td style={{ fontSize: 12 }}>{locName(d.location_id)}</td>
                     <td>{d.vendor ?? '—'}</td>
                     <td><span className={`badge badge-${d.status}`}>{d.status}</span></td>
                     <td style={{ whiteSpace: 'nowrap' }}>

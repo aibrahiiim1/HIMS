@@ -110,6 +110,40 @@ export function Settings() {
           {q.data && <button style={ghost} onClick={() => setForm(q.data)}>Reset</button>}
         </div>
       </div>
+
+      <LookupList kind="class" title="Device classes" hint="Values offered in the Inventory Class dropdown (e.g. Core, Access, Production)." />
+      <LookupList kind="vlan" title="VLANs" hint="Values offered in the Inventory VLAN dropdown (e.g. 10, 20, Guest)." />
+    </div>
+  )
+}
+
+// LookupList manages an operator value list (class / vlan) used by the
+// Inventory classification dropdowns.
+function LookupList({ kind, title, hint }: { kind: string; title: string; hint: string }) {
+  const qc = useQueryClient()
+  const [val, setVal] = useState('')
+  const key = ['lookups', kind]
+  const list = useQuery({ queryKey: key, queryFn: () => api.get<{ id: string; value: string }[]>(`/lookups?kind=${kind}`) })
+  const refresh = () => qc.invalidateQueries({ queryKey: key })
+  const add = useMutation({ mutationFn: () => api.post('/lookups', { kind, value: val.trim() }), onSuccess: () => { setVal(''); refresh() } })
+  const del = useMutation({ mutationFn: (id: string) => api.del(`/lookups/${id}`), onSuccess: refresh })
+  return (
+    <div className="card">
+      <h3>{title}</h3>
+      <p className="muted" style={{ fontSize: 12, marginBottom: 8 }}>{hint}</p>
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 8 }}>
+        <input style={input} placeholder={`new ${kind}`} value={val} onChange={(e) => setVal(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && val.trim()) add.mutate() }} />
+        <button style={btn} disabled={!val.trim() || add.isPending} onClick={() => add.mutate()}>Add</button>
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        {(list.data ?? []).length === 0 && <span className="muted" style={{ fontSize: 12 }}>None yet.</span>}
+        {(list.data ?? []).map((it) => (
+          <span key={it.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 8px', border: '1px solid #555', borderRadius: 12, fontSize: 12 }}>
+            {it.value}
+            <button onClick={() => del.mutate(it.id)} title="remove" style={{ background: 'none', border: 'none', color: '#ef9a9a', cursor: 'pointer', fontSize: 13, lineHeight: 1 }}>×</button>
+          </span>
+        ))}
+      </div>
     </div>
   )
 }

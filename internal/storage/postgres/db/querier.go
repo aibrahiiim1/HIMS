@@ -46,6 +46,7 @@ type Querier interface {
 	CreateDiscoveryJob(ctx context.Context, arg CreateDiscoveryJobParams) (DiscoveryJob, error)
 	CreateDiscoveryResult(ctx context.Context, arg CreateDiscoveryResultParams) (DiscoveryResult, error)
 	CreateLocation(ctx context.Context, arg CreateLocationParams) (Location, error)
+	CreateLookup(ctx context.Context, arg CreateLookupParams) (Lookup, error)
 	CreateMibFile(ctx context.Context, arg CreateMibFileParams) (MibFile, error)
 	CreateOIDMapping(ctx context.Context, arg CreateOIDMappingParams) (OidMapping, error)
 	// ---- Purchases ------------------------------------------------------------
@@ -64,6 +65,7 @@ type Querier interface {
 	// Bulk hard delete (multi-select). Returns the number of rows removed.
 	DeleteDevices(ctx context.Context, dollar_1 []uuid.UUID) (int64, error)
 	DeleteLocation(ctx context.Context, id uuid.UUID) error
+	DeleteLookup(ctx context.Context, id uuid.UUID) error
 	DeleteMonitoringCheck(ctx context.Context, id uuid.UUID) error
 	DeleteOIDMapping(ctx context.Context, id uuid.UUID) error
 	DeletePurchase(ctx context.Context, id uuid.UUID) error
@@ -152,6 +154,7 @@ type Querier interface {
 	ListLicenses(ctx context.Context, deviceID uuid.UUID) ([]FirewallLicense, error)
 	// Full flat list for building the location tree client-side.
 	ListLocations(ctx context.Context) ([]Location, error)
+	ListLookups(ctx context.Context, kind string) ([]Lookup, error)
 	ListLowStockParts(ctx context.Context) ([]SparePart, error)
 	ListMibFiles(ctx context.Context) ([]MibFile, error)
 	ListMibObjects(ctx context.Context, mibFileID uuid.UUID) ([]MibObject, error)
