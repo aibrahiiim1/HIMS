@@ -78,6 +78,8 @@ func (s *Server) routes() {
 		// --- Discovery (operator-launched subnet scans) --------------
 		r.Get("/discovery/jobs", s.listDiscoveryJobs)
 		r.Post("/discovery/scan", s.startScan)
+		r.Post("/discovery/controller-import", s.startControllerImport)
+		r.Post("/discovery/ad-import", s.startADImport)
 		r.Get("/discovery/jobs/{id}", s.getDiscoveryJob)
 
 		// --- Devices --------------------------------------------------

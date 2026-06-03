@@ -6,55 +6,30 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"flag"
 	"fmt"
 	"log/slog"
-	"net"
-	"net/http"
-	"net/http/cookiejar"
 	"net/netip"
-	"net/url"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
-	"github.com/go-ldap/ldap/v3"
 	"github.com/google/uuid"
-	"github.com/masterzen/winrm"
-	"github.com/vmware/govmomi"
 
-	"github.com/coralsearesorts/hims/internal/adimport"
 	"github.com/coralsearesorts/hims/internal/alerting"
 	"github.com/coralsearesorts/hims/internal/apply"
+	"github.com/coralsearesorts/hims/internal/collect"
 	"github.com/coralsearesorts/hims/internal/credresolver"
-	"github.com/coralsearesorts/hims/internal/cucm"
 	"github.com/coralsearesorts/hims/internal/discovery"
 	"github.com/coralsearesorts/hims/internal/domain"
 	"github.com/coralsearesorts/hims/internal/driver"
-	cucmdrv "github.com/coralsearesorts/hims/internal/driver/cucm"
-	extremedrv "github.com/coralsearesorts/hims/internal/driver/extreme"
-	hypervdrv "github.com/coralsearesorts/hims/internal/driver/hyperv"
-	omadadrv "github.com/coralsearesorts/hims/internal/driver/omada"
-	onvifdrv "github.com/coralsearesorts/hims/internal/driver/onvif"
-	rfdrv "github.com/coralsearesorts/hims/internal/driver/redfish"
-	ruckusdrv "github.com/coralsearesorts/hims/internal/driver/ruckus"
-	unifidrv "github.com/coralsearesorts/hims/internal/driver/unifi"
-	vspheredrv "github.com/coralsearesorts/hims/internal/driver/vsphere"
 	"github.com/coralsearesorts/hims/internal/drivers"
-	ec "github.com/coralsearesorts/hims/internal/extreme"
 	"github.com/coralsearesorts/hims/internal/monitoring"
-	oc "github.com/coralsearesorts/hims/internal/omada"
-	ov "github.com/coralsearesorts/hims/internal/onvif"
-	rf "github.com/coralsearesorts/hims/internal/redfish"
-	rc "github.com/coralsearesorts/hims/internal/ruckus"
 	"github.com/coralsearesorts/hims/internal/scan"
 	"github.com/coralsearesorts/hims/internal/secret"
 	"github.com/coralsearesorts/hims/internal/storage/postgres"
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
-	uc "github.com/coralsearesorts/hims/internal/unifi"
 )
 
 func main() {
@@ -338,675 +313,139 @@ func runScan(reg *driver.Registry, cidr, locStr string, concurrency, maxHosts in
 		prefix, res.Total, res.Persisted, res.Skipped, res.Failed)
 }
 
-// runRedfish collects a server's out-of-band BMC (iLO/iDRAC) over Redfish and
-// persists it. It resolves the scoped http_basic credentials, tries each
-// against /redfish/v1/, and on success runs the redfish driver + apply worker.
-// The http_basic secret is stored as "username:password" (split here, never
-// logged).
-func runRedfish(reg *driver.Registry, ipStr, locStr string) {
-	ip, err := netip.ParseAddr(ipStr)
-	if err != nil {
-		slog.Error("invalid -redfish IP", "value", ipStr, "error", err)
-		os.Exit(1)
-	}
-	locationID := parseLocationID(locStr)
+// The credentialed single-target collectors below are thin CLI wrappers over
+// the shared internal/collect package (the same cores the API's operator-
+// launched imports use — no duplication). Each resolves DB + credential deps,
+// invokes the collector, and prints the result or exits non-zero.
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
+// collectDeps builds the shared collect.Deps from the discovery wiring.
+func collectDeps(ctx context.Context, reg *driver.Registry) (collect.Deps, func()) {
 	queries, cfg, closeDB := buildDiscoverDeps(ctx, reg)
-	defer closeDB()
-
-	groups, err := cfg.Fetcher.CredentialCandidates(ctx, ip, locationID)
-	if err != nil {
-		slog.Error("redfish: credential resolve failed", "error", err)
-		os.Exit(1)
-	}
-
-	d := rfdrv.New()
-	var facts *driver.Facts
-	var bound *credresolver.CredRef
-	for _, g := range groups {
-		for _, m := range g.Members {
-			if m.Kind != domain.CredHTTPBasic {
-				continue
-			}
-			dec, err := cfg.Decrypt(ctx, m.ID)
-			if err != nil {
-				continue
-			}
-			user, pass := splitUserPass(dec.Community)
-			client := rf.NewClient("https://"+ip.String(), user, pass, nil)
-			var root map[string]any
-			if err := client.GetJSON(ctx, "/redfish/v1/", &root); err != nil {
-				continue // credential or host didn't answer Redfish
-			}
-			f, err := d.Collect(&rfdrv.Session{Client: client, Ctx: ctx}, driver.Probe{IP: ip})
-			if err != nil {
-				continue
-			}
-			c := m
-			facts, bound = &f, &c
-			break
-		}
-		if facts != nil {
-			break
-		}
-	}
-	if facts == nil {
-		slog.Error("redfish: no http_basic credential collected a BMC at this IP", "ip", ip.String())
-		os.Exit(1)
-	}
-
-	res := discovery.HostResult{
-		IP: ip, Alive: true, MatchedDrv: d,
-		Match: driver.Match{Confidence: 72, Category: domain.CatServer},
-		Facts: facts, BoundCred: bound,
-	}
-	id, err := apply.New(queries).Apply(ctx, res, locationID)
-	if err != nil {
-		slog.Error("redfish: apply failed", "error", err)
-		os.Exit(1)
-	}
-	fmt.Printf("BMC %s persisted as device %s (vendor=%s, controller=%s, health=%s)\n",
-		ip, id, facts.BMC.Vendor, facts.BMC.ControllerKind, facts.BMC.Health)
+	return collect.Deps{Queries: queries, Reg: reg, Fetcher: cfg.Fetcher, Decrypt: cfg.Decrypt}, closeDB
 }
 
-// runVSphere collects an ESXi host's VMs + datastores over the vSphere API and
-// persists them to the host's device. Resolves scoped vendor_api/http_basic
-// credentials (secret = "username:password"), connects via govmomi, runs the
-// vsphere driver + apply worker.
-func runVSphere(reg *driver.Registry, ipStr, locStr string) {
+// mustIP parses an IP flag or exits.
+func mustIP(flag, ipStr string) netip.Addr {
 	ip, err := netip.ParseAddr(ipStr)
 	if err != nil {
-		slog.Error("invalid -vsphere IP", "value", ipStr, "error", err)
+		slog.Error("invalid "+flag+" IP", "value", ipStr, "error", err)
 		os.Exit(1)
 	}
-	locationID := parseLocationID(locStr)
+	return ip
+}
 
+// reportCollect prints a single-target collection result or exits on error.
+func reportCollect(kind string, ip netip.Addr, r collect.Result, err error) {
+	if err != nil {
+		slog.Error(kind+": collect failed", "ip", ip.String(), "error", err)
+		os.Exit(1)
+	}
+	fmt.Printf("%s %s persisted as device %s (%s)\n", kind, ip, r.DeviceID, r.Summary)
+}
+
+func runRedfish(reg *driver.Registry, ipStr, locStr string) {
+	ip, loc := mustIP("-redfish", ipStr), parseLocationID(locStr)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	deps, closeDB := collectDeps(ctx, reg)
+	defer closeDB()
+	r, err := collect.Redfish(ctx, deps, ip, loc)
+	reportCollect("redfish", ip, r, err)
+}
+
+func runVSphere(reg *driver.Registry, ipStr, locStr string) {
+	ip, loc := mustIP("-vsphere", ipStr), parseLocationID(locStr)
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
-	queries, cfg, closeDB := buildDiscoverDeps(ctx, reg)
+	deps, closeDB := collectDeps(ctx, reg)
 	defer closeDB()
-
-	groups, err := cfg.Fetcher.CredentialCandidates(ctx, ip, locationID)
-	if err != nil {
-		slog.Error("vsphere: credential resolve failed", "error", err)
-		os.Exit(1)
-	}
-
-	d := vspheredrv.New()
-	var facts *driver.Facts
-	var bound *credresolver.CredRef
-	for _, g := range groups {
-		for _, m := range g.Members {
-			if m.Kind != domain.CredHTTPBasic && m.Kind != domain.CredVendorAPI {
-				continue
-			}
-			dec, err := cfg.Decrypt(ctx, m.ID)
-			if err != nil {
-				continue
-			}
-			user, pass := splitUserPass(dec.Community)
-			u := &url.URL{Scheme: "https", Host: ip.String(), Path: "/sdk", User: url.UserPassword(user, pass)}
-			gc, err := govmomi.NewClient(ctx, u, true) // insecure: mgmt LAN self-signed certs
-			if err != nil {
-				continue
-			}
-			f, err := d.Collect(&vspheredrv.Session{Client: gc.Client, Ctx: ctx}, driver.Probe{IP: ip})
-			_ = gc.Logout(ctx)
-			if err != nil {
-				continue
-			}
-			c := m
-			facts, bound = &f, &c
-			break
-		}
-		if facts != nil {
-			break
-		}
-	}
-	if facts == nil {
-		slog.Error("vsphere: no credential collected this host", "ip", ip.String())
-		os.Exit(1)
-	}
-
-	res := discovery.HostResult{
-		IP: ip, Alive: true, MatchedDrv: d,
-		Match: driver.Match{Confidence: 71, Category: domain.CatVirtualHost},
-		Facts: facts, BoundCred: bound,
-	}
-	id, err := apply.New(queries).Apply(ctx, res, locationID)
-	if err != nil {
-		slog.Error("vsphere: apply failed", "error", err)
-		os.Exit(1)
-	}
-	fmt.Printf("ESXi %s persisted as device %s (%d VMs, %d datastores)\n",
-		ip, id, len(facts.VMs), len(facts.Storage))
+	r, err := collect.VSphere(ctx, deps, ip, loc)
+	reportCollect("vsphere", ip, r, err)
 }
 
-// resolveWLANCred resolves an http_basic/vendor_api credential for a WLAN
-// controller IP and returns the split user/password + the bound ref. Shared by
-// the UniFi/Omada/Ruckus collect paths.
-func resolveWLANCred(ctx context.Context, cfg discovery.PipelineConfig, ip netip.Addr, locationID *uuid.UUID) (user, pass string, bound *credresolver.CredRef) {
-	groups, err := cfg.Fetcher.CredentialCandidates(ctx, ip, locationID)
-	if err != nil {
-		return "", "", nil
-	}
-	for _, g := range groups {
-		for _, m := range g.Members {
-			if m.Kind != domain.CredHTTPBasic && m.Kind != domain.CredVendorAPI {
-				continue
-			}
-			if dec, err := cfg.Decrypt(ctx, m.ID); err == nil {
-				u, p := splitUserPass(dec.Community)
-				c := m
-				return u, p, &c
-			}
-		}
-	}
-	return "", "", nil
-}
-
-// cookieJarClient builds an HTTPS client with a cookie jar (TLS-insecure for
-// mgmt-LAN self-signed certs).
-func cookieJarClient() *http.Client {
-	jar, _ := cookiejar.New(nil)
-	return &http.Client{
-		Timeout:   20 * time.Second,
-		Jar:       jar,
-		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}, //nolint:gosec
-	}
-}
-
-// runOmada collects a TP-Link Omada controller's APs and persists them.
-func runOmada(reg *driver.Registry, ipStr, cid, locStr string) {
-	ip, err := netip.ParseAddr(ipStr)
-	if err != nil {
-		slog.Error("invalid -omada IP", "value", ipStr, "error", err)
-		os.Exit(1)
-	}
-	if cid == "" {
-		slog.Error("omada: -omada-cid is required (controller id from /api/info)")
-		os.Exit(1)
-	}
-	locationID := parseLocationID(locStr)
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+func runHyperV(reg *driver.Registry, ipStr, locStr string) {
+	ip, loc := mustIP("-hyperv", ipStr), parseLocationID(locStr)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
-	queries, cfg, closeDB := buildDiscoverDeps(ctx, reg)
+	deps, closeDB := collectDeps(ctx, reg)
 	defer closeDB()
-
-	user, pass, bound := resolveWLANCred(ctx, cfg, ip, locationID)
-	if user == "" {
-		slog.Error("omada: no credential resolved", "ip", ip.String())
-		os.Exit(1)
-	}
-	client := oc.NewClient("https://"+ip.String()+":8043", cid, "Default", user, pass, cookieJarClient())
-	if err := client.Login(ctx); err != nil {
-		slog.Error("omada: login failed", "error", err)
-		os.Exit(1)
-	}
-	f, err := omadadrv.New().Collect(&omadadrv.Session{Client: client, Ctx: ctx}, driver.Probe{IP: ip})
-	if err != nil {
-		slog.Error("omada: collect failed", "error", err)
-		os.Exit(1)
-	}
-	res := discovery.HostResult{IP: ip, Alive: true, MatchedDrv: omadadrv.New(), Match: driver.Match{Confidence: 78, Category: domain.CatWirelessController}, Facts: &f, BoundCred: bound}
-	id, err := apply.New(queries).Apply(ctx, res, locationID)
-	if err != nil {
-		slog.Error("omada: apply failed", "error", err)
-		os.Exit(1)
-	}
-	fmt.Printf("Omada %s persisted as device %s (%d APs)\n", ip, id, len(f.APs))
+	r, err := collect.HyperV(ctx, deps, ip, loc)
+	reportCollect("hyperv", ip, r, err)
 }
 
-// runRuckus collects a Ruckus SmartZone controller's APs and persists them.
-func runRuckus(reg *driver.Registry, ipStr, locStr string) {
-	ip, err := netip.ParseAddr(ipStr)
-	if err != nil {
-		slog.Error("invalid -ruckus IP", "value", ipStr, "error", err)
-		os.Exit(1)
-	}
-	locationID := parseLocationID(locStr)
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	queries, cfg, closeDB := buildDiscoverDeps(ctx, reg)
-	defer closeDB()
-
-	user, pass, bound := resolveWLANCred(ctx, cfg, ip, locationID)
-	if user == "" {
-		slog.Error("ruckus: no credential resolved", "ip", ip.String())
-		os.Exit(1)
-	}
-	client := rc.NewClient("https://"+ip.String()+":8443", "", user, pass, cookieJarClient())
-	if err := client.Login(ctx); err != nil {
-		slog.Error("ruckus: login failed", "error", err)
-		os.Exit(1)
-	}
-	f, err := ruckusdrv.New().Collect(&ruckusdrv.Session{Client: client, Ctx: ctx}, driver.Probe{IP: ip})
-	if err != nil {
-		slog.Error("ruckus: collect failed", "error", err)
-		os.Exit(1)
-	}
-	res := discovery.HostResult{IP: ip, Alive: true, MatchedDrv: ruckusdrv.New(), Match: driver.Match{Confidence: 78, Category: domain.CatWirelessController}, Facts: &f, BoundCred: bound}
-	id, err := apply.New(queries).Apply(ctx, res, locationID)
-	if err != nil {
-		slog.Error("ruckus: apply failed", "error", err)
-		os.Exit(1)
-	}
-	fmt.Printf("Ruckus %s persisted as device %s (%d APs)\n", ip, id, len(f.APs))
-}
-
-// runCUCM collects a Cisco CUCM publisher's phone registry over AXL (SOAP) and
-// persists it. AXL is HTTP Basic per-request (no session login); the AXL
-// service runs on Tomcat 8443. Resolves an http_basic/vendor_api credential.
-func runCUCM(reg *driver.Registry, ipStr, version, locStr string) {
-	ip, err := netip.ParseAddr(ipStr)
-	if err != nil {
-		slog.Error("invalid -cucm IP", "value", ipStr, "error", err)
-		os.Exit(1)
-	}
-	locationID := parseLocationID(locStr)
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	queries, cfg, closeDB := buildDiscoverDeps(ctx, reg)
-	defer closeDB()
-
-	user, pass, bound := resolveWLANCred(ctx, cfg, ip, locationID)
-	if user == "" {
-		slog.Error("cucm: no credential resolved", "ip", ip.String())
-		os.Exit(1)
-	}
-	client := cucm.NewClient("https://"+ip.String()+":8443", user, pass, version, cookieJarClient())
-	f, err := cucmdrv.New().Collect(&cucmdrv.Session{Client: client, Ctx: ctx}, driver.Probe{IP: ip})
-	if err != nil {
-		slog.Error("cucm: collect failed", "error", err)
-		os.Exit(1)
-	}
-	res := discovery.HostResult{IP: ip, Alive: true, MatchedDrv: cucmdrv.New(), Match: driver.Match{Confidence: 75, Category: domain.CatPBX}, Facts: &f, BoundCred: bound}
-	id, err := apply.New(queries).Apply(ctx, res, locationID)
-	if err != nil {
-		slog.Error("cucm: apply failed", "error", err)
-		os.Exit(1)
-	}
-	fmt.Printf("CUCM %s persisted as device %s (%d phones)\n", ip, id, len(f.Phones))
-}
-
-// runExtreme collects an ExtremeCloud IQ (XIQ) tenant's AP inventory and
-// persists it against the controller anchor IP. XIQ is cloud-hosted (bearer
-// token via /login); -extreme is the anchor address the operator assigns to
-// the controller record, -extreme-base overrides the XIQ API host.
-func runExtreme(reg *driver.Registry, ipStr, baseURL, locStr string) {
-	ip, err := netip.ParseAddr(ipStr)
-	if err != nil {
-		slog.Error("invalid -extreme IP", "value", ipStr, "error", err)
-		os.Exit(1)
-	}
-	locationID := parseLocationID(locStr)
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	queries, cfg, closeDB := buildDiscoverDeps(ctx, reg)
-	defer closeDB()
-
-	user, pass, bound := resolveWLANCred(ctx, cfg, ip, locationID)
-	if user == "" {
-		slog.Error("extreme: no credential resolved", "ip", ip.String())
-		os.Exit(1)
-	}
-	client := ec.NewClient(baseURL, user, pass, cookieJarClient())
-	if err := client.Login(ctx); err != nil {
-		slog.Error("extreme: login failed", "error", err)
-		os.Exit(1)
-	}
-	f, err := extremedrv.New().Collect(&extremedrv.Session{Client: client, Ctx: ctx}, driver.Probe{IP: ip})
-	if err != nil {
-		slog.Error("extreme: collect failed", "error", err)
-		os.Exit(1)
-	}
-	res := discovery.HostResult{IP: ip, Alive: true, MatchedDrv: extremedrv.New(), Match: driver.Match{Confidence: 78, Category: domain.CatWirelessController}, Facts: &f, BoundCred: bound}
-	id, err := apply.New(queries).Apply(ctx, res, locationID)
-	if err != nil {
-		slog.Error("extreme: apply failed", "error", err)
-		os.Exit(1)
-	}
-	fmt.Printf("Extreme (XIQ) %s persisted as device %s (%d APs)\n", ip, id, len(f.APs))
-}
-
-// runUniFi collects a UniFi controller's AP inventory and persists it.
-// Resolves scoped http_basic credentials (secret = "username:password"), logs
-// in via a cookie-jar HTTP client, lists APs, applies. UniFi controllers
-// listen on 8443 (https) by default. Omada/Ruckus use different APIs (deferred).
-func runUniFi(reg *driver.Registry, ipStr, locStr string) {
-	ip, err := netip.ParseAddr(ipStr)
-	if err != nil {
-		slog.Error("invalid -unifi IP", "value", ipStr, "error", err)
-		os.Exit(1)
-	}
-	locationID := parseLocationID(locStr)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	queries, cfg, closeDB := buildDiscoverDeps(ctx, reg)
-	defer closeDB()
-
-	groups, err := cfg.Fetcher.CredentialCandidates(ctx, ip, locationID)
-	if err != nil {
-		slog.Error("unifi: credential resolve failed", "error", err)
-		os.Exit(1)
-	}
-
-	d := unifidrv.New()
-	var facts *driver.Facts
-	var bound *credresolver.CredRef
-	for _, g := range groups {
-		for _, m := range g.Members {
-			if m.Kind != domain.CredHTTPBasic && m.Kind != domain.CredVendorAPI {
-				continue
-			}
-			dec, err := cfg.Decrypt(ctx, m.ID)
-			if err != nil {
-				continue
-			}
-			user, pass := splitUserPass(dec.Community)
-			jar, _ := cookiejar.New(nil)
-			httpc := &http.Client{
-				Timeout:   20 * time.Second,
-				Jar:       jar,
-				Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}, //nolint:gosec // controller self-signed cert on mgmt LAN
-			}
-			client := uc.NewClient("https://"+ip.String()+":8443", "default", user, pass, httpc)
-			if err := client.Login(ctx); err != nil {
-				continue
-			}
-			f, err := d.Collect(&unifidrv.Session{Client: client, Ctx: ctx}, driver.Probe{IP: ip})
-			if err != nil {
-				continue
-			}
-			c := m
-			facts, bound = &f, &c
-			break
-		}
-		if facts != nil {
-			break
-		}
-	}
-	if facts == nil {
-		slog.Error("unifi: no credential collected this controller", "ip", ip.String())
-		os.Exit(1)
-	}
-
-	res := discovery.HostResult{
-		IP: ip, Alive: true, MatchedDrv: d,
-		Match: driver.Match{Confidence: 78, Category: domain.CatWirelessController},
-		Facts: facts, BoundCred: bound,
-	}
-	id, err := apply.New(queries).Apply(ctx, res, locationID)
-	if err != nil {
-		slog.Error("unifi: apply failed", "error", err)
-		os.Exit(1)
-	}
-	fmt.Printf("UniFi %s persisted as device %s (%d APs)\n", ip, id, len(facts.APs))
-}
-
-// runONVIF collects an IP camera's ONVIF inventory and persists it. Resolves
-// scoped onvif/http_basic credentials (secret = "username:password"), verifies
-// GetDeviceInformation, applies. The password is used only in memory.
 func runONVIF(reg *driver.Registry, ipStr, locStr string) {
-	ip, err := netip.ParseAddr(ipStr)
-	if err != nil {
-		slog.Error("invalid -onvif IP", "value", ipStr, "error", err)
-		os.Exit(1)
-	}
-	locationID := parseLocationID(locStr)
-
+	ip, loc := mustIP("-onvif", ipStr), parseLocationID(locStr)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	queries, cfg, closeDB := buildDiscoverDeps(ctx, reg)
+	deps, closeDB := collectDeps(ctx, reg)
 	defer closeDB()
-
-	groups, err := cfg.Fetcher.CredentialCandidates(ctx, ip, locationID)
-	if err != nil {
-		slog.Error("onvif: credential resolve failed", "error", err)
-		os.Exit(1)
-	}
-
-	d := onvifdrv.New()
-	var facts *driver.Facts
-	var bound *credresolver.CredRef
-	for _, g := range groups {
-		for _, m := range g.Members {
-			if m.Kind != domain.CredONVIF && m.Kind != domain.CredHTTPBasic {
-				continue
-			}
-			dec, err := cfg.Decrypt(ctx, m.ID)
-			if err != nil {
-				continue
-			}
-			user, pass := splitUserPass(dec.Community)
-			client := ov.NewClient("http://"+ip.String(), user, pass, nil)
-			f, err := d.Collect(&onvifdrv.Session{Client: client, Ctx: ctx}, driver.Probe{IP: ip})
-			if err != nil {
-				continue
-			}
-			c := m
-			facts, bound = &f, &c
-			break
-		}
-		if facts != nil {
-			break
-		}
-	}
-	if facts == nil {
-		slog.Error("onvif: no credential collected this camera", "ip", ip.String())
-		os.Exit(1)
-	}
-
-	res := discovery.HostResult{
-		IP: ip, Alive: true, MatchedDrv: d,
-		Match: driver.Match{Confidence: 75, Category: domain.CatCamera},
-		Facts: facts, BoundCred: bound,
-	}
-	id, err := apply.New(queries).Apply(ctx, res, locationID)
-	if err != nil {
-		slog.Error("onvif: apply failed", "error", err)
-		os.Exit(1)
-	}
-	fmt.Printf("Camera %s persisted as device %s (%s %s)\n", ip, id, facts.Camera.Manufacturer, facts.Camera.Model)
+	r, err := collect.ONVIF(ctx, deps, ip, loc)
+	reportCollect("onvif", ip, r, err)
 }
 
-// runADImport imports AD computer objects over LDAP and persists them as
-// devices. Resolves an ldap credential (secret = "bindUser:password") for the
-// DC, binds, searches the base DN, resolves each computer's DNS name to an IP,
-// and applies via the existing worker (reconcile by primary_ip+location).
-// Computers that don't resolve to an IP are skipped + counted.
-func runADImport(reg *driver.Registry, host, baseDN, locStr string) {
-	if baseDN == "" {
-		slog.Error("adimport: -basedn is required (e.g. OU=HotelA,DC=corp,DC=local)")
-		os.Exit(1)
-	}
-	locationID := parseLocationID(locStr)
+func runUniFi(reg *driver.Registry, ipStr, locStr string) {
+	ip, loc := mustIP("-unifi", ipStr), parseLocationID(locStr)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	deps, closeDB := collectDeps(ctx, reg)
+	defer closeDB()
+	r, err := collect.UniFi(ctx, deps, ip, loc)
+	reportCollect("unifi", ip, r, err)
+}
 
+func runOmada(reg *driver.Registry, ipStr, cid, locStr string) {
+	ip, loc := mustIP("-omada", ipStr), parseLocationID(locStr)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	deps, closeDB := collectDeps(ctx, reg)
+	defer closeDB()
+	r, err := collect.Omada(ctx, deps, ip, loc, cid)
+	reportCollect("omada", ip, r, err)
+}
+
+func runRuckus(reg *driver.Registry, ipStr, locStr string) {
+	ip, loc := mustIP("-ruckus", ipStr), parseLocationID(locStr)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	deps, closeDB := collectDeps(ctx, reg)
+	defer closeDB()
+	r, err := collect.Ruckus(ctx, deps, ip, loc)
+	reportCollect("ruckus", ip, r, err)
+}
+
+func runExtreme(reg *driver.Registry, ipStr, baseURL, locStr string) {
+	ip, loc := mustIP("-extreme", ipStr), parseLocationID(locStr)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	deps, closeDB := collectDeps(ctx, reg)
+	defer closeDB()
+	r, err := collect.Extreme(ctx, deps, ip, loc, baseURL)
+	reportCollect("extreme", ip, r, err)
+}
+
+func runCUCM(reg *driver.Registry, ipStr, version, locStr string) {
+	ip, loc := mustIP("-cucm", ipStr), parseLocationID(locStr)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	deps, closeDB := collectDeps(ctx, reg)
+	defer closeDB()
+	r, err := collect.CUCM(ctx, deps, ip, loc, version)
+	reportCollect("cucm", ip, r, err)
+}
+
+func runADImport(reg *driver.Registry, host, baseDN, locStr string) {
+	loc := parseLocationID(locStr)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	queries, cfg, closeDB := buildDiscoverDeps(ctx, reg)
+	deps, closeDB := collectDeps(ctx, reg)
 	defer closeDB()
-
-	// Resolve an ldap credential scoped to the DC's IP.
-	dcIPs, _ := net.LookupHost(host)
-	var dcAddr netip.Addr
-	for _, s := range dcIPs {
-		if a, err := netip.ParseAddr(s); err == nil {
-			dcAddr = a
-			break
-		}
-	}
-	var user, pass string
-	if dcAddr.IsValid() {
-		groups, _ := cfg.Fetcher.CredentialCandidates(ctx, dcAddr, locationID)
-		for _, g := range groups {
-			for _, m := range g.Members {
-				if m.Kind != domain.CredLDAP {
-					continue
-				}
-				if dec, err := cfg.Decrypt(ctx, m.ID); err == nil {
-					user, pass = splitUserPass(dec.Community)
-					break
-				}
-			}
-			if user != "" {
-				break
-			}
-		}
-	}
-	if user == "" {
-		slog.Error("adimport: no ldap credential resolved for the DC", "host", host)
-		os.Exit(1)
-	}
-
-	conn, err := ldap.DialURL("ldap://" + host + ":389")
+	res, err := collect.ADImport(ctx, deps, host, baseDN, loc)
 	if err != nil {
-		slog.Error("adimport: LDAP dial failed", "error", err)
+		slog.Error("adimport: failed", "host", host, "error", err)
 		os.Exit(1)
 	}
-	defer conn.Close()
-	if err := conn.Bind(user, pass); err != nil {
-		slog.Error("adimport: LDAP bind failed", "error", err)
-		os.Exit(1)
-	}
-
-	computers, err := adimport.SearchComputers(conn, baseDN)
-	if err != nil {
-		slog.Error("adimport: search failed", "error", err)
-		os.Exit(1)
-	}
-
-	applier := apply.New(queries)
-	imported, skipped := 0, 0
-	for _, c := range computers {
-		ip := resolveFirstIP(c.DNSHostName)
-		if !ip.IsValid() {
-			skipped++
-			continue // no IP → can't reconcile; surfaced via the count
-		}
-		ver := c.OSVersion
-		res := discovery.HostResult{
-			IP: ip, Alive: true,
-			Match: driver.Match{Category: c.Category},
-			Facts: &driver.Facts{Hostname: c.Name, OSVersion: ver, Vendor: "Microsoft", KV: map[string]string{"ad.os": c.OS}},
-		}
-		if _, err := applier.Apply(ctx, res, locationID); err == nil {
-			imported++
-		}
-	}
-	fmt.Printf("AD import from %s (%s) — %d computers: %d imported, %d skipped(no DNS/IP)\n",
-		host, baseDN, len(computers), imported, skipped)
-}
-
-func resolveFirstIP(host string) netip.Addr {
-	if host == "" {
-		return netip.Addr{}
-	}
-	ips, err := net.LookupHost(host)
-	if err != nil {
-		return netip.Addr{}
-	}
-	for _, s := range ips {
-		if a, err := netip.ParseAddr(s); err == nil && a.Is4() {
-			return a
-		}
-	}
-	return netip.Addr{}
-}
-
-// winrmRunner adapts a masterzen/winrm client to the hyperv.Runner interface.
-type winrmRunner struct{ c *winrm.Client }
-
-func (r winrmRunner) Run(ctx context.Context, script string) (string, error) {
-	stdout, stderr, code, err := r.c.RunPSWithContext(ctx, script)
-	if err != nil {
-		return "", err
-	}
-	if code != 0 {
-		return "", fmt.Errorf("winrm exit %d: %s", code, strings.TrimSpace(stderr))
-	}
-	return stdout, nil
-}
-
-// runHyperV collects a Hyper-V host's VMs over WinRM and persists them.
-// Resolves scoped winrm credentials (secret = "username:password"), runs
-// Get-VM, applies. WinRM listens on 5985 (http) by default.
-func runHyperV(reg *driver.Registry, ipStr, locStr string) {
-	ip, err := netip.ParseAddr(ipStr)
-	if err != nil {
-		slog.Error("invalid -hyperv IP", "value", ipStr, "error", err)
-		os.Exit(1)
-	}
-	locationID := parseLocationID(locStr)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-	defer cancel()
-	queries, cfg, closeDB := buildDiscoverDeps(ctx, reg)
-	defer closeDB()
-
-	groups, err := cfg.Fetcher.CredentialCandidates(ctx, ip, locationID)
-	if err != nil {
-		slog.Error("hyperv: credential resolve failed", "error", err)
-		os.Exit(1)
-	}
-
-	d := hypervdrv.New()
-	var facts *driver.Facts
-	var bound *credresolver.CredRef
-	for _, g := range groups {
-		for _, m := range g.Members {
-			if m.Kind != domain.CredWinRM {
-				continue
-			}
-			dec, err := cfg.Decrypt(ctx, m.ID)
-			if err != nil {
-				continue
-			}
-			user, pass := splitUserPass(dec.Community)
-			endpoint := winrm.NewEndpoint(ip.String(), 5985, false, false, nil, nil, nil, 0)
-			client, err := winrm.NewClient(endpoint, user, pass)
-			if err != nil {
-				continue
-			}
-			f, err := d.Collect(&hypervdrv.Session{Runner: winrmRunner{c: client}, Ctx: ctx}, driver.Probe{IP: ip})
-			if err != nil {
-				continue
-			}
-			c := m
-			facts, bound = &f, &c
-			break
-		}
-		if facts != nil {
-			break
-		}
-	}
-	if facts == nil {
-		slog.Error("hyperv: no winrm credential collected this host", "ip", ip.String())
-		os.Exit(1)
-	}
-
-	res := discovery.HostResult{
-		IP: ip, Alive: true, MatchedDrv: d,
-		Match: driver.Match{Confidence: 60, Category: domain.CatVirtualHost},
-		Facts: facts, BoundCred: bound,
-	}
-	id, err := apply.New(queries).Apply(ctx, res, locationID)
-	if err != nil {
-		slog.Error("hyperv: apply failed", "error", err)
-		os.Exit(1)
-	}
-	fmt.Printf("Hyper-V %s persisted as device %s (%d VMs)\n", ip, id, len(facts.VMs))
-}
-
-// splitUserPass splits a "username:password" secret on the first colon.
-func splitUserPass(s string) (user, pass string) {
-	if i := strings.IndexByte(s, ':'); i >= 0 {
-		return s[:i], s[i+1:]
-	}
-	return s, ""
+	fmt.Printf("AD import from %s (%s) — %d found: %d imported, %d skipped(no DNS/IP)\n",
+		host, baseDN, res.Found, res.Imported, res.Skipped)
 }
 
 // parseLocationID parses an optional location UUID flag (empty → nil).

@@ -93,6 +93,20 @@ export function Discovery() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['devices'] }),
   })
 
+  // --- Controller import (UniFi/Ruckus/Omada/Extreme/vSphere/Hyper-V/Redfish/ONVIF/CUCM) ---
+  const [ctrl, setCtrl] = useState({ kind: 'unifi', ip: '', omada_cid: '', cucm_version: '12.5', extreme_base: '' })
+  const importCtrl = useMutation({
+    mutationFn: () => api.post<DiscoveryJob>('/discovery/controller-import', { ...ctrl, location_id: location || null }),
+    onSuccess: (j) => { setJobID((j as DiscoveryJob).id); qc.invalidateQueries({ queryKey: ['discovery-jobs'] }) },
+  })
+
+  // --- AD import (computers from a selected OU subtree) ---
+  const [ad, setAd] = useState({ dc_host: '', base_dn: '' })
+  const importAd = useMutation({
+    mutationFn: () => api.post<DiscoveryJob>('/discovery/ad-import', { ...ad, location_id: location || null }),
+    onSuccess: (j) => { setJobID((j as DiscoveryJob).id); qc.invalidateQueries({ queryKey: ['discovery-jobs'] }) },
+  })
+
   return (
     <div>
       <div className="card">
@@ -213,6 +227,37 @@ export function Discovery() {
             {importCsv.data.errors.slice(0, 8).map((e, i) => <li key={i}>{e}</li>)}
           </ul>
         )}
+      </div>
+
+      <div className="card">
+        <h3>Controller import <span className="muted" style={{ fontSize: 12, fontWeight: 400 }}>— UniFi / Ruckus / Omada / Extreme / vSphere / Hyper-V / Redfish / ONVIF / CUCM</span></h3>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+          <select style={{ ...input, width: 150 }} value={ctrl.kind} onChange={(e) => setCtrl({ ...ctrl, kind: e.target.value })}>
+            {['unifi', 'ruckus', 'omada', 'extreme', 'vsphere', 'hyperv', 'redfish', 'onvif', 'cucm'].map((k) => <option key={k} value={k}>{k}</option>)}
+          </select>
+          <input style={{ ...input, width: 150 }} placeholder="controller / host IP" value={ctrl.ip} onChange={(e) => setCtrl({ ...ctrl, ip: e.target.value })} />
+          {ctrl.kind === 'omada' && <input style={{ ...input, width: 160 }} placeholder="omada controller id" value={ctrl.omada_cid} onChange={(e) => setCtrl({ ...ctrl, omada_cid: e.target.value })} />}
+          {ctrl.kind === 'cucm' && <input style={{ ...input, width: 110 }} placeholder="AXL ver (12.5)" value={ctrl.cucm_version} onChange={(e) => setCtrl({ ...ctrl, cucm_version: e.target.value })} />}
+          {ctrl.kind === 'extreme' && <input style={{ ...input, width: 220 }} placeholder="XIQ base URL (optional)" value={ctrl.extreme_base} onChange={(e) => setCtrl({ ...ctrl, extreme_base: e.target.value })} />}
+          <button style={btn} disabled={!ctrl.ip.trim() || importCtrl.isPending} onClick={() => importCtrl.mutate()}>
+            {importCtrl.isPending ? 'Launching…' : 'Import controller'}
+          </button>
+          {importCtrl.error && <span className="error-msg">{(importCtrl.error as Error).message}</span>}
+        </div>
+        <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>Credentials resolve from the scoped groups (Site dropdown above sets location scope). Runs as a background job below.</div>
+      </div>
+
+      <div className="card">
+        <h3>AD import <span className="muted" style={{ fontSize: 12, fontWeight: 400 }}>— computers from a selected OU subtree (LDAP)</span></h3>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+          <input style={{ ...input, width: 200 }} placeholder="DC host (dc01.corp.local)" value={ad.dc_host} onChange={(e) => setAd({ ...ad, dc_host: e.target.value })} />
+          <input style={{ ...input, width: 320 }} placeholder="base DN (OU=HotelA,DC=corp,DC=local)" value={ad.base_dn} onChange={(e) => setAd({ ...ad, base_dn: e.target.value })} />
+          <button style={btn} disabled={!ad.dc_host.trim() || !ad.base_dn.trim() || importAd.isPending} onClick={() => importAd.mutate()}>
+            {importAd.isPending ? 'Launching…' : 'Import from AD'}
+          </button>
+          {importAd.error && <span className="error-msg">{(importAd.error as Error).message}</span>}
+        </div>
+        <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>Needs an <code>ldap</code> credential scoped to the DC. Runs as a background job; "hosts" = computers found, "found" = imported.</div>
       </div>
 
       <div className="card">
