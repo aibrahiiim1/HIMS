@@ -278,6 +278,24 @@ export interface ExpenseByLocation {
   count: number
 }
 
+export interface CameraInfo {
+  device_id?: string
+  manufacturer?: string | null
+  model?: string | null
+  resolution?: string | null
+  rtsp_url?: string | null
+  onvif_url?: string | null
+}
+
+export interface NVRChannel {
+  id: string
+  nvr_device_id: string
+  channel_no: number
+  camera_name?: string | null
+  camera_ip?: string | null
+  status: string
+}
+
 export interface VirtualMachine {
   id: string
   host_device_id: string

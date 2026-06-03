@@ -173,7 +173,9 @@ monitoring_samples (TimescaleDB hypertable).
   AES-256-GCM keyed from env) + credentials API (seal-on-create, metadata-only
   reads) + device bind, then **SNMP-metric checks** (engine decrypts the bound
   community in-memory and polls an OID). Communities never logged/returned.
-- **Phase 5 — CCTV:** NVR/DVR + cameras (ONVIF/RTSP/vendor API).
+- **Phase 7 — CCTV ✅ DONE (classification + scaffolding):** `cctv` driver
+  (banner/RTSP fingerprint → camera/nvr), `camera_info` + `nvr_channels`
+  schema, Cameras/NVRs UI. Deep ONVIF/vendor-REST channel collection deferred.
 - **Phase 6 — Wireless controllers + APs** (UniFi/Omada/Ruckus REST).
 - **Phase 7 — Databases** (SQL/Oracle/PostgreSQL) + AD/DNS/DHCP.
 - **Phase 8 — Peripherals** (printers/UPS/fingerprint/IP phones) + voice.

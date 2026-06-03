@@ -81,6 +81,8 @@ func (s *Server) routes() {
 		r.Get("/devices/{id}/monitoring/checks", s.deviceMonitoringChecks)
 		r.Get("/devices/{id}/monitoring/samples", s.deviceMonitoringSamples)
 		r.Get("/devices/{id}/vms", s.deviceVMs)
+		r.Get("/devices/{id}/camera", s.deviceCamera)
+		r.Get("/devices/{id}/nvr-channels", s.deviceNVRChannels)
 
 		// --- Topology & search ----------------------------------------
 		// IP/MAC/name → switch+port+path (the headline Phase 1 feature).
@@ -240,6 +242,33 @@ func (s *Server) deviceVMs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := s.queries.ListVMsByHost(ctx, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (s *Server) deviceCamera(w http.ResponseWriter, r *http.Request) {
+	ctx, id, ok := pathDevice(w, r)
+	if !ok {
+		return
+	}
+	row, err := s.queries.GetCameraInfo(ctx, id)
+	if err != nil {
+		// No camera_info row yet is not an error — return an empty object.
+		writeJSON(w, http.StatusOK, map[string]any{})
+		return
+	}
+	writeJSON(w, http.StatusOK, row)
+}
+
+func (s *Server) deviceNVRChannels(w http.ResponseWriter, r *http.Request) {
+	ctx, id, ok := pathDevice(w, r)
+	if !ok {
+		return
+	}
+	rows, err := s.queries.ListNVRChannels(ctx, id)
 	if err != nil {
 		writeErr(w, err)
 		return

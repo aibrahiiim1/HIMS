@@ -7,6 +7,7 @@ package drivers
 import (
 	"github.com/coralsearesorts/hims/internal/driver"
 	"github.com/coralsearesorts/hims/internal/driver/aruba"
+	"github.com/coralsearesorts/hims/internal/driver/cctv"
 	"github.com/coralsearesorts/hims/internal/driver/cisco"
 	"github.com/coralsearesorts/hims/internal/driver/esxi"
 	"github.com/coralsearesorts/hims/internal/driver/fortigate"
@@ -26,5 +27,6 @@ func Builtin() *driver.Registry {
 	r.Register(hostsnmp.New())
 	r.Register(fortigate.New())
 	r.Register(esxi.New())
+	r.Register(cctv.New())
 	return r
 }

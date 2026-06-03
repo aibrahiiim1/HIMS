@@ -492,6 +492,28 @@ foundation, with the heavy transports honestly deferred.
 
 ---
 
+## Phase 7 — CCTV (cameras + NVR/DVR) ✅ (closed 2026-06-03)
+
+- ✅ `cctv` driver — fingerprints by HTTP banner (Hikvision/Dahua/Axis/…, 75),
+  or open RTSP 554 (60); a recorder hint (nvr/dvr/recorder) flips the category
+  to NVR. Registered in the builtin set. Tests: vendor camera, recorder→NVR,
+  RTSP-only, no-match.
+- ✅ migration 000015 `camera_info` (manufacturer/model/resolution/RTSP/ONVIF)
+  + `nvr_channels` (channel→camera map, upsert keyed on nvr+channel) +
+  `/devices/{id}/camera` and `/nvr-channels` APIs.
+- ✅ UI: **Cameras** + **NVRs** nav (DeviceList) + shared `CctvDetail` (camera
+  info + channel list; states deep fields await ONVIF, reachability monitored
+  today).
+- ✅ build/vet/test + frontend green; gofmt clean.
+
+### Carry-forward (deferred, with trigger)
+Deep collection — channel inventory, codec/resolution, recording state, RTSP
+URLs — via ONVIF (SOAP) + vendor REST. Pure-Go feasible; trigger: when CCTV
+credentials are bound and operators need channel inventory. Reachability
+(RTSP/HTTP) is monitored now.
+
+---
+
 ## Later phases ⬜
-See `PLAN.md` §10. Remaining: CCTV, wireless, databases/AD, peripherals/voice,
+See `PLAN.md` §10. Remaining: wireless, databases/AD, peripherals/voice,
 MIB upload engine + reporting/dashboards.

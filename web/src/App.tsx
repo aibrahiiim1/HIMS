@@ -5,6 +5,7 @@ import { SwitchDetail } from './pages/SwitchDetail'
 import { ServerDetail } from './pages/ServerDetail'
 import { FirewallDetail } from './pages/FirewallDetail'
 import { VirtualHostDetail } from './pages/VirtualHostDetail'
+import { CctvDetail } from './pages/CctvDetail'
 import { TopologyPage } from './pages/TopologyPage'
 import { SearchPage } from './pages/SearchPage'
 import { WorkOrders } from './pages/WorkOrders'
@@ -28,6 +29,8 @@ function Nav() {
       <Link to="/servers" style={active('/servers')}>Servers</Link>
       <Link to="/virtual-hosts" style={active('/virtual-hosts')}>Virtual Hosts</Link>
       <Link to="/firewalls" style={active('/firewalls')}>Firewalls</Link>
+      <Link to="/cameras" style={active('/cameras')}>Cameras</Link>
+      <Link to="/nvrs" style={active('/nvrs')}>NVRs</Link>
       <Link to="/topology" style={active('/topology')}>Topology</Link>
       <Link to="/monitoring" style={active('/monitoring')}>Monitoring</Link>
       <Link to="/alerts" style={active('/alerts')}>Alerts</Link>
@@ -56,6 +59,9 @@ export default function App() {
             <Route path="/virtual-hosts" element={<DeviceList category="virtual_host" title="Virtual Hosts" detailBase="/virtual-hosts" />} />
             <Route path="/virtual-hosts/:id" element={<VirtualHostDetail />} />
             <Route path="/firewalls/:id" element={<FirewallDetail />} />
+            <Route path="/cameras" element={<DeviceList category="camera" title="Cameras" detailBase="/cctv" />} />
+            <Route path="/nvrs" element={<DeviceList category="nvr" title="NVR / DVR" detailBase="/cctv" />} />
+            <Route path="/cctv/:id" element={<CctvDetail />} />
             <Route path="/topology" element={<TopologyPage />} />
             <Route path="/monitoring" element={<Monitoring />} />
             <Route path="/alerts" element={<Alerts />} />

@@ -49,6 +49,16 @@ type ArpEntry struct {
 	LastSeenAt       time.Time  `json:"last_seen_at"`
 }
 
+type CameraInfo struct {
+	DeviceID     uuid.UUID `json:"device_id"`
+	Manufacturer *string   `json:"manufacturer"`
+	Model        *string   `json:"model"`
+	Resolution   *string   `json:"resolution"`
+	RtspUrl      *string   `json:"rtsp_url"`
+	OnvifUrl     *string   `json:"onvif_url"`
+	LastSeenAt   time.Time `json:"last_seen_at"`
+}
+
 type Credential struct {
 	ID            uuid.UUID `json:"id"`
 	Name          string    `json:"name"`
@@ -286,6 +296,17 @@ type Neighbor struct {
 	Protocol         string      `json:"protocol"`
 	CollectionSource string      `json:"collection_source"`
 	LastSeenAt       time.Time   `json:"last_seen_at"`
+}
+
+type NvrChannel struct {
+	ID             uuid.UUID   `json:"id"`
+	NvrDeviceID    uuid.UUID   `json:"nvr_device_id"`
+	ChannelNo      int32       `json:"channel_no"`
+	CameraName     *string     `json:"camera_name"`
+	CameraIp       *netip.Addr `json:"camera_ip"`
+	CameraDeviceID *uuid.UUID  `json:"camera_device_id"`
+	Status         string      `json:"status"`
+	LastSeenAt     time.Time   `json:"last_seen_at"`
 }
 
 type PortVlan struct {

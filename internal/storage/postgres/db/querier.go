@@ -70,6 +70,7 @@ type Querier interface {
 	FindMACByIP(ctx context.Context, ipAddress netip.Addr) ([]FindMACByIPRow, error)
 	// Topology search: which switch + port + VLAN carries a MAC?
 	FindMACOnSwitches(ctx context.Context, mac string) ([]FindMACOnSwitchesRow, error)
+	GetCameraInfo(ctx context.Context, deviceID uuid.UUID) (CameraInfo, error)
 	GetCredential(ctx context.Context, id uuid.UUID) (Credential, error)
 	GetDevice(ctx context.Context, id uuid.UUID) (Device, error)
 	GetDiscoveryJob(ctx context.Context, id uuid.UUID) (DiscoveryJob, error)
@@ -109,6 +110,7 @@ type Querier interface {
 	ListMonitoringChecksByDevice(ctx context.Context, deviceID uuid.UUID) ([]MonitoringCheck, error)
 	ListMonitoringSamplesByCheck(ctx context.Context, arg ListMonitoringSamplesByCheckParams) ([]MonitoringSample, error)
 	ListMonitoringSamplesByDevice(ctx context.Context, arg ListMonitoringSamplesByDeviceParams) ([]MonitoringSample, error)
+	ListNVRChannels(ctx context.Context, nvrDeviceID uuid.UUID) ([]NvrChannel, error)
 	ListNeighbors(ctx context.Context, deviceID uuid.UUID) ([]Neighbor, error)
 	ListPortVlans(ctx context.Context, deviceID uuid.UUID) ([]PortVlan, error)
 	ListPurchases(ctx context.Context) ([]Purchase, error)
@@ -168,6 +170,7 @@ type Querier interface {
 	UpdateWorkOrder(ctx context.Context, arg UpdateWorkOrderParams) (WorkOrder, error)
 	// ---- ARP entries ---------------------------------------------------------
 	UpsertARP(ctx context.Context, arg UpsertARPParams) error
+	UpsertCameraInfo(ctx context.Context, arg UpsertCameraInfoParams) (CameraInfo, error)
 	UpsertDeviceFact(ctx context.Context, arg UpsertDeviceFactParams) error
 	UpsertFirewallStatus(ctx context.Context, arg UpsertFirewallStatusParams) error
 	UpsertHAMember(ctx context.Context, arg UpsertHAMemberParams) error
@@ -179,6 +182,7 @@ type Querier interface {
 	// Idempotent registration: re-registering the same (device, kind, port)
 	// updates the schedule knobs without resetting the live status counters.
 	UpsertMonitoringCheck(ctx context.Context, arg UpsertMonitoringCheckParams) (MonitoringCheck, error)
+	UpsertNVRChannel(ctx context.Context, arg UpsertNVRChannelParams) (NvrChannel, error)
 	// ---- Neighbors (LLDP/CDP) -----------------------------------------------
 	UpsertNeighbor(ctx context.Context, arg UpsertNeighborParams) (Neighbor, error)
 	UpsertPortVlan(ctx context.Context, arg UpsertPortVlanParams) error
