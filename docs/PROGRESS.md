@@ -792,9 +792,35 @@ ESXi 7/8 or vCenter**. Trigger: first vSphere credential bound. v1 targets a
 single ESXi `/sdk`; carry-forward: vCenter multi-host walk, port groups/VLANs/
 host NICs, VM↔managed-device linking, an API/UI collect trigger.
 
-## Status — listed roadmap + the fleet-onboarding path complete
-Every queued phase plus the discovery→persist integrator and now whole-subnet
-scanning are shipped, green, committed. Remaining work is all
-**deferred-with-trigger**: deep-collection transports (vSphere/govmomi,
-Hyper-V/WinRM, iLO/iDRAC Redfish, ONVIF, vendor REST), SNMP v3, scan
-job-record persistence + API/UI, AD-import, peripherals/voice drivers.
+## Hyper-V — host→VM via WinRM/PowerShell ✅ (closed 2026-06-03)
+
+Second deep-collection dep (`github.com/masterzen/winrm`). WinRM has no
+simulator, so the design isolates the **testable core** — the Get-VM output
+parser — from the un-simulatable transport.
+
+- ✅ `internal/hyperv` — `Runner` interface (injectable) + `CollectVMs` running
+  `Get-VM | ConvertTo-Json`. Parser handles ConvertTo-Json's single-object-vs-
+  array quirk and the VMState enum as **number (2/3/9) or string** → our
+  vocabulary. Tested: array, single-object, suspended+unknown, empty,
+  runner-error.
+- ✅ `internal/driver/hyperv` — **collection-only** driver: Fingerprint is
+  NoMatch by design (WinRM+Windows isn't Hyper-V-specific; finding VMs confirms
+  the role), Collect maps VMs → `Facts.VMs`. Tested.
+- ✅ Reuses `Facts.VMs` + apply → `virtual_machines` (VirtualHostDetail VM
+  section populates; no UI change). collector `-hyperv <ip>` resolves winrm
+  creds, `RunPSWithContext`, applies.
+- ✅ go mod tidy; gofmt + go build/vet/test ./... green.
+
+### ⚠️ Live-validation trigger
+Parser tested against sample Get-VM JSON; the **WinRM transport** can't be
+simulated and is unvalidated. Trigger: first winrm credential bound on a real
+Hyper-V host.
+
+## Status — listed roadmap + onboarding + 2 of 4 deep-collection deps complete
+Every queued phase + the discovery→persist integrator + whole-subnet scanning +
+**Redfish (iLO/iDRAC), vSphere (govmomi/vcsim-tested), and Hyper-V (WinRM,
+parser-tested)** are shipped, green, committed. Remaining deep-collection
+deps: **ONVIF (cameras)** and **wireless vendor REST (UniFi/Omada/Ruckus)** —
+next in the controlled order. Plus SNMP v3, scan job-record API/UI, AD-import,
+peripherals/voice, and the documented live-validation triggers for the
+hardware-dependent collectors.

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/masterzen/winrm"
 	"github.com/vmware/govmomi"
 
 	"github.com/coralsearesorts/hims/internal/alerting"
@@ -26,6 +27,7 @@ import (
 	"github.com/coralsearesorts/hims/internal/discovery"
 	"github.com/coralsearesorts/hims/internal/domain"
 	"github.com/coralsearesorts/hims/internal/driver"
+	hypervdrv "github.com/coralsearesorts/hims/internal/driver/hyperv"
 	rfdrv "github.com/coralsearesorts/hims/internal/driver/redfish"
 	vspheredrv "github.com/coralsearesorts/hims/internal/driver/vsphere"
 	"github.com/coralsearesorts/hims/internal/drivers"
@@ -46,6 +48,7 @@ func main() {
 	scanCIDR := flag.String("scan", "", "discover AND persist every host in a CIDR (needs DB + creds)")
 	redfishIP := flag.String("redfish", "", "collect a server BMC (iLO/iDRAC) over Redfish AND persist (needs DB + http_basic creds)")
 	vsphereIP := flag.String("vsphere", "", "collect an ESXi host's VMs + datastores over the vSphere API AND persist (needs DB + creds)")
+	hypervIP := flag.String("hyperv", "", "collect a Hyper-V host's VMs over WinRM AND persist (needs DB + winrm creds)")
 	concurrency := flag.Int("concurrency", 16, "max concurrent hosts during -scan")
 	maxHosts := flag.Int("max-hosts", 4096, "refuse a -scan scope larger than this")
 	location := flag.String("location", "", "location UUID to scope discovered devices to")
@@ -85,6 +88,11 @@ func main() {
 
 	if *vsphereIP != "" {
 		runVSphere(reg, *vsphereIP, *location)
+		return
+	}
+
+	if *hypervIP != "" {
+		runHyperV(reg, *hypervIP, *location)
 		return
 	}
 
@@ -410,6 +418,90 @@ func runVSphere(reg *driver.Registry, ipStr, locStr string) {
 	}
 	fmt.Printf("ESXi %s persisted as device %s (%d VMs, %d datastores)\n",
 		ip, id, len(facts.VMs), len(facts.Storage))
+}
+
+// winrmRunner adapts a masterzen/winrm client to the hyperv.Runner interface.
+type winrmRunner struct{ c *winrm.Client }
+
+func (r winrmRunner) Run(ctx context.Context, script string) (string, error) {
+	stdout, stderr, code, err := r.c.RunPSWithContext(ctx, script)
+	if err != nil {
+		return "", err
+	}
+	if code != 0 {
+		return "", fmt.Errorf("winrm exit %d: %s", code, strings.TrimSpace(stderr))
+	}
+	return stdout, nil
+}
+
+// runHyperV collects a Hyper-V host's VMs over WinRM and persists them.
+// Resolves scoped winrm credentials (secret = "username:password"), runs
+// Get-VM, applies. WinRM listens on 5985 (http) by default.
+func runHyperV(reg *driver.Registry, ipStr, locStr string) {
+	ip, err := netip.ParseAddr(ipStr)
+	if err != nil {
+		slog.Error("invalid -hyperv IP", "value", ipStr, "error", err)
+		os.Exit(1)
+	}
+	locationID := parseLocationID(locStr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	queries, cfg, closeDB := buildDiscoverDeps(ctx, reg)
+	defer closeDB()
+
+	groups, err := cfg.Fetcher.CredentialCandidates(ctx, ip, locationID)
+	if err != nil {
+		slog.Error("hyperv: credential resolve failed", "error", err)
+		os.Exit(1)
+	}
+
+	d := hypervdrv.New()
+	var facts *driver.Facts
+	var bound *credresolver.CredRef
+	for _, g := range groups {
+		for _, m := range g.Members {
+			if m.Kind != domain.CredWinRM {
+				continue
+			}
+			dec, err := cfg.Decrypt(ctx, m.ID)
+			if err != nil {
+				continue
+			}
+			user, pass := splitUserPass(dec.Community)
+			endpoint := winrm.NewEndpoint(ip.String(), 5985, false, false, nil, nil, nil, 0)
+			client, err := winrm.NewClient(endpoint, user, pass)
+			if err != nil {
+				continue
+			}
+			f, err := d.Collect(&hypervdrv.Session{Runner: winrmRunner{c: client}, Ctx: ctx}, driver.Probe{IP: ip})
+			if err != nil {
+				continue
+			}
+			c := m
+			facts, bound = &f, &c
+			break
+		}
+		if facts != nil {
+			break
+		}
+	}
+	if facts == nil {
+		slog.Error("hyperv: no winrm credential collected this host", "ip", ip.String())
+		os.Exit(1)
+	}
+
+	res := discovery.HostResult{
+		IP: ip, Alive: true, MatchedDrv: d,
+		Match: driver.Match{Confidence: 60, Category: domain.CatVirtualHost},
+		Facts: facts, BoundCred: bound,
+	}
+	id, err := apply.New(queries).Apply(ctx, res, locationID)
+	if err != nil {
+		slog.Error("hyperv: apply failed", "error", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Hyper-V %s persisted as device %s (%d VMs)\n", ip, id, len(facts.VMs))
 }
 
 // splitUserPass splits a "username:password" secret on the first colon.
