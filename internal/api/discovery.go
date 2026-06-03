@@ -78,9 +78,11 @@ func (s *Server) startScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Timeouts + default concurrency come from operator Settings.
+	snmpTO, portTO, defConcurrency := s.scanSettings(r.Context())
 	concurrency := req.Concurrency
 	if concurrency < 1 || concurrency > 64 {
-		concurrency = 16
+		concurrency = defConcurrency
 	}
 
 	var scopePrefix *netip.Prefix
@@ -98,7 +100,7 @@ func (s *Server) startScan(w http.ResponseWriter, r *http.Request) {
 		ID: job.ID, Status: "running", HostCount: int32(len(hosts)), FoundCount: 0,
 	})
 
-	go s.runScanJob(job.ID, hosts, locID, concurrency, extra)
+	go s.runScanJob(job.ID, hosts, locID, concurrency, extra, snmpTO, portTO)
 	writeJSON(w, http.StatusAccepted, job)
 }
 
@@ -216,14 +218,14 @@ func (s *Server) scanCredentialTier(ctx context.Context, credIDStrs, groupIDStrs
 
 // runScanJob is the background scan worker. It owns its own context (the HTTP
 // request's is long gone) and records per-host outcomes + a final job status.
-func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUID, concurrency int, extraGroups []credresolver.ScopedGroup) {
+func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUID, concurrency int, extraGroups []credresolver.ScopedGroup, snmpTO, portTO time.Duration) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
 	cfg := discovery.PipelineConfig{
 		Registry: s.reg, Fetcher: s.fetcher, Decrypt: s.scanDecrypt,
 		ExtraGroups: extraGroups,
-		PingTimeout: 2 * time.Second, SNMPTimeout: 3 * time.Second,
+		SNMPTimeout: snmpTO, PortTimeout: portTO,
 	}
 	applier := apply.New(s.queries)
 

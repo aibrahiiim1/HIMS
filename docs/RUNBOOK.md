@@ -309,6 +309,24 @@ polls status. AD job: `hosts`=computers found, `found`=imported.
 
 ---
 
+## 12b. Settings (operator-tunable timeouts) — `Settings` page
+
+Stored in `app_settings`; `GET/PUT /api/v1/settings`. Read at scan-launch and
+import time — change them in the UI, no restart needed.
+
+| Setting | Default | Range | Affects |
+|---|---|---|---|
+| `snmp_timeout_ms` | 3000 | 200–30000 | **Discovery scan** — per SNMP attempt. The dominant scan-time factor; presets 1s/3s/10s. |
+| `tcp_timeout_ms` | 500 | 100–10000 | **Discovery scan** — per TCP port connect (port scan + aliveness). |
+| `scan_concurrency` | 16 | 1–64 | **Discovery scan** — default parallel hosts (a scan request may override). |
+| `http_timeout_ms` | 20000 | 1000–120000 | **Imports** — Redfish/iDRAC, UniFi/Omada/Ruckus/Extreme, ONVIF, CUCM. |
+| `winrm_timeout_ms` | 60000 | 5000–300000 | **Imports** — Hyper-V (Windows). |
+
+Notes: **SSH is not used by discovery**, so there is no SSH scan setting (CLI
+manual-probe is a separate flow). Lowering `snmp_timeout_ms` speeds a subnet
+scan but risks missing slow/congested devices — measured: a 21-host range took
+~16s at 1s vs proportionally longer at 3s.
+
 ## 13. Live-validation checklist (per collector)
 
 Run this for **each** collector against one real target before trusting it

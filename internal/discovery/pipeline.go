@@ -77,6 +77,9 @@ type PipelineConfig struct {
 	// Timeout for each per-host step.
 	PingTimeout time.Duration
 	SNMPTimeout time.Duration
+	// PortTimeout bounds each TCP port-connect during the port scan + aliveness
+	// check. Zero falls back to 500ms.
+	PortTimeout time.Duration
 }
 
 // explicitTierSpecificity ranks operator-selected groups above subnet (2) and
@@ -91,7 +94,7 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 
 	// Step 1: TCP port scan — management ports for switches/servers plus the
 	// service ports the role-inference engine keys on (DNS/DC/DB).
-	r.OpenPorts = scanPorts(ctx, ip, []int{22, 23, 53, 80, 88, 161, 389, 443, 1433, 1521, 3389, 5432, 8080})
+	r.OpenPorts = scanPorts(ctx, ip, []int{22, 23, 53, 80, 88, 161, 389, 443, 1433, 1521, 3389, 5432, 8080}, cfg.PortTimeout)
 	r.Probe = driver.Probe{IP: ip, OpenTCPPorts: r.OpenPorts}
 
 	// Step 2: Resolve credential candidates (scope-bound + operator-selected /
@@ -192,11 +195,14 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 
 // --- Transport helpers --------------------------------------------------------
 
-func scanPorts(ctx context.Context, ip netip.Addr, ports []int) []int {
+func scanPorts(ctx context.Context, ip netip.Addr, ports []int, timeout time.Duration) []int {
+	if timeout <= 0 {
+		timeout = 500 * time.Millisecond
+	}
 	open := make([]int, 0, len(ports))
 	d := &net.Dialer{}
 	for _, port := range ports {
-		tctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		tctx, cancel := context.WithTimeout(ctx, timeout)
 		c, err := d.DialContext(tctx, "tcp", fmt.Sprintf("%s:%d", ip, port))
 		cancel()
 		if err == nil {

@@ -61,6 +61,25 @@ type Deps struct {
 	Reg     *driver.Registry
 	Fetcher discovery.CandidateFetcher
 	Decrypt discovery.DecryptFn
+	// HTTPTimeout bounds REST/Redfish/SOAP client calls (Redfish/UniFi/Omada/
+	// Ruckus/Extreme/ONVIF/CUCM imports). Zero falls back to 20s.
+	HTTPTimeout time.Duration
+	// WinRMTimeout bounds the Hyper-V WinRM operation. Zero falls back to 60s.
+	WinRMTimeout time.Duration
+}
+
+func (d Deps) httpTimeout() time.Duration {
+	if d.HTTPTimeout <= 0 {
+		return 20 * time.Second
+	}
+	return d.HTTPTimeout
+}
+
+func (d Deps) winrmTimeout() time.Duration {
+	if d.WinRMTimeout <= 0 {
+		return 60 * time.Second
+	}
+	return d.WinRMTimeout
 }
 
 // Result summarizes one persisted collection.
@@ -162,7 +181,7 @@ func (d Deps) persist(ctx context.Context, ip netip.Addr, loc *uuid.UUID, drv dr
 func Redfish(ctx context.Context, d Deps, ip netip.Addr, loc *uuid.UUID) (Result, error) {
 	drv := rfdrv.New()
 	facts, bound := d.tryCandidates(ctx, ip, loc, []domain.CredentialKind{domain.CredHTTPBasic}, func(user, pass string) (*driver.Facts, bool) {
-		client := rf.NewClient("https://"+ip.String(), user, pass, nil)
+		client := rf.NewClient("https://"+ip.String(), user, pass, cookieJarClient(d.httpTimeout()))
 		var root map[string]any
 		if err := client.GetJSON(ctx, "/redfish/v1/", &root); err != nil {
 			return nil, false
@@ -213,7 +232,7 @@ func VSphere(ctx context.Context, d Deps, ip netip.Addr, loc *uuid.UUID) (Result
 func HyperV(ctx context.Context, d Deps, ip netip.Addr, loc *uuid.UUID) (Result, error) {
 	drv := hypervdrv.New()
 	facts, bound := d.tryCandidates(ctx, ip, loc, []domain.CredentialKind{domain.CredWinRM}, func(user, pass string) (*driver.Facts, bool) {
-		endpoint := winrm.NewEndpoint(ip.String(), 5985, false, false, nil, nil, nil, 0)
+		endpoint := winrm.NewEndpoint(ip.String(), 5985, false, false, nil, nil, nil, d.winrmTimeout())
 		client, err := winrm.NewClient(endpoint, user, pass)
 		if err != nil {
 			return nil, false
@@ -238,7 +257,7 @@ func HyperV(ctx context.Context, d Deps, ip netip.Addr, loc *uuid.UUID) (Result,
 func ONVIF(ctx context.Context, d Deps, ip netip.Addr, loc *uuid.UUID) (Result, error) {
 	drv := onvifdrv.New()
 	facts, bound := d.tryCandidates(ctx, ip, loc, []domain.CredentialKind{domain.CredONVIF, domain.CredHTTPBasic}, func(user, pass string) (*driver.Facts, bool) {
-		client := ov.NewClient("http://"+ip.String(), user, pass, nil)
+		client := ov.NewClient("http://"+ip.String(), user, pass, cookieJarClient(d.httpTimeout()))
 		f, err := drv.Collect(&onvifdrv.Session{Client: client, Ctx: ctx}, driver.Probe{IP: ip})
 		if err != nil {
 			return nil, false
@@ -259,7 +278,7 @@ func ONVIF(ctx context.Context, d Deps, ip netip.Addr, loc *uuid.UUID) (Result, 
 func UniFi(ctx context.Context, d Deps, ip netip.Addr, loc *uuid.UUID) (Result, error) {
 	drv := unifidrv.New()
 	facts, bound := d.tryCandidates(ctx, ip, loc, []domain.CredentialKind{domain.CredHTTPBasic, domain.CredVendorAPI}, func(user, pass string) (*driver.Facts, bool) {
-		client := uc.NewClient("https://"+ip.String()+":8443", "default", user, pass, cookieJarClient())
+		client := uc.NewClient("https://"+ip.String()+":8443", "default", user, pass, cookieJarClient(d.httpTimeout()))
 		if err := client.Login(ctx); err != nil {
 			return nil, false
 		}
@@ -286,7 +305,7 @@ func Omada(ctx context.Context, d Deps, ip netip.Addr, loc *uuid.UUID, cid strin
 	}
 	drv := omadadrv.New()
 	facts, bound := d.tryCandidates(ctx, ip, loc, []domain.CredentialKind{domain.CredHTTPBasic, domain.CredVendorAPI}, func(user, pass string) (*driver.Facts, bool) {
-		client := oc.NewClient("https://"+ip.String()+":8043", cid, "Default", user, pass, cookieJarClient())
+		client := oc.NewClient("https://"+ip.String()+":8043", cid, "Default", user, pass, cookieJarClient(d.httpTimeout()))
 		if err := client.Login(ctx); err != nil {
 			return nil, false
 		}
@@ -310,7 +329,7 @@ func Omada(ctx context.Context, d Deps, ip netip.Addr, loc *uuid.UUID, cid strin
 func Ruckus(ctx context.Context, d Deps, ip netip.Addr, loc *uuid.UUID) (Result, error) {
 	drv := ruckusdrv.New()
 	facts, bound := d.tryCandidates(ctx, ip, loc, []domain.CredentialKind{domain.CredHTTPBasic, domain.CredVendorAPI}, func(user, pass string) (*driver.Facts, bool) {
-		client := rc.NewClient("https://"+ip.String()+":8443", "", user, pass, cookieJarClient())
+		client := rc.NewClient("https://"+ip.String()+":8443", "", user, pass, cookieJarClient(d.httpTimeout()))
 		if err := client.Login(ctx); err != nil {
 			return nil, false
 		}
@@ -334,7 +353,7 @@ func Ruckus(ctx context.Context, d Deps, ip netip.Addr, loc *uuid.UUID) (Result,
 func Extreme(ctx context.Context, d Deps, ip netip.Addr, loc *uuid.UUID, baseURL string) (Result, error) {
 	drv := extremedrv.New()
 	facts, bound := d.tryCandidates(ctx, ip, loc, []domain.CredentialKind{domain.CredHTTPBasic, domain.CredVendorAPI}, func(user, pass string) (*driver.Facts, bool) {
-		client := ec.NewClient(baseURL, user, pass, cookieJarClient())
+		client := ec.NewClient(baseURL, user, pass, cookieJarClient(d.httpTimeout()))
 		if err := client.Login(ctx); err != nil {
 			return nil, false
 		}
@@ -363,7 +382,7 @@ func CUCM(ctx context.Context, d Deps, ip netip.Addr, loc *uuid.UUID, version st
 	}
 	drv := cucmdrv.New()
 	facts, bound := d.tryCandidates(ctx, ip, loc, []domain.CredentialKind{domain.CredHTTPBasic, domain.CredVendorAPI}, func(user, pass string) (*driver.Facts, bool) {
-		client := cucm.NewClient("https://"+ip.String()+":8443", user, pass, version, cookieJarClient())
+		client := cucm.NewClient("https://"+ip.String()+":8443", user, pass, version, cookieJarClient(d.httpTimeout()))
 		f, err := drv.Collect(&cucmdrv.Session{Client: client, Ctx: ctx}, driver.Probe{IP: ip})
 		if err != nil {
 			return nil, false
@@ -469,11 +488,14 @@ func (r winrmRunner) Run(ctx context.Context, script string) (string, error) {
 }
 
 // cookieJarClient builds an HTTPS client with a cookie jar (TLS-insecure for
-// mgmt-LAN self-signed certs).
-func cookieJarClient() *http.Client {
+// mgmt-LAN self-signed certs) and the given request timeout.
+func cookieJarClient(timeout time.Duration) *http.Client {
+	if timeout <= 0 {
+		timeout = 20 * time.Second
+	}
 	jar, _ := cookiejar.New(nil)
 	return &http.Client{
-		Timeout:   20 * time.Second,
+		Timeout:   timeout,
 		Jar:       jar,
 		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}, //nolint:gosec
 	}

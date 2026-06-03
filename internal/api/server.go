@@ -170,6 +170,10 @@ func (s *Server) routes() {
 		r.Get("/credentials", s.listCredentials)
 		r.Post("/credentials", s.createCredential)
 		r.Get("/credential-groups", s.listCredentialGroups)
+
+		// --- Settings (operator-tunable timeouts / concurrency) ------
+		r.Get("/settings", s.getSettings)
+		r.Put("/settings", s.updateSettings)
 		r.Put("/devices/{id}/credential", s.bindDeviceCredential)
 
 		// --- MIB upload engine ---------------------------------------

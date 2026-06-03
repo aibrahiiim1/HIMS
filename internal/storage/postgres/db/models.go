@@ -51,6 +51,12 @@ type AlertRule struct {
 	UpdatedAt         time.Time `json:"updated_at"`
 }
 
+type AppSetting struct {
+	Key       string    `json:"key"`
+	Value     string    `json:"value"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 type ArpEntry struct {
 	ID               uuid.UUID  `json:"id"`
 	DeviceID         uuid.UUID  `json:"device_id"`

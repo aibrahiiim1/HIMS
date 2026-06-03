@@ -13,9 +13,15 @@ import (
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
 )
 
-// collectDeps assembles the shared collection dependencies from the server.
-func (s *Server) collectDeps() collect.Deps {
-	return collect.Deps{Queries: s.queries, Reg: s.reg, Fetcher: s.fetcher, Decrypt: s.scanDecrypt}
+// collectDeps assembles the shared collection dependencies from the server,
+// applying the operator-configured HTTP + WinRM timeouts.
+func (s *Server) collectDeps(ctx context.Context) collect.Deps {
+	m := s.resolveSettings(ctx)
+	return collect.Deps{
+		Queries: s.queries, Reg: s.reg, Fetcher: s.fetcher, Decrypt: s.scanDecrypt,
+		HTTPTimeout:  time.Duration(m["http_timeout_ms"]) * time.Millisecond,
+		WinRMTimeout: time.Duration(m["winrm_timeout_ms"]) * time.Millisecond,
+	}
 }
 
 type controllerImportReq struct {
@@ -66,7 +72,7 @@ func (s *Server) startControllerImport(w http.ResponseWriter, r *http.Request) {
 func (s *Server) runControllerImport(jobID uuid.UUID, kind string, ip netip.Addr, locID *uuid.UUID, opts collect.ControllerOpts) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	res, err := collect.Controller(ctx, s.collectDeps(), kind, ip, locID, opts)
+	res, err := collect.Controller(ctx, s.collectDeps(ctx), kind, ip, locID, opts)
 	status, found := "completed", int32(1)
 	var errMsg *string
 	if err != nil {
@@ -129,7 +135,7 @@ func (s *Server) startADImport(w http.ResponseWriter, r *http.Request) {
 func (s *Server) runADImport(jobID uuid.UUID, dcHost, baseDN string, locID *uuid.UUID) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	res, err := collect.ADImport(ctx, s.collectDeps(), dcHost, baseDN, locID)
+	res, err := collect.ADImport(ctx, s.collectDeps(ctx), dcHost, baseDN, locID)
 	status := "completed"
 	var errMsg *string
 	if err != nil {

@@ -153,6 +153,7 @@ type Querier interface {
 	ListPurchases(ctx context.Context) ([]Purchase, error)
 	ListRootLocations(ctx context.Context) ([]Location, error)
 	ListServerStorage(ctx context.Context, deviceID uuid.UUID) ([]ServerStorage, error)
+	ListSettings(ctx context.Context) ([]ListSettingsRow, error)
 	ListSpareParts(ctx context.Context) ([]SparePart, error)
 	ListSubnets(ctx context.Context) ([]Subnet, error)
 	ListSubnetsByLocation(ctx context.Context, locationID uuid.UUID) ([]Subnet, error)
@@ -240,6 +241,7 @@ type Querier interface {
 	UpsertPortVlan(ctx context.Context, arg UpsertPortVlanParams) error
 	UpsertPrinterSupply(ctx context.Context, arg UpsertPrinterSupplyParams) error
 	UpsertServerStorage(ctx context.Context, arg UpsertServerStorageParams) error
+	UpsertSetting(ctx context.Context, arg UpsertSettingParams) error
 	// ---- Topology links ------------------------------------------------------
 	UpsertTopologyLink(ctx context.Context, arg UpsertTopologyLinkParams) error
 	UpsertUPSStatus(ctx context.Context, arg UpsertUPSStatusParams) error
