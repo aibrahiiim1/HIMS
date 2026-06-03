@@ -1,0 +1,2 @@
+DROP TABLE IF EXISTS bmc_sensors;
+DROP TABLE IF EXISTS bmc_info;

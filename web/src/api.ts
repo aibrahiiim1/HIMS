@@ -289,6 +289,28 @@ export interface ExpenseByLocation {
   count: number
 }
 
+export interface BMCInfo {
+  device_id?: string
+  vendor?: string | null
+  controller_kind?: string | null
+  model?: string | null
+  serial?: string | null
+  firmware_version?: string | null
+  power_state?: string | null
+  health?: string | null
+}
+
+export interface BMCSensor {
+  id: string
+  device_id: string
+  kind: string
+  name: string
+  status?: string | null
+  reading?: number | null
+  unit?: string | null
+  has_reading: boolean
+}
+
 export interface DiscoveryJob {
   id: string
   location_id?: string | null

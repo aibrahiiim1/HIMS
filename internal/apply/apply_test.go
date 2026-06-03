@@ -27,6 +27,8 @@ type fakeWriter struct {
 	ifaces     []db.UpsertInterfaceParams
 	vlans      []db.UpsertVlanParams
 	neighbors  []db.UpsertNeighborParams
+	bmcInfo    []db.UpsertBMCInfoParams
+	bmcSensors []db.UpsertBMCSensorParams
 	staleCalls int
 }
 
@@ -105,6 +107,17 @@ func (f *fakeWriter) UpsertLicense(_ context.Context, _ db.UpsertLicenseParams) 
 func (f *fakeWriter) DeleteStaleLicenses(_ context.Context, _ db.DeleteStaleLicensesParams) error {
 	return nil
 }
+func (f *fakeWriter) UpsertBMCInfo(_ context.Context, arg db.UpsertBMCInfoParams) error {
+	f.bmcInfo = append(f.bmcInfo, arg)
+	return nil
+}
+func (f *fakeWriter) UpsertBMCSensor(_ context.Context, arg db.UpsertBMCSensorParams) error {
+	f.bmcSensors = append(f.bmcSensors, arg)
+	return nil
+}
+func (f *fakeWriter) DeleteStaleBMCSensors(_ context.Context, _ db.DeleteStaleBMCSensorsParams) error {
+	return nil
+}
 
 type fakeSwitch struct{}
 
@@ -178,6 +191,32 @@ func TestApply_ReconcileUpdatesExisting(t *testing.T) {
 	}
 	if len(f.created) != 0 || len(f.updated) != 1 {
 		t.Fatalf("expected update not create: created=%d updated=%d", len(f.created), len(f.updated))
+	}
+}
+
+func TestApply_PersistsBMC(t *testing.T) {
+	f := &fakeWriter{}
+	a := New(f)
+	res := discovery.HostResult{
+		IP: netip.MustParseAddr("10.0.0.51"), Alive: true, OpenPorts: []int{443},
+		MatchedDrv: fakeSwitch{}, Match: driver.Match{Category: domain.CatServer},
+		Facts: &driver.Facts{
+			KV:  map[string]string{},
+			BMC: &driver.BMCSnap{Vendor: "Dell", ControllerKind: "iDRAC", Model: "R740", Health: "OK"},
+			BMCSensors: []driver.BMCSensorSnap{
+				{Kind: "fan", Name: "Fan 1", Status: "OK", Reading: 30, Unit: "Percent", HasReading: true},
+				{Kind: "psu", Name: "PSU 1", Status: "OK"},
+			},
+		},
+	}
+	if _, err := a.Apply(context.Background(), res, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.bmcInfo) != 1 || f.bmcInfo[0].ControllerKind == nil || *f.bmcInfo[0].ControllerKind != "iDRAC" {
+		t.Fatalf("bmc_info not persisted: %+v", f.bmcInfo)
+	}
+	if len(f.bmcSensors) != 2 {
+		t.Fatalf("bmc sensors = %d; want 2", len(f.bmcSensors))
 	}
 }
 

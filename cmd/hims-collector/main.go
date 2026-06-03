@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -23,8 +24,10 @@ import (
 	"github.com/coralsearesorts/hims/internal/discovery"
 	"github.com/coralsearesorts/hims/internal/domain"
 	"github.com/coralsearesorts/hims/internal/driver"
+	rfdrv "github.com/coralsearesorts/hims/internal/driver/redfish"
 	"github.com/coralsearesorts/hims/internal/drivers"
 	"github.com/coralsearesorts/hims/internal/monitoring"
+	rf "github.com/coralsearesorts/hims/internal/redfish"
 	"github.com/coralsearesorts/hims/internal/scan"
 	"github.com/coralsearesorts/hims/internal/secret"
 	"github.com/coralsearesorts/hims/internal/storage/postgres"
@@ -38,6 +41,7 @@ func main() {
 	target := flag.String("ip", "", "single IP to discover (one-shot mode, no DB)")
 	discover := flag.String("discover", "", "discover an IP AND persist it to the CMDB (needs DB + creds)")
 	scanCIDR := flag.String("scan", "", "discover AND persist every host in a CIDR (needs DB + creds)")
+	redfishIP := flag.String("redfish", "", "collect a server BMC (iLO/iDRAC) over Redfish AND persist (needs DB + http_basic creds)")
 	concurrency := flag.Int("concurrency", 16, "max concurrent hosts during -scan")
 	maxHosts := flag.Int("max-hosts", 4096, "refuse a -scan scope larger than this")
 	location := flag.String("location", "", "location UUID to scope discovered devices to")
@@ -67,6 +71,11 @@ func main() {
 
 	if *scanCIDR != "" {
 		runScan(reg, *scanCIDR, *location, *concurrency, *maxHosts)
+		return
+	}
+
+	if *redfishIP != "" {
+		runRedfish(reg, *redfishIP, *location)
 		return
 	}
 
@@ -246,6 +255,87 @@ func runScan(reg *driver.Registry, cidr, locStr string, concurrency, maxHosts in
 	})
 	fmt.Printf("scan of %s complete — %d attempted: %d persisted, %d skipped(not-alive), %d failed\n",
 		prefix, res.Total, res.Persisted, res.Skipped, res.Failed)
+}
+
+// runRedfish collects a server's out-of-band BMC (iLO/iDRAC) over Redfish and
+// persists it. It resolves the scoped http_basic credentials, tries each
+// against /redfish/v1/, and on success runs the redfish driver + apply worker.
+// The http_basic secret is stored as "username:password" (split here, never
+// logged).
+func runRedfish(reg *driver.Registry, ipStr, locStr string) {
+	ip, err := netip.ParseAddr(ipStr)
+	if err != nil {
+		slog.Error("invalid -redfish IP", "value", ipStr, "error", err)
+		os.Exit(1)
+	}
+	locationID := parseLocationID(locStr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	queries, cfg, closeDB := buildDiscoverDeps(ctx, reg)
+	defer closeDB()
+
+	groups, err := cfg.Fetcher.CredentialCandidates(ctx, ip, locationID)
+	if err != nil {
+		slog.Error("redfish: credential resolve failed", "error", err)
+		os.Exit(1)
+	}
+
+	d := rfdrv.New()
+	var facts *driver.Facts
+	var bound *credresolver.CredRef
+	for _, g := range groups {
+		for _, m := range g.Members {
+			if m.Kind != domain.CredHTTPBasic {
+				continue
+			}
+			dec, err := cfg.Decrypt(ctx, m.ID)
+			if err != nil {
+				continue
+			}
+			user, pass := splitUserPass(dec.Community)
+			client := rf.NewClient("https://"+ip.String(), user, pass, nil)
+			var root map[string]any
+			if err := client.GetJSON(ctx, "/redfish/v1/", &root); err != nil {
+				continue // credential or host didn't answer Redfish
+			}
+			f, err := d.Collect(&rfdrv.Session{Client: client, Ctx: ctx}, driver.Probe{IP: ip})
+			if err != nil {
+				continue
+			}
+			c := m
+			facts, bound = &f, &c
+			break
+		}
+		if facts != nil {
+			break
+		}
+	}
+	if facts == nil {
+		slog.Error("redfish: no http_basic credential collected a BMC at this IP", "ip", ip.String())
+		os.Exit(1)
+	}
+
+	res := discovery.HostResult{
+		IP: ip, Alive: true, MatchedDrv: d,
+		Match: driver.Match{Confidence: 72, Category: domain.CatServer},
+		Facts: facts, BoundCred: bound,
+	}
+	id, err := apply.New(queries).Apply(ctx, res, locationID)
+	if err != nil {
+		slog.Error("redfish: apply failed", "error", err)
+		os.Exit(1)
+	}
+	fmt.Printf("BMC %s persisted as device %s (vendor=%s, controller=%s, health=%s)\n",
+		ip, id, facts.BMC.Vendor, facts.BMC.ControllerKind, facts.BMC.Health)
+}
+
+// splitUserPass splits a "username:password" secret on the first colon.
+func splitUserPass(s string) (user, pass string) {
+	if i := strings.IndexByte(s, ':'); i >= 0 {
+		return s[:i], s[i+1:]
+	}
+	return s, ""
 }
 
 // parseLocationID parses an optional location UUID flag (empty → nil).

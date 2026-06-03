@@ -61,6 +61,31 @@ type ArpEntry struct {
 	LastSeenAt       time.Time  `json:"last_seen_at"`
 }
 
+type BmcInfo struct {
+	DeviceID        uuid.UUID `json:"device_id"`
+	Vendor          *string   `json:"vendor"`
+	ControllerKind  *string   `json:"controller_kind"`
+	Model           *string   `json:"model"`
+	Serial          *string   `json:"serial"`
+	FirmwareVersion *string   `json:"firmware_version"`
+	PowerState      *string   `json:"power_state"`
+	Health          *string   `json:"health"`
+	LastSeenAt      time.Time `json:"last_seen_at"`
+}
+
+type BmcSensor struct {
+	ID               uuid.UUID `json:"id"`
+	DeviceID         uuid.UUID `json:"device_id"`
+	Kind             string    `json:"kind"`
+	Name             string    `json:"name"`
+	Status           *string   `json:"status"`
+	Reading          *float64  `json:"reading"`
+	Unit             *string   `json:"unit"`
+	HasReading       bool      `json:"has_reading"`
+	CollectionSource string    `json:"collection_source"`
+	LastSeenAt       time.Time `json:"last_seen_at"`
+}
+
 type CameraInfo struct {
 	DeviceID     uuid.UUID `json:"device_id"`
 	Manufacturer *string   `json:"manufacturer"`

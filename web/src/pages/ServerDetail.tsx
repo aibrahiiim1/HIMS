@@ -1,7 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
-import { api, type ServerStorage, type DeviceFact, type DeviceRole, type Interface } from '../api'
+import { api, type ServerStorage, type DeviceFact, type DeviceRole, type Interface, type BMCInfo, type BMCSensor } from '../api'
 import { DeviceOps } from '../components/DeviceOps'
+
+const healthBadge = (h?: string | null) =>
+  h === 'OK' ? 'up' : h === 'Critical' ? 'down' : h === 'Warning' ? 'warning' : 'unknown'
 
 function fmtBytes(n?: number | null): string {
   if (n == null) return '—'
@@ -20,8 +23,11 @@ export function ServerDetail() {
   const roles = useQuery({ queryKey: ['roles', id], queryFn: () => api.get<DeviceRole[]>(`/devices/${id}/roles`) })
   const storage = useQuery({ queryKey: ['storage', id], queryFn: () => api.get<ServerStorage[]>(`/devices/${id}/storage`) })
   const ifaces = useQuery({ queryKey: ['interfaces', id], queryFn: () => api.get<Interface[]>(`/devices/${id}/interfaces`) })
+  const bmc = useQuery({ queryKey: ['bmc', id], queryFn: () => api.get<BMCInfo>(`/devices/${id}/bmc`) })
+  const sensors = useQuery({ queryKey: ['bmc-sensors', id], queryFn: () => api.get<BMCSensor[]>(`/devices/${id}/bmc-sensors`) })
 
   const factMap = new Map((facts.data ?? []).map((f) => [f.key, f.value ?? '']))
+  const hasBMC = bmc.data && bmc.data.device_id
 
   return (
     <div>
@@ -85,6 +91,36 @@ export function ServerDetail() {
           </table>
         )}
       </div>
+
+      {hasBMC && (
+        <div className="card">
+          <h2>BMC / hardware health
+            <span className={`badge badge-${healthBadge(bmc.data?.health)}`} style={{ marginLeft: 8 }}>{bmc.data?.health ?? 'unknown'}</span>
+          </h2>
+          <dl className="kv">
+            <div><dt>Controller</dt><dd>{bmc.data?.vendor ?? '—'} {bmc.data?.controller_kind ?? ''}</dd></div>
+            <div><dt>Model</dt><dd>{bmc.data?.model ?? '—'}</dd></div>
+            <div><dt>Serial</dt><dd>{bmc.data?.serial ?? '—'}</dd></div>
+            <div><dt>Firmware</dt><dd>{bmc.data?.firmware_version ?? '—'}</dd></div>
+            <div><dt>Power</dt><dd>{bmc.data?.power_state ?? '—'}</dd></div>
+          </dl>
+          {sensors.data && sensors.data.length > 0 && (
+            <table>
+              <thead><tr><th>Kind</th><th>Name</th><th>Status</th><th>Reading</th></tr></thead>
+              <tbody>
+                {sensors.data.map((s) => (
+                  <tr key={s.id}>
+                    <td>{s.kind}</td>
+                    <td>{s.name}</td>
+                    <td><span className={`badge badge-${healthBadge(s.status)}`}>{s.status ?? '—'}</span></td>
+                    <td>{s.has_reading ? `${s.reading} ${s.unit ?? ''}` : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
 
       <DeviceOps deviceId={deviceId} />
     </div>

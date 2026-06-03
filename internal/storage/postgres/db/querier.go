@@ -57,6 +57,7 @@ type Querier interface {
 	DeletePurchase(ctx context.Context, id uuid.UUID) error
 	DeleteSparePart(ctx context.Context, id uuid.UUID) error
 	DeleteStaleARP(ctx context.Context, arg DeleteStaleARPParams) error
+	DeleteStaleBMCSensors(ctx context.Context, arg DeleteStaleBMCSensorsParams) error
 	DeleteStaleHAMembers(ctx context.Context, arg DeleteStaleHAMembersParams) error
 	DeleteStaleInterfaces(ctx context.Context, arg DeleteStaleInterfacesParams) error
 	DeleteStaleLicenses(ctx context.Context, arg DeleteStaleLicensesParams) error
@@ -80,6 +81,7 @@ type Querier interface {
 	FindMACByIP(ctx context.Context, ipAddress netip.Addr) ([]FindMACByIPRow, error)
 	// Topology search: which switch + port + VLAN carries a MAC?
 	FindMACOnSwitches(ctx context.Context, mac string) ([]FindMACOnSwitchesRow, error)
+	GetBMCInfo(ctx context.Context, deviceID uuid.UUID) (BmcInfo, error)
 	GetCameraInfo(ctx context.Context, deviceID uuid.UUID) (CameraInfo, error)
 	GetCredential(ctx context.Context, id uuid.UUID) (Credential, error)
 	GetDevice(ctx context.Context, id uuid.UUID) (Device, error)
@@ -98,6 +100,7 @@ type Querier interface {
 	ListAlerts(ctx context.Context) ([]Alert, error)
 	// Used by the topology graph to build the full picture.
 	ListAllTopologyLinks(ctx context.Context) ([]ListAllTopologyLinksRow, error)
+	ListBMCSensors(ctx context.Context, deviceID uuid.UUID) ([]BmcSensor, error)
 	ListChildLocations(ctx context.Context, parentID *uuid.UUID) ([]Location, error)
 	ListCredentials(ctx context.Context) ([]Credential, error)
 	ListDeviceFacts(ctx context.Context, deviceID uuid.UUID) ([]DeviceFact, error)
@@ -197,6 +200,8 @@ type Querier interface {
 	// ---- ARP entries ---------------------------------------------------------
 	UpsertARP(ctx context.Context, arg UpsertARPParams) error
 	UpsertAccessPoint(ctx context.Context, arg UpsertAccessPointParams) (AccessPoint, error)
+	UpsertBMCInfo(ctx context.Context, arg UpsertBMCInfoParams) error
+	UpsertBMCSensor(ctx context.Context, arg UpsertBMCSensorParams) error
 	UpsertCameraInfo(ctx context.Context, arg UpsertCameraInfoParams) (CameraInfo, error)
 	UpsertDeviceFact(ctx context.Context, arg UpsertDeviceFactParams) error
 	UpsertFirewallStatus(ctx context.Context, arg UpsertFirewallStatusParams) error

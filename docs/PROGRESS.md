@@ -717,6 +717,51 @@ Job cancellation endpoint; AD-import scope source; subnet-stored scopes
 
 ---
 
+## Redfish — iLO/iDRAC out-of-band collector ✅ (closed 2026-06-03)
+
+Dependency-free HTTP/JSON BMC collection for HPE iLO + Dell iDRAC — and the
+**reusable HTTP-credential transport** future vendor-REST drivers build on.
+
+- ✅ `internal/redfish` — `Client` (injectable `Doer`, HTTP Basic auth,
+  self-signed-cert tolerant for mgmt LAN) + `Collect` walking service-root →
+  Systems / Chassis (Thermal+Power) / Managers / Storage into normalized
+  `BMCFacts` (vendor, iLO/iDRAC kind, model, serial, BIOS+BMC firmware, power,
+  health, CPU/RAM, fan/PSU/temperature/storage sensors). HPE/Dell OEM detect.
+  Optional sections best-effort. Tested against **sample HPE iLO + Dell iDRAC
+  payloads** via a fake Doer (vendor detect, identity, sensor mix, a Critical
+  fan status preserved, 404 errors).
+- ✅ `internal/driver/redfish` — `redfish_bmc` driver: HTTPS-banner fingerprint
+  (iLO/iDRAC/Redfish → server, conf 72, below switch-authoritative) + an
+  HTTP-session `Collect` mapping `BMCFacts` → `driver.Facts` (BMC snap +
+  sensors + KV). Registered in the builtin set. Tested (fingerprint + mapping
+  + wrong-session).
+- ✅ `Facts.BMC` + `Facts.BMCSensors`; apply worker persists them
+  (`bmc_info` + `bmc_sensors`, stale-prune, source=redfish). Migration 000018
+  + queries. Apply test asserts BMC + sensors persist.
+- ✅ API: `GET /devices/{id}/bmc` + `/bmc-sensors`. UI: **BMC / hardware
+  health** section on ServerDetail (controller summary + health badge + sensor
+  table).
+- ✅ collector `-redfish <ip> [-location]` — resolves scoped http_basic
+  credentials (secret = `user:password`), verifies `/redfish/v1/`, collects +
+  applies. Community/password used only in memory, never logged.
+- ✅ gofmt + go build/vet/test + frontend green.
+
+### ⚠️ Live-validation trigger (not yet validated against real hardware)
+The Redfish field shapes follow the DMTF schema + published HPE/Dell examples
+but have **not been validated against a real iLO 5 / iDRAC 9**. Trigger:
+first BMC credential bound on the real fleet — run `-redfish` against one HPE
++ one Dell server, confirm the parsed model/serial/firmware/sensors, and
+adjust field paths if a vendor diverges (esp. per-physical-drive health, which
+v1 summarizes at the storage-controller level). Not marked
+production-validated until then.
+
+### Carry-forward
+Per-physical-drive health (one GET per Drive ref); fact-based hardware-health
+alert rules (the alerting engine currently matches monitoring-check status, not
+arbitrary facts — adding a "bmc.health != OK" rule type is a follow-up); link a
+BMC device to its OS-side device (BMC has its own mgmt IP). This HTTP client +
+http_basic path is the reusable base for the vendor-REST drivers next.
+
 ## Status — listed roadmap + the fleet-onboarding path complete
 Every queued phase plus the discovery→persist integrator and now whole-subnet
 scanning are shipped, green, committed. Remaining work is all

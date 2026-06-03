@@ -13,6 +13,7 @@ import (
 	"github.com/coralsearesorts/hims/internal/driver/fortigate"
 	"github.com/coralsearesorts/hims/internal/driver/hostsnmp"
 	"github.com/coralsearesorts/hims/internal/driver/huawei"
+	"github.com/coralsearesorts/hims/internal/driver/redfish"
 	"github.com/coralsearesorts/hims/internal/driver/wireless"
 )
 
@@ -30,5 +31,6 @@ func Builtin() *driver.Registry {
 	r.Register(esxi.New())
 	r.Register(cctv.New())
 	r.Register(wireless.New())
+	r.Register(redfish.New())
 	return r
 }

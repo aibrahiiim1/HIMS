@@ -55,6 +55,10 @@ type Writer interface {
 	DeleteStaleHAMembers(ctx context.Context, arg db.DeleteStaleHAMembersParams) error
 	UpsertLicense(ctx context.Context, arg db.UpsertLicenseParams) error
 	DeleteStaleLicenses(ctx context.Context, arg db.DeleteStaleLicensesParams) error
+
+	UpsertBMCInfo(ctx context.Context, arg db.UpsertBMCInfoParams) error
+	UpsertBMCSensor(ctx context.Context, arg db.UpsertBMCSensorParams) error
+	DeleteStaleBMCSensors(ctx context.Context, arg db.DeleteStaleBMCSensorsParams) error
 }
 
 // Applier persists discovery results.
@@ -199,6 +203,30 @@ func (a *Applier) applyFacts(ctx context.Context, devID uuid.UUID, f *driver.Fac
 	}
 
 	a.applyFirewall(ctx, devID, f, poll)
+	a.applyBMC(ctx, devID, f, poll)
+}
+
+// applyBMC persists the Redfish out-of-band controller summary + sensors.
+func (a *Applier) applyBMC(ctx context.Context, devID uuid.UUID, f *driver.Facts, poll time.Time) {
+	if f.BMC == nil {
+		return
+	}
+	b := f.BMC
+	_ = a.w.UpsertBMCInfo(ctx, db.UpsertBMCInfoParams{
+		DeviceID: devID, Vendor: nonEmpty(b.Vendor), ControllerKind: nonEmpty(b.ControllerKind),
+		Model: nonEmpty(b.Model), Serial: nonEmpty(b.Serial), FirmwareVersion: nonEmpty(b.FirmwareVersion),
+		PowerState: nonEmpty(b.PowerState), Health: nonEmpty(b.Health), LastSeenAt: poll,
+	})
+	for _, s := range f.BMCSensors {
+		_ = a.w.UpsertBMCSensor(ctx, db.UpsertBMCSensorParams{
+			DeviceID: devID, Kind: s.Kind, Name: s.Name, Status: nonEmpty(s.Status),
+			Reading: f64ptr(s.Reading), Unit: nonEmpty(s.Unit), HasReading: s.HasReading,
+			CollectionSource: "redfish", LastSeenAt: poll,
+		})
+	}
+	if len(f.BMCSensors) > 0 {
+		_ = a.w.DeleteStaleBMCSensors(ctx, db.DeleteStaleBMCSensorsParams{DeviceID: devID, LastSeenAt: poll, CollectionSource: "redfish"})
+	}
 }
 
 // applyFirewall persists the FortiGate current-state collections.
@@ -245,9 +273,10 @@ func driverTag(f *driver.Facts) string {
 	return "snmp"
 }
 
-func i16ptr(v int16) *int16 { return &v }
-func i32ptr(v int32) *int32 { return &v }
-func i64ptr(v int64) *int64 { return &v }
+func i16ptr(v int16) *int16     { return &v }
+func i32ptr(v int32) *int32     { return &v }
+func i64ptr(v int64) *int64     { return &v }
+func f64ptr(v float64) *float64 { return &v }
 func orUnknown(s string) string {
 	if s == "" {
 		return "unknown"

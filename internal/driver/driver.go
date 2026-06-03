@@ -87,6 +87,30 @@ type Facts struct {
 	VpnTunnels     []VpnTunnelSnap
 	HAMembers      []HAMemberSnap
 	Licenses       []LicenseSnap
+	// BMC out-of-band inventory + health (Redfish: iLO/iDRAC).
+	BMC        *BMCSnap
+	BMCSensors []BMCSensorSnap
+}
+
+// BMCSnap is a server's out-of-band controller summary (one row per device).
+type BMCSnap struct {
+	Vendor          string // HPE | Dell
+	ControllerKind  string // iLO | iDRAC
+	Model           string
+	Serial          string
+	FirmwareVersion string
+	PowerState      string
+	Health          string
+}
+
+// BMCSensorSnap is one fan / PSU / temperature / storage health reading.
+type BMCSensorSnap struct {
+	Kind       string // fan | psu | temperature | storage
+	Name       string
+	Status     string
+	Reading    float64
+	Unit       string
+	HasReading bool
 }
 
 // FirewallStatusSnap is the one-row-per-firewall HA + session summary.
