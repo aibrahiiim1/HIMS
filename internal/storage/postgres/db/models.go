@@ -476,6 +476,17 @@ type TopologyLink struct {
 	LastSeenAt     time.Time   `json:"last_seen_at"`
 }
 
+type UpsStatus struct {
+	DeviceID      uuid.UUID `json:"device_id"`
+	Manufacturer  *string   `json:"manufacturer"`
+	Model         *string   `json:"model"`
+	BatteryStatus string    `json:"battery_status"`
+	ChargePct     *int32    `json:"charge_pct"`
+	RuntimeMin    *int32    `json:"runtime_min"`
+	LoadPct       *int32    `json:"load_pct"`
+	LastSeenAt    time.Time `json:"last_seen_at"`
+}
+
 type VirtualMachine struct {
 	ID           uuid.UUID   `json:"id"`
 	HostDeviceID uuid.UUID   `json:"host_device_id"`

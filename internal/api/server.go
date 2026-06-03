@@ -103,6 +103,7 @@ func (s *Server) routes() {
 		r.Get("/devices/{id}/bmc", s.deviceBMC)
 		r.Get("/devices/{id}/bmc-sensors", s.deviceBMCSensors)
 		r.Get("/devices/{id}/printer-supplies", s.devicePrinterSupplies)
+		r.Get("/devices/{id}/ups", s.deviceUPS)
 
 		// --- Topology & search ----------------------------------------
 		// IP/MAC/name → switch+port+path (the headline Phase 1 feature).
@@ -342,6 +343,19 @@ func (s *Server) deviceBMC(w http.ResponseWriter, r *http.Request) {
 	row, err := s.queries.GetBMCInfo(ctx, id)
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{}) // no BMC collected yet
+		return
+	}
+	writeJSON(w, http.StatusOK, row)
+}
+
+func (s *Server) deviceUPS(w http.ResponseWriter, r *http.Request) {
+	ctx, id, ok := pathDevice(w, r)
+	if !ok {
+		return
+	}
+	row, err := s.queries.GetUPSStatus(ctx, id)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{}) // no UPS status yet
 		return
 	}
 	writeJSON(w, http.StatusOK, row)

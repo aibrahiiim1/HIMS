@@ -99,6 +99,18 @@ type Facts struct {
 	APs  []APSnap
 	// Printer marker supplies (Printer-MIB).
 	PrinterSupplies []PrinterSupplySnap
+	// UPS status (UPS-MIB).
+	UPS *UPSSnap
+}
+
+// UPSSnap is a UPS's current battery/load status (one row per device).
+type UPSSnap struct {
+	Manufacturer  string
+	Model         string
+	BatteryStatus string // normal | low | depleted | unknown
+	ChargePct     *int32
+	RuntimeMin    *int32
+	LoadPct       *int32
 }
 
 // PrinterSupplySnap is one printer marker supply (toner/ink/drum) reading.

@@ -15,6 +15,7 @@ import (
 	"github.com/coralsearesorts/hims/internal/driver/huawei"
 	"github.com/coralsearesorts/hims/internal/driver/printer"
 	"github.com/coralsearesorts/hims/internal/driver/redfish"
+	"github.com/coralsearesorts/hims/internal/driver/ups"
 	vspheredrv "github.com/coralsearesorts/hims/internal/driver/vsphere"
 	"github.com/coralsearesorts/hims/internal/driver/wireless"
 )
@@ -36,5 +37,6 @@ func Builtin() *driver.Registry {
 	r.Register(redfish.New())
 	r.Register(vspheredrv.New())
 	r.Register(printer.New())
+	r.Register(ups.New())
 	return r
 }

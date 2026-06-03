@@ -919,7 +919,26 @@ drivers now collect through the pipeline.
 Printer-MIB parsing is unit-tested; validate against a real printer once a
 credential is bound. UPS-MIB + voice remain as future peripherals phases.
 
-## Status — full platform + onboarding + ALL 4 deep-collection deps + SNMP v3 + printers
+## Peripherals: UPS via SNMP (UPS-MIB) ✅ (closed 2026-06-03)
+
+- ✅ `internal/driver/ups` — `ups_snmp`: sysDescr/banner keyword fingerprint
+  (APC/Eaton/Liebert/Smart-UPS/… → ups, conf 68); Collect GETs UPS-MIB scalars
+  (manufacturer, model, battery status 1-4→normal/low/depleted/unknown, charge
+  %, est. runtime min) + walks upsOutputPercentLoad (max line). `Session`
+  aliases `swsnmp.Session` (the shared type). Tested with a fake SNMP client
+  (on-battery-low: identity, status mapping, charge/runtime, max-load).
+  Registered.
+- ✅ migration 000020 `ups_status` + queries; `Facts.UPS` + apply persists.
+  API `/devices/{id}/ups`; UI **UPS** nav + UPSDetail (battery badge, charge,
+  runtime, load).
+- ✅ gofmt + go build/vet/test ./... green; frontend tsc + build green.
+
+### Live-validation trigger
+UPS-MIB parsing is unit-tested; validate battery/runtime/load against a real
+UPS once a credential is bound. Voice (CUCM/IP-phones) remains the last
+peripherals/voice sub-area.
+
+## Status — full platform + onboarding + ALL 4 deep deps + SNMP v3 + printers + UPS
 The entire requested scope is shipped, green, committed. Drivers:
 aruba/cisco/huawei (switch SNMP), fortigate (firewall), host_snmp +
 vmware_esxi (servers/virt SNMP), cctv + wlan_controller (banner), redfish_bmc

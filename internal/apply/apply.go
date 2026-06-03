@@ -66,6 +66,7 @@ type Writer interface {
 	UpsertAccessPoint(ctx context.Context, arg db.UpsertAccessPointParams) (db.AccessPoint, error)
 	UpsertPrinterSupply(ctx context.Context, arg db.UpsertPrinterSupplyParams) error
 	DeleteStalePrinterSupplies(ctx context.Context, arg db.DeleteStalePrinterSuppliesParams) error
+	UpsertUPSStatus(ctx context.Context, arg db.UpsertUPSStatusParams) error
 }
 
 // Applier persists discovery results.
@@ -238,6 +239,15 @@ func (a *Applier) applyFacts(ctx context.Context, devID uuid.UUID, f *driver.Fac
 		_ = a.w.DeleteStalePrinterSupplies(ctx, db.DeleteStalePrinterSuppliesParams{DeviceID: devID, LastSeenAt: poll, CollectionSource: sourceSNMP})
 	}
 
+	// UPS status (UPS-MIB).
+	if f.UPS != nil {
+		_ = a.w.UpsertUPSStatus(ctx, db.UpsertUPSStatusParams{
+			DeviceID: devID, Manufacturer: nonEmpty(f.UPS.Manufacturer), Model: nonEmpty(f.UPS.Model),
+			BatteryStatus: orDefaultBattery(f.UPS.BatteryStatus), ChargePct: f.UPS.ChargePct,
+			RuntimeMin: f.UPS.RuntimeMin, LoadPct: f.UPS.LoadPct, LastSeenAt: poll,
+		})
+	}
+
 	// Camera inventory (ONVIF).
 	if f.Camera != nil {
 		_, _ = a.w.UpsertCameraInfo(ctx, db.UpsertCameraInfoParams{
@@ -259,6 +269,15 @@ func (a *Applier) applyFacts(ctx context.Context, devID uuid.UUID, f *driver.Fac
 func orDefaultPower(s string) string {
 	switch s {
 	case "on", "off", "suspended":
+		return s
+	default:
+		return "unknown"
+	}
+}
+
+func orDefaultBattery(s string) string {
+	switch s {
+	case "normal", "low", "depleted":
 		return s
 	default:
 		return "unknown"

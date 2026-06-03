@@ -92,6 +92,7 @@ type Querier interface {
 	GetMonitoringCheck(ctx context.Context, id uuid.UUID) (MonitoringCheck, error)
 	GetSparePart(ctx context.Context, id uuid.UUID) (SparePart, error)
 	GetSystem(ctx context.Context, id uuid.UUID) (System, error)
+	GetUPSStatus(ctx context.Context, deviceID uuid.UUID) (UpsStatus, error)
 	GetWLANControllerInfo(ctx context.Context, deviceID uuid.UUID) (WlanControllerInfo, error)
 	GetWorkOrder(ctx context.Context, id uuid.UUID) (WorkOrder, error)
 	InsertMibObject(ctx context.Context, arg InsertMibObjectParams) error
@@ -224,6 +225,7 @@ type Querier interface {
 	UpsertServerStorage(ctx context.Context, arg UpsertServerStorageParams) error
 	// ---- Topology links ------------------------------------------------------
 	UpsertTopologyLink(ctx context.Context, arg UpsertTopologyLinkParams) error
+	UpsertUPSStatus(ctx context.Context, arg UpsertUPSStatusParams) error
 	// Upsert keyed on (host, name): re-collecting refreshes state without dups.
 	UpsertVM(ctx context.Context, arg UpsertVMParams) (VirtualMachine, error)
 	// ---- VLANs ----------------------------------------------------------------

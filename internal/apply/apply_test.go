@@ -138,6 +138,7 @@ func (f *fakeWriter) UpsertPrinterSupply(_ context.Context, _ db.UpsertPrinterSu
 func (f *fakeWriter) DeleteStalePrinterSupplies(_ context.Context, _ db.DeleteStalePrinterSuppliesParams) error {
 	return nil
 }
+func (f *fakeWriter) UpsertUPSStatus(_ context.Context, _ db.UpsertUPSStatusParams) error { return nil }
 
 type fakeSwitch struct{}
 

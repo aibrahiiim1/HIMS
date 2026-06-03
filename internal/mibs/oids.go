@@ -84,6 +84,15 @@ const (
 	PrtMarkerLifeCountEntry = "1.3.6.1.2.1.43.10.2.1.4"
 	PrinterMIBRoot          = "1.3.6.1.2.1.43" // presence ⇒ a printer
 
+	// --- UPS-MIB (RFC 1628), root 1.3.6.1.2.1.33 -------------------------
+	UpsMIBRoot              = "1.3.6.1.2.1.33"
+	UpsIdentManufacturer    = "1.3.6.1.2.1.33.1.1.1.0"
+	UpsIdentModel           = "1.3.6.1.2.1.33.1.1.2.0"
+	UpsBatteryStatus        = "1.3.6.1.2.1.33.1.2.1.0" // 1 unknown,2 normal,3 low,4 depleted
+	UpsEstMinutesRemaining  = "1.3.6.1.2.1.33.1.2.3.0"
+	UpsEstChargeRemaining   = "1.3.6.1.2.1.33.1.2.4.0"   // percent
+	UpsOutputPercentLoadCol = "1.3.6.1.2.1.33.1.4.4.1.5" // per-line load %, walk
+
 	// Virtualization / hardware-vendor enterprise OID prefixes
 	VMwareEnterprise = "1.3.6.1.4.1.6876." // VMware ESXi host SNMP agent
 	HPEServerOID     = "1.3.6.1.4.1.232."  // HP/HPE Insight (iLO host agent)

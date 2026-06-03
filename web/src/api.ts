@@ -289,6 +289,16 @@ export interface ExpenseByLocation {
   count: number
 }
 
+export interface UPSStatus {
+  device_id?: string
+  manufacturer?: string | null
+  model?: string | null
+  battery_status?: string
+  charge_pct?: number | null
+  runtime_min?: number | null
+  load_pct?: number | null
+}
+
 export interface PrinterSupply {
   id: string
   device_id: string
