@@ -662,10 +662,36 @@ v3 (no v2c community). Filed as BACKLOG-SNMPV3.
 
 ---
 
-## Status — explicitly-listed roadmap complete
-Every phase the operator queued (3b/3c, CCTV, Wireless, Databases/AD, MIB
-engine, reporting/dashboards, the persist-worker integrator, and the bounded
-follow-ups) is shipped, green, and committed. Remaining work is all
-**deferred-with-trigger** deep-collection transports (vSphere/govmomi,
-Hyper-V/WinRM, iLO/iDRAC Redfish, ONVIF, vendor REST), SNMP v3, peripherals/
-voice drivers, and range/CIDR + AD-import discovery driving the apply worker.
+## Range/CIDR scan orchestrator ✅ (closed 2026-06-03)
+
+Extends the per-IP persist path to whole-fleet onboarding.
+
+- ✅ `discovery.ExpandCIDR(prefix, maxHosts)` — pure: enumerates hosts, skips
+  IPv4 network/broadcast on /30-or-wider, yields all for /31-/32, and
+  **refuses** an oversized scope (errors before allocating a /8) rather than
+  silently truncating. Tests: /29 skip-ends, /31+/32, oversize refusal,
+  unmasked-normalization.
+- ✅ `internal/scan.Scope(ctx, ips, concurrency, fn)` — bounded worker pool
+  over an injectable per-IP `discover→apply` fn; aggregates
+  persisted/skipped/failed; honours context-cancel (stops dispatch). Tests:
+  outcome aggregation, concurrency-limit (max-in-flight ≤ N), cancel-dispatches-
+  nothing. No network (fn injected).
+- ✅ collector `-scan <cidr> [-concurrency N] [-max-hosts M] [-location uuid]`
+  — reuses the shared `buildDiscoverDeps` (Store fetcher + cipher decrypt +
+  pipeline) fanned across the scope, signal-aware. Refactored `-discover` onto
+  the same shared deps.
+- ✅ build/vet/test green; gofmt clean.
+
+### Carry-forward
+Persist a `discovery_jobs` + per-host `discovery_results` record per scan (the
+schema exists from migration 000006) + an API/UI to launch scans and watch
+progress; AD-import scope source.
+
+---
+
+## Status — listed roadmap + the fleet-onboarding path complete
+Every queued phase plus the discovery→persist integrator and now whole-subnet
+scanning are shipped, green, committed. Remaining work is all
+**deferred-with-trigger**: deep-collection transports (vSphere/govmomi,
+Hyper-V/WinRM, iLO/iDRAC Redfish, ONVIF, vendor REST), SNMP v3, scan
+job-record persistence + API/UI, AD-import, peripherals/voice drivers.

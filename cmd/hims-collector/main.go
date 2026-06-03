@@ -25,6 +25,7 @@ import (
 	"github.com/coralsearesorts/hims/internal/driver"
 	"github.com/coralsearesorts/hims/internal/drivers"
 	"github.com/coralsearesorts/hims/internal/monitoring"
+	"github.com/coralsearesorts/hims/internal/scan"
 	"github.com/coralsearesorts/hims/internal/secret"
 	"github.com/coralsearesorts/hims/internal/storage/postgres"
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
@@ -36,7 +37,10 @@ func main() {
 
 	target := flag.String("ip", "", "single IP to discover (one-shot mode, no DB)")
 	discover := flag.String("discover", "", "discover an IP AND persist it to the CMDB (needs DB + creds)")
-	location := flag.String("location", "", "location UUID to scope the discovered device to")
+	scanCIDR := flag.String("scan", "", "discover AND persist every host in a CIDR (needs DB + creds)")
+	concurrency := flag.Int("concurrency", 16, "max concurrent hosts during -scan")
+	maxHosts := flag.Int("max-hosts", 4096, "refuse a -scan scope larger than this")
+	location := flag.String("location", "", "location UUID to scope discovered devices to")
 	monitor := flag.Bool("monitor", false, "run the scheduled monitoring loop")
 	seed := flag.Bool("seed", false, "seed default monitoring checks, then exit")
 	rekey := flag.Bool("rekey", false, "rotate credential encryption: re-seal all secrets from HIMS_OLD_ENCRYPTION_KEY under HIMS_ENCRYPTION_KEY")
@@ -58,6 +62,11 @@ func main() {
 
 	if *discover != "" {
 		runDiscover(reg, *discover, *location)
+		return
+	}
+
+	if *scanCIDR != "" {
+		runScan(reg, *scanCIDR, *location, *concurrency, *maxHosts)
 		return
 	}
 
@@ -177,57 +186,14 @@ func runDiscover(reg *driver.Registry, ipStr, locStr string) {
 		slog.Error("invalid -discover IP", "value", ipStr, "error", err)
 		os.Exit(1)
 	}
-	var locationID *uuid.UUID
-	if locStr != "" {
-		l, err := uuid.Parse(locStr)
-		if err != nil {
-			slog.Error("invalid -location UUID", "value", locStr, "error", err)
-			os.Exit(1)
-		}
-		locationID = &l
-	}
+	locationID := parseLocationID(locStr)
 
-	dbURL := os.Getenv("HIMS_DATABASE_URL")
-	if dbURL == "" {
-		dbURL = "postgres://hims:hims@localhost:5432/hims?sslmode=disable"
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	pool, err := postgres.NewPool(ctx, postgres.PoolConfig{URL: dbURL, MaxOpenConns: 5})
-	if err != nil {
-		slog.Error("discover: database unavailable", "error", err)
-		os.Exit(1)
-	}
-	defer pool.Close()
+	queries, cfg, closeDB := buildDiscoverDeps(ctx, reg)
+	defer closeDB()
 
-	queries := db.New(pool)
-	store := postgres.New(pool) // CandidateFetcher (scope resolver)
-
-	cipher, err := secret.NewCipher(os.Getenv("HIMS_ENCRYPTION_KEY"))
-	if err != nil {
-		slog.Error("discover: HIMS_ENCRYPTION_KEY required to decrypt credentials", "error", err)
-		os.Exit(1)
-	}
-	decrypt := func(ctx context.Context, id uuid.UUID) (discovery.DecryptedCred, error) {
-		cred, err := queries.GetCredential(ctx, id)
-		if err != nil {
-			return discovery.DecryptedCred{}, err
-		}
-		plain, err := cipher.Open(cred.EncryptedBlob, cred.KeyID)
-		if err != nil {
-			return discovery.DecryptedCred{}, err
-		}
-		// plain (the community) is used only here and never logged.
-		return discovery.DecryptedCred{
-			ID: id, Kind: domain.CredentialKind(cred.Kind), Community: string(plain), Weak: cred.Weak,
-		}, nil
-	}
-
-	cfg := discovery.PipelineConfig{
-		Registry: reg, Fetcher: store, Decrypt: decrypt,
-		PingTimeout: 2 * time.Second, SNMPTimeout: 3 * time.Second,
-	}
 	res := discovery.Run(ctx, ip, locationID, cfg)
 	id, err := apply.New(queries).Apply(ctx, res, locationID)
 	if err != nil {
@@ -245,6 +211,97 @@ func runDiscover(reg *driver.Registry, ipStr, locStr string) {
 	collected := res.Facts != nil
 	fmt.Printf("IP %s persisted as device %s (driver=%s, category=%s, collected=%v)\n",
 		ip, id, drv, res.Match.Category, collected)
+}
+
+// runScan discovers + persists every host in a CIDR with bounded concurrency.
+// Reuses the same DB + credential-decrypt + pipeline + apply wiring as
+// -discover, fanned out across the scope.
+func runScan(reg *driver.Registry, cidr, locStr string, concurrency, maxHosts int) {
+	prefix, err := netip.ParsePrefix(cidr)
+	if err != nil {
+		slog.Error("invalid -scan CIDR", "value", cidr, "error", err)
+		os.Exit(1)
+	}
+	hosts, err := discovery.ExpandCIDR(prefix, maxHosts)
+	if err != nil {
+		slog.Error("scan: scope rejected", "error", err)
+		os.Exit(1)
+	}
+	locationID := parseLocationID(locStr)
+
+	// Generous overall budget: per-host steps have their own timeouts.
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	queries, cfg, closeDB := buildDiscoverDeps(ctx, reg)
+	defer closeDB()
+
+	applier := apply.New(queries)
+	slog.Info("scan starting", "cidr", prefix.String(), "hosts", len(hosts), "concurrency", concurrency)
+	res := scan.Scope(ctx, hosts, concurrency, func(ctx context.Context, ip netip.Addr) (uuid.UUID, error) {
+		hctx, hcancel := context.WithTimeout(ctx, 45*time.Second)
+		defer hcancel()
+		r := discovery.Run(hctx, ip, locationID, cfg)
+		return applier.Apply(hctx, r, locationID)
+	})
+	fmt.Printf("scan of %s complete — %d attempted: %d persisted, %d skipped(not-alive), %d failed\n",
+		prefix, res.Total, res.Persisted, res.Skipped, res.Failed)
+}
+
+// parseLocationID parses an optional location UUID flag (empty → nil).
+func parseLocationID(locStr string) *uuid.UUID {
+	if locStr == "" {
+		return nil
+	}
+	l, err := uuid.Parse(locStr)
+	if err != nil {
+		slog.Error("invalid -location UUID", "value", locStr, "error", err)
+		os.Exit(1)
+	}
+	return &l
+}
+
+// buildDiscoverDeps connects the DB and assembles the pipeline config (scope
+// resolver fetcher + in-memory cipher-decrypt closure). Exits on failure.
+// Returns the queries handle, the pipeline config, and a close func.
+func buildDiscoverDeps(ctx context.Context, reg *driver.Registry) (*db.Queries, discovery.PipelineConfig, func()) {
+	dbURL := os.Getenv("HIMS_DATABASE_URL")
+	if dbURL == "" {
+		dbURL = "postgres://hims:hims@localhost:5432/hims?sslmode=disable"
+	}
+	pool, err := postgres.NewPool(ctx, postgres.PoolConfig{URL: dbURL, MaxOpenConns: 10})
+	if err != nil {
+		slog.Error("discover: database unavailable", "error", err)
+		os.Exit(1)
+	}
+	queries := db.New(pool)
+	store := postgres.New(pool) // CandidateFetcher (scope resolver)
+
+	cipher, err := secret.NewCipher(os.Getenv("HIMS_ENCRYPTION_KEY"))
+	if err != nil {
+		pool.Close()
+		slog.Error("discover: HIMS_ENCRYPTION_KEY required to decrypt credentials", "error", err)
+		os.Exit(1)
+	}
+	decrypt := func(ctx context.Context, id uuid.UUID) (discovery.DecryptedCred, error) {
+		cred, err := queries.GetCredential(ctx, id)
+		if err != nil {
+			return discovery.DecryptedCred{}, err
+		}
+		plain, err := cipher.Open(cred.EncryptedBlob, cred.KeyID)
+		if err != nil {
+			return discovery.DecryptedCred{}, err
+		}
+		// plain (the community) is used only here and never logged.
+		return discovery.DecryptedCred{
+			ID: id, Kind: domain.CredentialKind(cred.Kind), Community: string(plain), Weak: cred.Weak,
+		}, nil
+	}
+	cfg := discovery.PipelineConfig{
+		Registry: reg, Fetcher: store, Decrypt: decrypt,
+		PingTimeout: 2 * time.Second, SNMPTimeout: 3 * time.Second,
+	}
+	return queries, cfg, pool.Close
 }
 
 // emptyFetcher returns no credential candidates (one-shot mode has no DB).
