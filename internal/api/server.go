@@ -125,6 +125,10 @@ func (s *Server) routes() {
 
 		// --- Locations -----------------------------------------------
 		r.Get("/locations", s.listLocations)
+		r.Get("/locations/all", s.listAllLocations)
+		r.Post("/locations", s.createLocation)
+		r.Patch("/locations/{id}", s.updateLocation)
+		r.Delete("/locations/{id}", s.deleteLocation)
 		r.Get("/locations/{id}/children", s.childLocations)
 		r.Get("/locations/{id}/subnets", s.locationSubnets)
 

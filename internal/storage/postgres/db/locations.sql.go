@@ -109,6 +109,40 @@ func (q *Queries) ListChildLocations(ctx context.Context, parentID *uuid.UUID) (
 	return items, nil
 }
 
+const listLocations = `-- name: ListLocations :many
+SELECT id, parent_id, kind, name, code, metadata, created_at, updated_at FROM locations ORDER BY kind, name
+`
+
+// Full flat list for building the location tree client-side.
+func (q *Queries) ListLocations(ctx context.Context) ([]Location, error) {
+	rows, err := q.db.Query(ctx, listLocations)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Location{}
+	for rows.Next() {
+		var i Location
+		if err := rows.Scan(
+			&i.ID,
+			&i.ParentID,
+			&i.Kind,
+			&i.Name,
+			&i.Code,
+			&i.Metadata,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRootLocations = `-- name: ListRootLocations :many
 SELECT id, parent_id, kind, name, code, metadata, created_at, updated_at FROM locations WHERE parent_id IS NULL ORDER BY name
 `
@@ -140,4 +174,32 @@ func (q *Queries) ListRootLocations(ctx context.Context) ([]Location, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const updateLocation = `-- name: UpdateLocation :one
+UPDATE locations SET name = $2, code = $3, updated_at = now()
+WHERE id = $1
+RETURNING id, parent_id, kind, name, code, metadata, created_at, updated_at
+`
+
+type UpdateLocationParams struct {
+	ID   uuid.UUID `json:"id"`
+	Name string    `json:"name"`
+	Code *string   `json:"code"`
+}
+
+func (q *Queries) UpdateLocation(ctx context.Context, arg UpdateLocationParams) (Location, error) {
+	row := q.db.QueryRow(ctx, updateLocation, arg.ID, arg.Name, arg.Code)
+	var i Location
+	err := row.Scan(
+		&i.ID,
+		&i.ParentID,
+		&i.Kind,
+		&i.Name,
+		&i.Code,
+		&i.Metadata,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }

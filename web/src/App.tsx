@@ -25,6 +25,7 @@ import { Roles } from './pages/Roles'
 import { Mibs } from './pages/Mibs'
 import { Settings } from './pages/Settings'
 import { Inventory } from './pages/Inventory'
+import { Locations } from './pages/Locations'
 import './App.css'
 
 const qc = new QueryClient({ defaultOptions: { queries: { staleTime: 30_000, retry: 1 } } })
@@ -59,6 +60,7 @@ function Nav() {
       <Link to="/expenses" style={active('/expenses')}>Expenses</Link>
       <Link to="/credentials" style={active('/credentials')}>Credentials</Link>
       <Link to="/mibs" style={active('/mibs')}>MIBs</Link>
+      <Link to="/locations" style={active('/locations')}>Locations</Link>
       <Link to="/settings" style={active('/settings')}>Settings</Link>
     </nav>
   )
@@ -105,6 +107,7 @@ export default function App() {
             <Route path="/mibs" element={<Mibs />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/inventory" element={<Inventory />} />
+            <Route path="/locations" element={<Locations />} />
           </Routes>
         </div>
       </BrowserRouter>

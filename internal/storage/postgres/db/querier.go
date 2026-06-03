@@ -150,6 +150,8 @@ type Querier interface {
 	ListHAMembers(ctx context.Context, deviceID uuid.UUID) ([]FirewallHaMember, error)
 	ListInterfaces(ctx context.Context, deviceID uuid.UUID) ([]Interface, error)
 	ListLicenses(ctx context.Context, deviceID uuid.UUID) ([]FirewallLicense, error)
+	// Full flat list for building the location tree client-side.
+	ListLocations(ctx context.Context) ([]Location, error)
 	ListLowStockParts(ctx context.Context) ([]SparePart, error)
 	ListMibFiles(ctx context.Context) ([]MibFile, error)
 	ListMibObjects(ctx context.Context, mibFileID uuid.UUID) ([]MibObject, error)
@@ -233,6 +235,7 @@ type Querier interface {
 	UpdateDiscoveredDevice(ctx context.Context, arg UpdateDiscoveredDeviceParams) (Device, error)
 	UpdateDiscoveryJobStatus(ctx context.Context, arg UpdateDiscoveryJobStatusParams) error
 	UpdateDiscoveryResult(ctx context.Context, arg UpdateDiscoveryResultParams) error
+	UpdateLocation(ctx context.Context, arg UpdateLocationParams) (Location, error)
 	UpdateSparePart(ctx context.Context, arg UpdateSparePartParams) (SparePart, error)
 	UpdateSystem(ctx context.Context, arg UpdateSystemParams) (System, error)
 	UpdateWorkOrder(ctx context.Context, arg UpdateWorkOrderParams) (WorkOrder, error)
