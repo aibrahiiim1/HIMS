@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
 import { api, type FirewallStatus, type VpnTunnel, type HAMember, type License, type DeviceFact } from '../api'
+import { DeviceOps } from '../components/DeviceOps'
 
 function fmtBytes(n?: number | null): string {
   if (n == null) return '—'
@@ -98,6 +99,8 @@ export function FirewallDetail() {
           </table>
         )}
       </div>
+
+      <DeviceOps deviceId={id!} />
     </div>
   )
 }

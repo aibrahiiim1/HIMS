@@ -39,11 +39,17 @@ func main() {
 	location := flag.String("location", "", "location UUID to scope the discovered device to")
 	monitor := flag.Bool("monitor", false, "run the scheduled monitoring loop")
 	seed := flag.Bool("seed", false, "seed default monitoring checks, then exit")
+	rekey := flag.Bool("rekey", false, "rotate credential encryption: re-seal all secrets from HIMS_OLD_ENCRYPTION_KEY under HIMS_ENCRYPTION_KEY")
 	tick := flag.Duration("tick", 30*time.Second, "monitoring sweep interval")
 	flag.Parse()
 
 	reg := drivers.Builtin()
 	slog.Info("hims-collector", "drivers", reg.Names())
+
+	if *rekey {
+		runRekey()
+		return
+	}
 
 	if *monitor || *seed {
 		runMonitoring(*monitor, *seed, *tick)
@@ -91,6 +97,73 @@ func main() {
 	}
 	if res.Error != nil {
 		fmt.Printf("  note: %v\n", res.Error)
+	}
+}
+
+// runRekey rotates credential encryption: it opens every credential's blob
+// with the old key (HIMS_OLD_ENCRYPTION_KEY) and re-seals it under the new key
+// (HIMS_ENCRYPTION_KEY), updating the stored blob + KeyID. Idempotent: rows
+// already under the new KeyID are skipped, so a re-run is safe.
+func runRekey() {
+	oldKey, newKey := os.Getenv("HIMS_OLD_ENCRYPTION_KEY"), os.Getenv("HIMS_ENCRYPTION_KEY")
+	if oldKey == "" || newKey == "" {
+		slog.Error("rekey needs both HIMS_OLD_ENCRYPTION_KEY and HIMS_ENCRYPTION_KEY")
+		os.Exit(1)
+	}
+	oldC, err := secret.NewCipher(oldKey)
+	if err != nil {
+		slog.Error("invalid HIMS_OLD_ENCRYPTION_KEY", "error", err)
+		os.Exit(1)
+	}
+	newC, err := secret.NewCipher(newKey)
+	if err != nil {
+		slog.Error("invalid HIMS_ENCRYPTION_KEY", "error", err)
+		os.Exit(1)
+	}
+
+	dbURL := os.Getenv("HIMS_DATABASE_URL")
+	if dbURL == "" {
+		dbURL = "postgres://hims:hims@localhost:5432/hims?sslmode=disable"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	pool, err := postgres.NewPool(ctx, postgres.PoolConfig{URL: dbURL, MaxOpenConns: 5})
+	if err != nil {
+		slog.Error("rekey: database unavailable", "error", err)
+		os.Exit(1)
+	}
+	defer pool.Close()
+	queries := db.New(pool)
+
+	creds, err := queries.ListCredentials(ctx)
+	if err != nil {
+		slog.Error("rekey: list credentials failed", "error", err)
+		os.Exit(1)
+	}
+	rotated, skipped, failed := 0, 0, 0
+	for _, c := range creds {
+		if c.KeyID == newC.KeyID() {
+			skipped++
+			continue // already under the new key
+		}
+		blob, keyID, err := secret.ReKey(oldC, newC, c.EncryptedBlob, c.KeyID)
+		if err != nil {
+			failed++
+			slog.Warn("rekey: could not re-seal credential", "id", c.ID, "error", err)
+			continue
+		}
+		if err := queries.UpdateCredentialSecret(ctx, db.UpdateCredentialSecretParams{
+			ID: c.ID, EncryptedBlob: blob, KeyID: keyID,
+		}); err != nil {
+			failed++
+			slog.Warn("rekey: update failed", "id", c.ID, "error", err)
+			continue
+		}
+		rotated++
+	}
+	slog.Info("rekey complete", "rotated", rotated, "skipped", skipped, "failed", failed, "new_key_id", newC.KeyID())
+	if failed > 0 {
+		os.Exit(1)
 	}
 }
 

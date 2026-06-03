@@ -26,12 +26,23 @@ async function patch<T>(path: string, body: unknown): Promise<T> {
   return r.json()
 }
 
+async function put<T>(path: string, body: unknown): Promise<T | void> {
+  const r = await fetch(`${BASE}${path}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${path}`)
+  if (r.status === 204) return
+  return r.json()
+}
+
 async function del(path: string): Promise<void> {
   const r = await fetch(`${BASE}${path}`, { method: 'DELETE' })
   if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${path}`)
 }
 
-export const api = { get, post, patch, del }
+export const api = { get, post, patch, put, del }
 
 // ---- Domain types -----------------------------------------------------------
 

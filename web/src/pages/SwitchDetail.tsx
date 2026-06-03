@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
 import { api, type Interface, type VLAN, type Neighbor, type TopologyLink } from '../api'
+import { DeviceOps } from '../components/DeviceOps'
 
 type Tab = 'interfaces' | 'vlans' | 'neighbors' | 'topology'
 
@@ -27,6 +28,7 @@ export function SwitchDetail() {
         {tab === 'neighbors' && <Neighbors id={id!} />}
         {tab === 'topology' && <DeviceTopology id={id!} />}
       </div>
+      <DeviceOps deviceId={id!} />
     </div>
   )
 }

@@ -72,6 +72,17 @@ func (c *Cipher) Seal(plaintext []byte) (blob []byte, keyID string, err error) {
 	return blob, c.keyID, nil
 }
 
+// ReKey re-seals a blob from the old key under the new key: open with old,
+// seal with new. Used by the credential key-rotation tool. Returns the new
+// blob + new KeyID to store. Plaintext exists only transiently in memory.
+func ReKey(oldC, newC *Cipher, blob []byte, keyID string) (newBlob []byte, newKeyID string, err error) {
+	plain, err := oldC.Open(blob, keyID)
+	if err != nil {
+		return nil, "", err
+	}
+	return newC.Seal(plain)
+}
+
 // Open decrypts a blob sealed by Seal. It verifies the KeyID matches the
 // loaded key first, then authenticates + decrypts (GCM rejects any tamper).
 func (c *Cipher) Open(blob []byte, keyID string) ([]byte, error) {

@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
 import { api, type DeviceFact, type ServerStorage, type VirtualMachine } from '../api'
+import { DeviceOps } from '../components/DeviceOps'
 
 function fmtBytes(n?: number | null): string {
   if (n == null) return '—'
@@ -76,6 +77,8 @@ export function VirtualHostDetail() {
           </table>
         )}
       </div>
+
+      <DeviceOps deviceId={id ?? ''} />
     </div>
   )
 }

@@ -181,6 +181,8 @@ type Querier interface {
 	SetMonitoringCheckEnabled(ctx context.Context, arg SetMonitoringCheckEnabledParams) (MonitoringCheck, error)
 	TotalExpenses(ctx context.Context) (float64, error)
 	TouchDeviceDiscovery(ctx context.Context, arg TouchDeviceDiscoveryParams) error
+	// Used by key rotation: re-seal the secret under a new key + KeyID.
+	UpdateCredentialSecret(ctx context.Context, arg UpdateCredentialSecretParams) error
 	// Reflect the worst current check status onto the device row so device lists
 	// show a live health badge without a per-row sample query.
 	UpdateDeviceMonitoringStatus(ctx context.Context, arg UpdateDeviceMonitoringStatusParams) error

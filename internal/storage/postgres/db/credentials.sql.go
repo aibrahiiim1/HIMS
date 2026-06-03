@@ -233,3 +233,20 @@ func (q *Queries) ResolveCandidatesForIP(ctx context.Context, arg ResolveCandida
 	}
 	return items, nil
 }
+
+const updateCredentialSecret = `-- name: UpdateCredentialSecret :exec
+UPDATE credentials SET encrypted_blob = $2, key_id = $3, updated_at = now()
+WHERE id = $1
+`
+
+type UpdateCredentialSecretParams struct {
+	ID            uuid.UUID `json:"id"`
+	EncryptedBlob []byte    `json:"encrypted_blob"`
+	KeyID         string    `json:"key_id"`
+}
+
+// Used by key rotation: re-seal the secret under a new key + KeyID.
+func (q *Queries) UpdateCredentialSecret(ctx context.Context, arg UpdateCredentialSecretParams) error {
+	_, err := q.db.Exec(ctx, updateCredentialSecret, arg.ID, arg.EncryptedBlob, arg.KeyID)
+	return err
+}

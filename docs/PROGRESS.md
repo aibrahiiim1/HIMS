@@ -638,8 +638,34 @@ The cross-cutting rollup over every engine shipped so far.
 
 ---
 
-## Later phases ⬜
-See `PLAN.md` §10. Remaining: **security/UX follow-ups** (per-device
-SNMP-check/bind UI, credential key-rotation tooling, SNMP v3), peripherals/
-voice drivers, and the deferred deep-collection transports (vSphere/govmomi,
-ONVIF, vendor REST, Redfish) — each filed with a trigger in its phase.
+## Follow-ups — key rotation + per-device ops UI ✅ (closed 2026-06-03)
+
+- ✅ **Credential key-rotation tooling**: `secret.ReKey(old, new, blob, keyID)`
+  (open with old → seal with new; test asserts the re-keyed blob opens under
+  the new KeyID and the old key no longer matches). `UpdateCredentialSecret`
+  query + collector `-rekey` mode (env old+new keys; lists credentials,
+  re-seals each, **idempotent** — rows already under the new KeyID are
+  skipped; non-zero exit if any fail).
+- ✅ **Per-device monitoring-check + credential-bind UI**: reusable
+  `DeviceOps` component (register a tcp/snmp check via POST /monitoring/checks;
+  bind a credential via PUT /devices/{id}/credential; lists the device's
+  checks with live status). Added to Switch / Server / Firewall / Virtual-Host
+  detail pages. Added `api.put`.
+- ✅ build/vet/test + frontend green; gofmt clean.
+
+### Deferred → SNMP v3 (its own phase, not "small")
+Full SNMP v3 (USM) needs auth + priv protocol selection and keys carried in
+the credential model, plus gosnmp v3 security-params wiring and the discovery
+prober + monitoring poller honoring v3. The credential `kind=snmp_v3` already
+exists; the transport is v2c-only today. Trigger: first device that mandates
+v3 (no v2c community). Filed as BACKLOG-SNMPV3.
+
+---
+
+## Status — explicitly-listed roadmap complete
+Every phase the operator queued (3b/3c, CCTV, Wireless, Databases/AD, MIB
+engine, reporting/dashboards, the persist-worker integrator, and the bounded
+follow-ups) is shipped, green, and committed. Remaining work is all
+**deferred-with-trigger** deep-collection transports (vSphere/govmomi,
+Hyper-V/WinRM, iLO/iDRAC Redfish, ONVIF, vendor REST), SNMP v3, peripherals/
+voice drivers, and range/CIDR + AD-import discovery driving the apply worker.

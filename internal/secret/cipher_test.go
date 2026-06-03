@@ -70,6 +70,29 @@ func TestOpen_WrongKey(t *testing.T) {
 	}
 }
 
+func TestReKey_RotatesUnderNewKey(t *testing.T) {
+	oldC, _ := NewCipher(testKey(t))
+	newC, _ := NewCipher(testKey(t))
+	plain := []byte("community-to-rotate")
+	blob, keyID, _ := oldC.Seal(plain)
+
+	newBlob, newKeyID, err := ReKey(oldC, newC, blob, keyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if newKeyID != newC.KeyID() || newKeyID == keyID {
+		t.Fatalf("re-keyed blob should carry the new KeyID")
+	}
+	// The new key opens the re-keyed blob; the old key no longer matches.
+	got, err := newC.Open(newBlob, newKeyID)
+	if err != nil || string(got) != string(plain) {
+		t.Fatalf("new key failed to open re-keyed blob: %v / %q", err, got)
+	}
+	if _, err := oldC.Open(newBlob, newKeyID); !errors.Is(err, ErrKeyMismatch) {
+		t.Fatalf("old key should not open re-keyed blob")
+	}
+}
+
 func TestNewCipher_BadKey(t *testing.T) {
 	if _, err := NewCipher("not-base64!!!"); err == nil {
 		t.Fatal("expected error for non-base64 key")

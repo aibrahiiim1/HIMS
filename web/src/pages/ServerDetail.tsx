@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
 import { api, type ServerStorage, type DeviceFact, type DeviceRole, type Interface } from '../api'
+import { DeviceOps } from '../components/DeviceOps'
 
 function fmtBytes(n?: number | null): string {
   if (n == null) return '—'
@@ -14,6 +15,7 @@ function fmtBytes(n?: number | null): string {
 // storage volumes, roles, and network interfaces. Vendor-agnostic.
 export function ServerDetail() {
   const { id } = useParams<{ id: string }>()
+  const deviceId = id ?? ''
   const facts = useQuery({ queryKey: ['facts', id], queryFn: () => api.get<DeviceFact[]>(`/devices/${id}/facts`) })
   const roles = useQuery({ queryKey: ['roles', id], queryFn: () => api.get<DeviceRole[]>(`/devices/${id}/roles`) })
   const storage = useQuery({ queryKey: ['storage', id], queryFn: () => api.get<ServerStorage[]>(`/devices/${id}/storage`) })
@@ -83,6 +85,8 @@ export function ServerDetail() {
           </table>
         )}
       </div>
+
+      <DeviceOps deviceId={deviceId} />
     </div>
   )
 }
