@@ -184,10 +184,12 @@ monitoring_samples (TimescaleDB hypertable).
   port→role inference (+web/file servers), fleet `RoleSummary` +
   `ListDevicesByRole` APIs, Roles UI (tiles → drill-down). Deep confirmation
   (LDAP bind / SQL handshake) deferred.
-- **⚠️ BACKLOG-PERSIST (high priority):** wire the **discovery→persist apply
-  worker** — nothing currently calls `CreateDevice`/`AddDeviceRole`/inventory
-  writers, so read-path UIs are empty until this integrator lands. It turns
-  the shipped engines + drivers into a live system.
+- **BACKLOG-PERSIST ✅ DONE:** the **discovery→persist apply worker**
+  (`internal/apply`) — reconcile/create device by (primary_ip, location),
+  bind-on-success credential, apply inferred roles, upsert facts + all
+  inventory with stale-prune (collection_source=snmp). Wired via collector
+  `-discover <ip>` (Postgres scope-resolver fetcher + in-memory cipher
+  decrypt). This is the integrator that makes read-path UIs show real data.
 - **Phase 8 — Peripherals** (printers/UPS/fingerprint/IP phones) + voice.
 - **Phase 9 — Operations layer:** work orders → spare parts → purchases →
   expenses → licenses/contracts; alert → work-order bridge.

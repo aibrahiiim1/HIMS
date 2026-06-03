@@ -548,15 +548,9 @@ broadens it and makes roles a first-class fleet view.
 
 ### ⚠️ Cross-cutting finding → BACKLOG (high priority): discovery→persist apply worker
 Reconnaissance during this phase confirmed `CreateDevice`/`AddDeviceRole`/the
-inventory writers are **not called by any production path** — HIMS has the
-discovery pipeline (probe→classify→collect `Facts`) and the storage layer,
-but the **apply worker** that persists discovered devices + facts + roles +
-inventory into the DB is not yet wired. Consequence: every read-path UI
-(devices, roles, monitoring seed, topology) reads tables that nothing
-populates until this lands. **This is now the highest-value next build** —
-it's the integrator that turns all the engines + drivers shipped so far into
-a live system. Trigger: before any real fleet onboarding. Filed as
-BACKLOG-PERSIST.
+inventory writers were **not called by any production path**. ✅ **RESOLVED**
+in the next commit (`internal/apply` + collector `-discover`). See the
+BACKLOG-PERSIST section below.
 
 ### Carry-forward
 Deep role confirmation (LDAP bind, SQL handshake) — needs those transports;
@@ -564,7 +558,40 @@ deferred. Role auto-application happens inside the persist worker above.
 
 ---
 
+## BACKLOG-PERSIST — discovery→persist apply worker ✅ (closed 2026-06-03)
+
+The integrator that turns the engines + drivers into a live system: it takes
+the `HostResult` a discovery run produces and writes it into the CMDB.
+
+- ✅ `internal/apply` — `Applier.Apply(HostResult, locationID)`:
+  - **reconcile** by (primary_ip, location): update a live device if found
+    (`UpdateDiscoveredDevice`), else `CreateDevice`. Location-less scans
+    always create (documented edge).
+  - **bind-on-success**: persists the authenticating credential.
+  - **roles**: applies `InferRoles(openPorts)` with source "port".
+  - **facts + inventory**: upserts KV facts + interfaces/VLANs/MACs/neighbors/
+    storage + firewall (status/VPN/HA/licenses), each stamped
+    `last_seen = pollStart` under `collection_source = "snmp"`, then
+    **prunes stale** rows (`last_seen < pollStart`) — a poll that no longer
+    sees a row removes it.
+  - Tested via a fake `Writer`: create-path persists everything (device +
+    cred + dns-role + 2 ifaces + vlan + neighbor + fact + 3 stale-prunes,
+    snmp source, poll-stamp), reconcile-updates-existing, dead-host-skips.
+- ✅ migration query `UpdateDiscoveredDevice` (reconcile refresh).
+- ✅ collector `-discover <ip> [-location <uuid>]` — connects DB, builds the
+  Postgres scope-resolver fetcher + an in-memory cipher-decrypt closure
+  (community never logged), runs the pipeline, applies. The end-to-end path
+  that populates the live system.
+- ✅ build/vet/test green; gofmt clean.
+
+### Carry-forward
+- Range/CIDR + AD-import discovery driving Apply over many IPs (the engine is
+  per-IP ready); an API discover-and-apply endpoint (collector path done).
+- Integration test against a real Postgres (gated `-tags=integration`) — the
+  unit layer covers orchestration via the fake Writer.
+
+---
+
 ## Later phases ⬜
-See `PLAN.md` §10. Remaining: **discovery→persist apply worker
-(BACKLOG-PERSIST, high priority)**, MIB upload engine, reporting/dashboards,
+See `PLAN.md` §10. Remaining: MIB upload engine, reporting/dashboards,
 peripherals/voice, security follow-ups.

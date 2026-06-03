@@ -381,6 +381,68 @@ func (q *Queries) TouchDeviceDiscovery(ctx context.Context, arg TouchDeviceDisco
 	return err
 }
 
+const updateDiscoveredDevice = `-- name: UpdateDiscoveredDevice :one
+UPDATE devices SET
+    hostname = $2, name = $3, vendor = $4, model = $5, serial = $6,
+    os_version = $7, category = $8, driver = $9, status = $10,
+    last_discovery_at = now(), updated_at = now()
+WHERE id = $1
+RETURNING id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at
+`
+
+type UpdateDiscoveredDeviceParams struct {
+	ID        uuid.UUID `json:"id"`
+	Hostname  *string   `json:"hostname"`
+	Name      string    `json:"name"`
+	Vendor    *string   `json:"vendor"`
+	Model     *string   `json:"model"`
+	Serial    *string   `json:"serial"`
+	OsVersion *string   `json:"os_version"`
+	Category  string    `json:"category"`
+	Driver    *string   `json:"driver"`
+	Status    string    `json:"status"`
+}
+
+// Reconcile path: refresh a live device's mutable identity fields on
+// re-discovery (keyed by the caller to the (primary_ip, location) match).
+func (q *Queries) UpdateDiscoveredDevice(ctx context.Context, arg UpdateDiscoveredDeviceParams) (Device, error) {
+	row := q.db.QueryRow(ctx, updateDiscoveredDevice,
+		arg.ID,
+		arg.Hostname,
+		arg.Name,
+		arg.Vendor,
+		arg.Model,
+		arg.Serial,
+		arg.OsVersion,
+		arg.Category,
+		arg.Driver,
+		arg.Status,
+	)
+	var i Device
+	err := row.Scan(
+		&i.ID,
+		&i.LocationID,
+		&i.PrimaryIp,
+		&i.Hostname,
+		&i.Name,
+		&i.Vendor,
+		&i.Model,
+		&i.Serial,
+		&i.OsVersion,
+		&i.Category,
+		&i.Status,
+		&i.Driver,
+		&i.CredentialID,
+		&i.LastDiscoveryAt,
+		&i.LastMonitoringAt,
+		&i.Metadata,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
 const upsertDeviceFact = `-- name: UpsertDeviceFact :exec
 INSERT INTO device_facts (device_id, key, value, value_json, driver, observed_at)
 VALUES ($1, $2, $3, $4, $5, now())

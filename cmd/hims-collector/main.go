@@ -18,8 +18,11 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/coralsearesorts/hims/internal/alerting"
+	"github.com/coralsearesorts/hims/internal/apply"
 	"github.com/coralsearesorts/hims/internal/credresolver"
 	"github.com/coralsearesorts/hims/internal/discovery"
+	"github.com/coralsearesorts/hims/internal/domain"
+	"github.com/coralsearesorts/hims/internal/driver"
 	"github.com/coralsearesorts/hims/internal/drivers"
 	"github.com/coralsearesorts/hims/internal/monitoring"
 	"github.com/coralsearesorts/hims/internal/secret"
@@ -31,7 +34,9 @@ func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
 
-	target := flag.String("ip", "", "single IP to discover (one-shot mode)")
+	target := flag.String("ip", "", "single IP to discover (one-shot mode, no DB)")
+	discover := flag.String("discover", "", "discover an IP AND persist it to the CMDB (needs DB + creds)")
+	location := flag.String("location", "", "location UUID to scope the discovered device to")
 	monitor := flag.Bool("monitor", false, "run the scheduled monitoring loop")
 	seed := flag.Bool("seed", false, "seed default monitoring checks, then exit")
 	tick := flag.Duration("tick", 30*time.Second, "monitoring sweep interval")
@@ -42,6 +47,11 @@ func main() {
 
 	if *monitor || *seed {
 		runMonitoring(*monitor, *seed, *tick)
+		return
+	}
+
+	if *discover != "" {
+		runDiscover(reg, *discover, *location)
 		return
 	}
 
@@ -82,6 +92,86 @@ func main() {
 	if res.Error != nil {
 		fmt.Printf("  note: %v\n", res.Error)
 	}
+}
+
+// runDiscover discovers an IP and persists the result to the CMDB. It wires
+// the real credential fetcher (Postgres scope resolver), an in-memory decrypt
+// closure (cipher.Open — plaintext never leaves this function), and the apply
+// worker. This is the end-to-end path that populates the live system.
+func runDiscover(reg *driver.Registry, ipStr, locStr string) {
+	ip, err := netip.ParseAddr(ipStr)
+	if err != nil {
+		slog.Error("invalid -discover IP", "value", ipStr, "error", err)
+		os.Exit(1)
+	}
+	var locationID *uuid.UUID
+	if locStr != "" {
+		l, err := uuid.Parse(locStr)
+		if err != nil {
+			slog.Error("invalid -location UUID", "value", locStr, "error", err)
+			os.Exit(1)
+		}
+		locationID = &l
+	}
+
+	dbURL := os.Getenv("HIMS_DATABASE_URL")
+	if dbURL == "" {
+		dbURL = "postgres://hims:hims@localhost:5432/hims?sslmode=disable"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	pool, err := postgres.NewPool(ctx, postgres.PoolConfig{URL: dbURL, MaxOpenConns: 5})
+	if err != nil {
+		slog.Error("discover: database unavailable", "error", err)
+		os.Exit(1)
+	}
+	defer pool.Close()
+
+	queries := db.New(pool)
+	store := postgres.New(pool) // CandidateFetcher (scope resolver)
+
+	cipher, err := secret.NewCipher(os.Getenv("HIMS_ENCRYPTION_KEY"))
+	if err != nil {
+		slog.Error("discover: HIMS_ENCRYPTION_KEY required to decrypt credentials", "error", err)
+		os.Exit(1)
+	}
+	decrypt := func(ctx context.Context, id uuid.UUID) (discovery.DecryptedCred, error) {
+		cred, err := queries.GetCredential(ctx, id)
+		if err != nil {
+			return discovery.DecryptedCred{}, err
+		}
+		plain, err := cipher.Open(cred.EncryptedBlob, cred.KeyID)
+		if err != nil {
+			return discovery.DecryptedCred{}, err
+		}
+		// plain (the community) is used only here and never logged.
+		return discovery.DecryptedCred{
+			ID: id, Kind: domain.CredentialKind(cred.Kind), Community: string(plain), Weak: cred.Weak,
+		}, nil
+	}
+
+	cfg := discovery.PipelineConfig{
+		Registry: reg, Fetcher: store, Decrypt: decrypt,
+		PingTimeout: 2 * time.Second, SNMPTimeout: 3 * time.Second,
+	}
+	res := discovery.Run(ctx, ip, locationID, cfg)
+	id, err := apply.New(queries).Apply(ctx, res, locationID)
+	if err != nil {
+		slog.Error("discover: apply failed", "ip", ip.String(), "error", err)
+		os.Exit(1)
+	}
+	if id == uuid.Nil {
+		fmt.Printf("IP %s — not alive; nothing persisted\n", ip)
+		return
+	}
+	drv := "unknown"
+	if res.MatchedDrv != nil {
+		drv = res.MatchedDrv.Name()
+	}
+	collected := res.Facts != nil
+	fmt.Printf("IP %s persisted as device %s (driver=%s, category=%s, collected=%v)\n",
+		ip, id, drv, res.Match.Category, collected)
 }
 
 // emptyFetcher returns no credential candidates (one-shot mode has no DB).

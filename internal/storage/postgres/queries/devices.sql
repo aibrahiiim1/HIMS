@@ -19,6 +19,16 @@ INSERT INTO devices (
 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
 RETURNING *;
 
+-- name: UpdateDiscoveredDevice :one
+-- Reconcile path: refresh a live device's mutable identity fields on
+-- re-discovery (keyed by the caller to the (primary_ip, location) match).
+UPDATE devices SET
+    hostname = $2, name = $3, vendor = $4, model = $5, serial = $6,
+    os_version = $7, category = $8, driver = $9, status = $10,
+    last_discovery_at = now(), updated_at = now()
+WHERE id = $1
+RETURNING *;
+
 -- name: SetDeviceCredential :exec
 -- Bind-on-success: record the credential that last authenticated.
 UPDATE devices SET credential_id = $2, updated_at = now() WHERE id = $1;

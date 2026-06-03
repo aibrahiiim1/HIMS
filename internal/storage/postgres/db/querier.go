@@ -168,6 +168,9 @@ type Querier interface {
 	// Reflect the worst current check status onto the device row so device lists
 	// show a live health badge without a per-row sample query.
 	UpdateDeviceMonitoringStatus(ctx context.Context, arg UpdateDeviceMonitoringStatusParams) error
+	// Reconcile path: refresh a live device's mutable identity fields on
+	// re-discovery (keyed by the caller to the (primary_ip, location) match).
+	UpdateDiscoveredDevice(ctx context.Context, arg UpdateDiscoveredDeviceParams) (Device, error)
 	UpdateDiscoveryJobStatus(ctx context.Context, arg UpdateDiscoveryJobStatusParams) error
 	UpdateDiscoveryResult(ctx context.Context, arg UpdateDiscoveryResultParams) error
 	UpdateSparePart(ctx context.Context, arg UpdateSparePartParams) (SparePart, error)
