@@ -117,7 +117,7 @@ export function Inventory() {
             <thead>
               <tr>
                 <th style={{ width: 28 }}><input type="checkbox" checked={allShownSelected} onChange={toggleAll} /></th>
-                <th>Name</th><th>IP</th><th>Category</th><th>Vendor</th><th>Model</th><th>Status</th><th></th>
+                <th>Name</th><th>IP</th><th>Category</th><th>VLAN</th><th>Class</th><th>Location</th><th>Vendor</th><th>Status</th><th></th>
               </tr>
             </thead>
             <tbody>
@@ -135,8 +135,10 @@ export function Inventory() {
                           {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
                         </select>
                       </td>
-                      <td><input style={{ ...input, width: 100 }} value={editing.vendor ?? ''} onChange={(e) => setEditing({ ...editing, vendor: e.target.value })} /></td>
-                      <td><input style={{ ...input, width: 100 }} value={editing.model ?? ''} onChange={(e) => setEditing({ ...editing, model: e.target.value })} /></td>
+                      <td><input style={{ ...input, width: 70 }} value={editing.vlan ?? ''} onChange={(e) => setEditing({ ...editing, vlan: e.target.value })} /></td>
+                      <td><input style={{ ...input, width: 90 }} value={editing.device_class ?? ''} onChange={(e) => setEditing({ ...editing, device_class: e.target.value })} /></td>
+                      <td><input style={{ ...input, width: 110 }} value={editing.location ?? ''} onChange={(e) => setEditing({ ...editing, location: e.target.value })} /></td>
+                      <td><input style={{ ...input, width: 90 }} value={editing.vendor ?? ''} onChange={(e) => setEditing({ ...editing, vendor: e.target.value })} /></td>
                       <td>{d.status}</td>
                       <td style={{ whiteSpace: 'nowrap' }}>
                         <button style={btn} disabled={save.isPending} onClick={() => save.mutate(editing)}>Save</button>{' '}
@@ -151,8 +153,10 @@ export function Inventory() {
                     <td>{base ? <Link to={`${base}/${d.id}`}>{d.name}</Link> : d.name}</td>
                     <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{d.primary_ip ?? '—'}</td>
                     <td>{d.category}</td>
+                    <td>{d.vlan ?? '—'}</td>
+                    <td>{d.device_class ?? '—'}</td>
+                    <td>{d.location ?? '—'}</td>
                     <td>{d.vendor ?? '—'}</td>
-                    <td>{d.model ?? '—'}</td>
                     <td><span className={`badge badge-${d.status}`}>{d.status}</span></td>
                     <td style={{ whiteSpace: 'nowrap' }}>
                       <button style={ghost} onClick={() => setEditing(d)}>Edit</button>{' '}

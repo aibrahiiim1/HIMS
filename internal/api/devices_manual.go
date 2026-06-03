@@ -28,6 +28,9 @@ type manualDeviceReq struct {
 	Serial     string  `json:"serial"`
 	OSVersion  string  `json:"os_version"`
 	LocationID *string `json:"location_id"`
+	VLAN       string  `json:"vlan"`
+	Class      string  `json:"class"`
+	Location   string  `json:"location"`
 }
 
 // createManualDevice handles POST /devices — operator-entered inventory. The
@@ -89,6 +92,9 @@ func manualDeviceParams(req manualDeviceReq) (db.CreateDeviceParams, error) {
 		Driver:       nil,
 		CredentialID: nil,
 		Metadata:     []byte(`{"source":"manual"}`),
+		Vlan:         strPtr(req.VLAN),
+		DeviceClass:  strPtr(req.Class),
+		Location:     strPtr(req.Location),
 	}, nil
 }
 
@@ -100,6 +106,9 @@ type updateDeviceReq struct {
 	Serial    string `json:"serial"`
 	OSVersion string `json:"os_version"`
 	Hostname  string `json:"hostname"`
+	VLAN      string `json:"vlan"`
+	Class     string `json:"class"`
+	Location  string `json:"location"`
 }
 
 // updateDevice handles PATCH /devices/{id} — operator edit of identity fields.
@@ -129,6 +138,7 @@ func (s *Server) updateDevice(w http.ResponseWriter, r *http.Request) {
 		ID: id, Name: strings.TrimSpace(req.Name), Category: cat,
 		Vendor: strPtr(req.Vendor), Model: strPtr(req.Model), Serial: strPtr(req.Serial),
 		OsVersion: strPtr(req.OSVersion), Hostname: strPtr(req.Hostname),
+		Vlan: strPtr(req.VLAN), DeviceClass: strPtr(req.Class), Location: strPtr(req.Location),
 	})
 	if err != nil {
 		writeErr(w, err)

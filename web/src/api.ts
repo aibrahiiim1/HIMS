@@ -71,6 +71,9 @@ export interface Device {
   driver?: string | null
   location_id?: string | null
   last_discovery_at?: string | null
+  vlan?: string | null
+  device_class?: string | null
+  location?: string | null
 }
 
 export interface Interface {

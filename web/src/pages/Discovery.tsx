@@ -82,11 +82,11 @@ export function Discovery() {
     setCredIDs((prev) => (prev.includes(id) ? prev.filter((g) => g !== id) : [...prev, id]))
 
   // --- Manual Add + CSV Import (non-discoverable / bulk assets) ---
-  const [man, setMan] = useState({ name: '', category: 'unknown', primary_ip: '', vendor: '', model: '', serial: '' })
+  const [man, setMan] = useState({ name: '', category: 'unknown', primary_ip: '', vendor: '', model: '', serial: '', vlan: '', class: '', location: '' })
   const [csv, setCsv] = useState('')
   const addManual = useMutation({
     mutationFn: () => api.post('/devices', { ...man, location_id: location || null }),
-    onSuccess: () => { setMan({ name: '', category: 'unknown', primary_ip: '', vendor: '', model: '', serial: '' }); qc.invalidateQueries({ queryKey: ['devices'] }) },
+    onSuccess: () => { setMan({ name: '', category: 'unknown', primary_ip: '', vendor: '', model: '', serial: '', vlan: '', class: '', location: '' }); qc.invalidateQueries({ queryKey: ['devices'] }) },
   })
   const importCsv = useMutation({
     mutationFn: () => api.postText<{ created: number; failed: number; errors?: string[] }>('/devices/import-csv', csv),
@@ -194,6 +194,9 @@ export function Discovery() {
           <input style={{ ...input, width: 120 }} placeholder="vendor" value={man.vendor} onChange={(e) => setMan({ ...man, vendor: e.target.value })} />
           <input style={{ ...input, width: 120 }} placeholder="model" value={man.model} onChange={(e) => setMan({ ...man, model: e.target.value })} />
           <input style={{ ...input, width: 120 }} placeholder="serial" value={man.serial} onChange={(e) => setMan({ ...man, serial: e.target.value })} />
+          <input style={{ ...input, width: 80 }} placeholder="vlan" value={man.vlan} onChange={(e) => setMan({ ...man, vlan: e.target.value })} />
+          <input style={{ ...input, width: 110 }} placeholder="class" value={man.class} onChange={(e) => setMan({ ...man, class: e.target.value })} />
+          <input style={{ ...input, width: 130 }} placeholder="location" value={man.location} onChange={(e) => setMan({ ...man, location: e.target.value })} />
           <button style={btn} disabled={!man.name.trim() || addManual.isPending} onClick={() => addManual.mutate()}>
             {addManual.isPending ? 'Adding…' : 'Add device'}
           </button>

@@ -33,9 +33,10 @@ func (q *Queries) AddDeviceRole(ctx context.Context, arg AddDeviceRoleParams) er
 const createDevice = `-- name: CreateDevice :one
 INSERT INTO devices (
     location_id, primary_ip, hostname, name, vendor, model, serial,
-    os_version, category, status, driver, credential_id, metadata
-) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-RETURNING id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at
+    os_version, category, status, driver, credential_id, metadata,
+    vlan, device_class, location
+) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+RETURNING id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location
 `
 
 type CreateDeviceParams struct {
@@ -52,6 +53,9 @@ type CreateDeviceParams struct {
 	Driver       *string     `json:"driver"`
 	CredentialID *uuid.UUID  `json:"credential_id"`
 	Metadata     []byte      `json:"metadata"`
+	Vlan         *string     `json:"vlan"`
+	DeviceClass  *string     `json:"device_class"`
+	Location     *string     `json:"location"`
 }
 
 func (q *Queries) CreateDevice(ctx context.Context, arg CreateDeviceParams) (Device, error) {
@@ -69,6 +73,9 @@ func (q *Queries) CreateDevice(ctx context.Context, arg CreateDeviceParams) (Dev
 		arg.Driver,
 		arg.CredentialID,
 		arg.Metadata,
+		arg.Vlan,
+		arg.DeviceClass,
+		arg.Location,
 	)
 	var i Device
 	err := row.Scan(
@@ -91,6 +98,9 @@ func (q *Queries) CreateDevice(ctx context.Context, arg CreateDeviceParams) (Dev
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.Vlan,
+		&i.DeviceClass,
+		&i.Location,
 	)
 	return i, err
 }
@@ -119,7 +129,7 @@ func (q *Queries) DeleteDevices(ctx context.Context, dollar_1 []uuid.UUID) (int6
 }
 
 const getDevice = `-- name: GetDevice :one
-SELECT id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at FROM devices WHERE id = $1 AND deleted_at IS NULL
+SELECT id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location FROM devices WHERE id = $1 AND deleted_at IS NULL
 `
 
 func (q *Queries) GetDevice(ctx context.Context, id uuid.UUID) (Device, error) {
@@ -145,12 +155,15 @@ func (q *Queries) GetDevice(ctx context.Context, id uuid.UUID) (Device, error) {
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.Vlan,
+		&i.DeviceClass,
+		&i.Location,
 	)
 	return i, err
 }
 
 const listAllDevices = `-- name: ListAllDevices :many
-SELECT id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at FROM devices
+SELECT id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location FROM devices
 WHERE deleted_at IS NULL
 ORDER BY category, name
 `
@@ -185,6 +198,9 @@ func (q *Queries) ListAllDevices(ctx context.Context) ([]Device, error) {
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.DeletedAt,
+			&i.Vlan,
+			&i.DeviceClass,
+			&i.Location,
 		); err != nil {
 			return nil, err
 		}
@@ -258,7 +274,7 @@ func (q *Queries) ListDeviceRoles(ctx context.Context, deviceID uuid.UUID) ([]De
 }
 
 const listDevicesByCategory = `-- name: ListDevicesByCategory :many
-SELECT id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at FROM devices
+SELECT id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location FROM devices
 WHERE category = $1 AND deleted_at IS NULL
 ORDER BY name
 `
@@ -292,6 +308,9 @@ func (q *Queries) ListDevicesByCategory(ctx context.Context, category string) ([
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.DeletedAt,
+			&i.Vlan,
+			&i.DeviceClass,
+			&i.Location,
 		); err != nil {
 			return nil, err
 		}
@@ -304,7 +323,7 @@ func (q *Queries) ListDevicesByCategory(ctx context.Context, category string) ([
 }
 
 const listDevicesByRole = `-- name: ListDevicesByRole :many
-SELECT d.id, d.location_id, d.primary_ip, d.hostname, d.name, d.vendor, d.model, d.serial, d.os_version, d.category, d.status, d.driver, d.credential_id, d.last_discovery_at, d.last_monitoring_at, d.metadata, d.created_at, d.updated_at, d.deleted_at FROM devices d
+SELECT d.id, d.location_id, d.primary_ip, d.hostname, d.name, d.vendor, d.model, d.serial, d.os_version, d.category, d.status, d.driver, d.credential_id, d.last_discovery_at, d.last_monitoring_at, d.metadata, d.created_at, d.updated_at, d.deleted_at, d.vlan, d.device_class, d.location FROM devices d
 JOIN device_roles r ON r.device_id = d.id
 WHERE r.role = $1
 ORDER BY d.name
@@ -339,6 +358,9 @@ func (q *Queries) ListDevicesByRole(ctx context.Context, role string) ([]Device,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.DeletedAt,
+			&i.Vlan,
+			&i.DeviceClass,
+			&i.Location,
 		); err != nil {
 			return nil, err
 		}
@@ -351,7 +373,7 @@ func (q *Queries) ListDevicesByRole(ctx context.Context, role string) ([]Device,
 }
 
 const liveDeviceByIPAndLocation = `-- name: LiveDeviceByIPAndLocation :one
-SELECT id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at FROM devices
+SELECT id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location FROM devices
 WHERE primary_ip = $1 AND location_id IS NOT DISTINCT FROM $2 AND deleted_at IS NULL
 `
 
@@ -387,6 +409,9 @@ func (q *Queries) LiveDeviceByIPAndLocation(ctx context.Context, arg LiveDeviceB
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.Vlan,
+		&i.DeviceClass,
+		&i.Location,
 	)
 	return i, err
 }
@@ -456,20 +481,24 @@ func (q *Queries) TouchDeviceDiscovery(ctx context.Context, arg TouchDeviceDisco
 const updateDevice = `-- name: UpdateDevice :one
 UPDATE devices SET
     name = $2, category = $3, vendor = $4, model = $5, serial = $6,
-    os_version = $7, hostname = $8, updated_at = now()
+    os_version = $7, hostname = $8, vlan = $9, device_class = $10,
+    location = $11, updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
-RETURNING id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at
+RETURNING id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location
 `
 
 type UpdateDeviceParams struct {
-	ID        uuid.UUID `json:"id"`
-	Name      string    `json:"name"`
-	Category  string    `json:"category"`
-	Vendor    *string   `json:"vendor"`
-	Model     *string   `json:"model"`
-	Serial    *string   `json:"serial"`
-	OsVersion *string   `json:"os_version"`
-	Hostname  *string   `json:"hostname"`
+	ID          uuid.UUID `json:"id"`
+	Name        string    `json:"name"`
+	Category    string    `json:"category"`
+	Vendor      *string   `json:"vendor"`
+	Model       *string   `json:"model"`
+	Serial      *string   `json:"serial"`
+	OsVersion   *string   `json:"os_version"`
+	Hostname    *string   `json:"hostname"`
+	Vlan        *string   `json:"vlan"`
+	DeviceClass *string   `json:"device_class"`
+	Location    *string   `json:"location"`
 }
 
 // Operator edit of a device's identity fields (Inventory CRUD).
@@ -483,6 +512,9 @@ func (q *Queries) UpdateDevice(ctx context.Context, arg UpdateDeviceParams) (Dev
 		arg.Serial,
 		arg.OsVersion,
 		arg.Hostname,
+		arg.Vlan,
+		arg.DeviceClass,
+		arg.Location,
 	)
 	var i Device
 	err := row.Scan(
@@ -505,6 +537,9 @@ func (q *Queries) UpdateDevice(ctx context.Context, arg UpdateDeviceParams) (Dev
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.Vlan,
+		&i.DeviceClass,
+		&i.Location,
 	)
 	return i, err
 }
@@ -515,7 +550,7 @@ UPDATE devices SET
     os_version = $7, category = $8, driver = $9, status = $10,
     last_discovery_at = now(), updated_at = now()
 WHERE id = $1
-RETURNING id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at
+RETURNING id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location
 `
 
 type UpdateDiscoveredDeviceParams struct {
@@ -567,6 +602,9 @@ func (q *Queries) UpdateDiscoveredDevice(ctx context.Context, arg UpdateDiscover
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.Vlan,
+		&i.DeviceClass,
+		&i.Location,
 	)
 	return i, err
 }

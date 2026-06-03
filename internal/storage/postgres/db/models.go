@@ -156,6 +156,9 @@ type Device struct {
 	CreatedAt        time.Time   `json:"created_at"`
 	UpdatedAt        time.Time   `json:"updated_at"`
 	DeletedAt        *time.Time  `json:"deleted_at"`
+	Vlan             *string     `json:"vlan"`
+	DeviceClass      *string     `json:"device_class"`
+	Location         *string     `json:"location"`
 }
 
 type DeviceFact struct {

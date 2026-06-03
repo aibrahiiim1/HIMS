@@ -23,8 +23,9 @@ WHERE primary_ip = $1 AND location_id IS NOT DISTINCT FROM $2 AND deleted_at IS 
 -- name: CreateDevice :one
 INSERT INTO devices (
     location_id, primary_ip, hostname, name, vendor, model, serial,
-    os_version, category, status, driver, credential_id, metadata
-) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+    os_version, category, status, driver, credential_id, metadata,
+    vlan, device_class, location
+) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
 RETURNING *;
 
 -- name: UpdateDiscoveredDevice :one
@@ -41,7 +42,8 @@ RETURNING *;
 -- Operator edit of a device's identity fields (Inventory CRUD).
 UPDATE devices SET
     name = $2, category = $3, vendor = $4, model = $5, serial = $6,
-    os_version = $7, hostname = $8, updated_at = now()
+    os_version = $7, hostname = $8, vlan = $9, device_class = $10,
+    location = $11, updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
 RETURNING *;
 
