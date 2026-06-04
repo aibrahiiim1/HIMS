@@ -1,7 +1,9 @@
 import { useQuery } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
 import { api, type DeviceFact, type ServerStorage, type VirtualMachine } from '../api'
+import { HardDrive } from 'lucide-react'
 import { DeviceOps } from '../components/DeviceOps'
+import { DeviceHeader } from '../components/DeviceHeader'
 
 function fmtBytes(n?: number | null): string {
   if (n == null) return '—'
@@ -25,6 +27,7 @@ export function VirtualHostDetail() {
 
   return (
     <div>
+      <DeviceHeader deviceId={id!} icon={HardDrive} />
       <div className="card">
         <h2>Virtualization host</h2>
         <dl className="kv">

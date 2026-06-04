@@ -1,6 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
+import { Wifi } from 'lucide-react'
 import { api, type AccessPoint, type WLANControllerInfo } from '../api'
+import { DeviceHeader } from '../components/DeviceHeader'
 
 const apBadge = (s: string) => (s === 'online' ? 'up' : s === 'offline' ? 'down' : 'unknown')
 
@@ -14,6 +16,7 @@ export function WirelessDetail() {
 
   return (
     <div>
+      <DeviceHeader deviceId={id!} icon={Wifi} />
       <div className="card">
         <h2>Wireless controller</h2>
         <dl className="kv">

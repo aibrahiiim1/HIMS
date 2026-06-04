@@ -1,6 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
+import { Phone } from 'lucide-react'
 import { api, type DeviceFact, type PhoneExtension } from '../api'
+import { DeviceHeader } from '../components/DeviceHeader'
 
 // PBX / call-manager template — the registered phone inventory pulled from
 // Cisco CUCM over AXL (listPhone). Live-validation pending (needs a real CUCM
@@ -13,6 +15,7 @@ export function PbxDetail() {
 
   return (
     <div>
+      <DeviceHeader deviceId={id!} icon={Phone} />
       <div className="card">
         <h2>Call Manager</h2>
         <dl className="kv">

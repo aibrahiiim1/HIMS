@@ -1,6 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
+import { Camera } from 'lucide-react'
 import { api, type CameraInfo, type NVRChannel } from '../api'
+import { DeviceHeader } from '../components/DeviceHeader'
 
 const chBadge = (s: string) => (s === 'online' ? 'up' : s === 'offline' ? 'down' : 'unknown')
 
@@ -17,6 +19,7 @@ export function CctvDetail() {
 
   return (
     <div>
+      <DeviceHeader deviceId={id!} icon={Camera} />
       <div className="card">
         <h2>CCTV device</h2>
         {hasCam ? (

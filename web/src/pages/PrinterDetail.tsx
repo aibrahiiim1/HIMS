@@ -1,6 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
+import { Printer } from 'lucide-react'
 import { api, type DeviceFact, type PrinterSupply } from '../api'
+import { DeviceHeader } from '../components/DeviceHeader'
 
 const barColor = (pct?: number | null) =>
   pct == null ? '#666' : pct <= 10 ? '#ef5350' : pct <= 25 ? '#ffa726' : '#66bb6a'
@@ -15,6 +17,7 @@ export function PrinterDetail() {
 
   return (
     <div>
+      <DeviceHeader deviceId={id!} icon={Printer} />
       <div className="card">
         <h2>Printer</h2>
         <dl className="kv">

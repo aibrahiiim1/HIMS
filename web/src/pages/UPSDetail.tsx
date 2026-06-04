@@ -1,6 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
+import { BatteryCharging } from 'lucide-react'
 import { api, type UPSStatus } from '../api'
+import { DeviceHeader } from '../components/DeviceHeader'
 
 const battBadge = (s?: string) =>
   s === 'normal' ? 'up' : s === 'low' ? 'warning' : s === 'depleted' ? 'down' : 'unknown'
@@ -12,7 +14,9 @@ export function UPSDetail() {
   const u = ups.data
 
   return (
-    <div className="card">
+    <div>
+      <DeviceHeader deviceId={id!} icon={BatteryCharging} />
+      <div className="card">
       <h2>UPS
         {u?.battery_status && <span className={`badge badge-${battBadge(u.battery_status)}`} style={{ marginLeft: 8 }}>{u.battery_status}</span>}
       </h2>
@@ -26,6 +30,7 @@ export function UPSDetail() {
           <div><dt>Output load</dt><dd>{u.load_pct != null ? `${u.load_pct}%` : '—'}</dd></div>
         </dl>
       )}
+      </div>
     </div>
   )
 }

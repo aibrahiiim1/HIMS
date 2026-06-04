@@ -1,3 +1,7 @@
+/* eslint-disable react-refresh/only-export-components */
+// This is a shared UI kit: it intentionally co-locates presentational
+// components with their small formatting helpers (timeAgo, colorFor,
+// STATUS_COLOR). The react-refresh rule is an HMR-only nicety, not correctness.
 import type { ComponentType, ReactNode } from 'react'
 
 /* ============================================================================
