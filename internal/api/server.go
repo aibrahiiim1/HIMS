@@ -177,6 +177,10 @@ func (s *Server) routes() {
 		r.Get("/devices/{id}/fingerprint-suggestion", s.deviceFingerprintSuggestion)
 		// --- Work orders for a device (#19) ---------------------------
 		r.Get("/devices/{id}/work-orders", s.deviceWorkOrders)
+		// --- Asset lifecycle (#18) ------------------------------------
+		r.Get("/devices/{id}/lifecycle", s.getDeviceLifecycle)
+		r.Put("/devices/{id}/lifecycle", s.putDeviceLifecycle)
+		r.Get("/assets/lifecycle", s.assetLifecycleRegister)
 		// --- NetFlow Analytics (#12) ----------------------------------
 		r.Get("/netflow/overview", s.flowOverview)
 		r.Get("/netflow/top-talkers", s.flowTopTalkers)

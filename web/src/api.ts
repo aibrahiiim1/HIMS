@@ -1007,3 +1007,26 @@ export interface FlowOverview {
   packets_received: number
 }
 export interface FlowEntry { label: string; bytes: number; packets: number }
+
+// #18 Asset Lifecycle.
+export interface AssetLifecycle {
+  device_id: string
+  device_name?: string
+  category?: string
+  primary_ip?: string
+  owner: string
+  supplier: string
+  purchase_date: string
+  warranty_expiry: string
+  eol_date: string
+  cost: number
+  notes: string
+  warranty_status: string
+  eol_status: string
+}
+export interface AssetRegister {
+  assets: AssetLifecycle[]
+  total: number
+  total_cost: number
+  summary: Record<string, number>
+}

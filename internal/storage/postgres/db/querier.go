@@ -91,6 +91,7 @@ type Querier interface {
 	DeleteCredential(ctx context.Context, id uuid.UUID) error
 	// Hard delete (cascades to inventory child rows via FK ON DELETE CASCADE).
 	DeleteDevice(ctx context.Context, id uuid.UUID) error
+	DeleteDeviceLifecycle(ctx context.Context, deviceID uuid.UUID) error
 	DeleteDeviceTemplate(ctx context.Context, id uuid.UUID) error
 	// Bulk hard delete (multi-select). Returns the number of rows removed.
 	DeleteDevices(ctx context.Context, dollar_1 []uuid.UUID) (int64, error)
@@ -151,6 +152,7 @@ type Querier interface {
 	GetConfigBackupContent(ctx context.Context, id uuid.UUID) (GetConfigBackupContentRow, error)
 	GetCredential(ctx context.Context, id uuid.UUID) (Credential, error)
 	GetDevice(ctx context.Context, id uuid.UUID) (Device, error)
+	GetDeviceLifecycle(ctx context.Context, deviceID uuid.UUID) (DeviceLifecycle, error)
 	GetDeviceTemplate(ctx context.Context, id uuid.UUID) (DeviceTemplate, error)
 	GetDiscoveryJob(ctx context.Context, id uuid.UUID) (DiscoveryJob, error)
 	// ===== Encryption key lifecycle (metadata only — never the key) ===========
@@ -189,6 +191,9 @@ type Querier interface {
 	ListAllDevices(ctx context.Context) ([]Device, error)
 	// Used by the topology graph to build the full picture.
 	ListAllTopologyLinks(ctx context.Context) ([]ListAllTopologyLinksRow, error)
+	// The asset register: every tracked asset (has a lifecycle row) with its device
+	// identity, ordered by soonest warranty expiry.
+	ListAssetLifecycle(ctx context.Context) ([]ListAssetLifecycleRow, error)
 	ListAuditLog(ctx context.Context, arg ListAuditLogParams) ([]AuditLog, error)
 	// Deep filtering: any subset of category / actor / entity_type / action / free
 	// text (summary) / time range. NULL args are ignored.
@@ -376,6 +381,7 @@ type Querier interface {
 	UpsertBMCSensor(ctx context.Context, arg UpsertBMCSensorParams) error
 	UpsertCameraInfo(ctx context.Context, arg UpsertCameraInfoParams) (CameraInfo, error)
 	UpsertDeviceFact(ctx context.Context, arg UpsertDeviceFactParams) error
+	UpsertDeviceLifecycle(ctx context.Context, arg UpsertDeviceLifecycleParams) (DeviceLifecycle, error)
 	// Adopt / record the current key's fingerprint (generate + first-run adopt).
 	UpsertEncryptionMetadata(ctx context.Context, arg UpsertEncryptionMetadataParams) error
 	UpsertFirewallStatus(ctx context.Context, arg UpsertFirewallStatusParams) error

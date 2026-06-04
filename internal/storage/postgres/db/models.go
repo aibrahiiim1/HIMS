@@ -212,6 +212,18 @@ type DeviceFact struct {
 	ObservedAt time.Time `json:"observed_at"`
 }
 
+type DeviceLifecycle struct {
+	DeviceID       uuid.UUID  `json:"device_id"`
+	Owner          string     `json:"owner"`
+	Supplier       string     `json:"supplier"`
+	PurchaseDate   *time.Time `json:"purchase_date"`
+	WarrantyExpiry *time.Time `json:"warranty_expiry"`
+	EolDate        *time.Time `json:"eol_date"`
+	Cost           float64    `json:"cost"`
+	Notes          string     `json:"notes"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+}
+
 type DeviceRole struct {
 	DeviceID  uuid.UUID `json:"device_id"`
 	Role      string    `json:"role"`
