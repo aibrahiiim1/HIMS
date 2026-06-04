@@ -546,6 +546,19 @@ type Purchase struct {
 	CreatedAt   time.Time  `json:"created_at"`
 }
 
+type ReportSchedule struct {
+	ID         uuid.UUID  `json:"id"`
+	Name       string     `json:"name"`
+	ReportType string     `json:"report_type"`
+	ChannelID  *uuid.UUID `json:"channel_id"`
+	Frequency  string     `json:"frequency"`
+	HourUtc    int32      `json:"hour_utc"`
+	Enabled    bool       `json:"enabled"`
+	LastRunAt  *time.Time `json:"last_run_at"`
+	LastStatus string     `json:"last_status"`
+	CreatedAt  time.Time  `json:"created_at"`
+}
+
 type Role struct {
 	ID          uuid.UUID `json:"id"`
 	Name        string    `json:"name"`

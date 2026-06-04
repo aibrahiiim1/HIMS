@@ -74,6 +74,7 @@ type Querier interface {
 	CreatePermission(ctx context.Context, arg CreatePermissionParams) (Permission, error)
 	// ---- Purchases ------------------------------------------------------------
 	CreatePurchase(ctx context.Context, arg CreatePurchaseParams) (Purchase, error)
+	CreateReportSchedule(ctx context.Context, arg CreateReportScheduleParams) (ReportSchedule, error)
 	CreateRole(ctx context.Context, arg CreateRoleParams) (Role, error)
 	// ---- Spare parts ----------------------------------------------------------
 	CreateSparePart(ctx context.Context, arg CreateSparePartParams) (SparePart, error)
@@ -101,6 +102,7 @@ type Querier interface {
 	DeleteOIDMapping(ctx context.Context, id uuid.UUID) error
 	DeletePermission(ctx context.Context, id uuid.UUID) error
 	DeletePurchase(ctx context.Context, id uuid.UUID) error
+	DeleteReportSchedule(ctx context.Context, id uuid.UUID) error
 	DeleteRole(ctx context.Context, id uuid.UUID) error
 	DeleteSparePart(ctx context.Context, id uuid.UUID) error
 	DeleteStaleARP(ctx context.Context, arg DeleteStaleARPParams) error
@@ -156,6 +158,7 @@ type Querier interface {
 	GetLocation(ctx context.Context, id uuid.UUID) (Location, error)
 	GetMonitoringCheck(ctx context.Context, id uuid.UUID) (MonitoringCheck, error)
 	GetNotificationChannel(ctx context.Context, id uuid.UUID) (NotificationChannel, error)
+	GetReportSchedule(ctx context.Context, id uuid.UUID) (ReportSchedule, error)
 	GetSparePart(ctx context.Context, id uuid.UUID) (SparePart, error)
 	GetSystem(ctx context.Context, id uuid.UUID) (System, error)
 	GetUPSStatus(ctx context.Context, deviceID uuid.UUID) (UpsStatus, error)
@@ -252,6 +255,7 @@ type Querier interface {
 	ListPurchases(ctx context.Context) ([]Purchase, error)
 	// Fleet activity feed for the Config page: recent captures with device name.
 	ListRecentConfigBackups(ctx context.Context, limit int32) ([]ListRecentConfigBackupsRow, error)
+	ListReportSchedules(ctx context.Context) ([]ReportSchedule, error)
 	ListRoles(ctx context.Context) ([]Role, error)
 	ListRootLocations(ctx context.Context) ([]Location, error)
 	// (channel_id, alert_id) pairs already delivered, so the dispatcher skips them.
@@ -299,6 +303,7 @@ type Querier interface {
 	// Persist the rollup the engine computed (status + failure counter) onto the
 	// check after a poll. History rows go to monitoring_samples separately.
 	RecordMonitoringResult(ctx context.Context, arg RecordMonitoringResultParams) (MonitoringCheck, error)
+	RecordReportScheduleRun(ctx context.Context, arg RecordReportScheduleRunParams) error
 	// Bump version + stamp the rotation; sets the new key's fingerprint.
 	RecordRotation(ctx context.Context, arg RecordRotationParams) error
 	ResolveAlert(ctx context.Context, id uuid.UUID) (Alert, error)
@@ -328,6 +333,7 @@ type Querier interface {
 	SetDiscoveryJobMetadata(ctx context.Context, arg SetDiscoveryJobMetadataParams) error
 	SetMonitoringCheckEnabled(ctx context.Context, arg SetMonitoringCheckEnabledParams) (MonitoringCheck, error)
 	SetNotificationChannelEnabled(ctx context.Context, arg SetNotificationChannelEnabledParams) (NotificationChannel, error)
+	SetReportScheduleEnabled(ctx context.Context, arg SetReportScheduleEnabledParams) (ReportSchedule, error)
 	SetRolePermissionsClear(ctx context.Context, roleID uuid.UUID) error
 	SetUserRolesClear(ctx context.Context, userID uuid.UUID) error
 	TotalExpenses(ctx context.Context) (float64, error)

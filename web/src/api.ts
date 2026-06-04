@@ -620,6 +620,20 @@ export interface NotificationChannel {
   created_at: string
 }
 
+// #21 Reports Pro — scheduled report delivery.
+export interface ReportSchedule {
+  id: string
+  name: string
+  report_type: 'inventory' | 'availability' | 'vendors' | 'all'
+  channel_id?: string | null
+  frequency: 'daily' | 'weekly' | 'monthly'
+  hour_utc: number
+  enabled: boolean
+  last_run_at?: string | null
+  last_status: string
+  created_at: string
+}
+
 export interface NotificationLogEntry {
   id: number
   channel_id: string

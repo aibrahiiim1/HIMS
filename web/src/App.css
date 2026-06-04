@@ -802,3 +802,11 @@ select.field { cursor: pointer; }
 .modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .modal-head h3 { display: flex; align-items: center; gap: 8px; font-size: var(--fs-lg); margin: 0; }
 .modal-body { max-height: 70vh; overflow: auto; }
+
+/* Reports — print to PDF: hide app chrome, show only the report content */
+@media print {
+  .rail, .topbar, .rail-scrim, .no-print { display: none !important; }
+  .app-main, .app-main-inner { margin: 0 !important; padding: 0 !important; max-width: none !important; }
+  .panel { break-inside: avoid; box-shadow: none; border-color: #ddd; }
+  body { background: #fff; }
+}

@@ -207,6 +207,14 @@ func (s *Server) routes() {
 		r.Delete("/subnets/{id}", s.deleteSubnet)
 
 		// --- Operations: work orders + systems/licenses --------------
+		// --- Reports Pro (#21): server-side multi-format export -------
+		r.Get("/reports/{type}/export", s.exportReport) // ?format=xlsx|csv
+		r.Get("/report-schedules", s.listReportSchedules)
+		r.Post("/report-schedules", s.createReportSchedule)
+		r.Patch("/report-schedules/{id}", s.setReportScheduleEnabled)
+		r.Delete("/report-schedules/{id}", s.deleteReportSchedule)
+		r.Post("/report-schedules/{id}/run", s.runReportScheduleNow)
+
 		r.Get("/work-orders", s.listWorkOrders)
 		r.Post("/work-orders", s.createWorkOrder)
 		r.Get("/work-orders/{id}", s.getWorkOrder)
