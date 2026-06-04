@@ -5,7 +5,7 @@ import {
   Plug, BatteryCharging, ShieldAlert, Camera, Video, Phone, CircleHelp, Brain,
   Map, ClipboardList, Wrench, Package, DollarSign, Building2,
   FileChartColumn, FileSearch, ChartLine, Tag, Download,
-  Users, ShieldCheck, LayoutTemplate, ScanLine, Settings, FileClock, Lock, Activity,
+  Users, ShieldCheck, LayoutTemplate, ScanLine, Settings, FileClock, Lock, Activity, MonitorPlay,
 } from 'lucide-react'
 
 export type BadgeKey = 'alerts' | 'failed_scans' | 'unknown' | 'work_orders'
@@ -36,6 +36,7 @@ export const NAV: NavGroup[] = [
     title: 'Overview',
     items: [
       { label: 'Dashboard', icon: LayoutDashboard, to: '/dashboard' },
+      { label: 'NOC Wallboard', icon: MonitorPlay, to: '/noc' },
       { label: 'Alerts', icon: Bell, to: '/alerts', badge: 'alerts' },
       { label: 'Global Search', icon: Search, to: '/search' },
     ],
