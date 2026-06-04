@@ -980,6 +980,27 @@ export interface Subnet {
   vlan_id?: number | null
 }
 
+// Universal credential testing — per-pair result; secrets never returned.
+export interface CredTestResult {
+  credential_id: string
+  credential_name: string
+  kind: string
+  device_id: string
+  device_name: string
+  ip: string
+  protocol: string
+  category: string // success | auth_failed | unreachable | unsupported | error
+  success: boolean
+  detail: string
+  latency_ms: number
+}
+export interface CredTestResponse {
+  results: CredTestResult[]
+  pairs: number
+  successes: number
+  failures: number
+}
+
 export interface CredentialGroup {
   id: string
   name: string

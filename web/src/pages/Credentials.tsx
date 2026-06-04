@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { api, type Credential, type EncryptionStatus } from '../api'
+import { api, type Credential, type EncryptionStatus, type Device, type CredTestResponse, type CredTestResult } from '../api'
 
 function EncryptionGate() {
   const q = useQuery({ queryKey: ['enc-status'], queryFn: () => api.get<EncryptionStatus>('/security/encryption/status'), retry: 0 })
@@ -64,6 +64,8 @@ export function Credentials() {
       </div>
 
       {show && <CreateForm onDone={() => { setShow(false); qc.invalidateQueries({ queryKey: ['credentials'] }) }} />}
+
+      {list.data && list.data.length > 0 && <CredentialTester credentials={list.data} />}
 
       <div className="card">
         {list.isLoading && <div className="loading">Loading…</div>}
@@ -180,6 +182,119 @@ function CreateForm({ onDone }: { onDone: () => void }) {
         </button>
         {m.error && <span className="error-msg" style={{ marginLeft: 12 }}>{(m.error as Error).message}</span>}
       </div>
+    </div>
+  )
+}
+
+const CAT_BADGE: Record<string, string> = {
+  success: 'badge-up', auth_failed: 'badge-warning', unreachable: 'badge-down',
+  unsupported: 'badge-unknown', error: 'badge-down',
+}
+
+// CredentialTester runs the universal credential-test matrix: pick credentials +
+// devices, probe every pair, show a secrets-free result grid. Results come from
+// POST /credentials/test (the server decrypts to probe; nothing secret returns).
+function CredentialTester({ credentials }: { credentials: Credential[] }) {
+  const devicesQ = useQuery({ queryKey: ['devices', 'all'], queryFn: () => api.get<Device[]>('/devices?category=all') })
+  const [credSel, setCredSel] = useState<Set<string>>(new Set())
+  const [devSel, setDevSel] = useState<Set<string>>(new Set())
+  const [filter, setFilter] = useState('')
+  const [legacyKex, setLegacyKex] = useState(false)
+
+  const filtered = useMemo(() => {
+    const f = filter.trim().toLowerCase()
+    const withIP = (devicesQ.data ?? []).filter((d) => d.primary_ip)
+    if (!f) return withIP.slice(0, 200)
+    return withIP.filter((d) => d.name.toLowerCase().includes(f) || (d.primary_ip ?? '').includes(f) || d.category.includes(f)).slice(0, 200)
+  }, [devicesQ.data, filter])
+
+  const toggle = (set: Set<string>, id: string, fn: (s: Set<string>) => void) => {
+    const next = new Set(set)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    fn(next)
+  }
+  const pairs = credSel.size * devSel.size
+
+  const run = useMutation({
+    mutationFn: () => api.post<CredTestResponse>('/credentials/test', {
+      credential_ids: [...credSel], device_ids: [...devSel], legacy_kex: legacyKex,
+    }),
+  })
+
+  return (
+    <div className="card">
+      <h2>Test credentials against devices</h2>
+      <p className="muted" style={{ marginBottom: 10 }}>
+        Verify which credentials authenticate to which devices — any combination (one-to-many or
+        many-to-one). The server decrypts each secret only to run the probe; the secret is never
+        returned or logged. SNMP / SSH / HTTP / ONVIF / WinRM are supported.
+      </p>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+        <div>
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>Credentials ({credSel.size})</div>
+          <div style={{ maxHeight: 220, overflow: 'auto', border: '1px solid #2a3a47', borderRadius: 6, padding: 8 }}>
+            {credentials.map((c) => (
+              <label key={c.id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '3px 0', fontSize: 13 }}>
+                <input type="checkbox" checked={credSel.has(c.id)} onChange={() => toggle(credSel, c.id, setCredSel)} />
+                <span>{c.name}</span><span className="muted" style={{ fontSize: 11 }}>{c.kind}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+        <div>
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>Devices ({devSel.size})</div>
+          <input style={{ ...input, marginBottom: 6 }} placeholder="filter by name / IP / category…" value={filter} onChange={(e) => setFilter(e.target.value)} />
+          <div style={{ maxHeight: 184, overflow: 'auto', border: '1px solid #2a3a47', borderRadius: 6, padding: 8 }}>
+            {devicesQ.isLoading && <div className="muted">Loading devices…</div>}
+            {filtered.map((d) => (
+              <label key={d.id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '3px 0', fontSize: 13 }}>
+                <input type="checkbox" checked={devSel.has(d.id)} onChange={() => toggle(devSel, d.id, setDevSel)} />
+                <span className="mono" style={{ fontSize: 12 }}>{d.primary_ip}</span><span>{d.name}</span>
+              </label>
+            ))}
+            {!devicesQ.isLoading && filtered.length === 0 && <div className="muted">No matching devices.</div>}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginTop: 12 }}>
+        <button style={btn} disabled={pairs === 0 || pairs > 500 || run.isPending} onClick={() => run.mutate()}>
+          {run.isPending ? 'Testing…' : `Test ${pairs} pair${pairs === 1 ? '' : 's'}`}
+        </button>
+        <label style={{ fontSize: 13, display: 'flex', gap: 6, alignItems: 'center' }}>
+          <input type="checkbox" checked={legacyKex} onChange={(e) => setLegacyKex(e.target.checked)} />
+          Legacy SSH KEX (old switches)
+        </label>
+        {pairs > 500 && <span className="error-msg">Too many pairs ({pairs}); max 500.</span>}
+        {run.error && <span className="error-msg">{(run.error as Error).message}</span>}
+      </div>
+
+      {run.data && (
+        <div style={{ marginTop: 14 }}>
+          <div style={{ marginBottom: 8, fontSize: 13 }}>
+            <span className="badge badge-up">{run.data.successes} ok</span>{' '}
+            <span className="badge badge-down">{run.data.failures} failed</span>{' '}
+            <span className="muted">of {run.data.pairs} pairs</span>
+          </div>
+          <table>
+            <thead><tr><th>Device</th><th>IP</th><th>Credential</th><th>Protocol</th><th>Result</th><th>Detail</th><th>Latency</th></tr></thead>
+            <tbody>
+              {run.data.results.map((r: CredTestResult, i) => (
+                <tr key={i}>
+                  <td>{r.device_name}</td>
+                  <td className="mono" style={{ fontSize: 12 }}>{r.ip}</td>
+                  <td>{r.credential_name} <span className="muted" style={{ fontSize: 11 }}>{r.kind}</span></td>
+                  <td>{r.protocol || '—'}</td>
+                  <td><span className={`badge ${CAT_BADGE[r.category] ?? 'badge-unknown'}`}>{r.category.replace(/_/g, ' ')}</span></td>
+                  <td className="muted" style={{ fontSize: 12 }}>{r.detail}</td>
+                  <td className="muted" style={{ fontSize: 12 }}>{r.latency_ms} ms</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   )
 }
