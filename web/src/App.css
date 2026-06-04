@@ -684,6 +684,12 @@ select.field { cursor: pointer; }
 .port-detail-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
 .port-detail-head strong { font-size: var(--fs-lg); }
 
+/* ---- Dashboard security health -------------------------------------------- */
+.sec-health { list-style: none; display: flex; flex-direction: column; }
+.sec-health li { display: flex; align-items: center; justify-content: space-between; padding: 9px 0; border-bottom: 1px solid var(--border); font-size: var(--fs-md); }
+.sec-health li:last-child { border-bottom: none; }
+.sec-health .sec-val { font-weight: 600; color: var(--text); }
+
 /* ---- Startup checklist ----------------------------------------------------- */
 .checklist { list-style: none; display: flex; flex-direction: column; gap: 2px; }
 .checklist-item { display: flex; align-items: flex-start; gap: 11px; padding: 10px 0; border-bottom: 1px solid var(--border); }

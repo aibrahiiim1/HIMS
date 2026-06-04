@@ -2,9 +2,9 @@ import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import {
   LayoutDashboard, Server, Wifi, WifiOff, Bell, ClipboardList, ShieldAlert,
-  Radar, Activity, TriangleAlert, RefreshCw, Clock, Boxes, TrendingUp,
+  Radar, Activity, TriangleAlert, RefreshCw, Clock, Boxes, TrendingUp, Lock, KeyRound,
 } from 'lucide-react'
-import { api, type Device, type Alert, type DiscoveryJob, type MonitoringOverviewRow, type RoleSummaryRow, type ExpenseByCategory } from '../api'
+import { api, type Device, type Alert, type DiscoveryJob, type MonitoringOverviewRow, type RoleSummaryRow, type ExpenseByCategory, type EncryptionStatus } from '../api'
 import {
   PageHeader, Panel, Kpi, HealthRing, Donut, Legend, BarList, Sparkline,
   ActivityFeed, EmptyState, StatusPill, colorFor, timeAgo,
@@ -30,12 +30,26 @@ const STATUS_DONUT_COLOR: Record<string, string> = {
   up: '#16a34a', warning: '#d97706', down: '#dc2626', unknown: '#94a3b8',
 }
 
+// Day-granularity label for security timestamps ("Today" / "45 days ago").
+function dayLabel(iso?: string | null): string {
+  if (!iso) return 'never'
+  const t = new Date(iso).getTime()
+  if (Number.isNaN(t)) return '—'
+  const days = Math.floor((Date.now() - t) / 86_400_000)
+  if (days <= 0) return 'Today'
+  if (days === 1) return 'Yesterday'
+  return `${days} days ago`
+}
+
+interface SecRow { label: string; value: React.ReactNode }
+
 export function Dashboard() {
   const dash = useQuery({ queryKey: ['dashboard'], queryFn: () => api.get<DashboardData>('/dashboard'), refetchInterval: 30_000 })
   const mon = useQuery({ queryKey: ['mon-overview'], queryFn: () => api.get<MonitoringOverviewRow[]>('/monitoring/overview'), refetchInterval: 30_000 })
   const devices = useQuery({ queryKey: ['devices', 'all'], queryFn: () => api.get<Device[]>('/devices?category=all') })
   const jobs = useQuery({ queryKey: ['discovery-jobs'], queryFn: () => api.get<DiscoveryJob[]>('/discovery/jobs'), refetchInterval: 30_000 })
   const alerts = useQuery({ queryKey: ['alerts'], queryFn: () => api.get<Alert[]>('/alerts'), refetchInterval: 30_000 })
+  const enc = useQuery({ queryKey: ['enc-status'], queryFn: () => api.get<EncryptionStatus>('/security/encryption/status'), refetchInterval: 60_000, retry: 0 })
 
   const h = dash.data?.headline ?? {}
   const devs = devices.data ?? []
@@ -186,6 +200,33 @@ export function Dashboard() {
 
         {/* Side column */}
         <div className="stack">
+          <Panel title="Security Health" icon={Lock} actions={<Link className="btn btn-ghost btn-sm" to="/security/encryption">Manage</Link>}>
+            {(() => {
+              const e = enc.data
+              const health = !e ? { label: 'Unknown', cls: 'badge-unknown' }
+                : e.status === 'enabled' && e.fingerprint_match && e.undecryptable_count === 0 ? { label: 'Healthy', cls: 'badge-up' }
+                : e.status === 'enabled' ? { label: 'Degraded', cls: 'badge-warning' }
+                : e.status === 'pending_restart' ? { label: 'Pending restart', cls: 'badge-warning' }
+                : { label: 'Not configured', cls: 'badge-down' }
+              const rows: SecRow[] = [
+                { label: 'Encryption', value: <span className={`badge ${health.cls}`}>{health.label}</span> },
+                { label: 'Credentials', value: e?.encrypted_count ?? '—' },
+                { label: 'Needs Re-entry', value: <span style={{ color: (e?.needs_reset_count ?? 0) > 0 ? 'var(--crit)' : 'var(--text)', fontWeight: 600 }}>{e?.needs_reset_count ?? 0}</span> },
+                { label: 'Last Validation', value: dayLabel(e?.last_validation_at) },
+                { label: 'Last Rotation', value: dayLabel(e?.last_rotation_at) },
+              ]
+              return (
+                <ul className="sec-health">
+                  {rows.map((r) => (
+                    <li key={r.label}><span className="muted">{r.label}</span><span className="sec-val">{r.value}</span></li>
+                  ))}
+                </ul>
+              )
+            })()}
+            {enc.data && enc.data.status === 'missing' && (
+              <div style={{ marginTop: 10 }}><Link className="badge badge-down" to="/security/encryption" style={{ textDecoration: 'none' }}><KeyRound size={11} style={{ verticalAlign: -1 }} /> Configure encryption →</Link></div>
+            )}
+          </Panel>
           <Panel title="Critical Assets" icon={TriangleAlert} actions={critical.length > 0 ? <Link className="btn btn-ghost btn-sm" to="/monitoring">View all</Link> : undefined}>
             {critical.length === 0
               ? <EmptyState icon={Wifi} title="All systems operational" message="No devices are offline or flagged for attention." />
