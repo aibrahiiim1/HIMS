@@ -322,6 +322,19 @@ export interface WorkOrder {
   cost: number
   created_at: string
   resolved_at?: string | null
+  // #19 enrichment (list + detail)
+  device_name?: string
+  due_at?: string
+  sla_status?: 'none' | 'on_track' | 'due_soon' | 'breached' | 'met'
+}
+
+export interface WorkOrderAlertLink {
+  id: string
+  severity: string
+  status: string
+  message: string
+  opened_at: string
+  resolved_at?: string | null
 }
 
 export interface WorkOrderEvent {

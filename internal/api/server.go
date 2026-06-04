@@ -173,6 +173,8 @@ func (s *Server) routes() {
 
 		// --- Vendor fingerprint suggestion (#9) -----------------------
 		r.Get("/devices/{id}/fingerprint-suggestion", s.deviceFingerprintSuggestion)
+		// --- Work orders for a device (#19) ---------------------------
+		r.Get("/devices/{id}/work-orders", s.deviceWorkOrders)
 
 		// --- Config Backup (#10) + Drift (#11) ------------------------
 		r.Get("/devices/{id}/config-backups", s.listDeviceConfigBackups)

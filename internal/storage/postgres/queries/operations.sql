@@ -18,6 +18,22 @@ LIMIT 200;
 -- name: ListWorkOrdersByDevice :many
 SELECT * FROM work_orders WHERE device_id = $1 ORDER BY created_at DESC;
 
+-- name: ListWorkOrdersWithDevice :many
+-- Enriched list for the Work Orders page: joins the linked device name.
+SELECT wo.*, d.name AS device_name
+FROM work_orders wo
+LEFT JOIN devices d ON d.id = wo.device_id
+ORDER BY
+    CASE wo.status WHEN 'open' THEN 0 WHEN 'in_progress' THEN 1 WHEN 'waiting' THEN 2 ELSE 3 END,
+    CASE wo.priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
+    wo.created_at DESC
+LIMIT 200;
+
+-- name: ListAlertsByWorkOrder :many
+-- Alerts whose auto-bridge (or manual link) points at this work order.
+SELECT id, severity, status, message, opened_at, resolved_at
+FROM alerts WHERE work_order_id = $1 ORDER BY opened_at DESC;
+
 -- name: UpdateWorkOrder :one
 UPDATE work_orders SET
     status        = $2,

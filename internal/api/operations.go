@@ -28,13 +28,64 @@ type createWorkOrderReq struct {
 	Cost           float64 `json:"cost"`
 }
 
+// woDTO is a work order enriched with its linked device name and derived SLA
+// (deadline + standing). SLA is computed from created_at + priority policy, so
+// no stored deadline can drift out of sync.
+type woDTO struct {
+	db.WorkOrder
+	DeviceName string    `json:"device_name"`
+	DueAt      time.Time `json:"due_at"`
+	SLAStatus  string    `json:"sla_status"`
+}
+
+func enrichWO(wo db.WorkOrder, deviceName string, now time.Time) woDTO {
+	return woDTO{
+		WorkOrder:  wo,
+		DeviceName: deviceName,
+		DueAt:      operations.SLADeadline(wo.CreatedAt, wo.Priority),
+		SLAStatus:  string(operations.ComputeSLAStatus(wo.CreatedAt, wo.Priority, wo.Status, wo.ResolvedAt, now)),
+	}
+}
+
 func (s *Server) listWorkOrders(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.queries.ListWorkOrders(r.Context())
+	rows, err := s.queries.ListWorkOrdersWithDevice(r.Context())
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, rows)
+	now := time.Now().UTC()
+	out := make([]woDTO, len(rows))
+	for i, row := range rows {
+		wo := db.WorkOrder{
+			ID: row.ID, DeviceID: row.DeviceID, LocationID: row.LocationID, Title: row.Title,
+			ProblemType: row.ProblemType, Priority: row.Priority, Status: row.Status,
+			AssignedTo: row.AssignedTo, Diagnosis: row.Diagnosis, ActionTaken: row.ActionTaken,
+			SpareParts: row.SpareParts, ExternalVendor: row.ExternalVendor, Cost: row.Cost,
+			CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, ResolvedAt: row.ResolvedAt,
+		}
+		out[i] = enrichWO(wo, derefStr(row.DeviceName), now)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// deviceWorkOrders handles GET /devices/{id}/work-orders — the device's ticket
+// history, SLA-enriched.
+func (s *Server) deviceWorkOrders(w http.ResponseWriter, r *http.Request) {
+	ctx, id, ok := pathDevice(w, r)
+	if !ok {
+		return
+	}
+	rows, err := s.queries.ListWorkOrdersByDevice(ctx, &id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	now := time.Now().UTC()
+	out := make([]woDTO, len(rows))
+	for i, wo := range rows {
+		out[i] = enrichWO(wo, "", now)
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) createWorkOrder(w http.ResponseWriter, r *http.Request) {
@@ -86,7 +137,18 @@ func (s *Server) getWorkOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	events, _ := s.queries.ListWorkOrderEvents(ctx, id)
-	writeJSON(w, http.StatusOK, map[string]any{"work_order": wo, "events": events})
+	alerts, _ := s.queries.ListAlertsByWorkOrder(ctx, &id)
+	deviceName := ""
+	if wo.DeviceID != nil {
+		if d, err := s.queries.GetDevice(ctx, *wo.DeviceID); err == nil {
+			deviceName = d.Name
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"work_order":    enrichWO(wo, deviceName, time.Now().UTC()),
+		"events":        events,
+		"linked_alerts": alerts,
+	})
 }
 
 type updateWorkOrderReq struct {

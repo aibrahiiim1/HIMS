@@ -205,6 +205,48 @@ func (q *Queries) GetWorkOrder(ctx context.Context, id uuid.UUID) (WorkOrder, er
 	return i, err
 }
 
+const listAlertsByWorkOrder = `-- name: ListAlertsByWorkOrder :many
+SELECT id, severity, status, message, opened_at, resolved_at
+FROM alerts WHERE work_order_id = $1 ORDER BY opened_at DESC
+`
+
+type ListAlertsByWorkOrderRow struct {
+	ID         uuid.UUID  `json:"id"`
+	Severity   string     `json:"severity"`
+	Status     string     `json:"status"`
+	Message    string     `json:"message"`
+	OpenedAt   time.Time  `json:"opened_at"`
+	ResolvedAt *time.Time `json:"resolved_at"`
+}
+
+// Alerts whose auto-bridge (or manual link) points at this work order.
+func (q *Queries) ListAlertsByWorkOrder(ctx context.Context, workOrderID *uuid.UUID) ([]ListAlertsByWorkOrderRow, error) {
+	rows, err := q.db.Query(ctx, listAlertsByWorkOrder, workOrderID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAlertsByWorkOrderRow{}
+	for rows.Next() {
+		var i ListAlertsByWorkOrderRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Severity,
+			&i.Status,
+			&i.Message,
+			&i.OpenedAt,
+			&i.ResolvedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSystems = `-- name: ListSystems :many
 SELECT id, name, vendor, location_id, license_expiry, support_expiry, cost, notes, created_at, updated_at FROM systems ORDER BY license_expiry NULLS LAST, name
 `
@@ -346,6 +388,76 @@ func (q *Queries) ListWorkOrdersByDevice(ctx context.Context, deviceID *uuid.UUI
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.ResolvedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listWorkOrdersWithDevice = `-- name: ListWorkOrdersWithDevice :many
+SELECT wo.id, wo.device_id, wo.location_id, wo.title, wo.problem_type, wo.priority, wo.status, wo.assigned_to, wo.diagnosis, wo.action_taken, wo.spare_parts, wo.external_vendor, wo.cost, wo.created_at, wo.updated_at, wo.resolved_at, d.name AS device_name
+FROM work_orders wo
+LEFT JOIN devices d ON d.id = wo.device_id
+ORDER BY
+    CASE wo.status WHEN 'open' THEN 0 WHEN 'in_progress' THEN 1 WHEN 'waiting' THEN 2 ELSE 3 END,
+    CASE wo.priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
+    wo.created_at DESC
+LIMIT 200
+`
+
+type ListWorkOrdersWithDeviceRow struct {
+	ID             uuid.UUID  `json:"id"`
+	DeviceID       *uuid.UUID `json:"device_id"`
+	LocationID     *uuid.UUID `json:"location_id"`
+	Title          string     `json:"title"`
+	ProblemType    string     `json:"problem_type"`
+	Priority       string     `json:"priority"`
+	Status         string     `json:"status"`
+	AssignedTo     *string    `json:"assigned_to"`
+	Diagnosis      *string    `json:"diagnosis"`
+	ActionTaken    *string    `json:"action_taken"`
+	SpareParts     *string    `json:"spare_parts"`
+	ExternalVendor *string    `json:"external_vendor"`
+	Cost           float64    `json:"cost"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+	ResolvedAt     *time.Time `json:"resolved_at"`
+	DeviceName     *string    `json:"device_name"`
+}
+
+// Enriched list for the Work Orders page: joins the linked device name.
+func (q *Queries) ListWorkOrdersWithDevice(ctx context.Context) ([]ListWorkOrdersWithDeviceRow, error) {
+	rows, err := q.db.Query(ctx, listWorkOrdersWithDevice)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListWorkOrdersWithDeviceRow{}
+	for rows.Next() {
+		var i ListWorkOrdersWithDeviceRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.DeviceID,
+			&i.LocationID,
+			&i.Title,
+			&i.ProblemType,
+			&i.Priority,
+			&i.Status,
+			&i.AssignedTo,
+			&i.Diagnosis,
+			&i.ActionTaken,
+			&i.SpareParts,
+			&i.ExternalVendor,
+			&i.Cost,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ResolvedAt,
+			&i.DeviceName,
 		); err != nil {
 			return nil, err
 		}

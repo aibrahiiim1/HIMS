@@ -176,6 +176,8 @@ type Querier interface {
 	ListAlertEvents(ctx context.Context, alertID uuid.UUID) ([]AlertEvent, error)
 	ListAlertRules(ctx context.Context) ([]AlertRule, error)
 	ListAlerts(ctx context.Context) ([]Alert, error)
+	// Alerts whose auto-bridge (or manual link) points at this work order.
+	ListAlertsByWorkOrder(ctx context.Context, workOrderID *uuid.UUID) ([]ListAlertsByWorkOrderRow, error)
 	// Every live device (the Inventory page), ordered for grouped display.
 	ListAllDevices(ctx context.Context) ([]Device, error)
 	// Used by the topology graph to build the full picture.
@@ -272,6 +274,8 @@ type Querier interface {
 	ListWorkOrderParts(ctx context.Context, workOrderID uuid.UUID) ([]WorkOrderPart, error)
 	ListWorkOrders(ctx context.Context) ([]WorkOrder, error)
 	ListWorkOrdersByDevice(ctx context.Context, deviceID *uuid.UUID) ([]WorkOrder, error)
+	// Enriched list for the Work Orders page: joins the linked device name.
+	ListWorkOrdersWithDevice(ctx context.Context) ([]ListWorkOrdersWithDeviceRow, error)
 	// Reconcile key for an UNSCOPED scan (no site selected): match by primary_ip
 	// alone so a re-scan updates the existing device regardless of an
 	// operator-assigned location_id, instead of duplicating it. Most-recent wins.
