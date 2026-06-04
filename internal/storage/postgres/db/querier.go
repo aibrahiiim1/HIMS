@@ -14,6 +14,9 @@ import (
 
 type Querier interface {
 	AcknowledgeAlert(ctx context.Context, id uuid.UUID) (Alert, error)
+	AcknowledgeAlertBy(ctx context.Context, arg AcknowledgeAlertByParams) (Alert, error)
+	// ---- Alert lifecycle timeline ---------------------------------------------
+	AddAlertEvent(ctx context.Context, arg AddAlertEventParams) (AlertEvent, error)
 	AddCredentialGroupMember(ctx context.Context, arg AddCredentialGroupMemberParams) error
 	AddDeviceRole(ctx context.Context, arg AddDeviceRoleParams) error
 	// A part not tracked in stock (free-text): just record it, no decrement.
@@ -60,6 +63,8 @@ type Querier interface {
 	CreateDiscoveryResult(ctx context.Context, arg CreateDiscoveryResultParams) (DiscoveryResult, error)
 	CreateLocation(ctx context.Context, arg CreateLocationParams) (Location, error)
 	CreateLookup(ctx context.Context, arg CreateLookupParams) (Lookup, error)
+	// ---- Maintenance windows (alert suppression) ------------------------------
+	CreateMaintenanceWindow(ctx context.Context, arg CreateMaintenanceWindowParams) (MaintenanceWindow, error)
 	CreateMibFile(ctx context.Context, arg CreateMibFileParams) (MibFile, error)
 	CreateOIDMapping(ctx context.Context, arg CreateOIDMappingParams) (OidMapping, error)
 	CreatePermission(ctx context.Context, arg CreatePermissionParams) (Permission, error)
@@ -86,6 +91,7 @@ type Querier interface {
 	DeleteDiscoveryJob(ctx context.Context, id uuid.UUID) error
 	DeleteLocation(ctx context.Context, id uuid.UUID) error
 	DeleteLookup(ctx context.Context, id uuid.UUID) error
+	DeleteMaintenanceWindow(ctx context.Context, id uuid.UUID) error
 	DeleteMonitoringCheck(ctx context.Context, id uuid.UUID) error
 	DeleteOIDMapping(ctx context.Context, id uuid.UUID) error
 	DeletePermission(ctx context.Context, id uuid.UUID) error
@@ -111,6 +117,9 @@ type Querier interface {
 	DeleteVendorFingerprint(ctx context.Context, id uuid.UUID) error
 	DeviceCountByCategory(ctx context.Context) ([]DeviceCountByCategoryRow, error)
 	DeviceCountByStatus(ctx context.Context) ([]DeviceCountByStatusRow, error)
+	// Mark open, unacknowledged, not-yet-escalated alerts as escalated once they
+	// have aged past their rule's escalate_after_minutes (0 = never).
+	EscalateStaleAlerts(ctx context.Context) ([]EscalateStaleAlertsRow, error)
 	// ---- Expenses (aggregation over the purchases ledger) ---------------------
 	// Expenses derive from the purchases ledger so the totals can never drift
 	// from their source rows. Work-order cost + system cost stay on their own
@@ -122,6 +131,7 @@ type Querier interface {
 	FindMACByIP(ctx context.Context, ipAddress netip.Addr) ([]FindMACByIPRow, error)
 	// Topology search: which switch + port + VLAN carries a MAC?
 	FindMACOnSwitches(ctx context.Context, mac string) ([]FindMACOnSwitchesRow, error)
+	GetAlert(ctx context.Context, id uuid.UUID) (Alert, error)
 	GetBMCInfo(ctx context.Context, deviceID uuid.UUID) (BmcInfo, error)
 	GetCameraInfo(ctx context.Context, deviceID uuid.UUID) (CameraInfo, error)
 	GetCredential(ctx context.Context, id uuid.UUID) (Credential, error)
@@ -143,6 +153,8 @@ type Querier interface {
 	InsertMonitoringSample(ctx context.Context, arg InsertMonitoringSampleParams) error
 	ListARPForDevice(ctx context.Context, deviceID uuid.UUID) ([]ListARPForDeviceRow, error)
 	ListAccessPoints(ctx context.Context, controllerDeviceID uuid.UUID) ([]AccessPoint, error)
+	ListActiveMaintenanceWindows(ctx context.Context) ([]MaintenanceWindow, error)
+	ListAlertEvents(ctx context.Context, alertID uuid.UUID) ([]AlertEvent, error)
 	ListAlertRules(ctx context.Context) ([]AlertRule, error)
 	ListAlerts(ctx context.Context) ([]Alert, error)
 	// Every live device (the Inventory page), ordered for grouped display.
@@ -196,6 +208,7 @@ type Querier interface {
 	// known device interface, that owner device's name + vendor (real correlation,
 	// no OUI guesswork).
 	ListMACForDevice(ctx context.Context, deviceID uuid.UUID) ([]ListMACForDeviceRow, error)
+	ListMaintenanceWindows(ctx context.Context) ([]MaintenanceWindow, error)
 	ListMibFiles(ctx context.Context) ([]MibFile, error)
 	ListMibObjects(ctx context.Context, mibFileID uuid.UUID) ([]MibObject, error)
 	ListMonitoringChecks(ctx context.Context) ([]MonitoringCheck, error)

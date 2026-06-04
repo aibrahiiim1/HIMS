@@ -234,6 +234,11 @@ func (s *Server) routes() {
 		r.Post("/alerts/evaluate", s.evaluateAlerts)
 		r.Post("/alerts/{id}/ack", s.acknowledgeAlert)
 		r.Post("/alerts/{id}/resolve", s.resolveAlert)
+		r.Get("/alerts/{id}/timeline", s.alertTimeline)
+		r.Post("/alerts/{id}/note", s.addAlertNote)
+		r.Get("/maintenance-windows", s.listMaintenanceWindows)
+		r.Post("/maintenance-windows", s.createMaintenanceWindow)
+		r.Delete("/maintenance-windows/{id}", s.deleteMaintenanceWindow)
 
 		// --- Credentials (encrypted at rest; secrets never returned) -
 		r.Get("/credentials", s.listCredentials)

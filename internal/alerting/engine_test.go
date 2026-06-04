@@ -17,8 +17,11 @@ type fakeRepo struct {
 	open      map[string]bool // dedup key rule|check → open
 	opened    []db.OpenAlertParams
 	wos       []db.CreateWorkOrderParams
-	linked    []db.SetAlertWorkOrderParams
-	events    []db.AddWorkOrderEventParams
+	linked      []db.SetAlertWorkOrderParams
+	events      []db.AddWorkOrderEventParams
+	windows     []db.MaintenanceWindow
+	alertEvents []db.AddAlertEventParams
+	escalated   []db.EscalateStaleAlertsRow
 }
 
 func (f *fakeRepo) ListEnabledAlertRules(context.Context) ([]db.AlertRule, error) {
@@ -50,6 +53,16 @@ func (f *fakeRepo) CreateWorkOrder(_ context.Context, arg db.CreateWorkOrderPara
 func (f *fakeRepo) AddWorkOrderEvent(_ context.Context, arg db.AddWorkOrderEventParams) (db.WorkOrderEvent, error) {
 	f.events = append(f.events, arg)
 	return db.WorkOrderEvent{}, nil
+}
+func (f *fakeRepo) ListActiveMaintenanceWindows(context.Context) ([]db.MaintenanceWindow, error) {
+	return f.windows, nil
+}
+func (f *fakeRepo) AddAlertEvent(_ context.Context, arg db.AddAlertEventParams) (db.AlertEvent, error) {
+	f.alertEvents = append(f.alertEvents, arg)
+	return db.AlertEvent{}, nil
+}
+func (f *fakeRepo) EscalateStaleAlerts(context.Context) ([]db.EscalateStaleAlertsRow, error) {
+	return f.escalated, nil
 }
 
 func downCheck() db.ListEnabledChecksWithDeviceRow {
@@ -106,6 +119,26 @@ func TestEvaluate_NoWorkOrderWhenNotFlagged(t *testing.T) {
 	res, _ := e.Evaluate(context.Background())
 	if res.Opened != 1 || res.WorkOrders != 0 {
 		t.Fatalf("res = %+v; want opened=1 wo=0", res)
+	}
+}
+
+func TestEvaluate_SuppressedByMaintenanceWindow(t *testing.T) {
+	rule := db.AlertRule{ID: uuid.New(), TriggerStatus: "down", MinFailures: 1, Severity: "critical", Enabled: true}
+	chk := downCheck()
+	// Device-scope window covering exactly this device suppresses the alert.
+	f := &fakeRepo{
+		rules:   []db.AlertRule{rule},
+		checks:  []db.ListEnabledChecksWithDeviceRow{chk},
+		open:    map[string]bool{},
+		windows: []db.MaintenanceWindow{{Scope: "device", DeviceID: &chk.DeviceID}},
+	}
+	e := NewEngine(f, nil)
+	res, err := e.Evaluate(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Opened != 0 || res.Suppressed != 1 {
+		t.Fatalf("res = %+v; want opened=0 suppressed=1 (device under maintenance)", res)
 	}
 }
 

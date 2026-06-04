@@ -23,6 +23,10 @@ type Repo interface {
 	ResolveRecoveredAlerts(ctx context.Context) ([]db.ResolveRecoveredAlertsRow, error)
 	CreateWorkOrder(ctx context.Context, arg db.CreateWorkOrderParams) (db.WorkOrder, error)
 	AddWorkOrderEvent(ctx context.Context, arg db.AddWorkOrderEventParams) (db.WorkOrderEvent, error)
+	// Alert Engine finalization (#6): suppression, timeline, escalation.
+	ListActiveMaintenanceWindows(ctx context.Context) ([]db.MaintenanceWindow, error)
+	AddAlertEvent(ctx context.Context, arg db.AddAlertEventParams) (db.AlertEvent, error)
+	EscalateStaleAlerts(ctx context.Context) ([]db.EscalateStaleAlertsRow, error)
 }
 
 // Engine evaluates alert rules against current monitoring state.
@@ -44,6 +48,22 @@ type Result struct {
 	Opened     int
 	WorkOrders int
 	Resolved   int
+	Suppressed int
+	Escalated  int
+}
+
+// suppression is the set of scopes currently under a maintenance window.
+type suppression struct {
+	global    bool
+	devices   map[uuid.UUID]bool
+	locations map[uuid.UUID]bool
+}
+
+func (s suppression) blocks(c db.ListEnabledChecksWithDeviceRow) bool {
+	if s.global || s.devices[c.DeviceID] {
+		return true
+	}
+	return c.DeviceLocationID != nil && s.locations[*c.DeviceLocationID]
 }
 
 // Evaluate runs one full pass:
@@ -64,17 +84,19 @@ func (e *Engine) Evaluate(ctx context.Context) (Result, error) {
 	}
 	for _, a := range recovered {
 		res.Resolved++
+		e.event(ctx, a.ID, "resolved", "system", "Auto: device recovered; alert resolved.")
 		if a.WorkOrderID != nil {
 			e.note(ctx, *a.WorkOrderID, "Auto: device recovered; alert resolved.")
 		}
 	}
 
+	// Suppression: devices/sites/global currently under a maintenance window do
+	// not fire new alerts (auto-resume is implicit — the window simply expires).
+	supp := e.loadSuppression(ctx)
+
 	rules, err := e.repo.ListEnabledAlertRules(ctx)
 	if err != nil {
 		return res, fmt.Errorf("list rules: %w", err)
-	}
-	if len(rules) == 0 {
-		return res, nil
 	}
 	checks, err := e.repo.ListEnabledChecksWithDevice(ctx)
 	if err != nil {
@@ -98,10 +120,64 @@ func (e *Engine) Evaluate(ctx context.Context) (Result, error) {
 			}) {
 				continue
 			}
+			if supp.blocks(c) {
+				res.Suppressed++
+				continue
+			}
 			e.fire(ctx, rule, c, &res)
 		}
 	}
+
+	// (4) Escalate open, unacknowledged alerts that have aged past their rule's
+	// escalation window. Runs regardless of whether any rules matched this pass.
+	e.escalate(ctx, &res)
 	return res, nil
+}
+
+// loadSuppression reads the active maintenance windows once per pass.
+func (e *Engine) loadSuppression(ctx context.Context) suppression {
+	sp := suppression{devices: map[uuid.UUID]bool{}, locations: map[uuid.UUID]bool{}}
+	ws, err := e.repo.ListActiveMaintenanceWindows(ctx)
+	if err != nil {
+		e.log.Warn("alerting: list maintenance windows failed", "error", err)
+		return sp
+	}
+	for _, w := range ws {
+		switch w.Scope {
+		case "global":
+			sp.global = true
+		case "device":
+			if w.DeviceID != nil {
+				sp.devices[*w.DeviceID] = true
+			}
+		case "site":
+			if w.LocationID != nil {
+				sp.locations[*w.LocationID] = true
+			}
+		}
+	}
+	return sp
+}
+
+// escalate flags stale open/unacked alerts and records the transition.
+func (e *Engine) escalate(ctx context.Context, res *Result) {
+	rows, err := e.repo.EscalateStaleAlerts(ctx)
+	if err != nil {
+		e.log.Warn("alerting: escalate stale failed", "error", err)
+		return
+	}
+	for _, a := range rows {
+		res.Escalated++
+		e.event(ctx, a.ID, "escalated", "system", "Alert open and unacknowledged past its escalation window.")
+		if a.WorkOrderID != nil {
+			e.note(ctx, *a.WorkOrderID, "Auto: alert escalated (still unacknowledged).")
+		}
+	}
+}
+
+// event appends a row to an alert's lifecycle timeline (best-effort).
+func (e *Engine) event(ctx context.Context, alertID uuid.UUID, kind, actor, note string) {
+	_, _ = e.repo.AddAlertEvent(ctx, db.AddAlertEventParams{AlertID: alertID, Kind: kind, Actor: actor, Note: note})
 }
 
 // fire opens an alert for a matching check; on a genuine open it spawns the
@@ -124,6 +200,7 @@ func (e *Engine) fire(ctx context.Context, rule db.AlertRule, c db.ListEnabledCh
 		return
 	}
 	res.Opened++
+	e.event(ctx, alert.ID, "opened", "system", msg)
 
 	if !rule.AutoWorkOrder {
 		return

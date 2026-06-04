@@ -35,20 +35,33 @@ type Alert struct {
 	OpenedAt       time.Time  `json:"opened_at"`
 	AcknowledgedAt *time.Time `json:"acknowledged_at"`
 	ResolvedAt     *time.Time `json:"resolved_at"`
+	AcknowledgedBy *string    `json:"acknowledged_by"`
+	Escalated      bool       `json:"escalated"`
+	EscalatedAt    *time.Time `json:"escalated_at"`
+}
+
+type AlertEvent struct {
+	ID      int64     `json:"id"`
+	AlertID uuid.UUID `json:"alert_id"`
+	At      time.Time `json:"at"`
+	Kind    string    `json:"kind"`
+	Actor   string    `json:"actor"`
+	Note    string    `json:"note"`
 }
 
 type AlertRule struct {
-	ID                uuid.UUID `json:"id"`
-	Name              string    `json:"name"`
-	TriggerStatus     string    `json:"trigger_status"`
-	MinFailures       int32     `json:"min_failures"`
-	DeviceCategory    *string   `json:"device_category"`
-	Severity          string    `json:"severity"`
-	AutoWorkOrder     bool      `json:"auto_work_order"`
-	WorkOrderPriority string    `json:"work_order_priority"`
-	Enabled           bool      `json:"enabled"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	ID                   uuid.UUID `json:"id"`
+	Name                 string    `json:"name"`
+	TriggerStatus        string    `json:"trigger_status"`
+	MinFailures          int32     `json:"min_failures"`
+	DeviceCategory       *string   `json:"device_category"`
+	Severity             string    `json:"severity"`
+	AutoWorkOrder        bool      `json:"auto_work_order"`
+	WorkOrderPriority    string    `json:"work_order_priority"`
+	Enabled              bool      `json:"enabled"`
+	CreatedAt            time.Time `json:"created_at"`
+	UpdatedAt            time.Time `json:"updated_at"`
+	EscalateAfterMinutes int32     `json:"escalate_after_minutes"`
 }
 
 type AppSetting struct {
@@ -343,6 +356,18 @@ type MacAddress struct {
 	FdbStatus        int16     `json:"fdb_status"`
 	CollectionSource string    `json:"collection_source"`
 	LastSeenAt       time.Time `json:"last_seen_at"`
+}
+
+type MaintenanceWindow struct {
+	ID         uuid.UUID  `json:"id"`
+	Scope      string     `json:"scope"`
+	DeviceID   *uuid.UUID `json:"device_id"`
+	LocationID *uuid.UUID `json:"location_id"`
+	Reason     string     `json:"reason"`
+	StartsAt   time.Time  `json:"starts_at"`
+	EndsAt     time.Time  `json:"ends_at"`
+	CreatedBy  string     `json:"created_by"`
+	CreatedAt  time.Time  `json:"created_at"`
 }
 
 type MibFile struct {
