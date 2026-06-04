@@ -6,9 +6,11 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/netip"
 	"sync/atomic"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -635,19 +637,52 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 // data across all devices, resolving neighbor management IPs to managed devices.
 // Operator-triggered; the collector also rebuilds incrementally per cycle.
 func (s *Server) rebuildTopology(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	devs, err := s.queries.ListAllDevices(ctx)
+	nd, nl, err := s.rebuildTopologyOnce(r.Context())
 	if err != nil {
 		writeErr(w, err)
 		return
+	}
+	s.audit(r, "topology", "topology.rebuild", "topology", "", "Rebuilt topology links from LLDP/CDP neighbors", map[string]any{"devices": nd, "links": nl})
+	writeJSON(w, http.StatusOK, map[string]any{"devices_processed": nd, "links_built": nl})
+}
+
+// rebuildTopologyOnce re-derives topology links across all devices. Shared by
+// the operator endpoint and the background auto-rebuilder.
+func (s *Server) rebuildTopologyOnce(ctx context.Context) (devices, links int, err error) {
+	devs, err := s.queries.ListAllDevices(ctx)
+	if err != nil {
+		return 0, 0, err
 	}
 	ids := make([]uuid.UUID, 0, len(devs))
 	for _, d := range devs {
 		ids = append(ids, d.ID)
 	}
 	nd, nl := s.topo.RebuildAll(ctx, ids)
-	s.audit(r, "topology", "topology.rebuild", "topology", "", "Rebuilt topology links from LLDP/CDP neighbors", map[string]any{"devices": nd, "links": nl})
-	writeJSON(w, http.StatusOK, map[string]any{"devices_processed": nd, "links_built": nl})
+	return nd, nl, nil
+}
+
+// StartTopologyRebuilder runs an initial topology rebuild shortly after startup
+// and then on the given interval, so the map / path finder / coverage stay fresh
+// as new LLDP/CDP neighbor data arrives — without an operator pressing Rebuild.
+// Runs until ctx is cancelled.
+func (s *Server) StartTopologyRebuilder(ctx context.Context, interval time.Duration) {
+	go func() {
+		timer := time.NewTimer(20 * time.Second) // brief delay so startup isn't slowed
+		defer timer.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-timer.C:
+			}
+			if nd, nl, err := s.rebuildTopologyOnce(ctx); err != nil {
+				slog.Warn("topology auto-rebuild failed", "error", err)
+			} else {
+				slog.Info("topology auto-rebuild", "devices", nd, "links", nl)
+			}
+			timer.Reset(interval)
+		}
+	}()
 }
 
 func (s *Server) allLinks(w http.ResponseWriter, r *http.Request) {

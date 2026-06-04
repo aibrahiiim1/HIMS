@@ -130,6 +130,10 @@ func main() {
 		Env:       getenvDefault("HIMS_ENV", "development"),
 	})
 
+	// Keep topology links fresh from incoming LLDP/CDP neighbor data without
+	// requiring an operator to press Rebuild.
+	srv.StartTopologyRebuilder(context.Background(), 10*time.Minute)
+
 	slog.Info("hims-api starting", "addr", addr, "pid", os.Getpid(), "version", version, "commit", gitCommit())
 	if err := http.Serve(ln, srv); err != nil {
 		slog.Error("server failed", "error", err)
