@@ -735,6 +735,26 @@ export interface VendorFingerprint {
   enabled: boolean
   created_at: string
 }
+
+// #9 Vendor Fingerprint Library — matcher tool.
+export interface FingerprintEvidence {
+  sysobjectid?: string
+  sysdescr?: string
+  http_server?: string
+  ssh_banner?: string
+  ports?: number[]
+}
+export interface FingerprintResult {
+  vendor: string
+  device_type: string
+  confidence: number
+  kind: string
+  pattern: string
+}
+export interface FingerprintMatchResp {
+  evidence: FingerprintEvidence
+  results: FingerprintResult[]
+}
 export type EncryptionState = 'enabled' | 'pending_restart' | 'missing_key' | 'no_metadata' | 'fingerprint_mismatch' | 'invalid_key'
 export interface EncryptionStatus {
   status: EncryptionState

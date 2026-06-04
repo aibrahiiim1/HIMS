@@ -171,6 +171,9 @@ func (s *Server) routes() {
 		r.Get("/devices/{id}/phones", s.devicePhones)
 		r.Get("/devices/{id}/ups", s.deviceUPS)
 
+		// --- Vendor fingerprint suggestion (#9) -----------------------
+		r.Get("/devices/{id}/fingerprint-suggestion", s.deviceFingerprintSuggestion)
+
 		// --- Config Backup (#10) + Drift (#11) ------------------------
 		r.Get("/devices/{id}/config-backups", s.listDeviceConfigBackups)
 		r.Post("/devices/{id}/config-backups", s.captureConfigBackup)
@@ -297,6 +300,8 @@ func (s *Server) routes() {
 
 		r.Get("/vendor-fingerprints", s.listVendorFingerprints)
 		r.Post("/vendor-fingerprints", s.createVendorFingerprint)
+		r.Post("/vendor-fingerprints/seed", s.seedVendorFingerprints)
+		r.Post("/vendor-fingerprints/match", s.matchVendorFingerprints)
 		r.Patch("/vendor-fingerprints/{id}", s.updateVendorFingerprint)
 		r.Delete("/vendor-fingerprints/{id}", s.deleteVendorFingerprint)
 
