@@ -75,7 +75,7 @@ are unit-tested against captured-output fixtures.
 | SC1 schema + queries (`os_inventory` 1:1 + `os_disks`/`os_nics`/`os_services`/`os_processes`/`os_software` 1:N, prune-on-poll) | ✅ `74f4719` |
 | SC2 Windows collector (`internal/osinv`: PowerShell `Get-CimInstance` script + pure parser + role detection) | ✅ `268f3ed` |
 | SC3 Linux collector (marked SSH script + per-section pure parsers + role detection) | ✅ `1235911` |
-| SC4 orchestrator + persistence + `POST /devices/{id}/collect-os` (cred resolve, method-by-os_family, delete-stale write, roles→device_roles, audit, site-scope) | ⏳ |
+| SC4 orchestrator + persistence + `POST /devices/{id}/collect-os` (cred resolve, method-by-os_family, delete-stale write, roles→`os_roles`, audit, site-scope) | ✅ `00aab50` (persist verified live vs real DB + idempotent; endpoint gating live; collection host+cred-gated) |
 | SC5 read endpoints + ServerDetail/endpoint tabs ("Not collected yet" + Collect-now) + DQ "OS not inventoried" | ⏳ |
 | SC6 docs + deploy + wrap-up | ⏳ |
 
