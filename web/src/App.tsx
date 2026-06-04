@@ -36,6 +36,7 @@ import { Encryption } from './pages/Encryption'
 import { SystemHealth } from './pages/SystemHealth'
 import { NocWallboard } from './pages/NocWallboard'
 import { PathFinder } from './pages/PathFinder'
+import { DataQuality } from './pages/DataQuality'
 import { Sidebar } from './components/Sidebar'
 import { Topbar } from './components/Topbar'
 import { useBadges } from './hooks/useBadges'
@@ -117,6 +118,7 @@ function Shell() {
             <Route path="/system-health" element={<SystemHealth />} />
             <Route path="/noc" element={<NocWallboard />} />
             <Route path="/path-finder" element={<PathFinder />} />
+            <Route path="/data-quality" element={<DataQuality />} />
             <Route path="/search" element={<SearchPage />} />
             <Route path="/work-orders" element={<WorkOrders />} />
             <Route path="/systems" element={<Systems />} />

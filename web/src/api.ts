@@ -735,6 +735,10 @@ export interface RuntimeInfo {
   hostname: string
 }
 
+export interface DataQualityDevice { id: string; name: string; primary_ip?: string; category: string; vendor?: string; note?: string }
+export interface DataQualityIssue { key: string; label: string; description: string; severity: string; count: number; devices: DataQualityDevice[] }
+export interface DataQualityReport { generated_at: string; total_devices: number; issue_count: number; clean: boolean; issues: DataQualityIssue[] }
+
 export interface AuditEntry {
   id: number
   at: string
