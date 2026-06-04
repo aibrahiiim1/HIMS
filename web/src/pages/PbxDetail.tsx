@@ -1,40 +1,46 @@
 import { useQuery } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
-import { Phone } from 'lucide-react'
+import { Phone, PhoneCall, Server } from 'lucide-react'
 import { api, type DeviceFact, type PhoneExtension } from '../api'
 import { DeviceHeader } from '../components/DeviceHeader'
+import { Panel, Kpi, EmptyState } from '../components/ui'
 
-// PBX / call-manager template — the registered phone inventory pulled from
-// Cisco CUCM over AXL (listPhone). Live-validation pending (needs a real CUCM
-// publisher + AXL application user).
+// Voice / PBX Intelligence (#17): registered-phone inventory from Cisco CUCM
+// over AXL (listPhone). Bind an AXL application-user (http_basic) credential
+// and collect to populate; reachability is monitored continuously.
 export function PbxDetail() {
   const { id } = useParams<{ id: string }>()
   const phones = useQuery({ queryKey: ['phones', id], queryFn: () => api.get<PhoneExtension[]>(`/devices/${id}/phones`) })
   const facts = useQuery({ queryKey: ['facts', id], queryFn: () => api.get<DeviceFact[]>(`/devices/${id}/facts`) })
-  const count = (facts.data ?? []).find((f) => f.key === 'phone_count')?.value
+
+  const list = phones.data ?? []
+  const f = new Map((facts.data ?? []).map((x) => [x.key, x.value ?? '']))
+  const registered = f.get('phone_count') ?? (phones.data ? String(list.length) : '—')
+  const pools = new Set(list.map((p) => p.device_pool).filter(Boolean)).size
+  const models = new Set(list.map((p) => p.model).filter(Boolean)).size
 
   return (
     <div>
       <DeviceHeader deviceId={id!} icon={Phone} />
-      <div className="card">
-        <h2>Call Manager</h2>
-        <dl className="kv">
-          <div><dt>Registered phones</dt><dd>{count ?? (phones.data ? phones.data.length : '—')}</dd></div>
-        </dl>
+
+      <div className="kpi-grid">
+        <Kpi label="Registered Phones" value={registered} icon={PhoneCall} tone="info" />
+        <Kpi label="Device Pools" value={pools || '—'} icon={Server} />
+        <Kpi label="Phone Models" value={models || '—'} icon={Phone} />
       </div>
 
-      <div className="card">
-        <h2>Phones</h2>
-        {phones.data && phones.data.length === 0 && (
-          <div className="muted">No phones collected. Bind an AXL application-user credential (http_basic) and collect.</div>
+      <Panel title="Phones" icon={PhoneCall} subtitle={list.length ? `${list.length}` : undefined} pad={false}>
+        {phones.data && list.length === 0 && (
+          <EmptyState icon={PhoneCall} title="No phones collected"
+            message="The phone registry is pulled from Cisco CUCM over AXL (listPhone). Bind an AXL application-user (http_basic) credential and collect to populate." />
         )}
-        {phones.data && phones.data.length > 0 && (
-          <table>
+        {list.length > 0 && (
+          <table className="data-table">
             <thead><tr><th>Name</th><th>Model</th><th>Description</th><th>Device Pool</th></tr></thead>
             <tbody>
-              {phones.data.map((p) => (
+              {list.map((p) => (
                 <tr key={p.id}>
-                  <td>{p.name}</td>
+                  <td className="cell-name">{p.name}</td>
                   <td>{p.model ?? '—'}</td>
                   <td>{p.description ?? '—'}</td>
                   <td>{p.device_pool ?? '—'}</td>
@@ -43,7 +49,7 @@ export function PbxDetail() {
             </tbody>
           </table>
         )}
-      </div>
+      </Panel>
     </div>
   )
 }

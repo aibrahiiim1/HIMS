@@ -1,62 +1,69 @@
 import { useQuery } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
-import { Camera } from 'lucide-react'
+import { Camera, Video, Film } from 'lucide-react'
 import { api, type CameraInfo, type NVRChannel } from '../api'
 import { DeviceHeader } from '../components/DeviceHeader'
+import { Panel, Kpi, DefList, EmptyState, StatusPill } from '../components/ui'
 
-const chBadge = (s: string) => (s === 'online' ? 'up' : s === 'offline' ? 'down' : 'unknown')
+const chStatus = (s: string) => (s === 'online' ? 'up' : s === 'offline' ? 'down' : 'unknown')
 
-// CCTV detail template — shared by cameras and NVR/DVRs. Shows per-camera
-// info and (for recorders) the channel list. Deep fields are populated by the
-// ONVIF/vendor-REST transport (deferred); reachability is monitored today.
+// Camera / NVR Intelligence (#16): device info + (for recorders) channel map.
+// Deep fields (model/resolution/streams/channels) come from the ONVIF / vendor
+// transport; reachability (RTSP 554 / HTTP) is monitored continuously.
 export function CctvDetail() {
   const { id } = useParams<{ id: string }>()
   const cam = useQuery({ queryKey: ['camera', id], queryFn: () => api.get<CameraInfo>(`/devices/${id}/camera`) })
   const channels = useQuery({ queryKey: ['nvr-channels', id], queryFn: () => api.get<NVRChannel[]>(`/devices/${id}/nvr-channels`) })
 
-  const hasCam = cam.data && cam.data.device_id
-  const hasChannels = channels.data && channels.data.length > 0
+  const c = cam.data
+  const hasCam = !!(c && c.device_id)
+  const ch = channels.data ?? []
+  const chOnline = ch.filter((x) => x.status === 'online').length
 
   return (
     <div>
       <DeviceHeader deviceId={id!} icon={Camera} />
-      <div className="card">
-        <h2>CCTV device</h2>
-        {hasCam ? (
-          <dl className="kv">
-            <div><dt>Manufacturer</dt><dd>{cam.data?.manufacturer ?? '—'}</dd></div>
-            <div><dt>Model</dt><dd>{cam.data?.model ?? '—'}</dd></div>
-            <div><dt>Resolution</dt><dd>{cam.data?.resolution ?? '—'}</dd></div>
-            <div><dt>RTSP</dt><dd style={{ fontFamily: 'monospace', fontSize: 12 }}>{cam.data?.rtsp_url ?? '—'}</dd></div>
-          </dl>
-        ) : (
-          <div className="muted">
-            No camera detail yet. Manufacturer/model/resolution/stream URLs are populated by the
-            ONVIF / vendor-REST transport — deferred. Reachability (RTSP 554 / HTTP) is monitored
-            by the monitoring engine today.
-          </div>
-        )}
+
+      <div className="kpi-grid">
+        <Kpi label="Manufacturer" value={c?.manufacturer || '—'} icon={Camera} tone="info" />
+        <Kpi label="Model" value={c?.model || '—'} icon={Video} />
+        <Kpi label="Resolution" value={c?.resolution || '—'} icon={Film} />
+        <Kpi label="Channels" value={ch.length || '—'} icon={Video} sub={ch.length ? `${chOnline} online` : undefined} />
       </div>
 
-      <div className="card">
-        <h2>Channels</h2>
-        {!hasChannels && <div className="muted">No channels (single camera, or NVR channel map awaits ONVIF collection).</div>}
-        {hasChannels && (
-          <table>
-            <thead><tr><th>Ch</th><th>Camera</th><th>IP</th><th>Status</th></tr></thead>
+      <Panel title="Device Information" icon={Camera}>
+        {hasCam ? (
+          <DefList items={[
+            { label: 'Manufacturer', value: c?.manufacturer || '—' },
+            { label: 'Model', value: c?.model || '—' },
+            { label: 'Resolution', value: c?.resolution || '—' },
+            { label: 'RTSP stream', value: c?.rtsp_url ? <span className="mono">{c.rtsp_url}</span> : '—' },
+            { label: 'ONVIF endpoint', value: c?.onvif_url ? <span className="mono">{c.onvif_url}</span> : '—' },
+          ]} />
+        ) : (
+          <EmptyState icon={Camera} title="No ONVIF detail collected yet"
+            message="Manufacturer / model / resolution / stream URLs populate from the ONVIF transport (bind an ONVIF or http_basic credential and collect). Reachability is already monitored." />
+        )}
+      </Panel>
+
+      <Panel title="Channels" icon={Video} subtitle={ch.length ? `${chOnline}/${ch.length} online` : undefined} pad={false}>
+        {channels.data && ch.length === 0 && <EmptyState icon={Video} title="No channels" message="Single camera, or the NVR channel map awaits ONVIF/vendor collection." />}
+        {ch.length > 0 && (
+          <table className="data-table">
+            <thead><tr><th>Channel</th><th>Camera</th><th>IP</th><th>Status</th></tr></thead>
             <tbody>
-              {channels.data!.map((c) => (
-                <tr key={c.id}>
-                  <td>{c.channel_no}</td>
-                  <td>{c.camera_name ?? '—'}</td>
-                  <td>{c.camera_ip ?? '—'}</td>
-                  <td><span className={`badge badge-${chBadge(c.status)}`}>{c.status}</span></td>
+              {ch.map((x) => (
+                <tr key={x.id}>
+                  <td className="cell-name">{x.channel_no}</td>
+                  <td>{x.camera_name ?? '—'}</td>
+                  <td className="mono">{x.camera_ip ?? '—'}</td>
+                  <td><StatusPill status={chStatus(x.status)} label={x.status} /></td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
-      </div>
+      </Panel>
     </div>
   )
 }
