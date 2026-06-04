@@ -127,3 +127,16 @@ ON CONFLICT (device_id, name, version) DO UPDATE SET
 
 -- name: DeleteStaleOSSoftware :exec
 DELETE FROM os_software WHERE device_id = $1 AND collection_source = $2 AND last_seen_at < $3;
+
+-- --- os roles (free-form, OS-detected) ---
+-- name: ListOSRoles :many
+SELECT * FROM os_roles WHERE device_id = $1 ORDER BY role;
+
+-- name: UpsertOSRole :exec
+INSERT INTO os_roles (device_id, role, collection_source, last_seen_at)
+VALUES ($1,$2,$3,$4)
+ON CONFLICT (device_id, role) DO UPDATE SET
+    collection_source = EXCLUDED.collection_source, last_seen_at = EXCLUDED.last_seen_at;
+
+-- name: DeleteStaleOSRoles :exec
+DELETE FROM os_roles WHERE device_id = $1 AND collection_source = $2 AND last_seen_at < $3;

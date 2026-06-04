@@ -613,6 +613,15 @@ type OsProcess struct {
 	CreatedAt        time.Time  `json:"created_at"`
 }
 
+type OsRole struct {
+	ID               uuid.UUID `json:"id"`
+	DeviceID         uuid.UUID `json:"device_id"`
+	Role             string    `json:"role"`
+	CollectionSource string    `json:"collection_source"`
+	LastSeenAt       time.Time `json:"last_seen_at"`
+	CreatedAt        time.Time `json:"created_at"`
+}
+
 type OsService struct {
 	ID               uuid.UUID `json:"id"`
 	DeviceID         uuid.UUID `json:"device_id"`

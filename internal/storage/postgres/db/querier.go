@@ -122,6 +122,7 @@ type Querier interface {
 	DeleteStaleOSDisks(ctx context.Context, arg DeleteStaleOSDisksParams) error
 	DeleteStaleOSNics(ctx context.Context, arg DeleteStaleOSNicsParams) error
 	DeleteStaleOSProcesses(ctx context.Context, arg DeleteStaleOSProcessesParams) error
+	DeleteStaleOSRoles(ctx context.Context, arg DeleteStaleOSRolesParams) error
 	DeleteStaleOSServices(ctx context.Context, arg DeleteStaleOSServicesParams) error
 	DeleteStaleOSSoftware(ctx context.Context, arg DeleteStaleOSSoftwareParams) error
 	DeleteStalePbxPhones(ctx context.Context, arg DeleteStalePbxPhonesParams) error
@@ -289,6 +290,8 @@ type Querier interface {
 	ListOSNics(ctx context.Context, deviceID uuid.UUID) ([]OsNic, error)
 	// --- processes ---
 	ListOSProcesses(ctx context.Context, deviceID uuid.UUID) ([]OsProcess, error)
+	// --- os roles (free-form, OS-detected) ---
+	ListOSRoles(ctx context.Context, deviceID uuid.UUID) ([]OsRole, error)
 	// --- services ---
 	ListOSServices(ctx context.Context, deviceID uuid.UUID) ([]OsService, error)
 	// --- software ---
@@ -448,6 +451,7 @@ type Querier interface {
 	UpsertOSInventory(ctx context.Context, arg UpsertOSInventoryParams) (OsInventory, error)
 	UpsertOSNic(ctx context.Context, arg UpsertOSNicParams) error
 	UpsertOSProcess(ctx context.Context, arg UpsertOSProcessParams) error
+	UpsertOSRole(ctx context.Context, arg UpsertOSRoleParams) error
 	UpsertOSService(ctx context.Context, arg UpsertOSServiceParams) error
 	UpsertOSSoftware(ctx context.Context, arg UpsertOSSoftwareParams) error
 	UpsertPbxPhone(ctx context.Context, arg UpsertPbxPhoneParams) error

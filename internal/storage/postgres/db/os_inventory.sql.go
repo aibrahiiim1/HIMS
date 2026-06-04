@@ -58,6 +58,21 @@ func (q *Queries) DeleteStaleOSProcesses(ctx context.Context, arg DeleteStaleOSP
 	return err
 }
 
+const deleteStaleOSRoles = `-- name: DeleteStaleOSRoles :exec
+DELETE FROM os_roles WHERE device_id = $1 AND collection_source = $2 AND last_seen_at < $3
+`
+
+type DeleteStaleOSRolesParams struct {
+	DeviceID         uuid.UUID `json:"device_id"`
+	CollectionSource string    `json:"collection_source"`
+	LastSeenAt       time.Time `json:"last_seen_at"`
+}
+
+func (q *Queries) DeleteStaleOSRoles(ctx context.Context, arg DeleteStaleOSRolesParams) error {
+	_, err := q.db.Exec(ctx, deleteStaleOSRoles, arg.DeviceID, arg.CollectionSource, arg.LastSeenAt)
+	return err
+}
+
 const deleteStaleOSServices = `-- name: DeleteStaleOSServices :exec
 DELETE FROM os_services WHERE device_id = $1 AND collection_source = $2 AND last_seen_at < $3
 `
@@ -285,6 +300,38 @@ func (q *Queries) ListOSProcesses(ctx context.Context, deviceID uuid.UUID) ([]Os
 			&i.CpuPct,
 			&i.MemBytes,
 			&i.StartTime,
+			&i.CollectionSource,
+			&i.LastSeenAt,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOSRoles = `-- name: ListOSRoles :many
+SELECT id, device_id, role, collection_source, last_seen_at, created_at FROM os_roles WHERE device_id = $1 ORDER BY role
+`
+
+// --- os roles (free-form, OS-detected) ---
+func (q *Queries) ListOSRoles(ctx context.Context, deviceID uuid.UUID) ([]OsRole, error) {
+	rows, err := q.db.Query(ctx, listOSRoles, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []OsRole{}
+	for rows.Next() {
+		var i OsRole
+		if err := rows.Scan(
+			&i.ID,
+			&i.DeviceID,
+			&i.Role,
 			&i.CollectionSource,
 			&i.LastSeenAt,
 			&i.CreatedAt,
@@ -639,6 +686,30 @@ func (q *Queries) UpsertOSProcess(ctx context.Context, arg UpsertOSProcessParams
 		arg.CpuPct,
 		arg.MemBytes,
 		arg.StartTime,
+		arg.CollectionSource,
+		arg.LastSeenAt,
+	)
+	return err
+}
+
+const upsertOSRole = `-- name: UpsertOSRole :exec
+INSERT INTO os_roles (device_id, role, collection_source, last_seen_at)
+VALUES ($1,$2,$3,$4)
+ON CONFLICT (device_id, role) DO UPDATE SET
+    collection_source = EXCLUDED.collection_source, last_seen_at = EXCLUDED.last_seen_at
+`
+
+type UpsertOSRoleParams struct {
+	DeviceID         uuid.UUID `json:"device_id"`
+	Role             string    `json:"role"`
+	CollectionSource string    `json:"collection_source"`
+	LastSeenAt       time.Time `json:"last_seen_at"`
+}
+
+func (q *Queries) UpsertOSRole(ctx context.Context, arg UpsertOSRoleParams) error {
+	_, err := q.db.Exec(ctx, upsertOSRole,
+		arg.DeviceID,
+		arg.Role,
 		arg.CollectionSource,
 		arg.LastSeenAt,
 	)
