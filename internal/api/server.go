@@ -293,6 +293,7 @@ func (s *Server) routes() {
 		r.Post("/device-templates", s.createDeviceTemplate)
 		r.Patch("/device-templates/{id}", s.updateDeviceTemplate)
 		r.Delete("/device-templates/{id}", s.deleteDeviceTemplate)
+		r.Post("/device-templates/{id}/apply", s.applyDeviceTemplate)
 
 		r.Get("/vendor-fingerprints", s.listVendorFingerprints)
 		r.Post("/vendor-fingerprints", s.createVendorFingerprint)

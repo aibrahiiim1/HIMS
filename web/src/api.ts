@@ -694,6 +694,37 @@ export interface DeviceTemplate {
   classification_rules: unknown
   enabled: boolean
 }
+
+// #8 Device Templates Engine — structured monitoring profile carried in
+// monitoring_rules.
+export interface TemplateCheck {
+  kind: 'tcp' | 'snmp'
+  label: string
+  port: number
+  oid: string
+  interval_seconds: number
+  down_threshold: number
+}
+export interface TemplateAlert {
+  name: string
+  trigger_status: 'down' | 'warning'
+  min_failures: number
+  severity: 'info' | 'warning' | 'critical'
+  auto_work_order: boolean
+  work_order_priority: 'low' | 'medium' | 'high' | 'critical'
+}
+export interface TemplateMonitoring {
+  checks: TemplateCheck[]
+  alerts: TemplateAlert[]
+}
+export interface ApplyTemplateResult {
+  devices: number
+  checks_created: number
+  checks_skipped: number
+  alerts_created: number
+  alerts_skipped: number
+  warnings: string[]
+}
 export interface VendorFingerprint {
   id: string
   kind: string

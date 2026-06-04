@@ -146,6 +146,7 @@ type Querier interface {
 	GetConfigBackupContent(ctx context.Context, id uuid.UUID) (GetConfigBackupContentRow, error)
 	GetCredential(ctx context.Context, id uuid.UUID) (Credential, error)
 	GetDevice(ctx context.Context, id uuid.UUID) (Device, error)
+	GetDeviceTemplate(ctx context.Context, id uuid.UUID) (DeviceTemplate, error)
 	GetDiscoveryJob(ctx context.Context, id uuid.UUID) (DiscoveryJob, error)
 	// ===== Encryption key lifecycle (metadata only — never the key) ===========
 	GetEncryptionMetadata(ctx context.Context) (EncryptionMetadatum, error)

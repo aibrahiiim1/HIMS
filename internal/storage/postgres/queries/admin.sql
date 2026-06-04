@@ -61,6 +61,9 @@ ON CONFLICT DO NOTHING;
 -- name: ListDeviceTemplates :many
 SELECT * FROM device_templates ORDER BY name;
 
+-- name: GetDeviceTemplate :one
+SELECT * FROM device_templates WHERE id = $1;
+
 -- name: CreateDeviceTemplate :one
 INSERT INTO device_templates (name, vendor, device_type, discovery_rules, monitoring_rules, classification_rules, enabled)
 VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *;

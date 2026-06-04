@@ -797,3 +797,8 @@ select.field { cursor: pointer; }
 .config-diff .diff-add { background: rgba(46,160,67,.18); color: var(--text); }
 .config-diff .diff-del { background: rgba(248,81,73,.18); color: var(--text); }
 .config-diff .diff-ctx { color: var(--text-faint); }
+
+/* Device Templates apply dialog */
+.modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.modal-head h3 { display: flex; align-items: center; gap: 8px; font-size: var(--fs-lg); margin: 0; }
+.modal-body { max-height: 70vh; overflow: auto; }

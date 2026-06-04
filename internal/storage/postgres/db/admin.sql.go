@@ -238,6 +238,28 @@ func (q *Queries) DeleteVendorFingerprint(ctx context.Context, id uuid.UUID) err
 	return err
 }
 
+const getDeviceTemplate = `-- name: GetDeviceTemplate :one
+SELECT id, name, vendor, device_type, discovery_rules, monitoring_rules, classification_rules, enabled, created_at, updated_at FROM device_templates WHERE id = $1
+`
+
+func (q *Queries) GetDeviceTemplate(ctx context.Context, id uuid.UUID) (DeviceTemplate, error) {
+	row := q.db.QueryRow(ctx, getDeviceTemplate, id)
+	var i DeviceTemplate
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Vendor,
+		&i.DeviceType,
+		&i.DiscoveryRules,
+		&i.MonitoringRules,
+		&i.ClassificationRules,
+		&i.Enabled,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const insertAuditLog = `-- name: InsertAuditLog :exec
 
 INSERT INTO audit_log (actor, action, category, entity_type, entity_id, summary, details)
