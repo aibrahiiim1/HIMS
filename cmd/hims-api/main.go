@@ -53,11 +53,14 @@ func main() {
 	if k := os.Getenv("HIMS_ENCRYPTION_KEY"); k != "" {
 		c, err := secret.NewCipher(k)
 		if err != nil {
-			slog.Error("invalid HIMS_ENCRYPTION_KEY", "error", err)
-			os.Exit(1)
+			// Degrade rather than crash-loop: the API still serves everything
+			// that doesn't need the key, and Encryption Status reports
+			// "invalid_key" with a clear reason. The error never includes the key.
+			slog.Error("invalid HIMS_ENCRYPTION_KEY; credential encryption disabled", "error", err)
+		} else {
+			cipher = c
+			slog.Info("credential encryption enabled", "key_id", c.KeyID())
 		}
-		cipher = c
-		slog.Info("credential encryption enabled", "key_id", c.KeyID())
 	} else {
 		slog.Warn("HIMS_ENCRYPTION_KEY not set; credential writes disabled")
 	}

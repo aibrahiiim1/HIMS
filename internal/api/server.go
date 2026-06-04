@@ -239,6 +239,7 @@ func (s *Server) routes() {
 		r.Post("/security/encryption/rotate", s.encryptionRotate)
 		r.Post("/security/encryption/reset-credentials", s.encryptionResetCredentials)
 		r.Get("/security/encryption/recovery-guide", s.encryptionRecoveryGuide)
+		r.Get("/security/encryption/diagnostics", s.encryptionDiagnostics)
 		r.Get("/security/encryption/needs-reentry", s.credentialsNeedingReentry)
 		r.Get("/security/startup-checklist", s.startupChecklist)
 

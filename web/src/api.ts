@@ -621,8 +621,10 @@ export interface VendorFingerprint {
   enabled: boolean
   created_at: string
 }
+export type EncryptionState = 'enabled' | 'pending_restart' | 'missing_key' | 'no_metadata' | 'fingerprint_mismatch' | 'invalid_key'
 export interface EncryptionStatus {
-  status: 'enabled' | 'pending_restart' | 'missing'
+  status: EncryptionState
+  reason: string
   configured: boolean
   enabled: boolean
   algorithm: string
@@ -636,7 +638,21 @@ export interface EncryptionStatus {
   needs_reset_count: number
   undecryptable_count: number
   fingerprint_match: boolean
+  runtime_key_present: boolean
+  runtime_key_length_valid: boolean
+  stored_fingerprint_present: boolean
   warnings: string[]
+}
+export interface EncryptionDiagnostics {
+  runtime_key_present: boolean
+  runtime_key_length_valid: boolean
+  stored_fingerprint_present: boolean
+  runtime_fingerprint: string
+  stored_fingerprint: string
+  fingerprint_match: boolean
+  self_test_passed: boolean
+  status: EncryptionState
+  reason: string
 }
 export interface KeyReveal { key?: string; new_key?: string; fingerprint: string; key_id: string; instructions: string; rotated?: number; failed?: { name: string; reason: string }[] }
 export interface ReentryCred { id: string; name: string; kind: string; weak: boolean; needs_secret_reentry: boolean; created_at: string; updated_at: string }

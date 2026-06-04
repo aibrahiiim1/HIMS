@@ -251,7 +251,10 @@ export function Dashboard() {
                 : e.status === 'enabled' && e.fingerprint_match && e.undecryptable_count === 0 ? { label: 'Healthy', cls: 'badge-up' }
                 : e.status === 'enabled' ? { label: 'Degraded', cls: 'badge-warning' }
                 : e.status === 'pending_restart' ? { label: 'Pending restart', cls: 'badge-warning' }
-                : { label: 'Not configured', cls: 'badge-down' }
+                : e.status === 'fingerprint_mismatch' ? { label: 'Key mismatch', cls: 'badge-down' }
+                : e.status === 'invalid_key' ? { label: 'Invalid key', cls: 'badge-down' }
+                : e.status === 'missing_key' ? { label: 'Key missing', cls: 'badge-down' }
+                : { label: 'Not configured', cls: 'badge-unknown' }
               const rows: SecRow[] = [
                 { label: 'Encryption', value: <span className={`badge ${health.cls}`}>{health.label}</span> },
                 { label: 'Credentials', value: e?.encrypted_count ?? '—' },
@@ -267,7 +270,7 @@ export function Dashboard() {
                 </ul>
               )
             })()}
-            {enc.data && enc.data.status === 'missing' && (
+            {enc.data && !enc.data.enabled && (
               <div style={{ marginTop: 10 }}><Link className="badge badge-down" to="/security/encryption" style={{ textDecoration: 'none' }}><KeyRound size={11} style={{ verticalAlign: -1 }} /> Configure encryption →</Link></div>
             )}
           </Panel>

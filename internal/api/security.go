@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"os"
 
 	"github.com/coralsearesorts/hims/internal/secret"
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
@@ -15,35 +16,142 @@ import (
 // rotate / reset workflows. Fingerprints are one-way (SHA-256) and safe to
 // store + show.
 
-type encryptionStatus struct {
-	Status            string   `json:"status"` // enabled | pending_restart | missing
-	Configured        bool     `json:"configured"`
-	Enabled           bool     `json:"enabled"`
-	Algorithm         string   `json:"algorithm"`
-	Fingerprint       string   `json:"fingerprint"`
-	KeyID             string   `json:"key_id"`
-	Version           int32    `json:"version"`
-	CreatedAt         *string  `json:"created_at"`
-	LastRotationAt    *string  `json:"last_rotation_at"`
-	LastValidationAt  *string  `json:"last_validation_at"`
-	EncryptedCount    int64    `json:"encrypted_count"`
-	NeedsResetCount   int64    `json:"needs_reset_count"`
-	UndecryptableCount int64   `json:"undecryptable_count"`
-	FingerprintMatch  bool     `json:"fingerprint_match"`
-	Warnings          []string `json:"warnings"`
+// Encryption status vocabulary (one-way fingerprints only; never the key).
+const (
+	encEnabled       = "enabled"
+	encMissingKey    = "missing_key"
+	encNoMetadata    = "no_metadata"
+	encPendingRestart = "pending_restart"
+	encMismatch      = "fingerprint_mismatch"
+	encInvalidKey    = "invalid_key"
+)
+
+var encReason = map[string]string{
+	encEnabled:        "Encryption key is loaded and its fingerprint matches the stored fingerprint.",
+	encMissingKey:     "No HIMS_ENCRYPTION_KEY is loaded in the API process.",
+	encNoMetadata:     "No encryption key has been configured yet.",
+	encPendingRestart: "Encryption key metadata exists, but the running API has not loaded the matching HIMS_ENCRYPTION_KEY. Configure the key in the deployment environment and restart the API.",
+	encMismatch:       "The API has loaded an encryption key, but it does not match the stored fingerprint — the wrong key is configured. Load the key these credentials were encrypted with, or rotate.",
+	encInvalidKey:     "An encryption key is set but failed validation (wrong length/format, or the encryption self-test failed).",
 }
 
-func tsPtr(t interface{ IsZero() bool }) *string { return nil } // unused placeholder
+// encState is the safe, computed encryption state. It NEVER carries key material —
+// only one-way fingerprints and booleans.
+type encState struct {
+	Status                   string
+	Reason                   string
+	RuntimeKeyPresent        bool
+	RuntimeKeyLengthValid    bool
+	RuntimeFingerprint       string
+	StoredFingerprint        string
+	StoredFingerprintPresent bool
+	FingerprintMatch         bool
+	SelfTestOK               bool
+}
+
+// computeEncState is the single source of truth for the encryption state
+// machine, shared by /status, /diagnostics and the startup checklist.
+func (s *Server) computeEncState(r *http.Request) encState {
+	ctx := r.Context()
+	st := encState{}
+
+	// Runtime key presence/length: if a cipher built, the key was present + a
+	// valid 32-byte key. If not, inspect the env var (presence + length only —
+	// the value is checked for length and immediately discarded, never logged).
+	envKey := os.Getenv("HIMS_ENCRYPTION_KEY")
+	if s.cipher != nil {
+		st.RuntimeKeyPresent = true
+		st.RuntimeKeyLengthValid = true
+		st.RuntimeFingerprint = s.cipher.Fingerprint()
+		// Self-test: seal+open a marker.
+		marker := []byte("hims-encryption-self-test")
+		if blob, kid, err := s.cipher.Seal(marker); err == nil {
+			if got, oerr := s.cipher.Open(blob, kid); oerr == nil && string(got) == string(marker) {
+				st.SelfTestOK = true
+			}
+		}
+	} else if envKey != "" {
+		st.RuntimeKeyPresent = true
+		if _, _, err := secret.FingerprintForKey(envKey); err == nil {
+			st.RuntimeKeyLengthValid = true
+		}
+	}
+
+	if meta, err := s.queries.GetEncryptionMetadata(ctx); err == nil && meta.Fingerprint != "" {
+		st.StoredFingerprint = meta.Fingerprint
+		st.StoredFingerprintPresent = true
+	}
+
+	switch {
+	case s.cipher != nil && !st.SelfTestOK:
+		st.Status = encInvalidKey
+	case s.cipher != nil && st.StoredFingerprintPresent && st.RuntimeFingerprint != st.StoredFingerprint:
+		st.Status = encMismatch
+	case s.cipher != nil:
+		// Adopt the running key as the baseline if nothing is stored yet.
+		if !st.StoredFingerprintPresent {
+			_ = s.queries.UpsertEncryptionMetadata(ctx, db.UpsertEncryptionMetadataParams{Fingerprint: s.cipher.Fingerprint(), KeyID: s.cipher.KeyID()})
+			st.StoredFingerprint = s.cipher.Fingerprint()
+			st.StoredFingerprintPresent = true
+		}
+		st.FingerprintMatch = true
+		st.Status = encEnabled
+	case st.RuntimeKeyPresent && !st.RuntimeKeyLengthValid:
+		st.Status = encInvalidKey
+	case st.RuntimeKeyPresent:
+		// Env set + valid length but cipher failed to build (shouldn't happen).
+		st.Status = encInvalidKey
+	case st.StoredFingerprintPresent:
+		st.Status = encPendingRestart
+	default:
+		// No runtime key, no stored fingerprint.
+		if n, _ := s.queries.CountEncryptedCredentials(ctx); n > 0 {
+			st.Status = encMissingKey
+		} else {
+			st.Status = encNoMetadata
+		}
+	}
+	st.Reason = encReason[st.Status]
+	return st
+}
+
+type encryptionStatus struct {
+	Status                   string   `json:"status"`
+	Reason                   string   `json:"reason"`
+	Configured               bool     `json:"configured"`
+	Enabled                  bool     `json:"enabled"`
+	Algorithm                string   `json:"algorithm"`
+	Fingerprint              string   `json:"fingerprint"`
+	KeyID                    string   `json:"key_id"`
+	Version                  int32    `json:"version"`
+	CreatedAt                *string  `json:"created_at"`
+	LastRotationAt           *string  `json:"last_rotation_at"`
+	LastValidationAt         *string  `json:"last_validation_at"`
+	EncryptedCount           int64    `json:"encrypted_count"`
+	NeedsResetCount          int64    `json:"needs_reset_count"`
+	UndecryptableCount       int64    `json:"undecryptable_count"`
+	FingerprintMatch         bool     `json:"fingerprint_match"`
+	RuntimeKeyPresent        bool     `json:"runtime_key_present"`
+	RuntimeKeyLengthValid    bool     `json:"runtime_key_length_valid"`
+	StoredFingerprintPresent bool     `json:"stored_fingerprint_present"`
+	Warnings                 []string `json:"warnings"`
+}
 
 func (s *Server) encryptionStatus(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	meta, metaErr := s.queries.GetEncryptionMetadata(ctx)
-	hasMeta := metaErr == nil
-
-	out := encryptionStatus{Algorithm: "AES-256-GCM", Version: 1, Warnings: []string{}}
-	if hasMeta {
-		out.Algorithm = meta.Algorithm
-		out.Version = meta.Version
+	es := s.computeEncState(r)
+	out := encryptionStatus{
+		Status: es.Status, Reason: es.Reason, Algorithm: "AES-256-GCM", Version: 1, Warnings: []string{},
+		Enabled:                  es.Status == encEnabled,
+		Configured:               es.Status == encEnabled || es.StoredFingerprintPresent,
+		Fingerprint:              firstNonEmpty(es.RuntimeFingerprint, es.StoredFingerprint),
+		FingerprintMatch:         es.FingerprintMatch,
+		RuntimeKeyPresent:        es.RuntimeKeyPresent,
+		RuntimeKeyLengthValid:    es.RuntimeKeyLengthValid,
+		StoredFingerprintPresent: es.StoredFingerprintPresent,
+	}
+	if meta, err := s.queries.GetEncryptionMetadata(ctx); err == nil {
+		out.Algorithm, out.Version, out.KeyID = meta.Algorithm, meta.Version, meta.KeyID
 		c := meta.CreatedAt.Format("2006-01-02T15:04:05Z07:00")
 		out.CreatedAt = &c
 		if meta.LastRotationAt != nil {
@@ -55,57 +163,56 @@ func (s *Server) encryptionStatus(w http.ResponseWriter, r *http.Request) {
 			out.LastValidationAt = &v
 		}
 	}
-
+	if s.cipher != nil {
+		out.KeyID = s.cipher.KeyID()
+	}
 	if encN, err := s.queries.CountEncryptedCredentials(ctx); err == nil {
 		out.EncryptedCount = encN
 	}
 	if rn, err := s.queries.CountCredentialsNeedingReentry(ctx); err == nil {
 		out.NeedsResetCount = rn
 	}
-
 	if s.cipher != nil {
-		out.Configured = true
-		out.Enabled = true
-		out.Status = "enabled"
-		out.Fingerprint = s.cipher.Fingerprint()
-		out.KeyID = s.cipher.KeyID()
-		// Adopt the running key as the recorded baseline if none exists yet.
-		if !hasMeta {
-			_ = s.queries.UpsertEncryptionMetadata(ctx, db.UpsertEncryptionMetadataParams{Fingerprint: s.cipher.Fingerprint(), KeyID: s.cipher.KeyID()})
-			out.FingerprintMatch = true
-		} else {
-			out.FingerprintMatch = meta.Fingerprint == "" || meta.Fingerprint == s.cipher.Fingerprint()
-			if !out.FingerprintMatch {
-				out.Warnings = append(out.Warnings, "Loaded key fingerprint does not match the recorded fingerprint — the wrong key may be configured.")
-			}
-		}
 		if und, err := s.queries.CountUndecryptableCredentials(ctx, s.cipher.KeyID()); err == nil {
 			out.UndecryptableCount = und
-			if und > 0 {
-				out.Warnings = append(out.Warnings, "Some credentials were sealed with a different key and cannot be decrypted by the current key.")
-			}
 		}
 	} else {
-		out.Configured = hasMeta && meta.Fingerprint != ""
-		out.Enabled = false
-		if out.Configured {
-			out.Status = "pending_restart"
-			out.Fingerprint = meta.Fingerprint
-			out.KeyID = meta.KeyID
-			out.Warnings = append(out.Warnings, "A key has been generated but HIMS_ENCRYPTION_KEY is not set in this process. Set it and restart to activate encryption.")
-		} else {
-			out.Status = "missing"
-		}
-		// Without a loaded key, every encrypted credential is undecryptable.
 		out.UndecryptableCount = out.EncryptedCount
-		if out.EncryptedCount > 0 {
-			out.Warnings = append(out.Warnings, "No encryption key is loaded but encrypted credentials exist — credential operations are disabled until the key is restored.")
-		}
+	}
+
+	// Plain-English warnings keyed off the precise state.
+	out.Warnings = append(out.Warnings, es.Reason)
+	if out.UndecryptableCount > 0 && es.Status == encEnabled {
+		out.Warnings = append(out.Warnings, "Some credentials were sealed with a different key and cannot be decrypted by the current key.")
 	}
 	if out.NeedsResetCount > 0 {
 		out.Warnings = append(out.Warnings, "Some credentials need their secret re-entered after a key reset.")
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+func firstNonEmpty(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}
+
+// encryptionDiagnostics returns SAFE diagnostics only — booleans + one-way
+// fingerprints. The raw key is never read for output, logged, or returned.
+func (s *Server) encryptionDiagnostics(w http.ResponseWriter, r *http.Request) {
+	es := s.computeEncState(r)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"runtime_key_present":        es.RuntimeKeyPresent,
+		"runtime_key_length_valid":   es.RuntimeKeyLengthValid,
+		"stored_fingerprint_present": es.StoredFingerprintPresent,
+		"runtime_fingerprint":        es.RuntimeFingerprint,
+		"stored_fingerprint":         es.StoredFingerprint,
+		"fingerprint_match":          es.FingerprintMatch,
+		"self_test_passed":           es.SelfTestOK,
+		"status":                     es.Status,
+		"reason":                     es.Reason,
+	})
 }
 
 func (s *Server) encryptionGenerate(w http.ResponseWriter, r *http.Request) {
@@ -279,24 +386,33 @@ func (s *Server) startupChecklist(w http.ResponseWriter, r *http.Request) {
 
 	items = append(items, checkItem{"api", "API running", "ok", "The HIMS API is serving requests.", ""})
 
+	// Precise encryption state (single source of truth) drives the key items.
+	es := s.computeEncState(r)
 	keyConfigured := s.cipher != nil
-	if keyConfigured {
-		items = append(items, checkItem{"key", "Encryption key configured", "ok", "HIMS_ENCRYPTION_KEY is loaded.", ""})
+	keyAction := map[string]string{
+		encPendingRestart: "Set HIMS_ENCRYPTION_KEY in your deployment environment and restart the API.",
+		encMissingKey:     "Set HIMS_ENCRYPTION_KEY in your deployment environment and restart the API.",
+		encNoMetadata:     "Generate or provide an encryption key, then set it and restart.",
+		encMismatch:       "Load the key these credentials were encrypted with (or rotate), then restart.",
+		encInvalidKey:     "HIMS_ENCRYPTION_KEY must be a base64-encoded 32-byte key. Fix it and restart.",
+	}
+	if es.Status == encEnabled {
+		items = append(items, checkItem{"key", "Encryption key configured", "ok", es.Reason, ""})
 	} else {
-		items = append(items, checkItem{"key", "Encryption key configured", "fail", "No encryption key is loaded in the API process.", "Configure HIMS_ENCRYPTION_KEY in your deployment environment and restart the API."})
+		items = append(items, checkItem{"key", "Encryption key configured", "fail", es.Reason, keyAction[es.Status]})
 	}
 
-	// Fingerprint valid — matches the recorded baseline (if any).
-	fpStatus, fpDetail, fpAction := "fail", "No key loaded, so no fingerprint to verify.", "Configure the encryption key and restart."
-	if keyConfigured {
-		meta, mErr := s.queries.GetEncryptionMetadata(ctx)
-		if mErr != nil || meta.Fingerprint == "" || meta.Fingerprint == s.cipher.Fingerprint() {
-			fpStatus, fpDetail, fpAction = "ok", "Loaded key fingerprint matches the recorded fingerprint.", ""
-		} else {
-			fpStatus, fpDetail, fpAction = "warn", "The loaded key does not match the recorded fingerprint — a different key may be configured.", "Verify HIMS_ENCRYPTION_KEY is the key these credentials were encrypted with."
-		}
+	// Fingerprint valid — runtime fingerprint matches the stored fingerprint.
+	switch {
+	case es.FingerprintMatch:
+		items = append(items, checkItem{"fingerprint", "Encryption fingerprint valid", "ok", "Runtime key fingerprint matches the stored fingerprint.", ""})
+	case es.Status == encMismatch:
+		items = append(items, checkItem{"fingerprint", "Encryption fingerprint valid", "fail", "Runtime key fingerprint does NOT match the stored fingerprint — the wrong key is loaded.", "Load the correct key (or rotate), then restart."})
+	case es.Status == encPendingRestart:
+		items = append(items, checkItem{"fingerprint", "Encryption fingerprint valid", "warn", "A fingerprint is stored, but no runtime key is loaded to compare it against.", "Set HIMS_ENCRYPTION_KEY and restart."})
+	default:
+		items = append(items, checkItem{"fingerprint", "Encryption fingerprint valid", "fail", "No runtime key loaded to verify a fingerprint.", "Set HIMS_ENCRYPTION_KEY and restart."})
 	}
-	items = append(items, checkItem{"fingerprint", "Encryption fingerprint valid", fpStatus, fpDetail, fpAction})
 
 	// Credentials decryptable — none sealed under a different key.
 	und := encN

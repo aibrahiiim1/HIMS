@@ -34,11 +34,12 @@ export function Encryption() {
   )
 }
 
+const ENC_BADGE: Record<string, string> = { enabled: 'badge-up', pending_restart: 'badge-warning', missing_key: 'badge-down', no_metadata: 'badge-unknown', fingerprint_mismatch: 'badge-down', invalid_key: 'badge-down' }
+const ENC_LABEL: Record<string, string> = { enabled: 'Enabled', pending_restart: 'Pending restart', missing_key: 'Key missing', no_metadata: 'Not configured', fingerprint_mismatch: 'Fingerprint mismatch', invalid_key: 'Invalid key' }
+const yn = (b?: boolean) => (b ? <span className="badge badge-up">Yes</span> : <span className="badge badge-down">No</span>)
 function StatusBadge({ s }: { s?: EncryptionStatus }) {
   if (!s) return null
-  const map = { enabled: 'badge-up', pending_restart: 'badge-warning', missing: 'badge-down' } as Record<string, string>
-  const label = { enabled: 'Enabled', pending_restart: 'Pending restart', missing: 'Not configured' } as Record<string, string>
-  return <span className={`badge ${map[s.status]}`}>{label[s.status]}</span>
+  return <span className={`badge ${ENC_BADGE[s.status] ?? 'badge-unknown'}`}>{ENC_LABEL[s.status] ?? s.status}</span>
 }
 
 function Warnings({ items }: { items: string[] }) {
@@ -55,7 +56,7 @@ function Warnings({ items }: { items: string[] }) {
 function StatusTab({ s, loading, onGo }: { s?: EncryptionStatus; loading: boolean; onGo: () => void }) {
   if (loading || !s) return <Panel title="Encryption Status"><div className="loading">Loading…</div></Panel>
 
-  if (s.status === 'missing') {
+  if (s.status === 'no_metadata') {
     return (
       <Panel title="Encryption Status" icon={ShieldCheck}>
         <EmptyState icon={KeyRound} title="No encryption key has been configured"
@@ -79,7 +80,11 @@ function StatusTab({ s, loading, onGo }: { s?: EncryptionStatus; loading: boolea
           <div><dt>Status</dt><dd><StatusBadge s={s} /></dd></div>
           <div><dt>Algorithm</dt><dd>{s.algorithm}</dd></div>
           <div><dt>Encryption Version</dt><dd>v{s.version}</dd></div>
-          <div><dt>Fingerprint match</dt><dd>{s.fingerprint_match ? <span className="badge badge-up">match</span> : <span className="badge badge-down">mismatch</span>}</dd></div>
+          <div><dt>Runtime key loaded</dt><dd>{yn(s.runtime_key_present)}</dd></div>
+          <div><dt>Key length valid</dt><dd>{yn(s.runtime_key_length_valid)}</dd></div>
+          <div><dt>Stored fingerprint exists</dt><dd>{yn(s.stored_fingerprint_present)}</dd></div>
+          <div><dt>Fingerprint match</dt><dd>{s.fingerprint_match ? <span className="badge badge-up">match</span> : <span className="badge badge-down">no match</span>}</dd></div>
+          <div style={{ gridColumn: '1 / -1' }}><dt>Status reason</dt><dd style={{ fontWeight: 400 }}>{s.reason}</dd></div>
           <div style={{ gridColumn: '1 / -1' }}><dt>SHA-256 Fingerprint</dt><dd className="mono" style={{ wordBreak: 'break-all' }}>{s.fingerprint || '—'}</dd></div>
           <div><dt>Key ID</dt><dd className="mono">{s.key_id || '—'}</dd></div>
           <div><dt>Created</dt><dd>{s.created_at ? timeAgo(s.created_at) : '—'}</dd></div>
@@ -250,9 +255,12 @@ function SetupWizard({ s }: { s?: EncryptionStatus }) {
 
       {step === 0 && (
         <Panel title="Where things stand" icon={ShieldCheck}>
-          {s?.status === 'missing' && <div className="enc-banner crit" style={{ marginBottom: 14 }}><TriangleAlert size={16} /> <span><b>Action required:</b> Configure <code>HIMS_ENCRYPTION_KEY</code> in your deployment environment and restart the API. This wizard walks you through it.</span></div>}
-          {s?.status === 'pending_restart' && <div className="enc-banner warn" style={{ marginBottom: 14 }}><TriangleAlert size={16} /> <span>A key has been generated but the API hasn't been restarted with it yet. Continue to the Deployment + Restart steps.</span></div>}
-          {allEnabled && <div className="enc-banner info" style={{ marginBottom: 14 }}><CircleCheck size={16} /> <span>Encryption is already configured and healthy. You can still use this wizard to review deployment steps or rotate later.</span></div>}
+          {s && !s.enabled && (
+            <div className={'enc-banner ' + (s.status === 'pending_restart' || s.status === 'no_metadata' ? 'warn' : 'crit')} style={{ marginBottom: 14 }}>
+              <TriangleAlert size={16} /> <span><b>Action required:</b> {s.reason}</span>
+            </div>
+          )}
+          {allEnabled && <div className="enc-banner info" style={{ marginBottom: 14 }}><CircleCheck size={16} /> <span>Encryption is configured and healthy. You can still use this wizard to review deployment steps or rotate later.</span></div>}
           <StartupChecklist />
           <div className="row" style={{ marginTop: 16 }}><button className="btn btn-primary" onClick={next}>Begin setup →</button></div>
         </Panel>
