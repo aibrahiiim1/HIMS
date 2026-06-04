@@ -138,6 +138,7 @@ func (s *Server) routes() {
 		r.Get("/system/runtime", s.systemRuntime)
 		r.Get("/data-quality", s.dataQuality)
 		r.Post("/data-quality/reconcile-sites", s.reconcileSites)
+		r.Post("/data-quality/collect-os", s.bulkCollectOS)
 
 		// --- Discovery (operator-launched subnet scans) --------------
 		r.Get("/discovery/jobs", s.listDiscoveryJobs)

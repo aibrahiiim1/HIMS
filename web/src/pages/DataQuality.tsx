@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { ClipboardCheck, ChevronRight, CircleCheck, TriangleAlert, Info, RefreshCw, MapPin } from 'lucide-react'
-import { api, type DataQualityReport, type ReconcileSitesResult } from '../api'
+import { ClipboardCheck, ChevronRight, CircleCheck, TriangleAlert, Info, RefreshCw, MapPin, Cpu } from 'lucide-react'
+import { api, type DataQualityReport, type DataQualityDevice, type ReconcileSitesResult, type BulkCollectOSResult, type OSCollectResult } from '../api'
 import { PageHeader, Panel, Kpi, EmptyState, timeAgo } from '../components/ui'
 
 const detailBase: Record<string, string> = { switch: '/devices', server: '/servers', firewall: '/firewalls', camera: '/cctv', nvr: '/cctv', wireless_controller: '/wlan', printer: '/printers', ups: '/ups', pbx: '/pbx', virtual_host: '/virtual-hosts' }
@@ -50,6 +50,7 @@ export function DataQuality() {
                 >
                   <p className="muted" style={{ fontSize: 13, marginBottom: isOpen ? 12 : 0 }}>{iss.description}</p>
                   {iss.key === 'missing_location' && <ReconcileSites onApplied={() => q.refetch()} />}
+                  {iss.key === 'os_not_inventoried' && <BulkCollectOS devices={iss.devices} onDone={() => q.refetch()} />}
                   {isOpen && (
                     <table className="data-table">
                       <thead><tr><th>Device</th><th>IP</th><th>Category</th><th>Vendor</th>{iss.devices.some((d) => d.note) && <th>Note</th>}</tr></thead>
@@ -75,6 +76,80 @@ export function DataQuality() {
           </div>
         </>
       )}
+    </div>
+  )
+}
+
+// BulkCollectOS — the Data Quality "OS not inventoried" action: select devices,
+// run authenticated deep OS collection, and show a per-device result. Failures
+// carry an actionable reason straight from the server (no credential, auth
+// failed, WinRM disabled, SSH timeout, unsupported OS…). Nothing is faked.
+function BulkCollectOS({ devices, onDone }: { devices: DataQualityDevice[]; onDone: () => void }) {
+  const [sel, setSel] = useState<Set<string>>(new Set())
+  const [res, setRes] = useState<BulkCollectOSResult | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+
+  const toggle = (id: string) => {
+    const next = new Set(sel)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    setSel(next)
+  }
+  const allIds = devices.map((d) => d.id)
+  const selectAll = () => setSel(new Set(sel.size === allIds.length ? [] : allIds))
+
+  const run = async () => {
+    setBusy(true); setErr(null)
+    try {
+      const r = await api.post<BulkCollectOSResult>('/data-quality/collect-os', { device_ids: [...sel] })
+      setRes(r); onDone()
+    } catch (e) { setErr(e instanceof Error ? e.message : String(e)) }
+    finally { setBusy(false) }
+  }
+  const byId = (id: string): OSCollectResult | undefined => res?.results.find((x) => x.device_id === id)
+
+  return (
+    <div style={{ margin: '4px 0 12px', padding: 12, borderRadius: 8, background: 'var(--surface-2, rgba(125,125,125,.06))' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+        <Cpu size={15} />
+        <span style={{ fontSize: 13, fontWeight: 600 }}>Collect OS inventory</span>
+        <span className="muted" style={{ fontSize: 12, flex: 1 }}>
+          Select devices and run authenticated collection (WinRM for Windows, SSH for Linux). Needs a working bound credential.
+        </span>
+        <button className="btn btn-xs btn-ghost" onClick={selectAll}>{sel.size === allIds.length ? 'Clear' : 'Select all'}</button>
+        <button className="btn btn-xs btn-primary" disabled={sel.size === 0 || busy} onClick={run}>
+          {busy ? 'Collecting…' : `Collect ${sel.size || ''}`}
+        </button>
+      </div>
+      {err && <p className="error-msg" style={{ fontSize: 12 }}>{err}</p>}
+      {res && (
+        <p style={{ fontSize: 12, marginBottom: 6 }}>
+          <span className="badge badge-up">{res.collected} collected</span>{' '}
+          <span className="badge badge-down">{res.failed} failed</span>
+        </p>
+      )}
+      <table className="data-table">
+        <thead><tr><th style={{ width: 28 }}></th><th>Device</th><th>IP</th><th>Result</th></tr></thead>
+        <tbody>
+          {devices.map((d) => {
+            const r = byId(d.id)
+            return (
+              <tr key={d.id}>
+                <td><input type="checkbox" checked={sel.has(d.id)} onChange={() => toggle(d.id)} /></td>
+                <td>{d.name}</td>
+                <td className="mono" style={{ fontSize: 12 }}>{d.primary_ip || '—'}</td>
+                <td>
+                  {!r ? <span className="muted" style={{ fontSize: 12 }}>—</span>
+                    : r.status === 'collected'
+                      ? <span className="badge badge-up">collected via {r.method}</span>
+                      : <span><span className="badge badge-down">{(r.reason || 'failed').replace(/_/g, ' ')}</span> <span className="muted" style={{ fontSize: 12 }}>{r.detail}</span></span>}
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
     </div>
   )
 }

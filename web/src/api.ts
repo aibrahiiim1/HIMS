@@ -980,6 +980,15 @@ export interface Subnet {
   vlan_id?: number | null
 }
 
+// Bulk OS collection (Data Quality action). Per-device, actionable on failure.
+export interface OSCollectResult {
+  device_id: string; name: string; ip: string
+  status: string // collected | failed
+  method?: string; reason?: string; detail: string
+  counts?: Record<string, number>; roles?: string[]
+}
+export interface BulkCollectOSResult { results: OSCollectResult[]; collected: number; failed: number }
+
 // Deep OS Inventory (Windows via WinRM, Linux via SSH). All summary fields are
 // nullable — null renders as "Not collected".
 export interface OSInventory {
