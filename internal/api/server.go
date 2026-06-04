@@ -306,6 +306,7 @@ func (s *Server) routes() {
 		// --- Credentials (encrypted at rest; secrets never returned) -
 		r.Get("/credentials", s.listCredentials)
 		r.Post("/credentials", s.createCredential)
+		r.Post("/credentials/test", s.testCredentials)
 		r.Patch("/credentials/{id}", s.updateCredential)
 		r.Delete("/credentials/{id}", s.deleteCredential)
 		r.Get("/credential-groups", s.listCredentialGroups)

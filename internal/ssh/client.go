@@ -39,6 +39,33 @@ func buildConfig(c Creds, legacyKEX bool, timeout time.Duration) *gossh.ClientCo
 	return cfg
 }
 
+// CheckAuth opens an SSH connection to host:port and completes the handshake +
+// authentication only — no command is run — then closes. It returns nil when
+// the credentials authenticate. Used by credential testing: it proves a login
+// works without side effects on the device. The password is never logged.
+func CheckAuth(ctx context.Context, host string, port int, c Creds, legacyKEX bool, timeout time.Duration) error {
+	if timeout <= 0 {
+		timeout = 15 * time.Second
+	}
+	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
+	d := net.Dialer{Timeout: timeout}
+	dialCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	conn, err := d.DialContext(dialCtx, "tcp", addr)
+	if err != nil {
+		return fmt.Errorf("dial %s: %w", addr, err)
+	}
+	cfg := buildConfig(c, legacyKEX, timeout)
+	sshConn, chans, reqs, err := gossh.NewClientConn(conn, addr, cfg)
+	if err != nil {
+		conn.Close()
+		return fmt.Errorf("ssh handshake: %w", err) // never includes the password
+	}
+	client := gossh.NewClient(sshConn, chans, reqs)
+	client.Close()
+	return nil
+}
+
 // Run opens an SSH session to host:port, executes command, and returns the
 // combined stdout/stderr. The password is never logged.
 func Run(ctx context.Context, host string, port int, c Creds, legacyKEX bool, command string, timeout time.Duration) (string, error) {
