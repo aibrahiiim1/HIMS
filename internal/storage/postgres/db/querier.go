@@ -119,6 +119,11 @@ type Querier interface {
 	DeleteStaleLicenses(ctx context.Context, arg DeleteStaleLicensesParams) error
 	DeleteStaleMACEntries(ctx context.Context, arg DeleteStaleMACEntriesParams) error
 	DeleteStaleNeighbors(ctx context.Context, arg DeleteStaleNeighborsParams) error
+	DeleteStaleOSDisks(ctx context.Context, arg DeleteStaleOSDisksParams) error
+	DeleteStaleOSNics(ctx context.Context, arg DeleteStaleOSNicsParams) error
+	DeleteStaleOSProcesses(ctx context.Context, arg DeleteStaleOSProcessesParams) error
+	DeleteStaleOSServices(ctx context.Context, arg DeleteStaleOSServicesParams) error
+	DeleteStaleOSSoftware(ctx context.Context, arg DeleteStaleOSSoftwareParams) error
 	DeleteStalePbxPhones(ctx context.Context, arg DeleteStalePbxPhonesParams) error
 	DeleteStalePortVlans(ctx context.Context, arg DeleteStalePortVlansParams) error
 	DeleteStalePrinterSupplies(ctx context.Context, arg DeleteStalePrinterSuppliesParams) error
@@ -168,6 +173,10 @@ type Querier interface {
 	GetLocation(ctx context.Context, id uuid.UUID) (Location, error)
 	GetMonitoringCheck(ctx context.Context, id uuid.UUID) (MonitoringCheck, error)
 	GetNotificationChannel(ctx context.Context, id uuid.UUID) (NotificationChannel, error)
+	// Deep OS Inventory queries. The 1:1 summary is upserted per device; the 1:N
+	// collections follow the prune-on-poll pattern (Upsert all rows with last_seen_at
+	// = poll, then DeleteStale* removes rows from the same source not seen this poll).
+	GetOSInventory(ctx context.Context, deviceID uuid.UUID) (OsInventory, error)
 	GetReportSchedule(ctx context.Context, id uuid.UUID) (ReportSchedule, error)
 	// Resolve a live session to its user (joined), enforcing expiry.
 	GetSession(ctx context.Context, tokenHash string) (GetSessionRow, error)
@@ -237,6 +246,8 @@ type Querier interface {
 	// Devices with a reachable IP but no monitoring check yet — the seeder turns
 	// each into a default TCP check (port chosen by category).
 	ListDevicesNeedingDefaultCheck(ctx context.Context) ([]ListDevicesNeedingDefaultCheckRow, error)
+	// Credentialed device classes (server/endpoint) that have never been OS-inventoried.
+	ListDevicesWithoutOSInventory(ctx context.Context) ([]ListDevicesWithoutOSInventoryRow, error)
 	ListDiscoveryJobs(ctx context.Context) ([]DiscoveryJob, error)
 	ListDiscoveryResults(ctx context.Context, jobID uuid.UUID) ([]DiscoveryResult, error)
 	// A check is due when enabled and either never run or its interval elapsed.
@@ -272,6 +283,16 @@ type Querier interface {
 	ListNotificationChannels(ctx context.Context) ([]NotificationChannel, error)
 	ListNotificationLog(ctx context.Context) ([]NotificationLog, error)
 	ListOIDMappings(ctx context.Context) ([]OidMapping, error)
+	// --- disks ---
+	ListOSDisks(ctx context.Context, deviceID uuid.UUID) ([]OsDisk, error)
+	// --- nics ---
+	ListOSNics(ctx context.Context, deviceID uuid.UUID) ([]OsNic, error)
+	// --- processes ---
+	ListOSProcesses(ctx context.Context, deviceID uuid.UUID) ([]OsProcess, error)
+	// --- services ---
+	ListOSServices(ctx context.Context, deviceID uuid.UUID) ([]OsService, error)
+	// --- software ---
+	ListOSSoftware(ctx context.Context, deviceID uuid.UUID) ([]OsSoftware, error)
 	ListPbxPhones(ctx context.Context, deviceID uuid.UUID) ([]PbxPhone, error)
 	ListPermissions(ctx context.Context) ([]Permission, error)
 	ListPortVlans(ctx context.Context, deviceID uuid.UUID) ([]PortVlan, error)
@@ -423,6 +444,12 @@ type Querier interface {
 	UpsertNVRChannel(ctx context.Context, arg UpsertNVRChannelParams) (NvrChannel, error)
 	// ---- Neighbors (LLDP/CDP) -----------------------------------------------
 	UpsertNeighbor(ctx context.Context, arg UpsertNeighborParams) (Neighbor, error)
+	UpsertOSDisk(ctx context.Context, arg UpsertOSDiskParams) error
+	UpsertOSInventory(ctx context.Context, arg UpsertOSInventoryParams) (OsInventory, error)
+	UpsertOSNic(ctx context.Context, arg UpsertOSNicParams) error
+	UpsertOSProcess(ctx context.Context, arg UpsertOSProcessParams) error
+	UpsertOSService(ctx context.Context, arg UpsertOSServiceParams) error
+	UpsertOSSoftware(ctx context.Context, arg UpsertOSSoftwareParams) error
 	UpsertPbxPhone(ctx context.Context, arg UpsertPbxPhoneParams) error
 	UpsertPortVlan(ctx context.Context, arg UpsertPortVlanParams) error
 	UpsertPrinterSupply(ctx context.Context, arg UpsertPrinterSupplyParams) error

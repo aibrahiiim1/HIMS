@@ -528,6 +528,118 @@ type OidMapping struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+type OsDisk struct {
+	ID               uuid.UUID `json:"id"`
+	DeviceID         uuid.UUID `json:"device_id"`
+	Name             string    `json:"name"`
+	Model            *string   `json:"model"`
+	Serial           *string   `json:"serial"`
+	Filesystem       *string   `json:"filesystem"`
+	SizeBytes        *int64    `json:"size_bytes"`
+	TotalBytes       *int64    `json:"total_bytes"`
+	FreeBytes        *int64    `json:"free_bytes"`
+	Health           *string   `json:"health"`
+	CollectionSource string    `json:"collection_source"`
+	LastSeenAt       time.Time `json:"last_seen_at"`
+	CreatedAt        time.Time `json:"created_at"`
+}
+
+type OsInventory struct {
+	DeviceID            uuid.UUID  `json:"device_id"`
+	CollectionMethod    string     `json:"collection_method"`
+	CollectedAt         time.Time  `json:"collected_at"`
+	Hostname            *string    `json:"hostname"`
+	Fqdn                *string    `json:"fqdn"`
+	Domain              *string    `json:"domain"`
+	Workgroup           *string    `json:"workgroup"`
+	LoggedOnUser        *string    `json:"logged_on_user"`
+	AdDistinguishedName *string    `json:"ad_distinguished_name"`
+	AdOuPath            *string    `json:"ad_ou_path"`
+	OsCaption           *string    `json:"os_caption"`
+	OsVersion           *string    `json:"os_version"`
+	OsBuild             *string    `json:"os_build"`
+	OsEdition           *string    `json:"os_edition"`
+	OsArch              *string    `json:"os_arch"`
+	Kernel              *string    `json:"kernel"`
+	InstallDate         *time.Time `json:"install_date"`
+	LastBoot            *time.Time `json:"last_boot"`
+	UptimeSeconds       *int64     `json:"uptime_seconds"`
+	Timezone            *string    `json:"timezone"`
+	Manufacturer        *string    `json:"manufacturer"`
+	Model               *string    `json:"model"`
+	Serial              *string    `json:"serial"`
+	AssetTag            *string    `json:"asset_tag"`
+	BiosVersion         *string    `json:"bios_version"`
+	BiosDate            *string    `json:"bios_date"`
+	CpuModel            *string    `json:"cpu_model"`
+	CpuSockets          *int32     `json:"cpu_sockets"`
+	CpuCores            *int32     `json:"cpu_cores"`
+	RamTotalBytes       *int64     `json:"ram_total_bytes"`
+	RamSlots            *int32     `json:"ram_slots"`
+	SwapTotalBytes      *int64     `json:"swap_total_bytes"`
+	EventsCritical24h   *int32     `json:"events_critical_24h"`
+	EventsError24h      *int32     `json:"events_error_24h"`
+	EventsWarning24h    *int32     `json:"events_warning_24h"`
+	LastCriticalEvent   *string    `json:"last_critical_event"`
+	CreatedAt           time.Time  `json:"created_at"`
+	UpdatedAt           time.Time  `json:"updated_at"`
+}
+
+type OsNic struct {
+	ID               uuid.UUID `json:"id"`
+	DeviceID         uuid.UUID `json:"device_id"`
+	Name             string    `json:"name"`
+	Mac              *string   `json:"mac"`
+	IpAddresses      *string   `json:"ip_addresses"`
+	Gateway          *string   `json:"gateway"`
+	DnsServers       *string   `json:"dns_servers"`
+	DhcpEnabled      *bool     `json:"dhcp_enabled"`
+	LinkSpeedMbps    *int64    `json:"link_speed_mbps"`
+	CollectionSource string    `json:"collection_source"`
+	LastSeenAt       time.Time `json:"last_seen_at"`
+	CreatedAt        time.Time `json:"created_at"`
+}
+
+type OsProcess struct {
+	ID               uuid.UUID  `json:"id"`
+	DeviceID         uuid.UUID  `json:"device_id"`
+	Pid              int32      `json:"pid"`
+	Name             string     `json:"name"`
+	CpuPct           *float64   `json:"cpu_pct"`
+	MemBytes         *int64     `json:"mem_bytes"`
+	StartTime        *time.Time `json:"start_time"`
+	CollectionSource string     `json:"collection_source"`
+	LastSeenAt       time.Time  `json:"last_seen_at"`
+	CreatedAt        time.Time  `json:"created_at"`
+}
+
+type OsService struct {
+	ID               uuid.UUID `json:"id"`
+	DeviceID         uuid.UUID `json:"device_id"`
+	Name             string    `json:"name"`
+	DisplayName      *string   `json:"display_name"`
+	Status           *string   `json:"status"`
+	StartType        *string   `json:"start_type"`
+	Account          *string   `json:"account"`
+	Description      *string   `json:"description"`
+	CollectionSource string    `json:"collection_source"`
+	LastSeenAt       time.Time `json:"last_seen_at"`
+	CreatedAt        time.Time `json:"created_at"`
+}
+
+type OsSoftware struct {
+	ID               uuid.UUID `json:"id"`
+	DeviceID         uuid.UUID `json:"device_id"`
+	Name             string    `json:"name"`
+	Version          string    `json:"version"`
+	Publisher        *string   `json:"publisher"`
+	Arch             *string   `json:"arch"`
+	InstallDate      *string   `json:"install_date"`
+	CollectionSource string    `json:"collection_source"`
+	LastSeenAt       time.Time `json:"last_seen_at"`
+	CreatedAt        time.Time `json:"created_at"`
+}
+
 type PbxPhone struct {
 	ID               uuid.UUID `json:"id"`
 	DeviceID         uuid.UUID `json:"device_id"`
