@@ -183,6 +183,8 @@ func (s *Server) routes() {
 		r.Get("/assets/lifecycle", s.assetLifecycleRegister)
 		// --- Multi-site rollup (#22) ----------------------------------
 		r.Get("/sites/overview", s.sitesOverview)
+		// --- API documentation (#30) ----------------------------------
+		r.Get("/openapi.json", s.openapiSpec)
 		// --- Backup & Restore (#25) -----------------------------------
 		r.Get("/admin/backup/export", s.exportBackup)
 		r.Post("/admin/backup/validate", s.validateBackup)

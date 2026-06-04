@@ -144,6 +144,7 @@ export const NAV: NavGroup[] = [
       { label: 'System Health', icon: Activity, to: '/system-health' },
       { label: 'Data Quality', icon: ClipboardCheck, to: '/data-quality' },
       { label: 'Backup & Restore', icon: DatabaseBackup, to: '/backup-restore' },
+      { label: 'API Documentation', icon: BookOpen, to: '/api-docs' },
       { label: 'System Settings', icon: Settings, to: '/settings' },
       { label: 'Audit Log', icon: FileClock, to: '/audit-log' },
     ],

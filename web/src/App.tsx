@@ -43,6 +43,7 @@ import { NetFlow } from './pages/NetFlow'
 import { AssetLifecycle } from './pages/AssetLifecycle'
 import { MultiSite } from './pages/MultiSite'
 import { BackupRestore } from './pages/BackupRestore'
+import { ApiDocs } from './pages/ApiDocs'
 import { Sidebar } from './components/Sidebar'
 import { Topbar } from './components/Topbar'
 import { useBadges } from './hooks/useBadges'
@@ -131,6 +132,7 @@ function Shell() {
             <Route path="/assets" element={<AssetLifecycle />} />
             <Route path="/sites" element={<MultiSite />} />
             <Route path="/backup-restore" element={<BackupRestore />} />
+            <Route path="/api-docs" element={<ApiDocs />} />
             <Route path="/search" element={<SearchPage />} />
             <Route path="/work-orders" element={<WorkOrders />} />
             <Route path="/systems" element={<Systems />} />
