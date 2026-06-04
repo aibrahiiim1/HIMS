@@ -60,6 +60,25 @@ Supporting fixes this program: runtime key unlock (`3ef8293`), single-instance g
 - **#4 MAC/ARP-derived edges**: engine rates MAC/ARP links lower when present but does not synthesize brand-new edges purely from FDB heuristics (false-topology risk).
 - **#9 auto-classify in discovery**: the operator fingerprint library powers the Match Tester + per-device suggestion, but is not yet consulted by the live discovery/enrichment classifier (which is driver-based). Wiring it in is gated on the discovery pipeline persisting richer evidence (full SNMP sysObjectID + untruncated sysDescr + HTTP/SSH banners) — today only a truncated sysDescr fragment + vendor name survive on the device row, so device-side matching is vendor-name-grade. Trigger: when discovery persists sysObjectID/sysDescr/banner evidence, add a reconcile pass that runs `fingerprint.Match` over it and proposes/raises reclassification.
 
+## Deep OS Inventory Phase (Windows via WinRM, Linux via SSH)
+
+Authenticated deep OS/hardware/service/process/disk/network/software inventory.
+Honest by construction — a field is only written when the host returned it; the
+UI shows "Not collected yet" otherwise. **WinRM is THE authenticated Windows
+method** (WMI/CIM gathered via `Get-CimInstance` over WinRM — pure-Go DCOM from
+Linux isn't viable; native agent stays future). Linux = SSH (password now,
+key-auth a documented future). Live collection is host+credential-gated; parsers
+are unit-tested against captured-output fixtures.
+
+| SC | Status |
+|---|---|
+| SC1 schema + queries (`os_inventory` 1:1 + `os_disks`/`os_nics`/`os_services`/`os_processes`/`os_software` 1:N, prune-on-poll) | ✅ `74f4719` |
+| SC2 Windows collector (`internal/osinv`: PowerShell `Get-CimInstance` script + pure parser + role detection) | ✅ `268f3ed` |
+| SC3 Linux collector (marked SSH script + per-section pure parsers + role detection) | ✅ `1235911` |
+| SC4 orchestrator + persistence + `POST /devices/{id}/collect-os` (cred resolve, method-by-os_family, delete-stale write, roles→device_roles, audit, site-scope) | ⏳ |
+| SC5 read endpoints + ServerDetail/endpoint tabs ("Not collected yet" + Collect-now) + DQ "OS not inventoried" | ⏳ |
+| SC6 docs + deploy + wrap-up | ⏳ |
+
 ## Production Readiness Phase
 
 Making the completed roadmap safe + usable in a real deployment. Fleet reachability from the build host: `172.21.210.x` (CCTV/NVR range) is reachable → live-testable; `172.21.96.x` (switches) is not → those gates stay documented.
