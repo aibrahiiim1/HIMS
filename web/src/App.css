@@ -653,3 +653,36 @@ select.field { cursor: pointer; }
 .dev-cell { display: flex; align-items: center; gap: 10px; }
 .dev-cell .dev-meta { display: flex; flex-direction: column; line-height: 1.25; }
 .dev-cell .dev-meta small { color: var(--text-faint); font-size: var(--fs-sm); }
+
+/* ---- Device hero header --------------------------------------------------- */
+.device-hero {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-5);
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm); padding: var(--space-5); margin-bottom: var(--space-4); flex-wrap: wrap;
+}
+.device-hero-id { display: flex; align-items: center; gap: var(--space-4); min-width: 0; }
+.device-hero-avatar {
+  width: 56px; height: 56px; border-radius: var(--radius-lg); flex: none; color: #fff;
+  display: flex; align-items: center; justify-content: center;
+}
+.device-hero-text { min-width: 0; }
+.device-hero-title { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.device-hero-title h1 { font-size: 21px; font-weight: 700; color: var(--text); }
+.device-hero-sub { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: var(--fs-md); margin-top: 2px; flex-wrap: wrap; }
+.device-hero-badges { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.hero-badge {
+  display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px;
+  border-radius: var(--radius-sm); background: var(--surface-2); border: 1px solid var(--border);
+  font-size: var(--fs-sm); font-weight: 600; color: var(--text);
+}
+.hero-badge em { font-style: normal; color: var(--text-faint); font-weight: 600; text-transform: uppercase; font-size: 10px; letter-spacing: .4px; }
+
+.device-hero-metrics { display: flex; align-items: center; gap: var(--space-5); flex-wrap: wrap; }
+.device-hero-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 22px; }
+.hero-stat { display: flex; align-items: center; gap: 9px; }
+.hero-stat-ico { width: 30px; height: 30px; border-radius: var(--radius-sm); flex: none; background: var(--surface-3); color: var(--text-muted); display: flex; align-items: center; justify-content: center; }
+.hero-stat-ico.tone-info { background: var(--brand-soft); color: var(--brand); }
+.hero-stat > div { display: flex; flex-direction: column; line-height: 1.2; min-width: 0; }
+.hero-stat b { font-size: var(--fs-base); color: var(--text); font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 150px; }
+.hero-stat small { font-size: var(--fs-sm); color: var(--text-faint); }
+@media (max-width: 720px) { .device-hero-stats { grid-template-columns: 1fr; } }
