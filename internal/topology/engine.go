@@ -173,6 +173,7 @@ func (e *Engine) SearchIP(ctx context.Context, ip netip.Addr) (SearchResult, err
 	}
 	res.Path = e.buildPath(ctx, &res)
 	res.Confidence, res.ConfidenceReasons = assessConfidence(&res)
+	res.normalizeSlices()
 	return res, nil
 }
 
@@ -182,7 +183,22 @@ func (e *Engine) SearchMAC(ctx context.Context, mac string) (SearchResult, error
 	res.SwitchPort = e.macToPort(ctx, mac)
 	res.Path = e.buildPath(ctx, &res)
 	res.Confidence, res.ConfidenceReasons = assessConfidence(&res)
+	res.normalizeSlices()
 	return res, nil
+}
+
+// normalizeSlices guarantees the result's slices serialize as JSON arrays (never
+// null), so the UI can safely call .length/.map without null checks.
+func (r *SearchResult) normalizeSlices() {
+	if r.SwitchPort == nil {
+		r.SwitchPort = []SwitchPortEntry{}
+	}
+	if r.Path == nil {
+		r.Path = []PathStep{}
+	}
+	if r.ConfidenceReasons == nil {
+		r.ConfidenceReasons = []string{}
+	}
 }
 
 // SearchHostname resolves a device name or hostname.
@@ -202,7 +218,12 @@ func (e *Engine) SearchHostname(ctx context.Context, name string) ([]SearchResul
 			sub, _ := e.SearchIP(ctx, *r.PrimaryIp) //nolint:shadow
 			sr.SwitchPort = sub.SwitchPort
 			sr.MAC = sub.MAC
+			sr.Path = sub.Path
+			sr.ARPDeviceID, sr.ARPDeviceName = sub.ARPDeviceID, sub.ARPDeviceName
+			sr.ARPSource, sr.ARPLastSeen = sub.ARPSource, sub.ARPLastSeen
+			sr.Confidence, sr.ConfidenceReasons = sub.Confidence, sub.ConfidenceReasons
 		}
+		sr.normalizeSlices()
 		out = append(out, sr)
 	}
 	return out, nil

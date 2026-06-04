@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useMutation } from '@tanstack/react-query'
 import {
   Route as RouteIcon, Search, MonitorSmartphone, Network, Flame, Router, Server,
@@ -42,7 +43,8 @@ function SourceChip({ source }: { source?: string | null }) {
 }
 
 export function PathFinder() {
-  const [q, setQ] = useState('')
+  const [params, setParams] = useSearchParams()
+  const [q, setQ] = useState(params.get('q') ?? '')
   const search = useMutation({
     mutationFn: async (query: string) => {
       const r = await api.get<SearchResult | SearchResult[]>(`/search?q=${encodeURIComponent(query)}`)
@@ -50,7 +52,18 @@ export function PathFinder() {
     },
   })
   const results = search.data ?? []
-  const submit = (e: React.FormEvent) => { e.preventDefault(); if (q.trim()) search.mutate(q.trim()) }
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault()
+    const v = q.trim()
+    if (v) { setParams({ q: v }); search.mutate(v) }
+  }
+  // Deep link: /path-finder?q=<ip|mac|host> auto-runs the trace on load.
+  useEffect(() => {
+    const p = params.get('q')
+    if (p) search.mutate(p)
+    // run once on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   return (
     <div>
