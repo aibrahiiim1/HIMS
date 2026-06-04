@@ -22,13 +22,16 @@ import { Alerts } from './pages/Alerts'
 import { SpareParts } from './pages/SpareParts'
 import { Expenses } from './pages/Expenses'
 import { Credentials } from './pages/Credentials'
-import { Roles } from './pages/Roles'
 import { Mibs } from './pages/Mibs'
 import { Settings } from './pages/Settings'
 import { Inventory } from './pages/Inventory'
 import { Locations } from './pages/Locations'
 import { Reports } from './pages/Reports'
-import { ComingSoon } from './pages/ComingSoon'
+import { DeviceIntelligence } from './pages/DeviceIntelligence'
+import { AccessControl } from './pages/AccessControl'
+import { DeviceTemplates } from './pages/DeviceTemplates'
+import { VendorFingerprints } from './pages/VendorFingerprints'
+import { AuditLog } from './pages/AuditLog'
 import { Sidebar } from './components/Sidebar'
 import { Topbar } from './components/Topbar'
 import { useBadges } from './hooks/useBadges'
@@ -100,7 +103,12 @@ function Shell() {
             <Route path="/topology" element={<TopologyPage />} />
             <Route path="/monitoring" element={<Monitoring />} />
             <Route path="/alerts" element={<Alerts />} />
-            <Route path="/roles" element={<Roles />} />
+            <Route path="/device-intelligence" element={<DeviceIntelligence />} />
+            <Route path="/access-control" element={<AccessControl />} />
+            <Route path="/access-control/:tab" element={<AccessControl />} />
+            <Route path="/device-templates" element={<DeviceTemplates />} />
+            <Route path="/vendor-fingerprints" element={<VendorFingerprints />} />
+            <Route path="/audit-log" element={<AuditLog />} />
             <Route path="/search" element={<SearchPage />} />
             <Route path="/work-orders" element={<WorkOrders />} />
             <Route path="/systems" element={<Systems />} />
@@ -113,7 +121,6 @@ function Shell() {
             <Route path="/locations" element={<Locations />} />
             <Route path="/reports" element={<Reports />} />
             <Route path="/reports/:view" element={<Reports />} />
-            <Route path="/soon/:slug" element={<ComingSoon />} />
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
         </div>

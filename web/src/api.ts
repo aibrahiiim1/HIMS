@@ -589,6 +589,50 @@ export interface Lookup {
   value: string
 }
 
+// ---- Admin: RBAC / templates / fingerprints / audit -------------------------
+export interface AppUser {
+  id: string
+  username: string
+  full_name: string
+  email: string
+  is_active: boolean
+  created_at: string
+  updated_at: string
+}
+export interface Role { id: string; name: string; description: string; created_at: string }
+export interface Permission { id: string; code: string; description: string; created_at: string }
+export interface DeviceTemplate {
+  id: string
+  name: string
+  vendor: string
+  device_type: string
+  discovery_rules: unknown
+  monitoring_rules: unknown
+  classification_rules: unknown
+  enabled: boolean
+}
+export interface VendorFingerprint {
+  id: string
+  kind: string
+  pattern: string
+  vendor: string
+  device_type: string
+  confidence: number
+  enabled: boolean
+  created_at: string
+}
+export interface AuditEntry {
+  id: number
+  at: string
+  actor: string
+  action: string
+  category: string
+  entity_type: string
+  entity_id: string
+  summary: string
+  details: unknown
+}
+
 // locationPaths builds a map of location id -> full path label
 // ("Hotel A / Main Building / IT Office") from a flat locations list.
 export function locationPaths(locs: Location[]): Record<string, string> {
