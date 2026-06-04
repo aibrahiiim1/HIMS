@@ -52,7 +52,8 @@ type createCredentialReq struct {
 }
 
 func (s *Server) createCredential(w http.ResponseWriter, r *http.Request) {
-	if s.cipher == nil {
+	cph := s.cipher()
+	if cph == nil {
 		http.Error(w, "encryption key not configured (set HIMS_ENCRYPTION_KEY)", http.StatusServiceUnavailable)
 		return
 	}
@@ -65,7 +66,7 @@ func (s *Server) createCredential(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "name, kind, and secret are required", http.StatusBadRequest)
 		return
 	}
-	blob, keyID, err := s.cipher.Seal([]byte(req.Secret))
+	blob, keyID, err := cph.Seal([]byte(req.Secret))
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -116,11 +117,12 @@ func (s *Server) updateCredential(w http.ResponseWriter, r *http.Request) {
 	}
 	weak := cur.Weak
 	if req.Secret != "" {
-		if s.cipher == nil {
+		cph := s.cipher()
+		if cph == nil {
 			http.Error(w, "encryption key not configured (set HIMS_ENCRYPTION_KEY)", http.StatusServiceUnavailable)
 			return
 		}
-		blob, keyID, err := s.cipher.Seal([]byte(req.Secret))
+		blob, keyID, err := cph.Seal([]byte(req.Secret))
 		if err != nil {
 			writeErr(w, err)
 			return

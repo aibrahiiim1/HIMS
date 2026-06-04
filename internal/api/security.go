@@ -59,14 +59,15 @@ func (s *Server) computeEncState(r *http.Request) encState {
 	// valid 32-byte key. If not, inspect the env var (presence + length only —
 	// the value is checked for length and immediately discarded, never logged).
 	envKey := os.Getenv("HIMS_ENCRYPTION_KEY")
-	if s.cipher != nil {
+	c := s.cipher()
+	if c != nil {
 		st.RuntimeKeyPresent = true
 		st.RuntimeKeyLengthValid = true
-		st.RuntimeFingerprint = s.cipher.Fingerprint()
+		st.RuntimeFingerprint = c.Fingerprint()
 		// Self-test: seal+open a marker.
 		marker := []byte("hims-encryption-self-test")
-		if blob, kid, err := s.cipher.Seal(marker); err == nil {
-			if got, oerr := s.cipher.Open(blob, kid); oerr == nil && string(got) == string(marker) {
+		if blob, kid, err := c.Seal(marker); err == nil {
+			if got, oerr := c.Open(blob, kid); oerr == nil && string(got) == string(marker) {
 				st.SelfTestOK = true
 			}
 		}
@@ -83,15 +84,15 @@ func (s *Server) computeEncState(r *http.Request) encState {
 	}
 
 	switch {
-	case s.cipher != nil && !st.SelfTestOK:
+	case c != nil && !st.SelfTestOK:
 		st.Status = encInvalidKey
-	case s.cipher != nil && st.StoredFingerprintPresent && st.RuntimeFingerprint != st.StoredFingerprint:
+	case c != nil && st.StoredFingerprintPresent && st.RuntimeFingerprint != st.StoredFingerprint:
 		st.Status = encMismatch
-	case s.cipher != nil:
+	case c != nil:
 		// Adopt the running key as the baseline if nothing is stored yet.
 		if !st.StoredFingerprintPresent {
-			_ = s.queries.UpsertEncryptionMetadata(ctx, db.UpsertEncryptionMetadataParams{Fingerprint: s.cipher.Fingerprint(), KeyID: s.cipher.KeyID()})
-			st.StoredFingerprint = s.cipher.Fingerprint()
+			_ = s.queries.UpsertEncryptionMetadata(ctx, db.UpsertEncryptionMetadataParams{Fingerprint: c.Fingerprint(), KeyID: c.KeyID()})
+			st.StoredFingerprint = c.Fingerprint()
 			st.StoredFingerprintPresent = true
 		}
 		st.FingerprintMatch = true
@@ -163,8 +164,9 @@ func (s *Server) encryptionStatus(w http.ResponseWriter, r *http.Request) {
 			out.LastValidationAt = &v
 		}
 	}
-	if s.cipher != nil {
-		out.KeyID = s.cipher.KeyID()
+	c := s.cipher()
+	if c != nil {
+		out.KeyID = c.KeyID()
 	}
 	if encN, err := s.queries.CountEncryptedCredentials(ctx); err == nil {
 		out.EncryptedCount = encN
@@ -172,8 +174,8 @@ func (s *Server) encryptionStatus(w http.ResponseWriter, r *http.Request) {
 	if rn, err := s.queries.CountCredentialsNeedingReentry(ctx); err == nil {
 		out.NeedsResetCount = rn
 	}
-	if s.cipher != nil {
-		if und, err := s.queries.CountUndecryptableCredentials(ctx, s.cipher.KeyID()); err == nil {
+	if c != nil {
+		if und, err := s.queries.CountUndecryptableCredentials(ctx, c.KeyID()); err == nil {
 			out.UndecryptableCount = und
 		}
 	} else {
@@ -216,7 +218,7 @@ func (s *Server) encryptionDiagnostics(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) encryptionGenerate(w http.ResponseWriter, r *http.Request) {
-	if s.cipher != nil {
+	if s.cipher() != nil {
 		http.Error(w, "an encryption key is already active; use Rotate to change it", http.StatusConflict)
 		return
 	}
@@ -247,34 +249,36 @@ func (s *Server) encryptionGenerate(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) encryptionValidate(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	if s.cipher == nil {
+	c := s.cipher()
+	if c == nil {
 		writeJSON(w, http.StatusOK, map[string]any{"status": "missing", "detail": "No encryption key is loaded."})
 		return
 	}
 	// Round-trip self-test: seal then open a known marker.
 	marker := []byte("hims-encryption-self-test")
-	blob, kid, err := s.cipher.Seal(marker)
+	blob, kid, err := c.Seal(marker)
 	status, detail := "valid", "Key loaded and credential encryption round-trip succeeded."
 	if err != nil {
 		status, detail = "invalid", "Encryption self-test failed: "+err.Error()
-	} else if got, oerr := s.cipher.Open(blob, kid); oerr != nil || string(got) != string(marker) {
+	} else if got, oerr := c.Open(blob, kid); oerr != nil || string(got) != string(marker) {
 		status, detail = "invalid", "Decryption self-test failed."
 	}
 	match := true
 	if meta, e := s.queries.GetEncryptionMetadata(ctx); e == nil && meta.Fingerprint != "" {
-		match = meta.Fingerprint == s.cipher.Fingerprint()
+		match = meta.Fingerprint == c.Fingerprint()
 	}
 	_ = s.queries.TouchValidation(ctx)
-	s.audit(r, "security", "encryption.key.validate", "encryption_key", s.cipher.KeyID(), "Validated encryption key", map[string]any{"status": status, "fingerprint_match": match})
+	s.audit(r, "security", "encryption.key.validate", "encryption_key", c.KeyID(), "Validated encryption key", map[string]any{"status": status, "fingerprint_match": match})
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status": status, "detail": detail, "fingerprint_match": match,
-		"fingerprint": s.cipher.Fingerprint(), "key_id": s.cipher.KeyID(),
+		"fingerprint": c.Fingerprint(), "key_id": c.KeyID(),
 	})
 }
 
 func (s *Server) encryptionRotate(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	if s.cipher == nil {
+	cur := s.cipher()
+	if cur == nil {
 		http.Error(w, "the current encryption key is not available; rotation requires the current key to be loaded", http.StatusBadRequest)
 		return
 	}
@@ -296,7 +300,7 @@ func (s *Server) encryptionRotate(w http.ResponseWriter, r *http.Request) {
 	rotated := 0
 	failed := []map[string]string{}
 	for _, b := range blobs {
-		newBlob, newKeyID, rerr := secret.ReKey(s.cipher, newC, b.EncryptedBlob, b.KeyID)
+		newBlob, newKeyID, rerr := secret.ReKey(cur, newC, b.EncryptedBlob, b.KeyID)
 		if rerr != nil {
 			failed = append(failed, map[string]string{"name": b.Name, "reason": rerr.Error()})
 			continue
@@ -311,6 +315,9 @@ func (s *Server) encryptionRotate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	// Activate the new key in the running process immediately — no restart needed.
+	// The raw key is never persisted; it lives only in this in-memory cipher.
+	s.setCipher(newC)
 	s.audit(r, "security", "encryption.key.rotate", "encryption_key", newC.KeyID(), "Rotated encryption key", map[string]any{"rotated": rotated, "failed": len(failed), "fingerprint": newC.Fingerprint()})
 	writeJSON(w, http.StatusOK, map[string]any{
 		"new_key":     newKey,
@@ -318,8 +325,8 @@ func (s *Server) encryptionRotate(w http.ResponseWriter, r *http.Request) {
 		"key_id":      newC.KeyID(),
 		"rotated":     rotated,
 		"failed":      failed,
-		"instructions": "All credentials were re-encrypted with the new key. Set HIMS_ENCRYPTION_KEY to this value and restart the API " +
-			"to activate it — until then credential operations are paused because the running process still holds the previous key. " +
+		"instructions": "All credentials were re-encrypted with the new key and it is now active in the running API. " +
+			"To keep it across restarts, set HIMS_ENCRYPTION_KEY to this value in your deployment environment. " +
 			"Save the key now; it cannot be shown again.",
 	})
 }
@@ -361,6 +368,104 @@ func (s *Server) encryptionRecoveryGuide(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, recoveryGuideSections)
 }
 
+// encryptionUnlock loads an existing key into the RUNNING process so encryption
+// activates immediately — no restart and no environment-variable editing. This
+// is the "I already have a key" path: the operator pastes the key, the server
+// builds the cipher in memory, verifies it against the stored fingerprint, and
+// swaps it in. The raw key is NEVER persisted, logged, or returned — only its
+// one-way fingerprint and key id (safe to show) appear in the response/audit.
+//
+// For persistence across process restarts the operator should ALSO set
+// HIMS_ENCRYPTION_KEY in the deployment environment; the response says so.
+func (s *Server) encryptionUnlock(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	var req struct {
+		Key   string `json:"key"`
+		Adopt bool   `json:"adopt"` // operator confirms this key is the correct baseline despite a mismatching stored fingerprint
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if req.Key == "" {
+		http.Error(w, "key is required", http.StatusBadRequest)
+		return
+	}
+
+	// Build the cipher. A bad length/format fails here — the key value is never
+	// echoed back; only a generic validation message is returned.
+	c, err := secret.NewCipher(req.Key)
+	// Best-effort wipe of the request copy of the key.
+	req.Key = ""
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"status": encInvalidKey,
+			"detail": "The key is not a valid base64-encoded 32-byte AES key. Check that you pasted the full key with no extra spaces or line breaks.",
+		})
+		return
+	}
+
+	// Self-test the freshly built cipher before adopting it.
+	marker := []byte("hims-encryption-self-test")
+	if blob, kid, serr := c.Seal(marker); serr != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"status": encInvalidKey, "detail": "Encryption self-test failed for the provided key."})
+		return
+	} else if got, oerr := c.Open(blob, kid); oerr != nil || string(got) != string(marker) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"status": encInvalidKey, "detail": "Decryption self-test failed for the provided key."})
+		return
+	}
+
+	// Compare against the stored fingerprint (if any).
+	var storedFP string
+	if meta, merr := s.queries.GetEncryptionMetadata(ctx); merr == nil {
+		storedFP = meta.Fingerprint
+	}
+	matches := storedFP == "" || storedFP == c.Fingerprint()
+
+	if !matches && !req.Adopt {
+		// The key is valid but doesn't match the recorded fingerprint. Don't
+		// silently change the baseline — report the mismatch and let the
+		// operator either load the correct key or explicitly adopt this one.
+		s.audit(r, "security", "encryption.key.unlock.rejected", "encryption_key", c.KeyID(), "Unlock rejected: key does not match stored fingerprint", map[string]any{"runtime_fingerprint": c.Fingerprint()})
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"status":              encMismatch,
+			"detail":              "This key is valid, but it does not match the stored fingerprint — it is not the key these credentials were encrypted with. Load the original key, or adopt this key as the new baseline (existing secrets sealed with the old key will then need re-entry).",
+			"runtime_fingerprint": c.Fingerprint(),
+			"stored_fingerprint":  storedFP,
+			"can_adopt":           true,
+		})
+		return
+	}
+
+	// Activate the key in the running process (in-memory only).
+	s.setCipher(c)
+
+	// Persist the fingerprint baseline when adopting (or when none existed yet).
+	adopted := false
+	if storedFP == "" || (!matches && req.Adopt) {
+		if uerr := s.queries.UpsertEncryptionMetadata(ctx, db.UpsertEncryptionMetadataParams{Fingerprint: c.Fingerprint(), KeyID: c.KeyID()}); uerr != nil {
+			writeErr(w, uerr)
+			return
+		}
+		adopted = storedFP != "" // only an "adoption" if it replaced a different fingerprint
+	}
+	_ = s.queries.TouchValidation(ctx)
+
+	action, msg := "encryption.key.unlock", "Loaded encryption key into the running process"
+	if adopted {
+		action, msg = "encryption.key.adopt", "Adopted a new encryption key as the baseline (replaced stored fingerprint)"
+	}
+	s.audit(r, "security", action, "encryption_key", c.KeyID(), msg, map[string]any{"fingerprint": c.Fingerprint(), "adopted": adopted})
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":      encEnabled,
+		"fingerprint": c.Fingerprint(),
+		"key_id":      c.KeyID(),
+		"adopted":     adopted,
+		"detail": "Encryption is now active in the running API — credential operations are enabled immediately. " +
+			"To keep encryption working after the API process restarts, also set HIMS_ENCRYPTION_KEY to this key in your deployment environment.",
+	})
+}
+
 type checkItem struct {
 	Key    string `json:"key"`
 	Label  string `json:"label"`
@@ -388,7 +493,8 @@ func (s *Server) startupChecklist(w http.ResponseWriter, r *http.Request) {
 
 	// Precise encryption state (single source of truth) drives the key items.
 	es := s.computeEncState(r)
-	keyConfigured := s.cipher != nil
+	c := s.cipher()
+	keyConfigured := c != nil
 	keyAction := map[string]string{
 		encPendingRestart: "Set HIMS_ENCRYPTION_KEY in your deployment environment and restart the API.",
 		encMissingKey:     "Set HIMS_ENCRYPTION_KEY in your deployment environment and restart the API.",
@@ -417,7 +523,7 @@ func (s *Server) startupChecklist(w http.ResponseWriter, r *http.Request) {
 	// Credentials decryptable — none sealed under a different key.
 	und := encN
 	if keyConfigured {
-		if u, err := s.queries.CountUndecryptableCredentials(ctx, s.cipher.KeyID()); err == nil {
+		if u, err := s.queries.CountUndecryptableCredentials(ctx, c.KeyID()); err == nil {
 			und = u
 		}
 	}

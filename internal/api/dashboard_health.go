@@ -288,16 +288,17 @@ func scoreForStatus(s string) int {
 func (s *Server) securitySection(ctx context.Context) sectionHealth {
 	encN, _ := s.queries.CountEncryptedCredentials(ctx)
 	reentry, _ := s.queries.CountCredentialsNeedingReentry(ctx)
-	if s.cipher == nil {
+	c := s.cipher()
+	if c == nil {
 		if encN > 0 {
 			return sectionHealth{Name: "Security", Status: "critical", Reason: "Encryption key missing; credential secrets are locked."}
 		}
 		return sectionHealth{Name: "Security", Status: "unknown", Reason: "No encryption key configured yet."}
 	}
-	if und, err := s.queries.CountUndecryptableCredentials(ctx, s.cipher.KeyID()); err == nil && und > 0 {
+	if und, err := s.queries.CountUndecryptableCredentials(ctx, c.KeyID()); err == nil && und > 0 {
 		return sectionHealth{Name: "Security", Status: "critical", Reason: "Credentials sealed with a different key cannot be decrypted."}
 	}
-	if meta, err := s.queries.GetEncryptionMetadata(ctx); err == nil && meta.Fingerprint != "" && meta.Fingerprint != s.cipher.Fingerprint() {
+	if meta, err := s.queries.GetEncryptionMetadata(ctx); err == nil && meta.Fingerprint != "" && meta.Fingerprint != c.Fingerprint() {
 		return sectionHealth{Name: "Security", Status: "warning", Reason: "Loaded key fingerprint does not match the recorded fingerprint."}
 	}
 	if reentry > 0 {

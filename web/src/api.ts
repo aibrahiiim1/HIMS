@@ -655,6 +655,30 @@ export interface EncryptionDiagnostics {
   reason: string
 }
 export interface KeyReveal { key?: string; new_key?: string; fingerprint: string; key_id: string; instructions: string; rotated?: number; failed?: { name: string; reason: string }[] }
+
+// EncryptionUnlockResult is the response of POST /security/encryption/unlock.
+// We read the body on success AND on 4xx (mismatch/invalid) so the UI can offer
+// the "adopt this key" path. The raw key is never echoed back.
+export interface EncryptionUnlockResult {
+  ok: boolean
+  status: EncryptionState
+  detail?: string
+  fingerprint?: string
+  key_id?: string
+  adopted?: boolean
+  runtime_fingerprint?: string
+  stored_fingerprint?: string
+  can_adopt?: boolean
+}
+export async function unlockEncryption(key: string, adopt = false): Promise<EncryptionUnlockResult> {
+  const r = await fetch(`${BASE}/security/encryption/unlock`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key, adopt }),
+  })
+  const data = (await r.json().catch(() => ({}))) as Record<string, unknown>
+  return { ok: r.ok, ...data } as EncryptionUnlockResult
+}
 export interface ReentryCred { id: string; name: string; kind: string; weak: boolean; needs_secret_reentry: boolean; created_at: string; updated_at: string }
 export interface GuideSection { title: string; body: string }
 

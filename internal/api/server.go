@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/netip"
+	"sync/atomic"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -28,11 +29,20 @@ type Server struct {
 	topo    *topology.Engine
 	mon     *monitoring.Engine
 	alerts  *alerting.Engine
-	cipher  *secret.Cipher             // nil when no encryption key is configured
-	reg     *driver.Registry           // nil disables operator-launched scans
-	fetcher discovery.CandidateFetcher // credential scope resolver for scans
+	enc     atomic.Pointer[secret.Cipher] // nil when no encryption key is loaded; swappable at runtime via /security/encryption/unlock
+	reg     *driver.Registry              // nil disables operator-launched scans
+	fetcher discovery.CandidateFetcher    // credential scope resolver for scans
 	queries *db.Queries
 }
+
+// cipher returns the active credential cipher, or nil when no key is loaded.
+// The pointer is read atomically so a runtime unlock (/security/encryption/unlock)
+// can swap it in without restarting the process or racing in-flight requests.
+func (s *Server) cipher() *secret.Cipher { return s.enc.Load() }
+
+// setCipher swaps the active cipher in memory. The raw key is never persisted;
+// only the in-memory *secret.Cipher (and its fingerprint metadata) is retained.
+func (s *Server) setCipher(c *secret.Cipher) { s.enc.Store(c) }
 
 // NewServer wires dependencies and returns a ready-to-serve Server. cipher
 // may be nil (no HIMS_ENCRYPTION_KEY set) — credential writes then return
@@ -46,11 +56,11 @@ func NewServer(queries *db.Queries, cipher *secret.Cipher, reg *driver.Registry,
 		// loop lives in the collector. Both share this engine type.
 		mon:     monitoring.NewEngine(queries, monitoring.NewPoller(nil, 0), nil),
 		alerts:  alerting.NewEngine(queries, nil),
-		cipher:  cipher,
 		reg:     reg,
 		fetcher: fetcher,
 		router:  chi.NewRouter(),
 	}
+	s.enc.Store(cipher)
 	s.routes()
 	return s
 }
@@ -235,6 +245,7 @@ func (s *Server) routes() {
 		// --- Security: encryption key lifecycle ----------------------
 		r.Get("/security/encryption/status", s.encryptionStatus)
 		r.Post("/security/encryption/generate", s.encryptionGenerate)
+		r.Post("/security/encryption/unlock", s.encryptionUnlock)
 		r.Post("/security/encryption/validate", s.encryptionValidate)
 		r.Post("/security/encryption/rotate", s.encryptionRotate)
 		r.Post("/security/encryption/reset-credentials", s.encryptionResetCredentials)

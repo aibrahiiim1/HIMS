@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Lock, KeyRound, ShieldCheck, RefreshCw, RotateCw, Copy, Download, TriangleAlert, CircleCheck, BookOpen, Rocket, ListChecks } from 'lucide-react'
-import { api, type EncryptionStatus, type KeyReveal, type ReentryCred, type GuideSection } from '../api'
+import { api, unlockEncryption, type EncryptionStatus, type EncryptionUnlockResult, type KeyReveal, type ReentryCred, type GuideSection } from '../api'
 import { PageHeader, Panel, Kpi, TabBar, EmptyState, timeAgo } from '../components/ui'
 import { StartupChecklist, DEPLOY_MODES, deploymentSteps, buildRunbook, CmdBlock, DownloadBtn, type DeployMode } from '../components/EncryptionSetup'
 
@@ -130,6 +130,68 @@ function KeyReveal({ data, onClose }: { data: KeyReveal; onClose: () => void }) 
   )
 }
 
+// UnlockPanel loads an EXISTING key into the running API immediately (no
+// restart). This is the "I already have a key" path. The key lives only in
+// process memory — never persisted/logged/returned. If the key doesn't match
+// the stored fingerprint, the operator can explicitly adopt it as the baseline.
+function UnlockPanel({ onUnlocked }: { onUnlocked?: () => void }) {
+  const qc = useQueryClient()
+  const [key, setKey] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [res, setRes] = useState<EncryptionUnlockResult | null>(null)
+  const inv = () => {
+    qc.invalidateQueries({ queryKey: ['enc-status'] })
+    qc.invalidateQueries({ queryKey: ['startup-checklist'] })
+    qc.invalidateQueries({ queryKey: ['enc-reentry'] })
+  }
+  const submit = async (adopt: boolean) => {
+    if (!key.trim()) return
+    setBusy(true)
+    try {
+      const r = await unlockEncryption(key.trim(), adopt)
+      setRes(r)
+      if (r.ok && r.status === 'enabled') { setKey(''); inv(); onUnlocked?.() }
+    } catch (e) {
+      setRes({ ok: false, status: 'invalid_key', detail: (e as Error).message })
+    } finally {
+      setBusy(false)
+    }
+  }
+  const mismatch = res && !res.ok && res.status === 'fingerprint_mismatch' && res.can_adopt
+  return (
+    <Panel title="Load Existing Key (Unlock)" icon={KeyRound}>
+      <p className="muted" style={{ marginBottom: 12 }}>
+        Paste the encryption key you already have to activate encryption in the running API <b>immediately — no restart and no environment editing needed</b>. The key is loaded into memory only: it is never stored, logged, or shown again. So it survives a future process restart, also set <code>HIMS_ENCRYPTION_KEY</code> to the same value in your deployment environment (see the Deployment step).
+      </p>
+      <div className="row" style={{ alignItems: 'center' }}>
+        <input className="field" type="password" autoComplete="off" spellCheck={false} style={{ width: 380, fontFamily: 'var(--font-mono, monospace)' }} value={key} onChange={(e) => setKey(e.target.value)} placeholder="base64-encoded 32-byte key" />
+        <button className="btn btn-primary" disabled={!key.trim() || busy} onClick={() => submit(false)}><KeyRound size={15} /> {busy ? 'Unlocking…' : 'Unlock now'}</button>
+      </div>
+      {res && res.ok && res.status === 'enabled' && (
+        <div className="enc-banner info" style={{ marginTop: 12 }}><CircleCheck size={16} /> <span>{res.adopted ? 'Key adopted as the new baseline. ' : ''}{res.detail}</span></div>
+      )}
+      {res && !res.ok && res.status === 'invalid_key' && (
+        <div className="enc-banner crit" style={{ marginTop: 12 }}><TriangleAlert size={16} /> <span>{res.detail}</span></div>
+      )}
+      {mismatch && (
+        <div className="enc-banner warn" style={{ marginTop: 12 }}>
+          <TriangleAlert size={16} />
+          <div className="stack" style={{ gap: 8 }}>
+            <span>{res!.detail}</span>
+            <div className="muted" style={{ fontSize: 12, fontFamily: 'var(--font-mono, monospace)' }}>
+              <div>This key&apos;s fingerprint: {res!.runtime_fingerprint?.slice(0, 23)}…</div>
+              <div>Stored fingerprint:&nbsp;&nbsp;{res!.stored_fingerprint?.slice(0, 23)}…</div>
+            </div>
+            <div className="row">
+              <button className="btn btn-danger btn-xs" disabled={busy} onClick={() => { if (confirm('Adopt this key as the new baseline? Any credentials sealed with the previous key will then need their secret re-entered.')) submit(true) }}>Adopt this key as the baseline</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </Panel>
+  )
+}
+
 function KeysTab({ s }: { s?: EncryptionStatus }) {
   const qc = useQueryClient()
   const [reveal, setReveal] = useState<KeyReveal | null>(null)
@@ -143,6 +205,8 @@ function KeysTab({ s }: { s?: EncryptionStatus }) {
   return (
     <div className="stack">
       {reveal && <KeyReveal data={reveal} onClose={() => { setReveal(null); inv() }} />}
+
+      {!s?.enabled && <UnlockPanel />}
 
       <Panel title="Generate Encryption Key" icon={KeyRound}>
         <p className="muted" style={{ marginBottom: 12 }}>Create a cryptographically secure 32-byte AES-256 key, shown once. Available only when no key is active.</p>
@@ -281,10 +345,11 @@ function SetupWizard({ s }: { s?: EncryptionStatus }) {
                 </div>
                 <div className="card" style={{ margin: 0 }}>
                   <h3 style={{ fontSize: 15 }}>I already have a key</h3>
-                  <p className="muted" style={{ fontSize: 13, margin: '6px 0 12px' }}>Use an existing key (e.g. restoring a server or migrating). You'll set it in the next steps.</p>
+                  <p className="muted" style={{ fontSize: 13, margin: '6px 0 12px' }}>Restoring a server or migrating? Paste your existing key to activate encryption right now — no restart needed.</p>
                   <button className={'btn' + (keyChoice === 'have' ? ' btn-primary' : '')} onClick={() => setKeyChoice('have')}>Use existing key</button>
                 </div>
               </div>
+              {keyChoice === 'have' && <div style={{ marginTop: 14 }}><UnlockPanel onUnlocked={() => setMsg('Encryption is now active. Continue to the Deployment step to make the key persist across restarts.')} /></div>}
               {keyChoice === 'generate' && <div className="enc-banner warn" style={{ marginTop: 14 }}><TriangleAlert size={16} /> <span>Key generated. Make sure you saved the recovery file — it cannot be shown again. It's also re-downloadable from the reveal dialog only while open.</span></div>}
             </>
           )}

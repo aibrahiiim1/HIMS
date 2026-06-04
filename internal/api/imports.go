@@ -37,7 +37,7 @@ type controllerImportReq struct {
 // (UniFi/Ruckus/Omada/Extreme/vSphere/Hyper-V/Redfish/ONVIF/CUCM) as a
 // background job, reusing internal/collect — the same cores the CLI uses.
 func (s *Server) startControllerImport(w http.ResponseWriter, r *http.Request) {
-	if s.reg == nil || s.fetcher == nil || s.cipher == nil {
+	if s.reg == nil || s.fetcher == nil || s.cipher() == nil {
 		http.Error(w, "import not configured on this server (needs DB + encryption key)", http.StatusServiceUnavailable)
 		return
 	}
@@ -104,7 +104,7 @@ type adBrowseReq struct {
 
 // browseAD binds the DC and returns its OU tree for the graphical browser.
 func (s *Server) browseAD(w http.ResponseWriter, r *http.Request) {
-	if s.fetcher == nil || s.cipher == nil {
+	if s.fetcher == nil || s.cipher() == nil {
 		http.Error(w, "AD browse not configured (needs DB + encryption key)", http.StatusServiceUnavailable)
 		return
 	}
@@ -136,7 +136,7 @@ type adImportReq struct {
 // startADImport launches an AD computer-object import (LDAP, selected OU
 // subtree) as a background job, reusing internal/collect.ADImport.
 func (s *Server) startADImport(w http.ResponseWriter, r *http.Request) {
-	if s.reg == nil || s.fetcher == nil || s.cipher == nil {
+	if s.reg == nil || s.fetcher == nil || s.cipher() == nil {
 		http.Error(w, "import not configured on this server (needs DB + encryption key)", http.StatusServiceUnavailable)
 		return
 	}

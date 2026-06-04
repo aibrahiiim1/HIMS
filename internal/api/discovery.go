@@ -307,14 +307,15 @@ func (s *Server) recordResult(ctx context.Context, jobID uuid.UUID, ip netip.Add
 // scanDecrypt opens a credential's secret in memory for the scan pipeline. It
 // requires the server's cipher; the plaintext community is never logged.
 func (s *Server) scanDecrypt(ctx context.Context, id uuid.UUID) (discovery.DecryptedCred, error) {
-	if s.cipher == nil {
+	c := s.cipher()
+	if c == nil {
 		return discovery.DecryptedCred{}, errBadRequest("no encryption key configured")
 	}
 	cred, err := s.queries.GetCredential(ctx, id)
 	if err != nil {
 		return discovery.DecryptedCred{}, err
 	}
-	plain, err := s.cipher.Open(cred.EncryptedBlob, cred.KeyID)
+	plain, err := c.Open(cred.EncryptedBlob, cred.KeyID)
 	if err != nil {
 		return discovery.DecryptedCred{}, err
 	}
