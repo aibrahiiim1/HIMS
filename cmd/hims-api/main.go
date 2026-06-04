@@ -134,6 +134,11 @@ func main() {
 	// requiring an operator to press Rebuild.
 	srv.StartTopologyRebuilder(context.Background(), 10*time.Minute)
 
+	// Run the monitoring loop in-process so availability/latency time-series are
+	// produced continuously (real TCP/SNMP probes), updating device status and
+	// evaluating alerts each sweep.
+	srv.StartMonitoring(context.Background(), 30*time.Second)
+
 	slog.Info("hims-api starting", "addr", addr, "pid", os.Getpid(), "version", version, "commit", gitCommit())
 	if err := http.Serve(ln, srv); err != nil {
 		slog.Error("server failed", "error", err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -42,11 +43,16 @@ type Engine struct {
 	// without monitoring importing alerting (dependency inversion).
 	AfterSweep func(ctx context.Context)
 
-	// Cipher, if set, lets snmp-metric checks decrypt the device's bound
-	// community in-memory. When nil, snmp checks are skipped (the API-side
-	// engine runs reachability only; the collector wires a cipher).
-	Cipher *secret.Cipher
+	// cipher, when set, lets snmp-metric checks decrypt the device's bound
+	// community in-memory. When nil, snmp checks are skipped (reachability still
+	// runs). Held atomically so the API can swap it in at runtime (key unlock)
+	// while a sweep is in flight without a data race.
+	cipher atomic.Pointer[secret.Cipher]
 }
+
+// SetCipher swaps the engine's credential cipher (used for snmp-metric checks).
+// Safe to call concurrently with a running Loop. Pass nil to disable snmp checks.
+func (e *Engine) SetCipher(c *secret.Cipher) { e.cipher.Store(c) }
 
 // NewEngine wires the engine. A nil logger uses the slog default.
 func NewEngine(repo Repo, poller *Poller, log *slog.Logger) *Engine {
@@ -102,8 +108,8 @@ func (e *Engine) RunDue(ctx context.Context) (int, error) {
 			return polled, ctx.Err()
 		}
 		// snmp checks need a cipher to decrypt the bound community; without
-		// one (e.g. the API-side engine) they're skipped, not failed.
-		if c.Kind == "snmp" && e.Cipher == nil {
+		// one (e.g. before the key is unlocked) they're skipped, not failed.
+		if c.Kind == "snmp" && e.cipher.Load() == nil {
 			continue
 		}
 		e.runOne(ctx, c)
@@ -171,11 +177,15 @@ func (e *Engine) probeSNMP(ctx context.Context, dev db.Device, c db.MonitoringCh
 	if dev.CredentialID == nil {
 		return Result{OK: false, Err: errNoCredential}
 	}
+	cph := e.cipher.Load()
+	if cph == nil {
+		return Result{OK: false, Err: errors.New("no encryption key loaded")}
+	}
 	cred, err := e.repo.GetCredential(ctx, *dev.CredentialID)
 	if err != nil {
 		return Result{OK: false, Err: err}
 	}
-	secret, err := e.Cipher.Open(cred.EncryptedBlob, cred.KeyID)
+	secret, err := cph.Open(cred.EncryptedBlob, cred.KeyID)
 	if err != nil {
 		return Result{OK: false, Err: err} // decrypt/keyID error — no secret in the message
 	}

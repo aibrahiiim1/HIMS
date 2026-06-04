@@ -45,7 +45,12 @@ func (s *Server) cipher() *secret.Cipher { return s.enc.Load() }
 
 // setCipher swaps the active cipher in memory. The raw key is never persisted;
 // only the in-memory *secret.Cipher (and its fingerprint metadata) is retained.
-func (s *Server) setCipher(c *secret.Cipher) { s.enc.Store(c) }
+// The monitoring engine is updated too so snmp-metric checks start working as
+// soon as the key is unlocked at runtime.
+func (s *Server) setCipher(c *secret.Cipher) {
+	s.enc.Store(c)
+	s.mon.SetCipher(c)
+}
 
 // NewServer wires dependencies and returns a ready-to-serve Server. cipher
 // may be nil (no HIMS_ENCRYPTION_KEY set) — credential writes then return
@@ -64,8 +69,33 @@ func NewServer(queries *db.Queries, cipher *secret.Cipher, reg *driver.Registry,
 		router:  chi.NewRouter(),
 	}
 	s.enc.Store(cipher)
+	s.mon.SetCipher(cipher)
 	s.routes()
 	return s
+}
+
+// StartMonitoring runs the scheduled monitoring loop inside the API process so
+// availability/latency time-series are produced continuously without a separate
+// collector. It seeds default checks once, chains alert evaluation after each
+// sweep, and runs until ctx is cancelled. snmp-metric checks activate
+// automatically once a key is unlocked (setCipher updates the engine).
+func (s *Server) StartMonitoring(ctx context.Context, tick time.Duration) {
+	// Evaluate alert rules against the freshly-updated statuses each sweep.
+	s.mon.AfterSweep = func(c context.Context) {
+		if _, err := s.alerts.Evaluate(c); err != nil && c.Err() == nil {
+			slog.Warn("alert evaluation failed", "error", err)
+		}
+	}
+	go func() {
+		if n, err := s.mon.SeedDefaults(ctx); err != nil {
+			slog.Warn("monitoring seed failed", "error", err)
+		} else if n > 0 {
+			slog.Info("monitoring seeded default checks", "count", n)
+		}
+		if err := s.mon.Loop(ctx, tick); err != nil && ctx.Err() == nil {
+			slog.Error("monitoring loop exited", "error", err)
+		}
+	}()
 }
 
 // ServeHTTP implements http.Handler.

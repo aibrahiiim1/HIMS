@@ -183,7 +183,7 @@ func TestRunDue_SNMPMetricWithCipher(t *testing.T) {
 	}
 	withFakeSNMP(t, &fakeSNMP{value: uint64(98765)}, nil)
 	e := NewEngine(f, NewPoller(nil, time.Second), nil)
-	e.Cipher = cipher
+	e.SetCipher(cipher)
 
 	n, err := e.RunDue(context.Background())
 	if err != nil || n != 1 {

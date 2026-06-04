@@ -551,7 +551,7 @@ func runMonitoring(loop, seed bool, tick time.Duration) {
 			slog.Error("invalid HIMS_ENCRYPTION_KEY", "error", err)
 			os.Exit(1)
 		}
-		engine.Cipher = c
+		engine.SetCipher(c)
 		slog.Info("snmp-metric monitoring enabled", "key_id", c.KeyID())
 	}
 	// Chain alerting after each sweep: evaluate rules against the freshly
