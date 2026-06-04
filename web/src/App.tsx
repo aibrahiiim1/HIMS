@@ -37,6 +37,7 @@ import { SystemHealth } from './pages/SystemHealth'
 import { NocWallboard } from './pages/NocWallboard'
 import { PathFinder } from './pages/PathFinder'
 import { DataQuality } from './pages/DataQuality'
+import { Notifications } from './pages/Notifications'
 import { Sidebar } from './components/Sidebar'
 import { Topbar } from './components/Topbar'
 import { useBadges } from './hooks/useBadges'
@@ -119,6 +120,7 @@ function Shell() {
             <Route path="/noc" element={<NocWallboard />} />
             <Route path="/path-finder" element={<PathFinder />} />
             <Route path="/data-quality" element={<DataQuality />} />
+            <Route path="/notifications" element={<Notifications />} />
             <Route path="/search" element={<SearchPage />} />
             <Route path="/work-orders" element={<WorkOrders />} />
             <Route path="/systems" element={<Systems />} />

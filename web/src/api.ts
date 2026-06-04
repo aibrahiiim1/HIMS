@@ -569,6 +569,27 @@ export interface AlertEvent {
   note: string
 }
 
+export interface NotificationChannel {
+  id: string
+  name: string
+  type: string
+  min_severity: string
+  enabled: boolean
+  quiet_start?: string | null
+  quiet_end?: string | null
+  target_hint: string
+  created_at: string
+}
+
+export interface NotificationLogEntry {
+  id: number
+  channel_id: string
+  alert_id?: string | null
+  at: string
+  status: string
+  detail: string
+}
+
 export interface MaintenanceWindow {
   id: string
   scope: string
