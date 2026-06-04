@@ -922,6 +922,18 @@ export interface DataQualityDevice { id: string; name: string; primary_ip?: stri
 export interface DataQualityIssue { key: string; label: string; description: string; severity: string; count: number; devices: DataQualityDevice[] }
 export interface DataQualityReport { generated_at: string; total_devices: number; issue_count: number; clean: boolean; issues: DataQualityIssue[] }
 
+// Subnet-based site reconciliation (Data Quality quick-action).
+export interface ReconcileSiteCount { location_id: string; location_name: string; count: number }
+export interface ReconcileAssignment { device_id: string; name: string; ip: string; location_id: string; location_name: string }
+export interface ReconcileSitesResult {
+  dry_run: boolean
+  matched?: number
+  updated?: number
+  unmatched: number
+  by_site: ReconcileSiteCount[]
+  assignments?: ReconcileAssignment[]
+}
+
 export interface AuditEntry {
   id: number
   at: string

@@ -137,6 +137,7 @@ func (s *Server) routes() {
 		// --- System: runtime identity of THIS API process ------------
 		r.Get("/system/runtime", s.systemRuntime)
 		r.Get("/data-quality", s.dataQuality)
+		r.Post("/data-quality/reconcile-sites", s.reconcileSites)
 
 		// --- Discovery (operator-launched subnet scans) --------------
 		r.Get("/discovery/jobs", s.listDiscoveryJobs)

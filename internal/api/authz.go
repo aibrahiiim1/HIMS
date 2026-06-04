@@ -87,6 +87,13 @@ func requiredPermission(method, path string) string {
 			return "devices.write"
 		}
 		return "devices.read"
+	case "data-quality":
+		// Reading the report is open to any authenticated user; the
+		// reconcile-sites quick-action mutates device locations.
+		if write {
+			return "devices.write"
+		}
+		return ""
 	case "device-templates", "vendor-fingerprints":
 		if write {
 			return "templates.manage"
@@ -122,7 +129,7 @@ func requiredPermission(method, path string) string {
 		return "topology.read"
 
 	default:
-		// dashboard, system, data-quality, search, sites, assets, locations,
+		// dashboard, system, search, sites, assets, locations,
 		// subnets, mibs, roles (CMDB), auth/* — authenticated-only.
 		return ""
 	}

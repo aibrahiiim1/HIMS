@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { ClipboardCheck, ChevronRight, CircleCheck, TriangleAlert, Info, RefreshCw } from 'lucide-react'
-import { api, type DataQualityReport } from '../api'
+import { ClipboardCheck, ChevronRight, CircleCheck, TriangleAlert, Info, RefreshCw, MapPin } from 'lucide-react'
+import { api, type DataQualityReport, type ReconcileSitesResult } from '../api'
 import { PageHeader, Panel, Kpi, EmptyState, timeAgo } from '../components/ui'
 
 const detailBase: Record<string, string> = { switch: '/devices', server: '/servers', firewall: '/firewalls', camera: '/cctv', nvr: '/cctv', wireless_controller: '/wlan', printer: '/printers', ups: '/ups', pbx: '/pbx', virtual_host: '/virtual-hosts' }
@@ -49,6 +49,7 @@ export function DataQuality() {
                   </button>}
                 >
                   <p className="muted" style={{ fontSize: 13, marginBottom: isOpen ? 12 : 0 }}>{iss.description}</p>
+                  {iss.key === 'missing_location' && <ReconcileSites onApplied={() => q.refetch()} />}
                   {isOpen && (
                     <table className="data-table">
                       <thead><tr><th>Device</th><th>IP</th><th>Category</th><th>Vendor</th>{iss.devices.some((d) => d.note) && <th>Note</th>}</tr></thead>
@@ -73,6 +74,70 @@ export function DataQuality() {
             })}
           </div>
         </>
+      )}
+    </div>
+  )
+}
+
+// ReconcileSites — assigns unassigned devices to a site by matching their IP
+// against the declared site subnets (Locations → Subnets). Always previews
+// (dry-run) before applying; only evidence-based matches are offered.
+function ReconcileSites({ onApplied }: { onApplied: () => void }) {
+  const [preview, setPreview] = useState<ReconcileSitesResult | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [done, setDone] = useState<string | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+
+  const run = async (dryRun: boolean) => {
+    setBusy(true); setErr(null)
+    try {
+      const res = await api.post<ReconcileSitesResult>('/data-quality/reconcile-sites', { dry_run: dryRun })
+      if (dryRun) { setPreview(res); setDone(null) }
+      else { setDone(`Assigned ${res.updated ?? 0} device(s) to a site by subnet match.`); setPreview(null); onApplied() }
+    } catch (e) { setErr(e instanceof Error ? e.message : String(e)) }
+    finally { setBusy(false) }
+  }
+
+  return (
+    <div style={{ margin: '4px 0 12px', padding: 12, borderRadius: 8, background: 'var(--surface-2, rgba(125,125,125,.06))' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <MapPin size={15} />
+        <span style={{ fontSize: 13, fontWeight: 600 }}>Assign by subnet</span>
+        <span className="muted" style={{ fontSize: 12, flex: 1 }}>
+          Match each unassigned device's IP to a declared site subnet. Devices whose IP matches no subnet stay unassigned.
+        </span>
+        <button className="btn btn-xs" disabled={busy} onClick={() => run(true)}>{busy && !preview ? 'Checking…' : 'Preview matches'}</button>
+      </div>
+
+      {err && <p style={{ color: 'var(--danger, #c0392b)', fontSize: 12, marginTop: 8 }}>{err}</p>}
+      {done && <p style={{ color: 'var(--ok, #2e7d32)', fontSize: 12, marginTop: 8 }}><CircleCheck size={12} style={{ verticalAlign: -2 }} /> {done}</p>}
+
+      {preview && (
+        <div style={{ marginTop: 10 }}>
+          {preview.matched === 0 ? (
+            <p className="muted" style={{ fontSize: 12 }}>
+              No unassigned devices fall within a declared subnet. Add the relevant CIDRs under Locations → Subnets, then preview again.
+              {preview.unmatched > 0 && ` (${preview.unmatched} unassigned device(s) have no matching subnet.)`}
+            </p>
+          ) : (
+            <>
+              <p style={{ fontSize: 13, marginBottom: 6 }}>
+                <strong>{preview.matched}</strong> device(s) match a declared subnet; <strong>{preview.unmatched}</strong> stay unassigned (no matching subnet).
+              </p>
+              <table className="data-table" style={{ marginBottom: 10 }}>
+                <thead><tr><th>Site</th><th>Devices to assign</th></tr></thead>
+                <tbody>
+                  {preview.by_site.map((s) => (
+                    <tr key={s.location_id}><td>{s.location_name}</td><td>{s.count}</td></tr>
+                  ))}
+                </tbody>
+              </table>
+              <button className="btn btn-xs btn-primary" disabled={busy} onClick={() => run(false)}>
+                {busy ? 'Applying…' : `Assign ${preview.matched} device(s)`}
+              </button>
+            </>
+          )}
+        </div>
       )}
     </div>
   )
