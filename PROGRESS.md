@@ -76,8 +76,8 @@ are unit-tested against captured-output fixtures.
 | SC2 Windows collector (`internal/osinv`: PowerShell `Get-CimInstance` script + pure parser + role detection) | ✅ `268f3ed` |
 | SC3 Linux collector (marked SSH script + per-section pure parsers + role detection) | ✅ `1235911` |
 | SC4 orchestrator + persistence + `POST /devices/{id}/collect-os` (cred resolve, method-by-os_family, delete-stale write, roles→`os_roles`, audit, site-scope) | ✅ `00aab50` (persist verified live vs real DB + idempotent; endpoint gating live; collection host+cred-gated) |
-| SC5 read endpoints + ServerDetail/endpoint tabs ("Not collected yet" + Collect-now) + DQ "OS not inventoried" | ⏳ |
-| SC6 docs + deploy + wrap-up | ⏳ |
+| SC5 read endpoint (`GET /devices/{id}/os-inventory`) + ServerDetail DeepOSInventory card ("Not collected yet" + Collect-now) + DQ "OS not inventoried" | ✅ `a72a907` (verified live: null/empty bundle + DQ fires for server) |
+| SC6 docs (`OS_INVENTORY.md`) + wrap-up | ✅ |
 
 ## Production Readiness Phase
 
