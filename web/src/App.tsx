@@ -33,6 +33,7 @@ import { DeviceTemplates } from './pages/DeviceTemplates'
 import { VendorFingerprints } from './pages/VendorFingerprints'
 import { AuditLog } from './pages/AuditLog'
 import { Encryption } from './pages/Encryption'
+import { SystemHealth } from './pages/SystemHealth'
 import { Sidebar } from './components/Sidebar'
 import { Topbar } from './components/Topbar'
 import { useBadges } from './hooks/useBadges'
@@ -111,6 +112,7 @@ function Shell() {
             <Route path="/vendor-fingerprints" element={<VendorFingerprints />} />
             <Route path="/audit-log" element={<AuditLog />} />
             <Route path="/security/encryption" element={<Encryption />} />
+            <Route path="/system-health" element={<SystemHealth />} />
             <Route path="/search" element={<SearchPage />} />
             <Route path="/work-orders" element={<WorkOrders />} />
             <Route path="/systems" element={<Systems />} />

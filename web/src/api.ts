@@ -707,6 +707,23 @@ export interface OperationalHealth {
   }
 }
 
+// RuntimeInfo is the identity of the API process currently serving requests
+// (GET /system/runtime). No secrets: key id only, DB url password redacted.
+export interface RuntimeInfo {
+  process_id: number
+  started_at: string
+  uptime: string
+  uptime_seconds: number
+  api_version: string
+  git_commit: string
+  database_url_redacted: string
+  encryption_state: EncryptionState
+  key_id: string
+  port: string
+  environment: string
+  hostname: string
+}
+
 export interface AuditEntry {
   id: number
   at: string

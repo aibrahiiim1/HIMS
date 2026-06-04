@@ -33,6 +33,7 @@ type Server struct {
 	reg     *driver.Registry              // nil disables operator-launched scans
 	fetcher discovery.CandidateFetcher    // credential scope resolver for scans
 	queries *db.Queries
+	rt      RuntimeInfo                   // process identity captured at startup (no secrets)
 }
 
 // cipher returns the active credential cipher, or nil when no key is loaded.
@@ -86,6 +87,9 @@ func (s *Server) routes() {
 		r.Get("/dashboard", s.dashboard)
 		r.Get("/dashboard/operational-health", s.operationalHealth)
 		r.Get("/dashboard/infrastructure-health", s.infrastructureHealth)
+
+		// --- System: runtime identity of THIS API process ------------
+		r.Get("/system/runtime", s.systemRuntime)
 
 		// --- Discovery (operator-launched subnet scans) --------------
 		r.Get("/discovery/jobs", s.listDiscoveryJobs)

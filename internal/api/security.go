@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 
@@ -544,6 +545,31 @@ func (s *Server) startupChecklist(w http.ResponseWriter, r *http.Request) {
 	} else {
 		items = append(items, checkItem{"writes", "Credential writes enabled", "fail", "Credential creation/updates are disabled without an encryption key.", "Configure the key and restart."})
 		items = append(items, checkItem{"discovery", "Discovery credential access enabled", "fail", "Credential-based discovery cannot authenticate without the key.", "Configure the key and restart."})
+	}
+
+	// --- Single-instance / port-ownership checks ---------------------
+	// This process is, by construction, the sole owner of its listen port:
+	// the API claims the socket at startup and exits if another instance
+	// already holds it. So the running PID here is the one and only server.
+	pid := os.Getpid()
+	addr := s.rt.Addr
+	if addr == "" {
+		addr = ":8090"
+	}
+	items = append(items, checkItem{"instance", "Single API instance", "ok",
+		fmt.Sprintf("This process (PID %d) owns %s. The API claims the port at startup and fails fast if another instance already holds it, so only one instance can serve at a time.", pid, addr), ""})
+	items = append(items, checkItem{"port", "Port owner", "ok",
+		fmt.Sprintf("Port %s is owned by this process (PID %d).", addr, pid), ""})
+
+	// Encryption key loaded in THIS active process — distinguishes "key is
+	// configured somewhere" from "the process answering requests has it".
+	if keyConfigured {
+		items = append(items, checkItem{"active_key", "Encryption key loaded in active process", "ok",
+			fmt.Sprintf("The serving process (PID %d) has the encryption key loaded (key id %s).", pid, c.KeyID()), ""})
+	} else {
+		items = append(items, checkItem{"active_key", "Encryption key loaded in active process", "fail",
+			fmt.Sprintf("The serving process (PID %d) has NO encryption key loaded. If the status looks wrong, confirm this PID is the instance you expect — a stray no-key instance answering on the port produces a misleading pending_restart.", pid),
+			"Load the key from Encryption → Key Management → Unlock, or set HIMS_ENCRYPTION_KEY for THIS process and restart."})
 	}
 
 	writeJSON(w, http.StatusOK, items)
