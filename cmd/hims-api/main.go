@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"runtime/debug"
+	"strconv"
 	"time"
 
 	"github.com/coralsearesorts/hims/internal/api"
@@ -145,6 +146,16 @@ func main() {
 
 	// Generate + email scheduled reports when due (daily/weekly/monthly).
 	srv.StartReportScheduler(context.Background(), 5*time.Minute)
+
+	// Receive + aggregate NetFlow v5 exports (devices must be configured to
+	// export to this address). HIMS_NETFLOW_ADDR overrides the default :2055.
+	flowFlush := time.Minute
+	if v := os.Getenv("HIMS_NETFLOW_FLUSH"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			flowFlush = time.Duration(n) * time.Second
+		}
+	}
+	srv.StartFlowCollector(context.Background(), getenvDefault("HIMS_NETFLOW_ADDR", ":2055"), flowFlush)
 
 	slog.Info("hims-api starting", "addr", addr, "pid", os.Getpid(), "version", version, "commit", gitCommit())
 	if err := http.Serve(ln, srv); err != nil {

@@ -325,6 +325,15 @@ type FirewallVpnTunnel struct {
 	UpdatedAt        time.Time   `json:"updated_at"`
 }
 
+type FlowRecord struct {
+	ID      int64     `json:"id"`
+	At      time.Time `json:"at"`
+	Kind    string    `json:"kind"`
+	Label   string    `json:"label"`
+	Bytes   int64     `json:"bytes"`
+	Packets int64     `json:"packets"`
+}
+
 type Interface struct {
 	ID               uuid.UUID `json:"id"`
 	DeviceID         uuid.UUID `json:"device_id"`

@@ -39,6 +39,7 @@ import { PathFinder } from './pages/PathFinder'
 import { DataQuality } from './pages/DataQuality'
 import { Notifications } from './pages/Notifications'
 import { ConfigBackups } from './pages/ConfigBackups'
+import { NetFlow } from './pages/NetFlow'
 import { Sidebar } from './components/Sidebar'
 import { Topbar } from './components/Topbar'
 import { useBadges } from './hooks/useBadges'
@@ -123,6 +124,7 @@ function Shell() {
             <Route path="/data-quality" element={<DataQuality />} />
             <Route path="/notifications" element={<Notifications />} />
             <Route path="/config-backups" element={<ConfigBackups />} />
+            <Route path="/netflow" element={<NetFlow />} />
             <Route path="/search" element={<SearchPage />} />
             <Route path="/work-orders" element={<WorkOrders />} />
             <Route path="/systems" element={<Systems />} />

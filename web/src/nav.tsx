@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Bell, Search, HeartPulse, Radar, BookOpen, KeyRound,
   Boxes, Layers, Network, Flame, Wifi, Cpu, Server, HardDrive, MonitorSmartphone,
   Plug, BatteryCharging, ShieldAlert, Camera, Video, Phone, CircleHelp, Brain,
-  Map, Route as RouteIcon, ClipboardList, Wrench, Package, DollarSign, Building2,
+  Map, Route as RouteIcon, Waypoints, ClipboardList, Wrench, Package, DollarSign, Building2,
   FileChartColumn, FileSearch, ChartLine, Tag, Download,
   Users, ShieldCheck, LayoutTemplate, ScanLine, Settings, FileClock, Lock, Activity, MonitorPlay, ClipboardCheck, Send, FileCode,
 } from 'lucide-react'
@@ -101,6 +101,7 @@ export const NAV: NavGroup[] = [
     items: [
       { label: 'Network Map', icon: Map, to: '/topology' },
       { label: 'Path Finder', icon: RouteIcon, to: '/path-finder' },
+      { label: 'NetFlow', icon: Waypoints, to: '/netflow' },
     ],
   },
   {

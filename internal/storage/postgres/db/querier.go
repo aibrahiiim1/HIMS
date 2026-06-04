@@ -142,6 +142,7 @@ type Querier interface {
 	FindMACByIP(ctx context.Context, ipAddress netip.Addr) ([]FindMACByIPRow, error)
 	// Topology search: which switch + port + VLAN carries a MAC?
 	FindMACOnSwitches(ctx context.Context, mac string) ([]FindMACOnSwitchesRow, error)
+	FlowOverview(ctx context.Context, at time.Time) (FlowOverviewRow, error)
 	GetAlert(ctx context.Context, id uuid.UUID) (Alert, error)
 	GetBMCInfo(ctx context.Context, deviceID uuid.UUID) (BmcInfo, error)
 	GetCameraInfo(ctx context.Context, deviceID uuid.UUID) (CameraInfo, error)
@@ -169,6 +170,7 @@ type Querier interface {
 	// ===== Audit log ===========================================================
 	InsertAuditLog(ctx context.Context, arg InsertAuditLogParams) error
 	InsertConfigBackup(ctx context.Context, arg InsertConfigBackupParams) (InsertConfigBackupRow, error)
+	InsertFlowRecord(ctx context.Context, arg InsertFlowRecordParams) error
 	InsertMibObject(ctx context.Context, arg InsertMibObjectParams) error
 	InsertMonitoringSample(ctx context.Context, arg InsertMonitoringSampleParams) error
 	// ---- Delivery log ---------------------------------------------------------
@@ -341,6 +343,8 @@ type Querier interface {
 	SetReportScheduleEnabled(ctx context.Context, arg SetReportScheduleEnabledParams) (ReportSchedule, error)
 	SetRolePermissionsClear(ctx context.Context, roleID uuid.UUID) error
 	SetUserRolesClear(ctx context.Context, userID uuid.UUID) error
+	// Roll up aggregate rows of one kind over a recent window, highest bytes first.
+	TopFlowEntries(ctx context.Context, arg TopFlowEntriesParams) ([]TopFlowEntriesRow, error)
 	TotalExpenses(ctx context.Context) (float64, error)
 	TouchDeviceDiscovery(ctx context.Context, arg TouchDeviceDiscoveryParams) error
 	TouchValidation(ctx context.Context) error

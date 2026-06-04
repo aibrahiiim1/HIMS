@@ -36,6 +36,8 @@ type Server struct {
 	fetcher discovery.CandidateFetcher    // credential scope resolver for scans
 	queries *db.Queries
 	rt      RuntimeInfo                   // process identity captured at startup (no secrets)
+	flow     *flowCollector // nil until StartFlowCollector binds the UDP listener
+	flowAddr string         // NetFlow collector listen address ("" = disabled)
 }
 
 // cipher returns the active credential cipher, or nil when no key is loaded.
@@ -175,6 +177,11 @@ func (s *Server) routes() {
 		r.Get("/devices/{id}/fingerprint-suggestion", s.deviceFingerprintSuggestion)
 		// --- Work orders for a device (#19) ---------------------------
 		r.Get("/devices/{id}/work-orders", s.deviceWorkOrders)
+		// --- NetFlow Analytics (#12) ----------------------------------
+		r.Get("/netflow/overview", s.flowOverview)
+		r.Get("/netflow/top-talkers", s.flowTopTalkers)
+		r.Get("/netflow/protocols", s.flowProtocols)
+		r.Get("/netflow/conversations", s.flowConversations)
 
 		// --- Config Backup (#10) + Drift (#11) ------------------------
 		r.Get("/devices/{id}/config-backups", s.listDeviceConfigBackups)

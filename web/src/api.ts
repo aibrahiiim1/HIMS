@@ -995,3 +995,15 @@ export interface ConfigBackupContent {
   sha256: string
   content: string
 }
+
+// #12 NetFlow Analytics.
+export interface FlowOverview {
+  listening: boolean
+  listen_addr: string
+  bytes: number
+  packets: number
+  talkers: number
+  last_at: string | null
+  packets_received: number
+}
+export interface FlowEntry { label: string; bytes: number; packets: number }
