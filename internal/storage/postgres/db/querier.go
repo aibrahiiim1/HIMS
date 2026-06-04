@@ -7,6 +7,7 @@ package db
 import (
 	"context"
 	"net/netip"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -239,6 +240,8 @@ type Querier interface {
 	// selected, location_id = NULL) still reconciles instead of duplicating.
 	LiveDeviceByIPAndLocation(ctx context.Context, arg LiveDeviceByIPAndLocationParams) (Device, error)
 	MACCountByPort(ctx context.Context, deviceID uuid.UUID) ([]MACCountByPortRow, error)
+	// Freshness of the most recent LLDP/CDP neighbor observation (topology age).
+	MaxNeighborSeenAt(ctx context.Context) (time.Time, error)
 	// Live fleet rollup: how many checks sit in each status bucket.
 	MonitoringStatusOverview(ctx context.Context) ([]MonitoringStatusOverviewRow, error)
 	// ---- Alerts ---------------------------------------------------------------

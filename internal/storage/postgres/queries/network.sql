@@ -207,3 +207,7 @@ SELECT if_index, COUNT(*) AS mac_count
 FROM mac_addresses
 WHERE device_id = $1 AND if_index IS NOT NULL
 GROUP BY if_index;
+
+-- name: MaxNeighborSeenAt :one
+-- Freshness of the most recent LLDP/CDP neighbor observation (topology age).
+SELECT MAX(last_seen_at)::timestamptz AS max_seen FROM neighbors;

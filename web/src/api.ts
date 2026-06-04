@@ -642,6 +642,22 @@ export interface KeyReveal { key?: string; new_key?: string; fingerprint: string
 export interface ReentryCred { id: string; name: string; kind: string; weak: boolean; needs_secret_reentry: boolean; created_at: string; updated_at: string }
 export interface GuideSection { title: string; body: string }
 
+export interface OperationalHealth {
+  discovery: {
+    status: string; last_scan_at?: string | null; last_scan_status: string
+    successful_scan_percent?: number | null; failed_scan_count: number
+    credential_failure_count?: number | null; pending_job_count: number
+  }
+  monitoring: {
+    status: string; monitored_devices: number; online_devices: number; offline_devices: number
+    critical_alerts: number; warning_alerts: number; last_collection_at?: string | null; collection_status: string
+  }
+  topology: {
+    status: string; mapped_devices: number; unmapped_devices: number; missing_neighbors: number
+    coverage_percent?: number | null; lldp_cdp_data_age?: string | null; last_topology_refresh_at?: string | null
+  }
+}
+
 export interface AuditEntry {
   id: number
   at: string

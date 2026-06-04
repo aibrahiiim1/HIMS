@@ -599,6 +599,18 @@ func (q *Queries) MACCountByPort(ctx context.Context, deviceID uuid.UUID) ([]MAC
 	return items, nil
 }
 
+const maxNeighborSeenAt = `-- name: MaxNeighborSeenAt :one
+SELECT MAX(last_seen_at)::timestamptz AS max_seen FROM neighbors
+`
+
+// Freshness of the most recent LLDP/CDP neighbor observation (topology age).
+func (q *Queries) MaxNeighborSeenAt(ctx context.Context) (time.Time, error) {
+	row := q.db.QueryRow(ctx, maxNeighborSeenAt)
+	var max_seen time.Time
+	err := row.Scan(&max_seen)
+	return max_seen, err
+}
+
 const upsertARP = `-- name: UpsertARP :exec
 
 INSERT INTO arp_entries (device_id, ip_address, mac, if_index, collection_source, last_seen_at)

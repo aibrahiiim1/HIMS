@@ -235,6 +235,37 @@ export function ActivityFeed({ items }: { items: { icon?: IconType; tone?: Tone;
   )
 }
 
+/* ---- Operational health panel (Dashboard) --------------------------------- */
+const OPH_STATUS: Record<string, { cls: string; label: string }> = {
+  healthy: { cls: 'badge-up', label: 'Healthy' },
+  warning: { cls: 'badge-warning', label: 'Warning' },
+  critical: { cls: 'badge-down', label: 'Critical' },
+  unknown: { cls: 'badge-unknown', label: 'Not collected yet' },
+}
+export function OperationalHealthPanel({ title, icon, status, rows, impact, action, notCollectedReason }: {
+  title: string; icon?: IconType; status: string
+  rows: { label: string; value: ReactNode }[]
+  impact?: ReactNode; action?: ReactNode; notCollectedReason?: string
+}) {
+  const m = OPH_STATUS[status] ?? OPH_STATUS.unknown
+  const empty = status === 'unknown'
+  return (
+    <Panel title={title} icon={icon} actions={<span className={`badge ${m.cls}`}>{m.label}</span>}>
+      {empty ? (
+        <div className="muted" style={{ fontSize: 13 }}>{notCollectedReason ?? 'Not collected yet.'}</div>
+      ) : (
+        <ul className="sec-health">
+          {rows.map((r) => (
+            <li key={r.label}><span className="muted">{r.label}</span><span className="sec-val">{r.value}</span></li>
+          ))}
+        </ul>
+      )}
+      {impact && <p className="muted" style={{ fontSize: 12, marginTop: 10 }}>{impact}</p>}
+      {action && <div style={{ marginTop: 10 }}>{action}</div>}
+    </Panel>
+  )
+}
+
 /* ---- Empty state ---------------------------------------------------------- */
 export function EmptyState({ icon: Icon, title, message, action }: {
   icon?: IconType; title: string; message?: string; action?: ReactNode

@@ -2,13 +2,16 @@ import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import {
   LayoutDashboard, Server, Wifi, WifiOff, Bell, ClipboardList, ShieldAlert,
-  Radar, Activity, TriangleAlert, RefreshCw, Clock, Boxes, TrendingUp, Lock, KeyRound,
+  Radar, Activity, TriangleAlert, RefreshCw, Clock, Boxes, TrendingUp, Lock, KeyRound, HeartPulse, Network,
 } from 'lucide-react'
-import { api, type Device, type Alert, type DiscoveryJob, type MonitoringOverviewRow, type RoleSummaryRow, type ExpenseByCategory, type EncryptionStatus } from '../api'
+import { api, type Device, type Alert, type DiscoveryJob, type MonitoringOverviewRow, type RoleSummaryRow, type ExpenseByCategory, type EncryptionStatus, type OperationalHealth } from '../api'
 import {
   PageHeader, Panel, Kpi, HealthRing, Donut, Legend, BarList, Sparkline,
-  ActivityFeed, EmptyState, StatusPill, colorFor, timeAgo,
+  ActivityFeed, EmptyState, StatusPill, OperationalHealthPanel, colorFor, timeAgo,
 } from '../components/ui'
+
+// timeAgo for an ISO string, with "Never" for null.
+const ago = (iso?: string | null) => (iso ? timeAgo(iso) : 'Never')
 
 interface CountRow { category?: string; status?: string; count: number }
 interface DashboardData {
@@ -50,6 +53,7 @@ export function Dashboard() {
   const jobs = useQuery({ queryKey: ['discovery-jobs'], queryFn: () => api.get<DiscoveryJob[]>('/discovery/jobs'), refetchInterval: 30_000 })
   const alerts = useQuery({ queryKey: ['alerts'], queryFn: () => api.get<Alert[]>('/alerts'), refetchInterval: 30_000 })
   const enc = useQuery({ queryKey: ['enc-status'], queryFn: () => api.get<EncryptionStatus>('/security/encryption/status'), refetchInterval: 60_000, retry: 0 })
+  const oph = useQuery({ queryKey: ['operational-health'], queryFn: () => api.get<OperationalHealth>('/dashboard/operational-health'), refetchInterval: 30_000, retry: 0 })
 
   const h = dash.data?.headline ?? {}
   const devs = devices.data ?? []
@@ -227,6 +231,57 @@ export function Dashboard() {
               <div style={{ marginTop: 10 }}><Link className="badge badge-down" to="/security/encryption" style={{ textDecoration: 'none' }}><KeyRound size={11} style={{ verticalAlign: -1 }} /> Configure encryption →</Link></div>
             )}
           </Panel>
+          {(() => {
+            const o = oph.data
+            const d = o?.discovery, m = o?.monitoring, tp = o?.topology
+            return (
+              <>
+                <OperationalHealthPanel
+                  title="Discovery Health" icon={Radar} status={d?.status ?? 'unknown'}
+                  notCollectedReason="No discovery scans have run yet — launch a scan to populate inventory."
+                  rows={d ? [
+                    { label: 'Last Scan', value: ago(d.last_scan_at) },
+                    { label: 'Last Scan Status', value: <span style={{ textTransform: 'capitalize' }}>{d.last_scan_status}</span> },
+                    { label: 'Successful Scans', value: d.successful_scan_percent == null ? 'Not collected yet' : `${d.successful_scan_percent}%` },
+                    { label: 'Failed Scans', value: <span style={{ color: d.failed_scan_count > 0 ? 'var(--crit)' : undefined }}>{d.failed_scan_count}</span> },
+                    { label: 'Credential Failures', value: d.credential_failure_count == null ? 'Not collected yet' : d.credential_failure_count },
+                    { label: 'Pending Jobs', value: d.pending_job_count },
+                  ] : []}
+                  impact="Discovery keeps the inventory current; failures mean devices may be missing or stale."
+                  action={<Link className="btn btn-ghost btn-sm" to="/discovery">Open Discovery Center →</Link>}
+                />
+                <OperationalHealthPanel
+                  title="Monitoring Health" icon={HeartPulse} status={m?.status ?? 'unknown'}
+                  notCollectedReason="No monitoring checks are configured — seed checks to track availability."
+                  rows={m ? [
+                    { label: 'Monitored Devices', value: m.monitored_devices },
+                    { label: 'Online', value: m.online_devices },
+                    { label: 'Offline', value: <span style={{ color: m.offline_devices > 0 ? 'var(--crit)' : undefined }}>{m.offline_devices}</span> },
+                    { label: 'Critical Alerts', value: <span style={{ color: m.critical_alerts > 0 ? 'var(--crit)' : undefined }}>{m.critical_alerts}</span> },
+                    { label: 'Warning Alerts', value: m.warning_alerts },
+                    { label: 'Last Collection', value: ago(m.last_collection_at) },
+                    { label: 'Collection Status', value: <span style={{ textTransform: 'capitalize' }}>{m.collection_status}</span> },
+                  ] : []}
+                  impact="Monitoring detects outages; stale collection or offline devices need attention."
+                  action={<Link className="btn btn-ghost btn-sm" to="/monitoring">Open Monitoring →</Link>}
+                />
+                <OperationalHealthPanel
+                  title="Topology Health" icon={Network} status={tp?.status ?? 'unknown'}
+                  notCollectedReason="No topology links computed yet — discover switches to gather LLDP/CDP neighbors."
+                  rows={tp ? [
+                    { label: 'Mapped Devices', value: tp.mapped_devices },
+                    { label: 'Unmapped Devices', value: tp.unmapped_devices },
+                    { label: 'Missing Neighbors', value: tp.missing_neighbors },
+                    { label: 'Topology Coverage', value: tp.coverage_percent == null ? 'Not collected yet' : `${tp.coverage_percent}%` },
+                    { label: 'LLDP/CDP Data Age', value: ago(tp.lldp_cdp_data_age) },
+                    { label: 'Last Refresh', value: ago(tp.last_topology_refresh_at) },
+                  ] : []}
+                  impact="Topology reflects physical links; low coverage means the network map is incomplete."
+                  action={<Link className="btn btn-ghost btn-sm" to="/topology">Open Topology →</Link>}
+                />
+              </>
+            )
+          })()}
           <Panel title="Critical Assets" icon={TriangleAlert} actions={critical.length > 0 ? <Link className="btn btn-ghost btn-sm" to="/monitoring">View all</Link> : undefined}>
             {critical.length === 0
               ? <EmptyState icon={Wifi} title="All systems operational" message="No devices are offline or flagged for attention." />
