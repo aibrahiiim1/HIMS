@@ -108,6 +108,7 @@ func (s *Server) startScan(w http.ResponseWriter, r *http.Request) {
 	}
 
 	go s.runScanJob(job.ID, hosts, locID, concurrency, extra, snmpTO, portTO)
+	s.audit(r, "discovery", "discovery.scan", "discovery_job", job.ID.String(), "Launched discovery scan ("+scopeLabel+")", map[string]any{"hosts": len(hosts), "mode": req.Mode})
 	writeJSON(w, http.StatusAccepted, job)
 }
 

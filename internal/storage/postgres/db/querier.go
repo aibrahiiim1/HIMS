@@ -17,6 +17,8 @@ type Querier interface {
 	AddDeviceRole(ctx context.Context, arg AddDeviceRoleParams) error
 	// A part not tracked in stock (free-text): just record it, no decrement.
 	AddFreeWorkOrderPart(ctx context.Context, arg AddFreeWorkOrderPartParams) (WorkOrderPart, error)
+	AddRolePermission(ctx context.Context, arg AddRolePermissionParams) error
+	AddUserRole(ctx context.Context, arg AddUserRoleParams) error
 	AddWorkOrderEvent(ctx context.Context, arg AddWorkOrderEventParams) (WorkOrderEvent, error)
 	// Absolute set of on-hand quantity (a stock count / receiving correction).
 	// The CHECK (quantity >= 0) constraint rejects negative results.
@@ -43,18 +45,23 @@ type Querier interface {
 	CreateCredential(ctx context.Context, arg CreateCredentialParams) (Credential, error)
 	CreateCredentialGroup(ctx context.Context, arg CreateCredentialGroupParams) (CredentialGroup, error)
 	CreateDevice(ctx context.Context, arg CreateDeviceParams) (Device, error)
+	CreateDeviceTemplate(ctx context.Context, arg CreateDeviceTemplateParams) (DeviceTemplate, error)
 	CreateDiscoveryJob(ctx context.Context, arg CreateDiscoveryJobParams) (DiscoveryJob, error)
 	CreateDiscoveryResult(ctx context.Context, arg CreateDiscoveryResultParams) (DiscoveryResult, error)
 	CreateLocation(ctx context.Context, arg CreateLocationParams) (Location, error)
 	CreateLookup(ctx context.Context, arg CreateLookupParams) (Lookup, error)
 	CreateMibFile(ctx context.Context, arg CreateMibFileParams) (MibFile, error)
 	CreateOIDMapping(ctx context.Context, arg CreateOIDMappingParams) (OidMapping, error)
+	CreatePermission(ctx context.Context, arg CreatePermissionParams) (Permission, error)
 	// ---- Purchases ------------------------------------------------------------
 	CreatePurchase(ctx context.Context, arg CreatePurchaseParams) (Purchase, error)
+	CreateRole(ctx context.Context, arg CreateRoleParams) (Role, error)
 	// ---- Spare parts ----------------------------------------------------------
 	CreateSparePart(ctx context.Context, arg CreateSparePartParams) (SparePart, error)
 	CreateSubnet(ctx context.Context, arg CreateSubnetParams) (Subnet, error)
 	CreateSystem(ctx context.Context, arg CreateSystemParams) (System, error)
+	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
+	CreateVendorFingerprint(ctx context.Context, arg CreateVendorFingerprintParams) (VendorFingerprint, error)
 	CreateWorkOrder(ctx context.Context, arg CreateWorkOrderParams) (WorkOrder, error)
 	DeleteAlertRule(ctx context.Context, id uuid.UUID) error
 	// Removing a credential un-binds it from devices (FK ON DELETE SET NULL) and
@@ -62,6 +69,7 @@ type Querier interface {
 	DeleteCredential(ctx context.Context, id uuid.UUID) error
 	// Hard delete (cascades to inventory child rows via FK ON DELETE CASCADE).
 	DeleteDevice(ctx context.Context, id uuid.UUID) error
+	DeleteDeviceTemplate(ctx context.Context, id uuid.UUID) error
 	// Bulk hard delete (multi-select). Returns the number of rows removed.
 	DeleteDevices(ctx context.Context, dollar_1 []uuid.UUID) (int64, error)
 	// Removes a job and its results (discovery_results FK ON DELETE CASCADE).
@@ -70,7 +78,9 @@ type Querier interface {
 	DeleteLookup(ctx context.Context, id uuid.UUID) error
 	DeleteMonitoringCheck(ctx context.Context, id uuid.UUID) error
 	DeleteOIDMapping(ctx context.Context, id uuid.UUID) error
+	DeletePermission(ctx context.Context, id uuid.UUID) error
 	DeletePurchase(ctx context.Context, id uuid.UUID) error
+	DeleteRole(ctx context.Context, id uuid.UUID) error
 	DeleteSparePart(ctx context.Context, id uuid.UUID) error
 	DeleteStaleARP(ctx context.Context, arg DeleteStaleARPParams) error
 	DeleteStaleBMCSensors(ctx context.Context, arg DeleteStaleBMCSensorsParams) error
@@ -87,6 +97,8 @@ type Querier interface {
 	DeleteStaleVpnTunnels(ctx context.Context, arg DeleteStaleVpnTunnelsParams) error
 	DeleteSubnet(ctx context.Context, id uuid.UUID) error
 	DeleteSystem(ctx context.Context, id uuid.UUID) error
+	DeleteUser(ctx context.Context, id uuid.UUID) error
+	DeleteVendorFingerprint(ctx context.Context, id uuid.UUID) error
 	DeviceCountByCategory(ctx context.Context) ([]DeviceCountByCategoryRow, error)
 	DeviceCountByStatus(ctx context.Context) ([]DeviceCountByStatusRow, error)
 	// ---- Expenses (aggregation over the purchases ledger) ---------------------
@@ -113,6 +125,8 @@ type Querier interface {
 	GetUPSStatus(ctx context.Context, deviceID uuid.UUID) (UpsStatus, error)
 	GetWLANControllerInfo(ctx context.Context, deviceID uuid.UUID) (WlanControllerInfo, error)
 	GetWorkOrder(ctx context.Context, id uuid.UUID) (WorkOrder, error)
+	// ===== Audit log ===========================================================
+	InsertAuditLog(ctx context.Context, arg InsertAuditLogParams) error
 	InsertMibObject(ctx context.Context, arg InsertMibObjectParams) error
 	InsertMonitoringSample(ctx context.Context, arg InsertMonitoringSampleParams) error
 	ListARPForDevice(ctx context.Context, deviceID uuid.UUID) ([]ListARPForDeviceRow, error)
@@ -123,6 +137,7 @@ type Querier interface {
 	ListAllDevices(ctx context.Context) ([]Device, error)
 	// Used by the topology graph to build the full picture.
 	ListAllTopologyLinks(ctx context.Context) ([]ListAllTopologyLinksRow, error)
+	ListAuditLog(ctx context.Context, arg ListAuditLogParams) ([]AuditLog, error)
 	ListBMCSensors(ctx context.Context, deviceID uuid.UUID) ([]BmcSensor, error)
 	ListChildLocations(ctx context.Context, parentID *uuid.UUID) ([]Location, error)
 	// All credentials as resolver candidates (the "try everything" default for a
@@ -139,6 +154,8 @@ type Querier interface {
 	ListCredentials(ctx context.Context) ([]Credential, error)
 	ListDeviceFacts(ctx context.Context, deviceID uuid.UUID) ([]DeviceFact, error)
 	ListDeviceRoles(ctx context.Context, deviceID uuid.UUID) ([]DeviceRole, error)
+	// ===== Device templates ====================================================
+	ListDeviceTemplates(ctx context.Context) ([]DeviceTemplate, error)
 	ListDevicesByCategory(ctx context.Context, category string) ([]Device, error)
 	ListDevicesByRole(ctx context.Context, role string) ([]Device, error)
 	// Devices with a reachable IP but no monitoring check yet — the seeder turns
@@ -175,9 +192,11 @@ type Querier interface {
 	ListNeighbors(ctx context.Context, deviceID uuid.UUID) ([]Neighbor, error)
 	ListOIDMappings(ctx context.Context) ([]OidMapping, error)
 	ListPbxPhones(ctx context.Context, deviceID uuid.UUID) ([]PbxPhone, error)
+	ListPermissions(ctx context.Context) ([]Permission, error)
 	ListPortVlans(ctx context.Context, deviceID uuid.UUID) ([]PortVlan, error)
 	ListPrinterSupplies(ctx context.Context, deviceID uuid.UUID) ([]PrinterSupply, error)
 	ListPurchases(ctx context.Context) ([]Purchase, error)
+	ListRoles(ctx context.Context) ([]Role, error)
 	ListRootLocations(ctx context.Context) ([]Location, error)
 	ListServerStorage(ctx context.Context, deviceID uuid.UUID) ([]ServerStorage, error)
 	ListSettings(ctx context.Context) ([]ListSettingsRow, error)
@@ -186,7 +205,11 @@ type Querier interface {
 	ListSubnetsByLocation(ctx context.Context, locationID uuid.UUID) ([]Subnet, error)
 	ListSystems(ctx context.Context) ([]System, error)
 	ListTopologyLinks(ctx context.Context, localDeviceID uuid.UUID) ([]TopologyLink, error)
+	// ===== RBAC: users / roles / permissions ==================================
+	ListUsers(ctx context.Context) ([]User, error)
 	ListVMsByHost(ctx context.Context, hostDeviceID uuid.UUID) ([]VirtualMachine, error)
+	// ===== Vendor fingerprints =================================================
+	ListVendorFingerprints(ctx context.Context) ([]VendorFingerprint, error)
 	ListVlans(ctx context.Context, deviceID uuid.UUID) ([]Vlan, error)
 	ListVpnTunnels(ctx context.Context, deviceID uuid.UUID) ([]FirewallVpnTunnel, error)
 	ListWorkOrderEvents(ctx context.Context, workOrderID uuid.UUID) ([]WorkOrderEvent, error)
@@ -210,6 +233,7 @@ type Querier interface {
 	// for the same (rule, check) is a no-op. RETURNING yields a row ONLY on a
 	// real insert, so the engine fires the work-order bridge exactly once.
 	OpenAlert(ctx context.Context, arg OpenAlertParams) (Alert, error)
+	PermissionsForRole(ctx context.Context, roleID uuid.UUID) ([]Permission, error)
 	// Persist the rollup the engine computed (status + failure counter) onto the
 	// check after a poll. History rows go to monitoring_samples separately.
 	RecordMonitoringResult(ctx context.Context, arg RecordMonitoringResultParams) (MonitoringCheck, error)
@@ -224,6 +248,7 @@ type Querier interface {
 	ResolveRecoveredAlerts(ctx context.Context) ([]ResolveRecoveredAlertsRow, error)
 	// Fleet-wide role rollup: how many devices hold each role (the CMDB role cut).
 	RoleSummary(ctx context.Context) ([]RoleSummaryRow, error)
+	RolesForUser(ctx context.Context, userID uuid.UUID) ([]Role, error)
 	SearchByHostname(ctx context.Context, hostname *string) ([]SearchByHostnameRow, error)
 	// Primary search entry point for the IP → MAC → port path resolution.
 	SearchByIP(ctx context.Context, primaryIp *netip.Addr) (SearchByIPRow, error)
@@ -238,6 +263,8 @@ type Querier interface {
 	// Stores the scan spec (mode/targets/creds) so the job can be re-run as-is.
 	SetDiscoveryJobMetadata(ctx context.Context, arg SetDiscoveryJobMetadataParams) error
 	SetMonitoringCheckEnabled(ctx context.Context, arg SetMonitoringCheckEnabledParams) (MonitoringCheck, error)
+	SetRolePermissionsClear(ctx context.Context, roleID uuid.UUID) error
+	SetUserRolesClear(ctx context.Context, userID uuid.UUID) error
 	TotalExpenses(ctx context.Context) (float64, error)
 	TouchDeviceDiscovery(ctx context.Context, arg TouchDeviceDiscoveryParams) error
 	// Rename + weak-flag update (Credentials CRUD edit).
@@ -249,6 +276,7 @@ type Querier interface {
 	// Reflect the worst current check status onto the device row so device lists
 	// show a live health badge without a per-row sample query.
 	UpdateDeviceMonitoringStatus(ctx context.Context, arg UpdateDeviceMonitoringStatusParams) error
+	UpdateDeviceTemplate(ctx context.Context, arg UpdateDeviceTemplateParams) (DeviceTemplate, error)
 	// Reconcile path: refresh a live device's mutable identity fields on
 	// re-discovery (keyed by the caller to the (primary_ip, location) match).
 	UpdateDiscoveredDevice(ctx context.Context, arg UpdateDiscoveredDeviceParams) (Device, error)
@@ -257,6 +285,8 @@ type Querier interface {
 	UpdateLocation(ctx context.Context, arg UpdateLocationParams) (Location, error)
 	UpdateSparePart(ctx context.Context, arg UpdateSparePartParams) (SparePart, error)
 	UpdateSystem(ctx context.Context, arg UpdateSystemParams) (System, error)
+	UpdateUser(ctx context.Context, arg UpdateUserParams) (User, error)
+	UpdateVendorFingerprint(ctx context.Context, arg UpdateVendorFingerprintParams) (VendorFingerprint, error)
 	UpdateWorkOrder(ctx context.Context, arg UpdateWorkOrderParams) (WorkOrder, error)
 	// ---- ARP entries ---------------------------------------------------------
 	UpsertARP(ctx context.Context, arg UpsertARPParams) error

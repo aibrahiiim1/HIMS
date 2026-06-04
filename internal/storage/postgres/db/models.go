@@ -67,6 +67,18 @@ type ArpEntry struct {
 	LastSeenAt       time.Time  `json:"last_seen_at"`
 }
 
+type AuditLog struct {
+	ID         int64     `json:"id"`
+	At         time.Time `json:"at"`
+	Actor      string    `json:"actor"`
+	Action     string    `json:"action"`
+	Category   string    `json:"category"`
+	EntityType string    `json:"entity_type"`
+	EntityID   string    `json:"entity_id"`
+	Summary    string    `json:"summary"`
+	Details    []byte    `json:"details"`
+}
+
 type BmcInfo struct {
 	DeviceID        uuid.UUID `json:"device_id"`
 	Vendor          *string   `json:"vendor"`
@@ -176,6 +188,19 @@ type DeviceRole struct {
 	Role      string    `json:"role"`
 	Source    string    `json:"source"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+type DeviceTemplate struct {
+	ID                  uuid.UUID `json:"id"`
+	Name                string    `json:"name"`
+	Vendor              string    `json:"vendor"`
+	DeviceType          string    `json:"device_type"`
+	DiscoveryRules      []byte    `json:"discovery_rules"`
+	MonitoringRules     []byte    `json:"monitoring_rules"`
+	ClassificationRules []byte    `json:"classification_rules"`
+	Enabled             bool      `json:"enabled"`
+	CreatedAt           time.Time `json:"created_at"`
+	UpdatedAt           time.Time `json:"updated_at"`
 }
 
 type DiscoveryJob struct {
@@ -402,6 +427,13 @@ type PbxPhone struct {
 	LastSeenAt       time.Time `json:"last_seen_at"`
 }
 
+type Permission struct {
+	ID          uuid.UUID `json:"id"`
+	Code        string    `json:"code"`
+	Description string    `json:"description"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
 type PortVlan struct {
 	ID               uuid.UUID `json:"id"`
 	DeviceID         uuid.UUID `json:"device_id"`
@@ -437,6 +469,18 @@ type Purchase struct {
 	InvoiceRef  *string    `json:"invoice_ref"`
 	Notes       *string    `json:"notes"`
 	CreatedAt   time.Time  `json:"created_at"`
+}
+
+type Role struct {
+	ID          uuid.UUID `json:"id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+type RolePermission struct {
+	RoleID       uuid.UUID `json:"role_id"`
+	PermissionID uuid.UUID `json:"permission_id"`
 }
 
 type ServerStorage struct {
@@ -512,6 +556,32 @@ type UpsStatus struct {
 	RuntimeMin    *int32    `json:"runtime_min"`
 	LoadPct       *int32    `json:"load_pct"`
 	LastSeenAt    time.Time `json:"last_seen_at"`
+}
+
+type User struct {
+	ID        uuid.UUID `json:"id"`
+	Username  string    `json:"username"`
+	FullName  string    `json:"full_name"`
+	Email     string    `json:"email"`
+	IsActive  bool      `json:"is_active"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type UserRole struct {
+	UserID uuid.UUID `json:"user_id"`
+	RoleID uuid.UUID `json:"role_id"`
+}
+
+type VendorFingerprint struct {
+	ID         uuid.UUID `json:"id"`
+	Kind       string    `json:"kind"`
+	Pattern    string    `json:"pattern"`
+	Vendor     string    `json:"vendor"`
+	DeviceType string    `json:"device_type"`
+	Confidence int32     `json:"confidence"`
+	Enabled    bool      `json:"enabled"`
+	CreatedAt  time.Time `json:"created_at"`
 }
 
 type VirtualMachine struct {

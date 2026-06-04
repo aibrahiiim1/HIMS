@@ -82,6 +82,7 @@ func (s *Server) createCredential(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// req.Secret goes out of scope here; it is never logged or returned.
+	s.audit(r, "credential", "credential.create", "credential", c.ID.String(), "Created credential "+c.Name+" ("+c.Kind+")", nil)
 	writeJSON(w, http.StatusCreated, toCredentialDTO(c))
 }
 
@@ -147,6 +148,7 @@ func (s *Server) deleteCredential(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	s.audit(r, "credential", "credential.delete", "credential", id.String(), "Deleted credential", nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -56,6 +56,7 @@ func (s *Server) createManualDevice(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	s.audit(r, "inventory", "device.create", "device", dev.ID.String(), "Manually added device "+dev.Name, nil)
 	writeJSON(w, http.StatusCreated, dev)
 }
 
@@ -237,6 +238,7 @@ func (s *Server) bulkDeleteDevices(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	s.audit(r, "inventory", "device.bulk_delete", "device", "", "Deleted devices", map[string]any{"count": n})
 	writeJSON(w, http.StatusOK, map[string]int64{"deleted": n})
 }
 

@@ -200,6 +200,36 @@ func (s *Server) routes() {
 		r.Delete("/lookups/{id}", s.deleteLookup)
 		r.Put("/devices/{id}/credential", s.bindDeviceCredential)
 
+		// --- Administration: RBAC, templates, fingerprints, audit ----
+		// RBAC is namespaced under /rbac so it never collides with the
+		// CMDB device-role routes (/roles/summary, /roles/{role}/devices).
+		r.Get("/rbac/users", s.listUsers)
+		r.Post("/rbac/users", s.createUser)
+		r.Patch("/rbac/users/{id}", s.updateUser)
+		r.Delete("/rbac/users/{id}", s.deleteUser)
+		r.Get("/rbac/users/{id}/roles", s.userRoles)
+		r.Post("/rbac/users/{id}/roles", s.setUserRoles)
+		r.Get("/rbac/roles", s.listRoles)
+		r.Post("/rbac/roles", s.createRole)
+		r.Delete("/rbac/roles/{id}", s.deleteRole)
+		r.Get("/rbac/roles/{id}/permissions", s.rolePermissions)
+		r.Post("/rbac/roles/{id}/permissions", s.setRolePermissions)
+		r.Get("/rbac/permissions", s.listPermissions)
+		r.Post("/rbac/permissions", s.createPermission)
+		r.Delete("/rbac/permissions/{id}", s.deletePermission)
+
+		r.Get("/device-templates", s.listDeviceTemplates)
+		r.Post("/device-templates", s.createDeviceTemplate)
+		r.Patch("/device-templates/{id}", s.updateDeviceTemplate)
+		r.Delete("/device-templates/{id}", s.deleteDeviceTemplate)
+
+		r.Get("/vendor-fingerprints", s.listVendorFingerprints)
+		r.Post("/vendor-fingerprints", s.createVendorFingerprint)
+		r.Patch("/vendor-fingerprints/{id}", s.updateVendorFingerprint)
+		r.Delete("/vendor-fingerprints/{id}", s.deleteVendorFingerprint)
+
+		r.Get("/audit-log", s.listAuditLog)
+
 		// --- MIB upload engine ---------------------------------------
 		r.Get("/mibs", s.listMibFiles)
 		r.Post("/mibs", s.uploadMib)

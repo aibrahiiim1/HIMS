@@ -80,6 +80,9 @@ func (s *Server) updateSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if len(req) > 0 {
+		s.audit(r, "config", "settings.update", "settings", "", "Updated system settings", map[string]any{"keys": len(req)})
+	}
 	writeJSON(w, http.StatusOK, s.resolveSettings(r.Context()))
 }
 
