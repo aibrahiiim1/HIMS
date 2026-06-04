@@ -142,6 +142,7 @@ func (s *Server) routes() {
 		// IP/MAC/name → switch+port+path (the headline Phase 1 feature).
 		r.Get("/search", s.search) // ?q=<IP|MAC|name>
 		r.Get("/topology/links", s.allLinks)
+		r.Post("/topology/rebuild", s.rebuildTopology)
 
 		// --- Roles (CMDB role cut: databases, AD/DNS/DHCP, …) --------
 		r.Get("/roles/summary", s.roleSummary)
@@ -628,6 +629,25 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, results)
+}
+
+// rebuildTopology re-derives topology_links from the latest LLDP/CDP neighbor
+// data across all devices, resolving neighbor management IPs to managed devices.
+// Operator-triggered; the collector also rebuilds incrementally per cycle.
+func (s *Server) rebuildTopology(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	devs, err := s.queries.ListAllDevices(ctx)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	ids := make([]uuid.UUID, 0, len(devs))
+	for _, d := range devs {
+		ids = append(ids, d.ID)
+	}
+	nd, nl := s.topo.RebuildAll(ctx, ids)
+	s.audit(r, "topology", "topology.rebuild", "topology", "", "Rebuilt topology links from LLDP/CDP neighbors", map[string]any{"devices": nd, "links": nl})
+	writeJSON(w, http.StatusOK, map[string]any{"devices_processed": nd, "links_built": nl})
 }
 
 func (s *Server) allLinks(w http.ResponseWriter, r *http.Request) {

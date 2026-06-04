@@ -491,27 +491,81 @@ func assessConfidence(res *SearchResult) (string, []string) {
 	}
 }
 
-// BuildLinks derives topology_links from the latest neighbor + MAC + ARP
-// data. Called by the collector engine after each collect cycle.
-func (e *Engine) BuildLinks(ctx context.Context, deviceID uuid.UUID) error {
+// BuildLinks derives topology_links for one device from its LLDP/CDP neighbors,
+// resolving each neighbor's management IP to a managed device so the link has a
+// real remote_device_id (which the topology map + path walk require). Only
+// resolved managed-to-managed links are persisted — unresolved neighbors stay
+// visible in the per-device Neighbors view but don't create stub rows (which
+// would accumulate as duplicates across rebuilds since NULL remote_device_id is
+// distinct under the unique index). Returns the number of links upserted.
+func (e *Engine) BuildLinks(ctx context.Context, deviceID uuid.UUID) (int, error) {
 	neighbors, err := e.q.ListNeighbors(ctx, deviceID)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	now := time.Now().UTC()
+	built := 0
 	for _, n := range neighbors {
-		arg := db.UpsertTopologyLinkParams{
-			LocalDeviceID: deviceID,
-			LocalIfIndex:  n.LocalIfIndex,
-			LocalIfName:   n.LocalIfName,
-			RemoteSysName: n.RemSysName,
-			LinkSource:    n.Protocol,
-			LastSeenAt:    now,
-		}
+		var rid *uuid.UUID
+		var remIP *netip.Addr
+
+		// 1) Resolve by management IP (most reliable).
 		if n.RemMgmtIp != nil && n.RemMgmtIp.IsValid() {
-			arg.RemoteIp = n.RemMgmtIp
+			ip := *n.RemMgmtIp
+			remIP = &ip
+			if dev, derr := e.q.SearchByIP(ctx, &ip); derr == nil && dev.ID != uuid.Nil && dev.ID != deviceID {
+				id := dev.ID
+				rid = &id
+			}
 		}
-		_ = e.q.UpsertTopologyLink(ctx, arg) // best-effort; link building is non-critical
+		// 2) Fallback: resolve by remote system name (exact, case-insensitive).
+		//    LLDP/CDP usually carries a sysName even when no mgmt IP is present.
+		if rid == nil && n.RemSysName != nil && *n.RemSysName != "" {
+			exact := *n.RemSysName
+			if rows, herr := e.q.SearchByHostname(ctx, &exact); herr == nil {
+				for _, d := range rows {
+					if d.ID == deviceID {
+						continue
+					}
+					if strings.EqualFold(d.Name, exact) || (d.Hostname != nil && strings.EqualFold(*d.Hostname, exact)) {
+						id := d.ID
+						rid = &id
+						break
+					}
+				}
+			}
+		}
+		if rid == nil {
+			continue // unresolved neighbor — no managed device to link to
+		}
+
+		arg := db.UpsertTopologyLinkParams{
+			LocalDeviceID:  deviceID,
+			LocalIfIndex:   n.LocalIfIndex,
+			LocalIfName:    n.LocalIfName,
+			RemoteDeviceID: rid,
+			RemoteIp:       remIP,
+			RemoteSysName:  n.RemSysName,
+			LinkSource:     n.Protocol,
+			LastSeenAt:     now,
+		}
+		if err := e.q.UpsertTopologyLink(ctx, arg); err == nil {
+			built++
+		}
 	}
-	return nil
+	return built, nil
+}
+
+// RebuildAll rebuilds topology links for every supplied device. Returns the
+// number of devices processed and the total links upserted.
+func (e *Engine) RebuildAll(ctx context.Context, deviceIDs []uuid.UUID) (devicesProcessed, linksBuilt int) {
+	for _, id := range deviceIDs {
+		n, err := e.BuildLinks(ctx, id)
+		if err != nil {
+			continue
+		}
+		devicesProcessed++
+		linksBuilt += n
+	}
+	return devicesProcessed, linksBuilt
 }

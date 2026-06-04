@@ -1,14 +1,24 @@
-import { useEffect, useMemo, useRef } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import cytoscape from 'cytoscape'
-import { Network, Share2, Cable, Workflow } from 'lucide-react'
+import { Network, Share2, Cable, Workflow, RefreshCw } from 'lucide-react'
 import { api, type TopologyLink } from '../api'
 import { PageHeader, Panel, Kpi, EmptyState } from '../components/ui'
 
 export function TopologyPage() {
+  const qc = useQueryClient()
+  const [msg, setMsg] = useState('')
   const { data, isLoading, error } = useQuery({
     queryKey: ['topology-links'],
     queryFn: () => api.get<TopologyLink[]>('/topology/links'),
+  })
+  const rebuild = useMutation({
+    mutationFn: () => api.post<{ devices_processed: number; links_built: number }>('/topology/rebuild', {}),
+    onSuccess: (d) => {
+      setMsg(`Rebuilt from LLDP/CDP neighbors: ${d.links_built} links across ${d.devices_processed} devices.`)
+      qc.invalidateQueries({ queryKey: ['topology-links'] })
+    },
+    onError: (e) => setMsg((e as Error).message),
   })
   const ref = useRef<HTMLDivElement>(null)
 
@@ -63,7 +73,16 @@ export function TopologyPage() {
 
   return (
     <div>
-      <PageHeader title="Network Topology" icon={Network} subtitle="Layer-2/3 map from LLDP/CDP neighbors and MAC/ARP correlation" />
+      <PageHeader
+        title="Network Topology" icon={Network}
+        subtitle="Layer-2/3 map from LLDP/CDP neighbors and MAC/ARP correlation"
+        actions={
+          <button className="btn btn-primary" disabled={rebuild.isPending} onClick={() => rebuild.mutate()}>
+            <RefreshCw size={15} className={rebuild.isPending ? 'spin' : ''} /> {rebuild.isPending ? 'Rebuilding…' : 'Rebuild links'}
+          </button>
+        }
+      />
+      {msg && <div className="enc-banner info" style={{ marginBottom: 12 }}>{msg}</div>}
 
       <div className="kpi-grid">
         <Kpi label="Mapped Nodes" value={stats.nodeCount} icon={Network} tone="info" />
