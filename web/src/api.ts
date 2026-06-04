@@ -108,6 +108,45 @@ export interface VLAN {
   last_seen_at: string
 }
 
+export interface PortVlan {
+  id: string
+  device_id: string
+  if_index: number
+  vlan_id: number
+  tagged: boolean
+  collection_source: string
+  last_seen_at: string
+}
+
+export interface MacEntry {
+  id: string
+  mac: string
+  vlan_id: number
+  if_index?: number | null
+  fdb_status: number
+  collection_source: string
+  last_seen_at: string
+  if_name?: string | null
+  owner_name?: string | null
+  owner_vendor?: string | null
+}
+
+export interface ArpEntry {
+  id: string
+  ip_address: string
+  mac: string
+  if_index?: number | null
+  collection_source: string
+  last_seen_at: string
+  if_name?: string | null
+  owner_name?: string | null
+}
+
+export interface MacCount {
+  if_index?: number | null
+  mac_count: number
+}
+
 export interface Neighbor {
   id: string
   device_id: string

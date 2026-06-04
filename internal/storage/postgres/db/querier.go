@@ -115,6 +115,7 @@ type Querier interface {
 	GetWorkOrder(ctx context.Context, id uuid.UUID) (WorkOrder, error)
 	InsertMibObject(ctx context.Context, arg InsertMibObjectParams) error
 	InsertMonitoringSample(ctx context.Context, arg InsertMonitoringSampleParams) error
+	ListARPForDevice(ctx context.Context, deviceID uuid.UUID) ([]ListARPForDeviceRow, error)
 	ListAccessPoints(ctx context.Context, controllerDeviceID uuid.UUID) ([]AccessPoint, error)
 	ListAlertRules(ctx context.Context) ([]AlertRule, error)
 	ListAlerts(ctx context.Context) ([]Alert, error)
@@ -159,6 +160,11 @@ type Querier interface {
 	ListLocations(ctx context.Context) ([]Location, error)
 	ListLookups(ctx context.Context, kind string) ([]Lookup, error)
 	ListLowStockParts(ctx context.Context) ([]SparePart, error)
+	// ---- Read APIs for the device detail Ports / MAC / ARP tabs --------------
+	// The switch FDB with the local port name and, when the MAC belongs to a
+	// known device interface, that owner device's name + vendor (real correlation,
+	// no OUI guesswork).
+	ListMACForDevice(ctx context.Context, deviceID uuid.UUID) ([]ListMACForDeviceRow, error)
 	ListMibFiles(ctx context.Context) ([]MibFile, error)
 	ListMibObjects(ctx context.Context, mibFileID uuid.UUID) ([]MibObject, error)
 	ListMonitoringChecks(ctx context.Context) ([]MonitoringCheck, error)
@@ -196,6 +202,7 @@ type Querier interface {
 	// matched NULL-safe (IS NOT DISTINCT FROM) so an unscoped scan (no site
 	// selected, location_id = NULL) still reconciles instead of duplicating.
 	LiveDeviceByIPAndLocation(ctx context.Context, arg LiveDeviceByIPAndLocationParams) (Device, error)
+	MACCountByPort(ctx context.Context, deviceID uuid.UUID) ([]MACCountByPortRow, error)
 	// Live fleet rollup: how many checks sit in each status bucket.
 	MonitoringStatusOverview(ctx context.Context) ([]MonitoringStatusOverviewRow, error)
 	// ---- Alerts ---------------------------------------------------------------

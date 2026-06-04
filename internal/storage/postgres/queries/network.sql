@@ -163,3 +163,47 @@ FROM topology_links tl
 JOIN devices ld ON ld.id = tl.local_device_id AND ld.deleted_at IS NULL
 LEFT JOIN devices rd ON rd.id = tl.remote_device_id AND rd.deleted_at IS NULL
 ORDER BY ld.name, tl.local_if_index;
+
+-- ---- Read APIs for the device detail Ports / MAC / ARP tabs --------------
+
+-- name: ListMACForDevice :many
+-- The switch FDB with the local port name and, when the MAC belongs to a
+-- known device interface, that owner device's name + vendor (real correlation,
+-- no OUI guesswork).
+SELECT m.id, m.mac, m.vlan_id, m.if_index, m.fdb_status,
+       m.collection_source, m.last_seen_at,
+       i.if_name AS if_name,
+       owner.name AS owner_name,
+       owner.vendor AS owner_vendor
+FROM mac_addresses m
+LEFT JOIN interfaces i ON i.device_id = m.device_id AND i.if_index = m.if_index
+LEFT JOIN LATERAL (
+    SELECT d.name, d.vendor
+    FROM interfaces oi
+    JOIN devices d ON d.id = oi.device_id AND d.deleted_at IS NULL
+    WHERE oi.mac = m.mac AND oi.device_id <> m.device_id
+    LIMIT 1
+) owner ON true
+WHERE m.device_id = $1
+ORDER BY m.vlan_id, m.mac;
+
+-- name: ListARPForDevice :many
+SELECT a.id, a.ip_address, a.mac, a.if_index, a.collection_source, a.last_seen_at,
+       i.if_name AS if_name,
+       owner.name AS owner_name
+FROM arp_entries a
+LEFT JOIN interfaces i ON i.device_id = a.device_id AND i.if_index = a.if_index
+LEFT JOIN LATERAL (
+    SELECT d.name FROM interfaces oi
+    JOIN devices d ON d.id = oi.device_id AND d.deleted_at IS NULL
+    WHERE oi.mac = a.mac AND oi.device_id <> a.device_id
+    LIMIT 1
+) owner ON true
+WHERE a.device_id = $1
+ORDER BY a.ip_address;
+
+-- name: MACCountByPort :many
+SELECT if_index, COUNT(*) AS mac_count
+FROM mac_addresses
+WHERE device_id = $1 AND if_index IS NOT NULL
+GROUP BY if_index;

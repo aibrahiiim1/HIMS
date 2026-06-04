@@ -654,6 +654,36 @@ select.field { cursor: pointer; }
 .dev-cell .dev-meta { display: flex; flex-direction: column; line-height: 1.25; }
 .dev-cell .dev-meta small { color: var(--text-faint); font-size: var(--fs-sm); }
 
+/* ---- Switch port panel ---------------------------------------------------- */
+.port-grid { display: grid; grid-template-columns: repeat(auto-fill, 48px); gap: 7px; }
+.port-tile {
+  width: 48px; height: 40px; border-radius: var(--radius-sm); cursor: pointer;
+  border: 1px solid var(--border-strong); background: var(--surface-3); color: var(--text);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
+  position: relative; padding: 0; font-family: inherit;
+}
+.port-tile .port-num { font-size: 9.5px; font-weight: 700; line-height: 1; }
+.port-tile .port-mac { font-size: 8px; opacity: .8; }
+.port-tile.port-up { background: var(--ok-bg); border-color: var(--ok); color: var(--ok); }
+.port-tile.port-down { background: var(--surface-3); border-color: var(--border-strong); color: var(--text-faint); }
+.port-tile.port-unknown { background: var(--surface-3); border-color: var(--border); color: var(--text-faint); }
+.port-tile.port-admindown { background: var(--neutral-bg); border-color: var(--neutral); color: var(--neutral); opacity: .7; }
+.port-tile.port-trunk { box-shadow: inset 0 3px 0 var(--brand); }
+.port-tile.selected { outline: 2px solid var(--brand); outline-offset: 1px; }
+.port-tile:hover { filter: brightness(1.05); }
+
+.port-legend { display: inline-flex; gap: 12px; font-size: var(--fs-sm); color: var(--text-muted); flex-wrap: wrap; }
+.port-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.port-legend .dot { width: 11px; height: 11px; border-radius: 3px; display: inline-block; border: 1px solid var(--border-strong); }
+.port-legend .dot.port-up { background: var(--ok-bg); border-color: var(--ok); }
+.port-legend .dot.port-down { background: var(--surface-3); }
+.port-legend .dot.port-admindown { background: var(--neutral-bg); border-color: var(--neutral); }
+.port-legend .dot.port-trunk-key { background: var(--brand); border-color: var(--brand); }
+
+.port-detail { margin-top: var(--space-4); padding-top: var(--space-4); border-top: 1px solid var(--border); }
+.port-detail-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.port-detail-head strong { font-size: var(--fs-lg); }
+
 /* ---- Form field (label + control stacked) --------------------------------- */
 .form-field { display: flex; flex-direction: column; gap: 5px; font-size: var(--fs-sm); color: var(--text-muted); font-weight: 600; }
 .form-field .field { font-weight: 400; }

@@ -202,6 +202,62 @@ func (q *Queries) FindMACOnSwitches(ctx context.Context, mac string) ([]FindMACO
 	return items, nil
 }
 
+const listARPForDevice = `-- name: ListARPForDevice :many
+SELECT a.id, a.ip_address, a.mac, a.if_index, a.collection_source, a.last_seen_at,
+       i.if_name AS if_name,
+       owner.name AS owner_name
+FROM arp_entries a
+LEFT JOIN interfaces i ON i.device_id = a.device_id AND i.if_index = a.if_index
+LEFT JOIN LATERAL (
+    SELECT d.name FROM interfaces oi
+    JOIN devices d ON d.id = oi.device_id AND d.deleted_at IS NULL
+    WHERE oi.mac = a.mac AND oi.device_id <> a.device_id
+    LIMIT 1
+) owner ON true
+WHERE a.device_id = $1
+ORDER BY a.ip_address
+`
+
+type ListARPForDeviceRow struct {
+	ID               uuid.UUID  `json:"id"`
+	IpAddress        netip.Addr `json:"ip_address"`
+	Mac              string     `json:"mac"`
+	IfIndex          *int32     `json:"if_index"`
+	CollectionSource string     `json:"collection_source"`
+	LastSeenAt       time.Time  `json:"last_seen_at"`
+	IfName           *string    `json:"if_name"`
+	OwnerName        string     `json:"owner_name"`
+}
+
+func (q *Queries) ListARPForDevice(ctx context.Context, deviceID uuid.UUID) ([]ListARPForDeviceRow, error) {
+	rows, err := q.db.Query(ctx, listARPForDevice, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListARPForDeviceRow{}
+	for rows.Next() {
+		var i ListARPForDeviceRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.IpAddress,
+			&i.Mac,
+			&i.IfIndex,
+			&i.CollectionSource,
+			&i.LastSeenAt,
+			&i.IfName,
+			&i.OwnerName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAllTopologyLinks = `-- name: ListAllTopologyLinks :many
 SELECT tl.id, tl.local_device_id, tl.local_if_index, tl.local_if_name, tl.remote_device_id, tl.remote_ip, tl.remote_sys_name, tl.link_source, tl.last_seen_at,
        ld.name AS local_name, ld.primary_ip AS local_ip, ld.category AS local_category,
@@ -297,6 +353,74 @@ func (q *Queries) ListInterfaces(ctx context.Context, deviceID uuid.UUID) ([]Int
 			&i.LastSeenAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMACForDevice = `-- name: ListMACForDevice :many
+
+SELECT m.id, m.mac, m.vlan_id, m.if_index, m.fdb_status,
+       m.collection_source, m.last_seen_at,
+       i.if_name AS if_name,
+       owner.name AS owner_name,
+       owner.vendor AS owner_vendor
+FROM mac_addresses m
+LEFT JOIN interfaces i ON i.device_id = m.device_id AND i.if_index = m.if_index
+LEFT JOIN LATERAL (
+    SELECT d.name, d.vendor
+    FROM interfaces oi
+    JOIN devices d ON d.id = oi.device_id AND d.deleted_at IS NULL
+    WHERE oi.mac = m.mac AND oi.device_id <> m.device_id
+    LIMIT 1
+) owner ON true
+WHERE m.device_id = $1
+ORDER BY m.vlan_id, m.mac
+`
+
+type ListMACForDeviceRow struct {
+	ID               uuid.UUID `json:"id"`
+	Mac              string    `json:"mac"`
+	VlanID           int32     `json:"vlan_id"`
+	IfIndex          *int32    `json:"if_index"`
+	FdbStatus        int16     `json:"fdb_status"`
+	CollectionSource string    `json:"collection_source"`
+	LastSeenAt       time.Time `json:"last_seen_at"`
+	IfName           *string   `json:"if_name"`
+	OwnerName        string    `json:"owner_name"`
+	OwnerVendor      *string   `json:"owner_vendor"`
+}
+
+// ---- Read APIs for the device detail Ports / MAC / ARP tabs --------------
+// The switch FDB with the local port name and, when the MAC belongs to a
+// known device interface, that owner device's name + vendor (real correlation,
+// no OUI guesswork).
+func (q *Queries) ListMACForDevice(ctx context.Context, deviceID uuid.UUID) ([]ListMACForDeviceRow, error) {
+	rows, err := q.db.Query(ctx, listMACForDevice, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListMACForDeviceRow{}
+	for rows.Next() {
+		var i ListMACForDeviceRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Mac,
+			&i.VlanID,
+			&i.IfIndex,
+			&i.FdbStatus,
+			&i.CollectionSource,
+			&i.LastSeenAt,
+			&i.IfName,
+			&i.OwnerName,
+			&i.OwnerVendor,
 		); err != nil {
 			return nil, err
 		}
@@ -433,6 +557,38 @@ func (q *Queries) ListVlans(ctx context.Context, deviceID uuid.UUID) ([]Vlan, er
 			&i.CollectionSource,
 			&i.LastSeenAt,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const mACCountByPort = `-- name: MACCountByPort :many
+SELECT if_index, COUNT(*) AS mac_count
+FROM mac_addresses
+WHERE device_id = $1 AND if_index IS NOT NULL
+GROUP BY if_index
+`
+
+type MACCountByPortRow struct {
+	IfIndex  *int32 `json:"if_index"`
+	MacCount int64  `json:"mac_count"`
+}
+
+func (q *Queries) MACCountByPort(ctx context.Context, deviceID uuid.UUID) ([]MACCountByPortRow, error) {
+	rows, err := q.db.Query(ctx, mACCountByPort, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []MACCountByPortRow{}
+	for rows.Next() {
+		var i MACCountByPortRow
+		if err := rows.Scan(&i.IfIndex, &i.MacCount); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

@@ -1,13 +1,14 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
-import { Network, Cable, Layers, Share2, Activity, Settings, Gauge } from 'lucide-react'
-import { api, type Interface, type VLAN, type Neighbor, type TopologyLink, type MonitoringCheck, type MonitoringSample } from '../api'
+import { Network, Cable, Layers, Share2, Activity, Settings, Gauge, LayoutGrid, Table, Router } from 'lucide-react'
+import { api, type Interface, type VLAN, type Neighbor, type TopologyLink, type MonitoringCheck, type MonitoringSample, type MacEntry, type ArpEntry } from '../api'
 import { DeviceHeader } from '../components/DeviceHeader'
 import { DeviceOps } from '../components/DeviceOps'
+import { SwitchPorts } from '../components/SwitchPorts'
 import { Panel, TabBar, Kpi, StatusPill, EmptyState, Sparkline, timeAgo } from '../components/ui'
 
-type Tab = 'overview' | 'interfaces' | 'vlans' | 'neighbors' | 'topology' | 'monitoring' | 'operations'
+type Tab = 'overview' | 'ports' | 'mac' | 'arp' | 'interfaces' | 'vlans' | 'neighbors' | 'topology' | 'monitoring' | 'operations'
 const operLabel = (s?: number | null) => (s === 1 ? 'up' : s === 2 ? 'down' : 'unknown')
 
 export function SwitchDetail() {
@@ -24,7 +25,9 @@ export function SwitchDetail() {
 
   const tabs = [
     { key: 'overview', label: 'Overview', icon: Activity },
-    { key: 'interfaces', label: 'Interfaces', icon: Cable, count: ifList.length || undefined },
+    { key: 'ports', label: 'Ports', icon: LayoutGrid, count: ifList.length || undefined },
+    { key: 'mac', label: 'MAC Table', icon: Table },
+    { key: 'arp', label: 'ARP Table', icon: Router },
     { key: 'vlans', label: 'VLANs', icon: Layers, count: vlans.data?.length || undefined },
     { key: 'neighbors', label: 'Neighbors', icon: Share2, count: neighbors.data?.length || undefined },
     { key: 'topology', label: 'Topology', icon: Network, count: topo.data?.length || undefined },
@@ -58,6 +61,10 @@ export function SwitchDetail() {
           </div>
         </div>
       )}
+
+      {tab === 'ports' && <SwitchPorts deviceId={id!} />}
+      {tab === 'mac' && <MacTable id={id!} />}
+      {tab === 'arp' && <ArpTable id={id!} />}
 
       {tab === 'interfaces' && (
         <Panel title="Interfaces" subtitle={`${ifList.length}`} pad={false}>
@@ -175,5 +182,87 @@ function MonitoringTab({ id }: { id: string }) {
           )}
       </Panel>
     </div>
+  )
+}
+
+function MacTable({ id }: { id: string }) {
+  const q = useQuery({ queryKey: ['mac', id], queryFn: () => api.get<MacEntry[]>(`/devices/${id}/mac`) })
+  const [term, setTerm] = useState('')
+  const [vlan, setVlan] = useState('all')
+  const rows = q.data ?? []
+  const vlanOpts = useMemo(() => [...new Set(rows.map((r) => r.vlan_id))].sort((a, b) => a - b), [q.data])
+  const filtered = rows.filter((r) => {
+    if (vlan !== 'all' && String(r.vlan_id) !== vlan) return false
+    if (!term.trim()) return true
+    const t = term.toLowerCase()
+    return r.mac.toLowerCase().includes(t) || (r.if_name ?? '').toLowerCase().includes(t) || (r.owner_name ?? '').toLowerCase().includes(t) || (r.owner_vendor ?? '').toLowerCase().includes(t)
+  })
+  return (
+    <Panel title="MAC Address Table" icon={Table} subtitle={`${filtered.length} of ${rows.length}`} pad={false}>
+      <div className="row" style={{ padding: 'var(--space-4) var(--space-5)', borderBottom: '1px solid var(--border)' }}>
+        <input className="field" style={{ width: 260 }} placeholder="Search MAC / port / device / vendor…" value={term} onChange={(e) => setTerm(e.target.value)} />
+        <select className="field" value={vlan} onChange={(e) => setVlan(e.target.value)}>
+          <option value="all">All VLANs</option>
+          {vlanOpts.map((v) => <option key={v} value={String(v)}>VLAN {v}</option>)}
+        </select>
+      </div>
+      {q.isLoading && <div className="loading">Loading MAC table…</div>}
+      {q.data && rows.length === 0 && <EmptyState icon={Table} title="No MAC entries collected" message="The forwarding table is populated by SNMP/CLI collection of this switch." />}
+      {filtered.length > 0 && (
+        <table className="data-table">
+          <thead><tr><th>MAC</th><th>VLAN</th><th>Port</th><th>Owner device</th><th>Vendor</th><th>Source</th><th>Last seen</th></tr></thead>
+          <tbody>
+            {filtered.map((m) => (
+              <tr key={m.id}>
+                <td className="mono">{m.mac}</td>
+                <td>{m.vlan_id}</td>
+                <td>{m.if_name ?? (m.if_index != null ? `if ${m.if_index}` : '—')}</td>
+                <td>{m.owner_name ?? '—'}</td>
+                <td>{m.owner_vendor ?? '—'}</td>
+                <td><span className="badge badge-unknown">{m.collection_source}</span></td>
+                <td className="muted">{timeAgo(m.last_seen_at)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </Panel>
+  )
+}
+
+function ArpTable({ id }: { id: string }) {
+  const q = useQuery({ queryKey: ['arp', id], queryFn: () => api.get<ArpEntry[]>(`/devices/${id}/arp`) })
+  const [term, setTerm] = useState('')
+  const rows = q.data ?? []
+  const filtered = rows.filter((r) => {
+    if (!term.trim()) return true
+    const t = term.toLowerCase()
+    return r.ip_address.toLowerCase().includes(t) || r.mac.toLowerCase().includes(t) || (r.if_name ?? '').toLowerCase().includes(t) || (r.owner_name ?? '').toLowerCase().includes(t)
+  })
+  return (
+    <Panel title="ARP Table" icon={Router} subtitle={`${filtered.length} of ${rows.length}`} pad={false}>
+      <div className="row" style={{ padding: 'var(--space-4) var(--space-5)', borderBottom: '1px solid var(--border)' }}>
+        <input className="field" style={{ width: 260 }} placeholder="Search IP / MAC / port / device…" value={term} onChange={(e) => setTerm(e.target.value)} />
+      </div>
+      {q.isLoading && <div className="loading">Loading ARP table…</div>}
+      {q.data && rows.length === 0 && <EmptyState icon={Router} title="No ARP entries collected" message="ARP is collected from L3 devices (routers, firewalls, L3 switches)." />}
+      {filtered.length > 0 && (
+        <table className="data-table">
+          <thead><tr><th>IP address</th><th>MAC</th><th>Interface</th><th>Resolved device</th><th>Source</th><th>Last seen</th></tr></thead>
+          <tbody>
+            {filtered.map((a) => (
+              <tr key={a.id}>
+                <td className="mono">{a.ip_address}</td>
+                <td className="mono">{a.mac}</td>
+                <td>{a.if_name ?? (a.if_index != null ? `if ${a.if_index}` : '—')}</td>
+                <td>{a.owner_name ?? '—'}</td>
+                <td><span className="badge badge-unknown">{a.collection_source}</span></td>
+                <td className="muted">{timeAgo(a.last_seen_at)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </Panel>
   )
 }
