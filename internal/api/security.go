@@ -254,6 +254,79 @@ func (s *Server) encryptionRecoveryGuide(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, recoveryGuideSections)
 }
 
+type checkItem struct {
+	Key    string `json:"key"`
+	Label  string `json:"label"`
+	Status string `json:"status"` // ok | warn | fail
+	Detail string `json:"detail"`
+	Action string `json:"action,omitempty"`
+}
+
+// startupChecklist reports the operational readiness of the system as a set of
+// plain-language checks — used by the Encryption Setup Wizard so a non-technical
+// admin can see exactly what is and isn't working, and what to do next.
+func (s *Server) startupChecklist(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	items := make([]checkItem, 0, 7)
+
+	// Database — a lightweight query proves the pool is connected.
+	encN, dbErr := s.queries.CountEncryptedCredentials(ctx)
+	if dbErr != nil {
+		items = append(items, checkItem{"database", "Database connected", "fail", "The API could not query PostgreSQL: " + dbErr.Error(), "Check HIMS_DATABASE_URL and that the database is reachable."})
+	} else {
+		items = append(items, checkItem{"database", "Database connected", "ok", "PostgreSQL is reachable.", ""})
+	}
+
+	items = append(items, checkItem{"api", "API running", "ok", "The HIMS API is serving requests.", ""})
+
+	keyConfigured := s.cipher != nil
+	if keyConfigured {
+		items = append(items, checkItem{"key", "Encryption key configured", "ok", "HIMS_ENCRYPTION_KEY is loaded.", ""})
+	} else {
+		items = append(items, checkItem{"key", "Encryption key configured", "fail", "No encryption key is loaded in the API process.", "Configure HIMS_ENCRYPTION_KEY in your deployment environment and restart the API."})
+	}
+
+	// Fingerprint valid — matches the recorded baseline (if any).
+	fpStatus, fpDetail, fpAction := "fail", "No key loaded, so no fingerprint to verify.", "Configure the encryption key and restart."
+	if keyConfigured {
+		meta, mErr := s.queries.GetEncryptionMetadata(ctx)
+		if mErr != nil || meta.Fingerprint == "" || meta.Fingerprint == s.cipher.Fingerprint() {
+			fpStatus, fpDetail, fpAction = "ok", "Loaded key fingerprint matches the recorded fingerprint.", ""
+		} else {
+			fpStatus, fpDetail, fpAction = "warn", "The loaded key does not match the recorded fingerprint — a different key may be configured.", "Verify HIMS_ENCRYPTION_KEY is the key these credentials were encrypted with."
+		}
+	}
+	items = append(items, checkItem{"fingerprint", "Encryption fingerprint valid", fpStatus, fpDetail, fpAction})
+
+	// Credentials decryptable — none sealed under a different key.
+	und := encN
+	if keyConfigured {
+		if u, err := s.queries.CountUndecryptableCredentials(ctx, s.cipher.KeyID()); err == nil {
+			und = u
+		}
+	}
+	switch {
+	case encN == 0:
+		items = append(items, checkItem{"decrypt", "Credentials decryptable", "ok", "No encrypted credentials are stored yet.", ""})
+	case keyConfigured && und == 0:
+		items = append(items, checkItem{"decrypt", "Credentials decryptable", "ok", "All stored credential secrets decrypt with the current key.", ""})
+	default:
+		items = append(items, checkItem{"decrypt", "Credentials decryptable", "fail",
+			"Some stored credential secrets cannot be decrypted with the current key.",
+			"Restore the original key, or use Credential Recovery to reset and re-enter the affected secrets."})
+	}
+
+	if keyConfigured {
+		items = append(items, checkItem{"writes", "Credential writes enabled", "ok", "New and updated credential secrets can be encrypted and saved.", ""})
+		items = append(items, checkItem{"discovery", "Discovery credential access enabled", "ok", "Scans can decrypt credentials to authenticate to devices.", ""})
+	} else {
+		items = append(items, checkItem{"writes", "Credential writes enabled", "fail", "Credential creation/updates are disabled without an encryption key.", "Configure the key and restart."})
+		items = append(items, checkItem{"discovery", "Discovery credential access enabled", "fail", "Credential-based discovery cannot authenticate without the key.", "Configure the key and restart."})
+	}
+
+	writeJSON(w, http.StatusOK, items)
+}
+
 type guideSection struct {
 	Title string `json:"title"`
 	Body  string `json:"body"`

@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Lock, KeyRound, ShieldCheck, RefreshCw, RotateCw, Copy, Download, TriangleAlert, CircleCheck, BookOpen } from 'lucide-react'
+import { Lock, KeyRound, ShieldCheck, RefreshCw, RotateCw, Copy, Download, TriangleAlert, CircleCheck, BookOpen, Rocket, ListChecks } from 'lucide-react'
 import { api, type EncryptionStatus, type KeyReveal, type ReentryCred, type GuideSection } from '../api'
 import { PageHeader, Panel, Kpi, TabBar, EmptyState, timeAgo } from '../components/ui'
+import { StartupChecklist, DEPLOY_MODES, deploymentSteps, buildRunbook, CmdBlock, DownloadBtn, type DeployMode } from '../components/EncryptionSetup'
 
-type Tab = 'status' | 'keys' | 'recovery' | 'guide'
+type Tab = 'status' | 'wizard' | 'keys' | 'recovery' | 'guide'
 
 export function Encryption() {
   const [tab, setTab] = useState<Tab>('status')
@@ -17,13 +18,15 @@ export function Encryption() {
       <TabBar
         tabs={[
           { key: 'status', label: 'Status', icon: ShieldCheck },
+          { key: 'wizard', label: 'Setup Wizard', icon: Rocket },
           { key: 'keys', label: 'Key Management', icon: KeyRound },
           { key: 'recovery', label: 'Credential Recovery', icon: RefreshCw, count: s?.needs_reset_count || undefined },
           { key: 'guide', label: 'Recovery Guide', icon: BookOpen },
         ]}
         active={tab} onChange={(k) => setTab(k as Tab)}
       />
-      {tab === 'status' && <StatusTab s={s} loading={status.isLoading} onGo={() => setTab('keys')} />}
+      {tab === 'status' && <StatusTab s={s} loading={status.isLoading} onGo={() => setTab('wizard')} />}
+      {tab === 'wizard' && <SetupWizard s={s} />}
       {tab === 'keys' && <KeysTab s={s} />}
       {tab === 'recovery' && <RecoveryTab s={s} />}
       {tab === 'guide' && <GuideTab />}
@@ -84,6 +87,9 @@ function StatusTab({ s, loading, onGo }: { s?: EncryptionStatus; loading: boolea
           <div><dt>Last validation</dt><dd>{s.last_validation_at ? timeAgo(s.last_validation_at) : 'never'}</dd></div>
         </dl>
         <p className="muted" style={{ fontSize: 12, marginTop: 12 }}>The encryption key is never stored or displayed — only this one-way fingerprint identifies it.</p>
+      </Panel>
+      <Panel title="System Startup Checklist" icon={ListChecks}>
+        <StartupChecklist />
       </Panel>
     </div>
   )
@@ -202,6 +208,137 @@ function RecoveryTab({ s }: { s?: EncryptionStatus }) {
         )}
         {!s?.enabled && rows.length > 0 && <div className="muted" style={{ padding: 'var(--space-4) var(--space-5)', fontSize: 12 }}>Re-entry requires an active encryption key. Configure/restore the key first.</div>}
       </Panel>
+    </div>
+  )
+}
+
+const STEPS = ['Status', 'Encryption Key', 'Deployment', 'Restart & Validate']
+const restartHint: Record<DeployMode, string> = {
+  local: 'Re-run the API start command from the Deployment step.',
+  windows: 'Run: Restart-Service HIMS-API  (then Get-Service HIMS-API to confirm).',
+  docker: 'Run: docker compose restart hims-api',
+  cloud: 'Restart / redeploy the API from your hosting platform after setting the variable.',
+}
+
+function SetupWizard({ s }: { s?: EncryptionStatus }) {
+  const qc = useQueryClient()
+  const [step, setStep] = useState(0)
+  const [mode, setMode] = useState<DeployMode | null>(null)
+  const [reveal, setReveal] = useState<KeyReveal | null>(null)
+  const [keyChoice, setKeyChoice] = useState<'generate' | 'have' | null>(s?.enabled ? 'have' : null)
+  const [msg, setMsg] = useState('')
+  const inv = () => { qc.invalidateQueries({ queryKey: ['enc-status'] }); qc.invalidateQueries({ queryKey: ['startup-checklist'] }) }
+
+  const generate = useMutation({ mutationFn: () => api.post<KeyReveal>('/security/encryption/generate', {}), onSuccess: (d) => { setReveal(d as KeyReveal); setKeyChoice('generate'); inv() }, onError: (e) => setMsg((e as Error).message) })
+  const validate = useMutation({ mutationFn: () => api.post<{ status: string; detail: string }>('/security/encryption/validate', {}), onSuccess: (d) => { setMsg(`Validation: ${(d as { status: string }).status} — ${(d as { detail: string }).detail}`); inv() }, onError: (e) => setMsg((e as Error).message) })
+
+  const allEnabled = s?.status === 'enabled' && (s?.undecryptable_count ?? 0) === 0
+  const next = () => setStep((n) => Math.min(STEPS.length - 1, n + 1))
+  const back = () => setStep((n) => Math.max(0, n - 1))
+
+  return (
+    <div className="stack">
+      {reveal && <KeyReveal data={reveal} onClose={() => { setReveal(null); inv() }} />}
+
+      <div className="stepper">
+        {STEPS.map((label, i) => (
+          <div key={label} className={'stepper-step' + (i === step ? ' active' : i < step ? ' done' : '')}>
+            <span className="step-num">{i < step ? '✓' : i + 1}</span> {label}
+          </div>
+        ))}
+      </div>
+
+      {step === 0 && (
+        <Panel title="Where things stand" icon={ShieldCheck}>
+          {s?.status === 'missing' && <div className="enc-banner crit" style={{ marginBottom: 14 }}><TriangleAlert size={16} /> <span><b>Action required:</b> Configure <code>HIMS_ENCRYPTION_KEY</code> in your deployment environment and restart the API. This wizard walks you through it.</span></div>}
+          {s?.status === 'pending_restart' && <div className="enc-banner warn" style={{ marginBottom: 14 }}><TriangleAlert size={16} /> <span>A key has been generated but the API hasn't been restarted with it yet. Continue to the Deployment + Restart steps.</span></div>}
+          {allEnabled && <div className="enc-banner info" style={{ marginBottom: 14 }}><CircleCheck size={16} /> <span>Encryption is already configured and healthy. You can still use this wizard to review deployment steps or rotate later.</span></div>}
+          <StartupChecklist />
+          <div className="row" style={{ marginTop: 16 }}><button className="btn btn-primary" onClick={next}>Begin setup →</button></div>
+        </Panel>
+      )}
+
+      {step === 1 && (
+        <Panel title="Encryption Key" icon={KeyRound}>
+          {s?.enabled ? (
+            <div className="enc-banner info"><CircleCheck size={16} /> <span>A key is already active (fingerprint {s.fingerprint.slice(0, 23)}…). To replace it, use Key Management → Rotate. Continue to review deployment.</span></div>
+          ) : (
+            <>
+              <p className="muted" style={{ marginBottom: 12 }}>Choose how to provide the encryption key. It is shown only once at generation — save it immediately.</p>
+              <div className="grid-2">
+                <div className="card" style={{ margin: 0 }}>
+                  <h3 style={{ fontSize: 15 }}>Generate a new key</h3>
+                  <p className="muted" style={{ fontSize: 13, margin: '6px 0 12px' }}>Best for a fresh install with no existing encrypted secrets.</p>
+                  <button className="btn btn-primary" disabled={generate.isPending} onClick={() => generate.mutate()}><KeyRound size={15} /> Generate key</button>
+                </div>
+                <div className="card" style={{ margin: 0 }}>
+                  <h3 style={{ fontSize: 15 }}>I already have a key</h3>
+                  <p className="muted" style={{ fontSize: 13, margin: '6px 0 12px' }}>Use an existing key (e.g. restoring a server or migrating). You'll set it in the next steps.</p>
+                  <button className={'btn' + (keyChoice === 'have' ? ' btn-primary' : '')} onClick={() => setKeyChoice('have')}>Use existing key</button>
+                </div>
+              </div>
+              {keyChoice === 'generate' && <div className="enc-banner warn" style={{ marginTop: 14 }}><TriangleAlert size={16} /> <span>Key generated. Make sure you saved the recovery file — it cannot be shown again. It's also re-downloadable from the reveal dialog only while open.</span></div>}
+            </>
+          )}
+          {msg && <div className="muted" style={{ fontSize: 12, marginTop: 10 }}>{msg}</div>}
+          <div className="row" style={{ marginTop: 16 }}>
+            <button className="btn btn-ghost" onClick={back}>← Back</button>
+            <button className="btn btn-primary" disabled={!keyChoice && !s?.enabled} onClick={next}>Next →</button>
+          </div>
+        </Panel>
+      )}
+
+      {step === 2 && (
+        <Panel title="Configure your deployment" icon={Rocket}>
+          <p className="muted" style={{ marginBottom: 12 }}>Pick how HIMS is hosted — we'll show the exact steps to set the key and restart.</p>
+          <div className="deploy-modes">
+            {DEPLOY_MODES.map((m) => (
+              <button key={m.key} className={'deploy-mode' + (mode === m.key ? ' active' : '')} onClick={() => setMode(m.key)}>
+                <span className="dm-ico"><m.icon size={20} /></span>
+                <span><b>{m.label}</b><small>{m.blurb}</small></span>
+              </button>
+            ))}
+          </div>
+          {mode && (
+            <div style={{ marginTop: 16 }}>
+              {deploymentSteps(mode).map((sec, i) => (
+                <div key={i} style={{ marginBottom: 10 }}>
+                  <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 2 }}>{sec.title}</div>
+                  <CmdBlock lines={sec.lines} />
+                </div>
+              ))}
+              <div className="row" style={{ marginTop: 8 }}>
+                <DownloadBtn filename={`hims-${mode}-runbook.txt`} text={buildRunbook(mode)} label="Download deployment runbook" />
+                <DownloadBtn filename="hims-disaster-recovery-runbook.txt" text={buildRunbook('disaster')} label="Disaster recovery runbook" />
+              </div>
+              <p className="muted" style={{ fontSize: 12, marginTop: 10 }}>Replace <code>&lt;PASTE-YOUR-RECOVERY-KEY&gt;</code> with the key from your recovery file. The key is never sent to the browser or stored here.</p>
+            </div>
+          )}
+          <div className="row" style={{ marginTop: 16 }}>
+            <button className="btn btn-ghost" onClick={back}>← Back</button>
+            <button className="btn btn-primary" disabled={!mode} onClick={next}>Next →</button>
+          </div>
+        </Panel>
+      )}
+
+      {step === 3 && (
+        <Panel title="Restart & Validate" icon={CircleCheck}>
+          <p className="muted" style={{ marginBottom: 10 }}>The API only loads the key at startup, so it must be restarted after you set <code>HIMS_ENCRYPTION_KEY</code>.</p>
+          {mode && <div className="enc-banner info" style={{ marginBottom: 14 }}><RefreshCw size={16} /> <span>{restartHint[mode]}</span></div>}
+          {allEnabled ? (
+            <div className="enc-banner info"><CircleCheck size={16} /> <span><b>Encryption is configured and validated.</b> Credential storage, writes and discovery credential access are enabled.</span></div>
+          ) : (
+            <div className="enc-banner warn"><TriangleAlert size={16} /> <span>Not yet active. After restarting, click “Re-check” below. This wizard reports the real status — it won't show success until the API confirms the key is loaded.</span></div>
+          )}
+          <div className="row" style={{ margin: '14px 0' }}>
+            <button className="btn" onClick={inv}><RefreshCw size={15} /> Re-check status</button>
+            <button className="btn" disabled={!s?.enabled || validate.isPending} onClick={() => validate.mutate()}><ShieldCheck size={15} /> Validate encryption</button>
+          </div>
+          <StartupChecklist />
+          {msg && <div className="muted" style={{ fontSize: 12, marginTop: 10 }}>{msg}</div>}
+          <div className="row" style={{ marginTop: 16 }}><button className="btn btn-ghost" onClick={back}>← Back</button></div>
+        </Panel>
+      )}
     </div>
   )
 }

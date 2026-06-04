@@ -1,6 +1,22 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { api, type Credential } from '../api'
+import { Link } from 'react-router-dom'
+import { api, type Credential, type EncryptionStatus } from '../api'
+
+function EncryptionGate() {
+  const q = useQuery({ queryKey: ['enc-status'], queryFn: () => api.get<EncryptionStatus>('/security/encryption/status'), retry: 0 })
+  if (!q.data || q.data.enabled) return null
+  return (
+    <div className="enc-banner crit" style={{ marginBottom: 16 }}>
+      <span>🔒</span>
+      <div style={{ flex: 1 }}>
+        <div style={{ fontWeight: 700 }}>Credential storage is disabled — no encryption key is configured</div>
+        <div style={{ fontSize: 12, marginTop: 2 }}>Credential creation, updates and credential-based discovery will not work until encryption is configured. Action required: set <code>HIMS_ENCRYPTION_KEY</code> in your deployment environment and restart the API.</div>
+      </div>
+      <Link className="btn btn-sm" to="/security/encryption" style={{ whiteSpace: 'nowrap' }}>Configure Encryption →</Link>
+    </div>
+  )
+}
 
 const KINDS = ['snmp_v2c', 'snmp_v3', 'ssh', 'winrm', 'http_basic', 'onvif', 'vendor_api', 'ldap']
 
@@ -35,6 +51,7 @@ export function Credentials() {
 
   return (
     <div>
+      <EncryptionGate />
       <div className="card">
         <h2>Credentials</h2>
         <p className="muted" style={{ marginBottom: 10 }}>
