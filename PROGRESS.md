@@ -60,6 +60,20 @@ Supporting fixes this program: runtime key unlock (`3ef8293`), single-instance g
 - **#4 MAC/ARP-derived edges**: engine rates MAC/ARP links lower when present but does not synthesize brand-new edges purely from FDB heuristics (false-topology risk).
 - **#9 auto-classify in discovery**: the operator fingerprint library powers the Match Tester + per-device suggestion, but is not yet consulted by the live discovery/enrichment classifier (which is driver-based). Wiring it in is gated on the discovery pipeline persisting richer evidence (full SNMP sysObjectID + untruncated sysDescr + HTTP/SSH banners) — today only a truncated sysDescr fragment + vendor name survive on the device row, so device-side matching is vendor-name-grade. Trigger: when discovery persists sysObjectID/sysDescr/banner evidence, add a reconcile pass that runs `fingerprint.Match` over it and proposes/raises reclassification.
 
+## Production Readiness Phase
+
+Making the completed roadmap safe + usable in a real deployment. Fleet reachability from the build host: `172.21.210.x` (CCTV/NVR range) is reachable → live-testable; `172.21.96.x` (switches) is not → those gates stay documented.
+
+| Priority | Item | Status |
+|---|---|---|
+| P1 | Auth / Session / RBAC enforcement | 🟡 Stage A done (login + sessions + authed actor); B (permission enforce) + C (site-scope) next |
+| P2 | Operational gates activation | 🔴 NVR range reachable; switch gates documented |
+| P3 | Data cleanup (Data Quality Center) | 🔴 |
+| P4 | Production deploy validation | 🟡 hims-migrate up verified on 000037; encryption/runtime/DR earlier |
+| Add-on | OS/NVR discovery + classification + universal credential testing | 🔴 |
+
+- **P1 Stage A — Authentication + sessions + authenticated actor**: migration 000037 (`users.password_hash` bcrypt + `sessions` storing only sha256(token)); `internal/auth` (bcrypt + token gen/hash, unit-tested); `POST /auth/login|logout`, `GET /auth/me`, `POST /auth/password`; session-cookie `authMiddleware` on all `/api/v1` (allow-lists login + openapi) with an **open-mode safety valve** until the first password exists; **bootstrap admin** from `HIMS_ADMIN_USER`/`HIMS_ADMIN_PASSWORD` (creates admin + all-permissions role, activates enforcement); `s.audit` now attributes the **authenticated** actor (X-Actor only as fallback). Frontend: login screen + `AuthGate` (calls /me, drops to login on 401) + Topbar user/logout. Verified live: unauth→401, bad-pw→401, login→cookie+identity(admin,18 perms), authed→200, /me, **audit shows actor=admin** for login + work-order create, logout→session invalidated→401. Migrate-up applied 000037 cleanly. **Acceptance met: a real user can log in; audit shows real authenticated actors.**
+
 ## Changelog
 - **🎉 31-item roadmap complete.** All items ✅ (with documented operational gates where live data needs a collection run / bound credential / configured exporter).
 - **#30 API Documentation**: `GET /api/v1/openapi.json` generates an OpenAPI 3.0.3 document by walking the live chi router (`chi.Walk`) — every route becomes a tagged operation with `{param}` path parameters; because it's derived from the router it can never drift from the deployed surface. Frontend Administration → API Documentation page renders it offline (no Swagger CDN): KPIs, resource-grouped endpoint tables with method badges, and a filter. Added `API_GUIDE.md` (base URL, X-Actor attribution, secret-handling notes, curl examples, client generation). Verified live: spec is valid OpenAPI 3.0.3 — 154 paths, 194 operations, 42 tags; `/devices/{id}/lifecycle` PUT declares its `id` path param; netflow + all resources present. **#30 complete.**

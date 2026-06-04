@@ -618,6 +618,14 @@ type ServerStorage struct {
 	UpdatedAt        time.Time `json:"updated_at"`
 }
 
+type Session struct {
+	TokenHash  string    `json:"token_hash"`
+	UserID     uuid.UUID `json:"user_id"`
+	CreatedAt  time.Time `json:"created_at"`
+	ExpiresAt  time.Time `json:"expires_at"`
+	LastSeenAt time.Time `json:"last_seen_at"`
+}
+
 type SparePart struct {
 	ID          uuid.UUID  `json:"id"`
 	Name        string     `json:"name"`
@@ -680,14 +688,15 @@ type UpsStatus struct {
 }
 
 type User struct {
-	ID         uuid.UUID  `json:"id"`
-	Username   string     `json:"username"`
-	FullName   string     `json:"full_name"`
-	Email      string     `json:"email"`
-	IsActive   bool       `json:"is_active"`
-	CreatedAt  time.Time  `json:"created_at"`
-	UpdatedAt  time.Time  `json:"updated_at"`
-	LocationID *uuid.UUID `json:"location_id"`
+	ID           uuid.UUID  `json:"id"`
+	Username     string     `json:"username"`
+	FullName     string     `json:"full_name"`
+	Email        string     `json:"email"`
+	IsActive     bool       `json:"is_active"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+	LocationID   *uuid.UUID `json:"location_id"`
+	PasswordHash string     `json:"password_hash"`
 }
 
 type UserRole struct {

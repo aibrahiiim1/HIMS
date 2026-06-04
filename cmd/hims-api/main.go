@@ -144,6 +144,13 @@ func main() {
 	// webhook/email), honoring severity thresholds + quiet hours.
 	srv.StartNotifier(context.Background(), 30*time.Second)
 
+	// Authentication: bootstrap an admin login from env on first run (when no
+	// user has a password yet) and activate enforcement; purge expired sessions.
+	if err := srv.BootstrapAdmin(context.Background(), os.Getenv("HIMS_ADMIN_USER"), os.Getenv("HIMS_ADMIN_PASSWORD")); err != nil {
+		slog.Error("admin bootstrap failed", "error", err)
+	}
+	srv.StartSessionGC(context.Background(), time.Hour)
+
 	// Generate + email scheduled reports when due (daily/weekly/monthly).
 	srv.StartReportScheduler(context.Background(), 5*time.Minute)
 

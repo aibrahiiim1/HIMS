@@ -38,6 +38,7 @@ type Server struct {
 	rt      RuntimeInfo                   // process identity captured at startup (no secrets)
 	flow     *flowCollector // nil until StartFlowCollector binds the UDP listener
 	flowAddr string         // NetFlow collector listen address ("" = disabled)
+	authActive atomic.Bool  // true once any user has a password (enforce auth); false = open bootstrap mode
 }
 
 // cipher returns the active credential cipher, or nil when no key is loaded.
@@ -117,6 +118,17 @@ func (s *Server) routes() {
 	})
 
 	r.Route("/api/v1", func(r chi.Router) {
+		// Authentication gate: every /api/v1 route requires a valid session
+		// except the login endpoint + the public API spec (allow-listed inside
+		// the middleware). Enforcement is a no-op only when auth is disabled.
+		r.Use(s.authMiddleware)
+
+		// --- Authentication (Production Readiness P1) ----------------
+		r.Post("/auth/login", s.login)
+		r.Post("/auth/logout", s.logout)
+		r.Get("/auth/me", s.me)
+		r.Post("/auth/password", s.changePassword)
+
 		// --- Executive dashboard (cross-cutting rollups) -------------
 		r.Get("/dashboard", s.dashboard)
 		r.Get("/dashboard/operational-health", s.operationalHealth)

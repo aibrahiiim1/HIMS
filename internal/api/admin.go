@@ -36,11 +36,23 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 // audit records an operator/system action. It never fails the request — an
 // audit write error is logged, not surfaced. actor comes from the X-Actor
 // header when present (set by a future auth layer), else "operator".
-func (s *Server) audit(r *http.Request, category, action, entityType, entityID, summary string, details map[string]any) {
-	actor := r.Header.Get("X-Actor")
-	if actor == "" {
-		actor = "operator"
+// actor resolves who is acting: the authenticated session user, else the
+// optional X-Actor header (legacy / unauthenticated bootstrap), else "operator".
+func (s *Server) actor(r *http.Request) string {
+	if id, ok := identityFrom(r.Context()); ok && id != nil && id.Username != "" {
+		return id.Username
 	}
+	if a := r.Header.Get("X-Actor"); a != "" {
+		return a
+	}
+	return "operator"
+}
+
+func (s *Server) audit(r *http.Request, category, action, entityType, entityID, summary string, details map[string]any) {
+	s.auditAs(s.actor(r), r, category, action, entityType, entityID, summary, details)
+}
+
+func (s *Server) auditAs(actor string, r *http.Request, category, action, entityType, entityID, summary string, details map[string]any) {
 	raw := []byte("{}")
 	if details != nil {
 		if b, err := json.Marshal(details); err == nil {

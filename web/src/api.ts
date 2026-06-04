@@ -1,18 +1,29 @@
 const BASE = import.meta.env.VITE_API_BASE ?? '/api/v1'
 
+// All requests carry the session cookie. A 401 (missing/expired session)
+// notifies a registered handler so the app drops to the login screen.
+const withCreds: RequestInit = { credentials: 'include' }
+let onUnauthorized: (() => void) | null = null
+export function setUnauthorizedHandler(fn: () => void) { onUnauthorized = fn }
+function check401(r: Response, path: string) {
+  if (r.status === 401 && !path.endsWith('/auth/login') && !path.endsWith('/auth/me')) onUnauthorized?.()
+}
+
 async function get<T>(path: string): Promise<T> {
-  const r = await fetch(`${BASE}${path}`)
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${path}`)
+  const r = await fetch(`${BASE}${path}`, withCreds)
+  if (!r.ok) { check401(r, path); throw new Error(`${r.status} ${r.statusText}: ${path}`) }
   return r.json()
 }
 
 async function post<T>(path: string, body: unknown): Promise<T> {
   const r = await fetch(`${BASE}${path}`, {
+    ...withCreds,
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
   if (!r.ok) {
+    check401(r, path)
     // Surface the server's plain-text reason (e.g. "bind an 'ssh' credential
     // first") so operators get actionable feedback, not just a status code.
     const detail = (await r.text().catch(() => '')).trim()
@@ -23,50 +34,64 @@ async function post<T>(path: string, body: unknown): Promise<T> {
 
 async function patch<T>(path: string, body: unknown): Promise<T> {
   const r = await fetch(`${BASE}${path}`, {
+    ...withCreds,
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${path}`)
+  if (!r.ok) { check401(r, path); throw new Error(`${r.status} ${r.statusText}: ${path}`) }
   return r.json()
 }
 
 async function put<T>(path: string, body: unknown): Promise<T | void> {
   const r = await fetch(`${BASE}${path}`, {
+    ...withCreds,
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${path}`)
+  if (!r.ok) { check401(r, path); throw new Error(`${r.status} ${r.statusText}: ${path}`) }
   if (r.status === 204) return
   return r.json()
 }
 
 async function del(path: string): Promise<void> {
-  const r = await fetch(`${BASE}${path}`, { method: 'DELETE' })
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${path}`)
+  const r = await fetch(`${BASE}${path}`, { ...withCreds, method: 'DELETE' })
+  if (!r.ok) { check401(r, path); throw new Error(`${r.status} ${r.statusText}: ${path}`) }
 }
 
 // postText sends a raw text body (e.g. text/csv for bulk import).
 async function postText<T>(path: string, body: string, contentType = 'text/csv'): Promise<T> {
   const r = await fetch(`${BASE}${path}`, {
+    ...withCreds,
     method: 'POST',
     headers: { 'Content-Type': contentType },
     body,
   })
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${path}`)
+  if (!r.ok) { check401(r, path); throw new Error(`${r.status} ${r.statusText}: ${path}`) }
   return r.json()
 }
 
 // postForm sends multipart/form-data (file uploads). The browser sets the
 // Content-Type boundary; do not set it manually.
 async function postForm<T>(path: string, body: FormData): Promise<T> {
-  const r = await fetch(`${BASE}${path}`, { method: 'POST', body })
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${path}`)
+  const r = await fetch(`${BASE}${path}`, { ...withCreds, method: 'POST', body })
+  if (!r.ok) { check401(r, path); throw new Error(`${r.status} ${r.statusText}: ${path}`) }
   return r.json()
 }
 
 export const api = { get, post, patch, put, del, postText, postForm }
+
+// #P1 Auth — current principal.
+export interface AuthMe {
+  authenticated: boolean
+  auth_active: boolean
+  user_id?: string
+  username?: string
+  permissions?: string[]
+  admin?: boolean
+  site_id?: string
+}
 
 // ---- Domain types -----------------------------------------------------------
 

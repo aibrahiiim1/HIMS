@@ -1,18 +1,22 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Menu, PanelLeftClose, PanelLeft, Search, Bell, Sun, Moon } from 'lucide-react'
+import { Menu, PanelLeftClose, PanelLeft, Search, Bell, Sun, Moon, LogOut } from 'lucide-react'
 import type { BadgeCounts } from '../hooks/useBadges'
 
 interface TopbarProps {
   collapsed: boolean
   theme: 'light' | 'dark'
   counts: BadgeCounts
+  username?: string
   onToggleCollapse: () => void
   onToggleDrawer: () => void
   onToggleTheme: () => void
+  onLogout?: () => void
 }
 
-export function Topbar({ collapsed, theme, counts, onToggleCollapse, onToggleDrawer, onToggleTheme }: TopbarProps) {
+const initials = (name?: string) => (name ? name.slice(0, 2).toUpperCase() : 'OP')
+
+export function Topbar({ collapsed, theme, counts, username, onToggleCollapse, onToggleDrawer, onToggleTheme, onLogout }: TopbarProps) {
   const navigate = useNavigate()
   const [q, setQ] = useState('')
   const alerts = counts.alerts ?? 0
@@ -53,9 +57,14 @@ export function Topbar({ collapsed, theme, counts, onToggleCollapse, onToggleDra
       </button>
 
       <div className="user-chip">
-        <span className="user-avatar">AI</span>
-        <span className="user-name">Admin</span>
+        <span className="user-avatar">{initials(username)}</span>
+        <span className="user-name">{username || 'operator'}</span>
       </div>
+      {onLogout && (
+        <button type="button" className="icon-btn" onClick={onLogout} aria-label="Sign out" title="Sign out">
+          <LogOut size={18} />
+        </button>
+      )}
     </header>
   )
 }

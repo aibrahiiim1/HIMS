@@ -57,6 +57,7 @@ type Querier interface {
 	CountOpenWorkOrders(ctx context.Context) (int64, error)
 	// Blobs sealed under a key id other than the one currently loaded.
 	CountUndecryptableCredentials(ctx context.Context, keyID string) (int64, error)
+	CountUsersWithPassword(ctx context.Context) (int64, error)
 	// ---- Alert rules ----------------------------------------------------------
 	CreateAlertRule(ctx context.Context, arg CreateAlertRuleParams) (AlertRule, error)
 	CreateCredential(ctx context.Context, arg CreateCredentialParams) (Credential, error)
@@ -78,6 +79,7 @@ type Querier interface {
 	CreatePurchase(ctx context.Context, arg CreatePurchaseParams) (Purchase, error)
 	CreateReportSchedule(ctx context.Context, arg CreateReportScheduleParams) (ReportSchedule, error)
 	CreateRole(ctx context.Context, arg CreateRoleParams) (Role, error)
+	CreateSession(ctx context.Context, arg CreateSessionParams) error
 	// ---- Spare parts ----------------------------------------------------------
 	CreateSparePart(ctx context.Context, arg CreateSparePartParams) (SparePart, error)
 	CreateSubnet(ctx context.Context, arg CreateSubnetParams) (Subnet, error)
@@ -97,6 +99,7 @@ type Querier interface {
 	DeleteDevices(ctx context.Context, dollar_1 []uuid.UUID) (int64, error)
 	// Removes a job and its results (discovery_results FK ON DELETE CASCADE).
 	DeleteDiscoveryJob(ctx context.Context, id uuid.UUID) error
+	DeleteExpiredSessions(ctx context.Context) error
 	DeleteLocation(ctx context.Context, id uuid.UUID) error
 	DeleteLookup(ctx context.Context, id uuid.UUID) error
 	DeleteMaintenanceWindow(ctx context.Context, id uuid.UUID) error
@@ -107,6 +110,7 @@ type Querier interface {
 	DeletePurchase(ctx context.Context, id uuid.UUID) error
 	DeleteReportSchedule(ctx context.Context, id uuid.UUID) error
 	DeleteRole(ctx context.Context, id uuid.UUID) error
+	DeleteSession(ctx context.Context, tokenHash string) error
 	DeleteSparePart(ctx context.Context, id uuid.UUID) error
 	DeleteStaleARP(ctx context.Context, arg DeleteStaleARPParams) error
 	DeleteStaleBMCSensors(ctx context.Context, arg DeleteStaleBMCSensorsParams) error
@@ -126,6 +130,7 @@ type Querier interface {
 	DeleteSubnet(ctx context.Context, id uuid.UUID) error
 	DeleteSystem(ctx context.Context, id uuid.UUID) error
 	DeleteUser(ctx context.Context, id uuid.UUID) error
+	DeleteUserSessions(ctx context.Context, userID uuid.UUID) error
 	DeleteVendorFingerprint(ctx context.Context, id uuid.UUID) error
 	DeviceCountByCategory(ctx context.Context) ([]DeviceCountByCategoryRow, error)
 	DeviceCountByStatus(ctx context.Context) ([]DeviceCountByStatusRow, error)
@@ -164,9 +169,12 @@ type Querier interface {
 	GetMonitoringCheck(ctx context.Context, id uuid.UUID) (MonitoringCheck, error)
 	GetNotificationChannel(ctx context.Context, id uuid.UUID) (NotificationChannel, error)
 	GetReportSchedule(ctx context.Context, id uuid.UUID) (ReportSchedule, error)
+	// Resolve a live session to its user (joined), enforcing expiry.
+	GetSession(ctx context.Context, tokenHash string) (GetSessionRow, error)
 	GetSparePart(ctx context.Context, id uuid.UUID) (SparePart, error)
 	GetSystem(ctx context.Context, id uuid.UUID) (System, error)
 	GetUPSStatus(ctx context.Context, deviceID uuid.UUID) (UpsStatus, error)
+	GetUserByUsername(ctx context.Context, username string) (User, error)
 	GetWLANControllerInfo(ctx context.Context, deviceID uuid.UUID) (WlanControllerInfo, error)
 	GetWorkOrder(ctx context.Context, id uuid.UUID) (WorkOrder, error)
 	// ===== Audit log ===========================================================
@@ -317,6 +325,8 @@ type Querier interface {
 	// Open (unresolved) alert counts per device, for site rollups.
 	OpenAlertCountsByDevice(ctx context.Context) ([]OpenAlertCountsByDeviceRow, error)
 	PermissionsForRole(ctx context.Context, roleID uuid.UUID) ([]Permission, error)
+	// All permission codes a user holds via any of their roles.
+	PermissionsForUser(ctx context.Context, userID uuid.UUID) ([]string, error)
 	// Persist the rollup the engine computed (status + failure counter) onto the
 	// check after a poll. History rows go to monitoring_samples separately.
 	RecordMonitoringResult(ctx context.Context, arg RecordMonitoringResultParams) (MonitoringCheck, error)
@@ -352,11 +362,13 @@ type Querier interface {
 	SetNotificationChannelEnabled(ctx context.Context, arg SetNotificationChannelEnabledParams) (NotificationChannel, error)
 	SetReportScheduleEnabled(ctx context.Context, arg SetReportScheduleEnabledParams) (ReportSchedule, error)
 	SetRolePermissionsClear(ctx context.Context, roleID uuid.UUID) error
+	SetUserPassword(ctx context.Context, arg SetUserPasswordParams) error
 	SetUserRolesClear(ctx context.Context, userID uuid.UUID) error
 	// Roll up aggregate rows of one kind over a recent window, highest bytes first.
 	TopFlowEntries(ctx context.Context, arg TopFlowEntriesParams) ([]TopFlowEntriesRow, error)
 	TotalExpenses(ctx context.Context) (float64, error)
 	TouchDeviceDiscovery(ctx context.Context, arg TouchDeviceDiscoveryParams) error
+	TouchSession(ctx context.Context, tokenHash string) error
 	TouchValidation(ctx context.Context) error
 	// Rename + weak-flag update (Credentials CRUD edit).
 	UpdateCredentialMeta(ctx context.Context, arg UpdateCredentialMetaParams) (Credential, error)

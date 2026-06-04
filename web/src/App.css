@@ -816,3 +816,9 @@ select.field { cursor: pointer; }
 .matrix-table th:first-child, .matrix-table td:first-child { text-align: left; position: sticky; left: 0; background: var(--surface); }
 .matrix-table td { user-select: none; }
 .matrix-table tbody tr:hover td { background: var(--surface-2); }
+
+/* Login screen (#P1 auth) */
+.login-screen { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--bg, #0b0f1a); padding: 24px; }
+.login-card { width: 100%; max-width: 360px; display: flex; flex-direction: column; gap: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); padding: 28px; }
+.login-brand { display: flex; align-items: center; gap: 10px; font-size: 22px; font-weight: 800; color: var(--text); }
+.login-sub { font-size: var(--fs-sm); color: var(--text-faint); margin-bottom: 8px; }

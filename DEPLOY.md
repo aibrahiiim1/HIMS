@@ -79,7 +79,22 @@ only in the service env), and starts the service.
 - Verify DR posture any time at Administration → Backup & Restore (checklist +
   last-backup age + key fingerprint).
 
-## 7. Health checks
+## 7. Authentication (Production Readiness)
+
+HIMS requires login. On first start, set `HIMS_ADMIN_USER` + `HIMS_ADMIN_PASSWORD`
+— when no user has a password yet, HIMS creates/adopts that admin (full
+permissions) and **activates login enforcement**. Once any password exists the
+bootstrap env is ignored; change the admin password after first login
+(Administration → users, or the change-password endpoint).
+
+- Sessions are server-side (httpOnly cookie; only the SHA-256 of the token is
+  stored). Default lifetime 12h; expired sessions are GC'd hourly.
+- Before any password exists the API runs in **open mode** (no enforcement) so a
+  fresh install isn't bricked; the first password switches enforcement on.
+- The collector talks to the database directly and is unaffected by API auth.
+- Audit entries are attributed to the authenticated user.
+
+## 8. Health checks
 
 - `GET /healthz` — liveness.
 - `GET /api/v1/system/runtime` — version, uptime, encryption status, loops.

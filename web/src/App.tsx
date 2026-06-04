@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query'
 import { BrowserRouter, Route, Routes, Navigate } from 'react-router-dom'
+import { api, setUnauthorizedHandler, type AuthMe } from './api'
+import { Login } from './pages/Login'
 import { DeviceList } from './pages/DeviceList'
 import { Dashboard } from './pages/Dashboard'
 import { Discovery } from './pages/Discovery'
@@ -62,7 +64,7 @@ function useTheme(): [Theme, () => void] {
   return [theme, () => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))]
 }
 
-function Shell() {
+function Shell({ me, onLogout }: { me?: AuthMe; onLogout: () => void }) {
   const [theme, toggleTheme] = useTheme()
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('nims-rail-collapsed') === '1')
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -83,9 +85,11 @@ function Shell() {
         collapsed={collapsed}
         theme={theme}
         counts={counts}
+        username={me?.username}
         onToggleCollapse={() => setCollapsed((v) => !v)}
         onToggleDrawer={() => setDrawerOpen((v) => !v)}
         onToggleTheme={toggleTheme}
+        onLogout={onLogout}
       />
       <main className="app-main">
         <div className="app-main-inner">
@@ -153,11 +157,35 @@ function Shell() {
   )
 }
 
+// AuthGate resolves the current session before rendering the app. While auth is
+// inactive (fresh install, open mode) it renders the app directly; once auth is
+// active it requires a valid session and otherwise shows the login screen.
+function AuthGate() {
+  const me = useQuery({ queryKey: ['me'], queryFn: () => api.get<AuthMe>('/auth/me'), retry: false })
+  useEffect(() => {
+    setUnauthorizedHandler(() => qc.setQueryData(['me'], { authenticated: false, auth_active: true } as AuthMe))
+  }, [])
+
+  if (me.isLoading) {
+    return <div className="login-screen"><div className="loading">Loading…</div></div>
+  }
+  const data = me.data
+  const needsLogin = me.isError || (data ? data.auth_active && !data.authenticated : true)
+  if (needsLogin) {
+    return <Login onSuccess={() => qc.invalidateQueries({ queryKey: ['me'] })} />
+  }
+  const logout = async () => {
+    try { await api.post('/auth/logout', {}) } catch { /* ignore */ }
+    qc.setQueryData(['me'], { authenticated: false, auth_active: true } as AuthMe)
+  }
+  return <Shell me={data} onLogout={logout} />
+}
+
 export default function App() {
   return (
     <QueryClientProvider client={qc}>
       <BrowserRouter>
-        <Shell />
+        <AuthGate />
       </BrowserRouter>
     </QueryClientProvider>
   )
