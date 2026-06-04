@@ -42,6 +42,19 @@ $secure = Read-Host -AsSecureString 'Paste the HIMS encryption key (input hidden
 $key = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure))
 if ([string]::IsNullOrWhiteSpace($key)) { Write-Error 'No key entered.'; exit 1 }
 
+# Apply database migrations first (idempotent) using the bundled hims-migrate
+# tool, if present alongside the API exe. A clean DB is built from zero; an
+# already-migrated DB needs a one-time `hims-migrate baseline` (see DEPLOY.md).
+$migrate = Join-Path (Split-Path $ExePath) 'hims-migrate.exe'
+if (Test-Path $migrate) {
+  Write-Host 'Applying database migrations...' -ForegroundColor Cyan
+  $env:HIMS_DATABASE_URL = $DatabaseUrl
+  & $migrate up
+  if ($LASTEXITCODE -ne 0) { Write-Error 'Migration failed — service not installed.'; exit 1 }
+} else {
+  Write-Host 'hims-migrate.exe not found next to the API — skipping migrations (run them manually).' -ForegroundColor Yellow
+}
+
 Write-Host "Installing service '$ServiceName'..." -ForegroundColor Cyan
 & $nssm install $ServiceName $ExePath | Out-Null
 & $nssm set $ServiceName AppDirectory (Split-Path $ExePath) | Out-Null
