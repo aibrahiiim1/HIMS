@@ -1,21 +1,11 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Bell, TriangleAlert, CircleCheck, ListChecks, Play, Plus } from 'lucide-react'
 import { api, type Alert, type AlertRule } from '../api'
+import { PageHeader, Panel, Kpi, EmptyState, StatusPill, timeAgo } from '../components/ui'
 
-const sevBadge = (s: string) => (s === 'critical' ? 'down' : s === 'warning' ? 'warning' : 'unknown')
-const statusBadge = (s: string) => (s === 'open' ? 'down' : s === 'acknowledged' ? 'warning' : 'up')
-
-const btn: React.CSSProperties = {
-  padding: '8px 16px', background: '#1565c0', color: '#fff', border: 'none',
-  borderRadius: 6, cursor: 'pointer', fontSize: 14, fontWeight: 600,
-}
-const ghost: React.CSSProperties = {
-  padding: '4px 10px', background: 'transparent', color: '#90caf9',
-  border: '1px solid #90caf9', borderRadius: 6, cursor: 'pointer', fontSize: 12,
-}
-const input: React.CSSProperties = {
-  padding: '8px 10px', border: '1px solid #ccc', borderRadius: 6, fontSize: 13, width: '100%',
-}
+const sevCls = (s: string) => (s === 'critical' ? 'badge-down' : s === 'warning' ? 'badge-warning' : 'badge-unknown')
+const SeverityBadge = ({ s }: { s: string }) => <span className={`badge ${sevCls(s)}`}>{s}</span>
 
 export function Alerts() {
   const qc = useQueryClient()
@@ -30,87 +20,91 @@ export function Alerts() {
   const evaluate = useMutation({ mutationFn: () => api.post('/alerts/evaluate', {}), onSuccess: invalidate })
   const ack = useMutation({ mutationFn: (id: string) => api.post(`/alerts/${id}/ack`, {}), onSuccess: invalidate })
   const resolve = useMutation({ mutationFn: (id: string) => api.post(`/alerts/${id}/resolve`, {}), onSuccess: invalidate })
-  const toggleRule = useMutation({
-    mutationFn: (r: AlertRule) => api.patch(`/alert-rules/${r.id}`, { enabled: !r.enabled }),
-    onSuccess: invalidate,
-  })
+  const toggleRule = useMutation({ mutationFn: (r: AlertRule) => api.patch(`/alert-rules/${r.id}`, { enabled: !r.enabled }), onSuccess: invalidate })
   const delRule = useMutation({ mutationFn: (id: string) => api.del(`/alert-rules/${id}`), onSuccess: invalidate })
+
+  const list = alerts.data ?? []
+  const open = list.filter((a) => a.status === 'open').length
+  const critical = list.filter((a) => a.severity === 'critical' && a.status !== 'resolved').length
+  const acked = list.filter((a) => a.status === 'acknowledged').length
+  const activeRules = (rules.data ?? []).filter((r) => r.enabled).length
 
   return (
     <div>
-      <div className="card">
-        <h2>Alerts</h2>
-        <p className="muted" style={{ marginBottom: 10 }}>
-          Rules match monitoring state (a check's status + consecutive failures). A match opens an
-          alert; rules flagged <em>auto work-order</em> also create a linked ticket. Alerts
-          auto-resolve when the check recovers. Evaluation runs after each monitoring sweep.
-        </p>
-        <div style={{ display: 'flex', gap: 10 }}>
-          <button style={btn} disabled={evaluate.isPending} onClick={() => evaluate.mutate()}>
-            {evaluate.isPending ? 'Evaluating…' : 'Evaluate now'}
-          </button>
-          <button style={btn} onClick={() => setShowRule((v) => !v)}>{showRule ? 'Cancel' : '+ New rule'}</button>
-        </div>
+      <PageHeader
+        title="Alerts" icon={Bell}
+        subtitle="Rule-driven alerting on monitoring state — auto work-orders, auto-resolve on recovery"
+        actions={
+          <>
+            <button className="btn btn-sm" disabled={evaluate.isPending} onClick={() => evaluate.mutate()}>
+              <Play size={14} /> {evaluate.isPending ? 'Evaluating…' : 'Evaluate now'}
+            </button>
+            <button className="btn btn-primary btn-sm" onClick={() => setShowRule((v) => !v)}>
+              <Plus size={14} /> {showRule ? 'Cancel' : 'New rule'}
+            </button>
+          </>
+        }
+      />
+
+      <div className="kpi-grid">
+        <Kpi label="Open Alerts" value={open} icon={Bell} tone={open > 0 ? 'crit' : 'default'} sub="unresolved" />
+        <Kpi label="Critical" value={critical} icon={TriangleAlert} tone={critical > 0 ? 'crit' : 'default'} sub="active" />
+        <Kpi label="Acknowledged" value={acked} icon={CircleCheck} tone={acked > 0 ? 'warn' : 'default'} sub="in handling" />
+        <Kpi label="Active Rules" value={activeRules} icon={ListChecks} tone="info" sub={`${rules.data?.length ?? 0} total`} />
       </div>
 
       {showRule && <RuleForm onDone={() => { setShowRule(false); invalidate() }} />}
 
-      <div className="card">
-        <h3>Active &amp; recent alerts</h3>
+      <Panel title="Active & Recent Alerts" icon={Bell} subtitle={`${list.length}`} pad={false}>
         {alerts.isLoading && <div className="loading">Loading…</div>}
-        {alerts.data && alerts.data.length === 0 && <div className="muted">No alerts.</div>}
-        {alerts.data && alerts.data.length > 0 && (
-          <table>
-            <thead>
-              <tr><th>Severity</th><th>Status</th><th>Message</th><th>Opened</th><th>WO</th><th></th></tr>
-            </thead>
+        {alerts.data && list.length === 0 && <EmptyState icon={CircleCheck} title="No active alerts" message="All monitored devices are within their alerting thresholds." />}
+        {list.length > 0 && (
+          <table className="data-table">
+            <thead><tr><th>Severity</th><th>Status</th><th>Message</th><th>Opened</th><th>WO</th><th></th></tr></thead>
             <tbody>
-              {alerts.data.map((a) => (
+              {list.map((a) => (
                 <tr key={a.id}>
-                  <td><span className={`badge badge-${sevBadge(a.severity)}`}>{a.severity}</span></td>
-                  <td><span className={`badge badge-${statusBadge(a.status)}`}>{a.status}</span></td>
-                  <td>{a.message}</td>
-                  <td>{new Date(a.opened_at).toLocaleString()}</td>
+                  <td><SeverityBadge s={a.severity} /></td>
+                  <td><StatusPill status={a.status === 'open' ? 'down' : a.status === 'acknowledged' ? 'warning' : 'up'} label={a.status} /></td>
+                  <td className="cell-name">{a.message}</td>
+                  <td className="muted">{timeAgo(a.opened_at)}</td>
                   <td>{a.work_order_id ? '✓' : '—'}</td>
-                  <td style={{ display: 'flex', gap: 6 }}>
-                    {a.status === 'open' && <button style={ghost} onClick={() => ack.mutate(a.id)}>Ack</button>}
-                    {a.status !== 'resolved' && <button style={ghost} onClick={() => resolve.mutate(a.id)}>Resolve</button>}
+                  <td className="cell-actions">
+                    {a.status === 'open' && <button className="btn btn-ghost btn-xs" onClick={() => ack.mutate(a.id)}>Ack</button>}
+                    {a.status !== 'resolved' && <button className="btn btn-ghost btn-xs" onClick={() => resolve.mutate(a.id)}>Resolve</button>}
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
-      </div>
+      </Panel>
 
-      <div className="card">
-        <h3>Rules</h3>
-        {rules.data && rules.data.length === 0 && <div className="muted">No rules — add one to start alerting.</div>}
+      <Panel title="Alert Rules" icon={ListChecks} subtitle={`${rules.data?.length ?? 0}`} pad={false}>
+        {rules.data && rules.data.length === 0 && <EmptyState icon={ListChecks} title="No alert rules" message="Add a rule to start alerting on monitoring state." action={<button className="btn btn-primary btn-sm" onClick={() => setShowRule(true)}>New rule</button>} />}
         {rules.data && rules.data.length > 0 && (
-          <table>
-            <thead>
-              <tr><th>Name</th><th>Trigger</th><th>Min fails</th><th>Category</th><th>Severity</th><th>Auto WO</th><th>Enabled</th><th></th></tr>
-            </thead>
+          <table className="data-table">
+            <thead><tr><th>Name</th><th>Trigger</th><th>Min fails</th><th>Category</th><th>Severity</th><th>Auto WO</th><th>Enabled</th><th></th></tr></thead>
             <tbody>
               {rules.data.map((r) => (
                 <tr key={r.id}>
-                  <td><strong>{r.name}</strong></td>
+                  <td className="cell-name">{r.name}</td>
                   <td>{r.trigger_status}</td>
                   <td>{r.min_failures}</td>
                   <td>{r.device_category ?? 'any'}</td>
-                  <td><span className={`badge badge-${sevBadge(r.severity)}`}>{r.severity}</span></td>
+                  <td><SeverityBadge s={r.severity} /></td>
                   <td>{r.auto_work_order ? `yes (${r.work_order_priority})` : 'no'}</td>
-                  <td>{r.enabled ? 'yes' : 'no'}</td>
-                  <td style={{ display: 'flex', gap: 6 }}>
-                    <button style={ghost} onClick={() => toggleRule.mutate(r)}>{r.enabled ? 'Disable' : 'Enable'}</button>
-                    <button style={ghost} onClick={() => delRule.mutate(r.id)}>Delete</button>
+                  <td>{r.enabled ? <span className="badge badge-up">enabled</span> : <span className="badge badge-disabled">disabled</span>}</td>
+                  <td className="cell-actions">
+                    <button className="btn btn-ghost btn-xs" onClick={() => toggleRule.mutate(r)}>{r.enabled ? 'Disable' : 'Enable'}</button>
+                    <button className="btn btn-ghost btn-xs" style={{ color: 'var(--crit)' }} onClick={() => delRule.mutate(r.id)}>Delete</button>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
-      </div>
+      </Panel>
     </div>
   )
 }
@@ -132,42 +126,41 @@ function RuleForm({ onDone }: { onDone: () => void }) {
     onSuccess: onDone,
   })
   return (
-    <div className="card">
-      <h2>New alert rule</h2>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(180px,1fr))', gap: 10 }}>
-        <label>Name<input style={input} value={name} onChange={(e) => setName(e.target.value)} /></label>
-        <label>Trigger status
-          <select style={input} value={triggerStatus} onChange={(e) => setTriggerStatus(e.target.value)}>
+    <Panel title="New Alert Rule" icon={Plus}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(190px,1fr))', gap: 12 }}>
+        <label className="form-field">Name<input className="field" value={name} onChange={(e) => setName(e.target.value)} /></label>
+        <label className="form-field">Trigger status
+          <select className="field" value={triggerStatus} onChange={(e) => setTriggerStatus(e.target.value)}>
             <option value="down">down</option><option value="warning">warning</option>
           </select>
         </label>
-        <label>Min failures<input style={input} type="number" value={minFailures} onChange={(e) => setMinFailures(e.target.value)} /></label>
-        <label>Category (blank = any)<input style={input} value={category} onChange={(e) => setCategory(e.target.value)} placeholder="switch / firewall / …" /></label>
-        <label>Severity
-          <select style={input} value={severity} onChange={(e) => setSeverity(e.target.value)}>
+        <label className="form-field">Min failures<input className="field" type="number" value={minFailures} onChange={(e) => setMinFailures(e.target.value)} /></label>
+        <label className="form-field">Category (blank = any)<input className="field" value={category} onChange={(e) => setCategory(e.target.value)} placeholder="switch / firewall / …" /></label>
+        <label className="form-field">Severity
+          <select className="field" value={severity} onChange={(e) => setSeverity(e.target.value)}>
             <option value="info">info</option><option value="warning">warning</option><option value="critical">critical</option>
           </select>
         </label>
-        <label>Auto work-order
-          <select style={input} value={autoWo ? 'yes' : 'no'} onChange={(e) => setAutoWo(e.target.value === 'yes')}>
+        <label className="form-field">Auto work-order
+          <select className="field" value={autoWo ? 'yes' : 'no'} onChange={(e) => setAutoWo(e.target.value === 'yes')}>
             <option value="no">no</option><option value="yes">yes</option>
           </select>
         </label>
         {autoWo && (
-          <label>WO priority
-            <select style={input} value={woPriority} onChange={(e) => setWoPriority(e.target.value)}>
+          <label className="form-field">WO priority
+            <select className="field" value={woPriority} onChange={(e) => setWoPriority(e.target.value)}>
               <option value="low">low</option><option value="medium">medium</option>
               <option value="high">high</option><option value="critical">critical</option>
             </select>
           </label>
         )}
       </div>
-      <div style={{ marginTop: 12 }}>
-        <button style={btn} disabled={!name || m.isPending} onClick={() => m.mutate()}>
+      <div style={{ marginTop: 14 }}>
+        <button className="btn btn-primary" disabled={!name || m.isPending} onClick={() => m.mutate()}>
           {m.isPending ? 'Creating…' : 'Create rule'}
         </button>
         {m.error && <span className="error-msg" style={{ marginLeft: 12 }}>{(m.error as Error).message}</span>}
       </div>
-    </div>
+    </Panel>
   )
 }

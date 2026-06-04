@@ -654,6 +654,10 @@ select.field { cursor: pointer; }
 .dev-cell .dev-meta { display: flex; flex-direction: column; line-height: 1.25; }
 .dev-cell .dev-meta small { color: var(--text-faint); font-size: var(--fs-sm); }
 
+/* ---- Form field (label + control stacked) --------------------------------- */
+.form-field { display: flex; flex-direction: column; gap: 5px; font-size: var(--fs-sm); color: var(--text-muted); font-weight: 600; }
+.form-field .field { font-weight: 400; }
+
 /* ---- Device hero header --------------------------------------------------- */
 .device-hero {
   display: flex; align-items: center; justify-content: space-between; gap: var(--space-5);
