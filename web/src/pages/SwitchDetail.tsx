@@ -156,31 +156,71 @@ function NeighborTable({ data, full }: { data: Neighbor[]; full?: boolean }) {
 }
 
 function MonitoringTab({ id }: { id: string }) {
-  const checks = useQuery({ queryKey: ['dev-checks', id], queryFn: () => api.get<MonitoringCheck[]>(`/devices/${id}/monitoring/checks`) })
-  const samples = useQuery({ queryKey: ['dev-samples', id], queryFn: () => api.get<MonitoringSample[]>(`/devices/${id}/monitoring/samples`) })
+  const checks = useQuery({ queryKey: ['dev-checks', id], queryFn: () => api.get<MonitoringCheck[]>(`/devices/${id}/monitoring/checks`), refetchInterval: 30_000 })
+  const samples = useQuery({ queryKey: ['dev-samples', id], queryFn: () => api.get<MonitoringSample[]>(`/devices/${id}/monitoring/samples?limit=200`), refetchInterval: 30_000 })
   const list = checks.data ?? []
-  const latencyPoints = [...(samples.data ?? [])]
-    .sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime())
-    .map((s) => s.latency_ms ?? 0).filter((n) => n > 0).slice(-40)
+  const asc = [...(samples.data ?? [])].sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime())
+
+  const latencyPoints = asc.map((s) => s.latency_ms ?? 0).filter((n) => n > 0).slice(-60)
+  const valuePoints = asc.filter((s) => s.value_num != null).map((s) => s.value_num as number).slice(-60)
+  const strip = asc.slice(-60)
+  const total = asc.length
+  const ups = asc.filter((s) => s.status === 'up').length
+  const uptime = total ? Math.round((ups / total) * 100) : 0
+  const lat = latencyPoints.length ? {
+    avg: latencyPoints.reduce((a, b) => a + b, 0) / latencyPoints.length,
+    min: Math.min(...latencyPoints), max: Math.max(...latencyPoints),
+  } : null
+  const sColor = (s: string) => (s === 'up' ? 'var(--ok)' : s === 'warning' ? 'var(--warn)' : s === 'down' ? 'var(--crit)' : 'var(--surface-3)')
 
   return (
     <div className="stack">
-      <Panel title="Availability Trend" icon={Gauge}>
-        {latencyPoints.length > 1
-          ? <Sparkline points={latencyPoints} width={640} height={80} />
-          : <EmptyState icon={Gauge} title="No samples yet" message="Latency history appears after a few monitoring sweeps." />}
+      <Panel title="Performance & Availability" icon={Gauge} subtitle={`${total} samples`}>
+        {total === 0 && <EmptyState icon={Gauge} title="No samples yet" message="History appears after a few monitoring sweeps (every 30s)." />}
+        {total > 0 && (
+          <>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(140px,1fr))', gap: 14, marginBottom: 16 }}>
+              <Stat label="Uptime (window)" value={`${uptime}%`} tone={uptime >= 99 ? 'ok' : uptime >= 90 ? 'warn' : 'crit'} />
+              <Stat label="Avg latency" value={lat ? `${lat.avg.toFixed(1)} ms` : '—'} />
+              <Stat label="Min / Max" value={lat ? `${lat.min.toFixed(0)} / ${lat.max.toFixed(0)} ms` : '—'} />
+              <Stat label="Samples" value={String(total)} />
+            </div>
+            {/* status timeline strip */}
+            <div style={{ display: 'flex', gap: 1, height: 22, borderRadius: 4, overflow: 'hidden', marginBottom: 16 }} title="status over time (oldest → newest)">
+              {strip.map((s, i) => <div key={i} style={{ flex: 1, background: sColor(s.status) }} title={`${new Date(s.time).toLocaleTimeString()} · ${s.status}`} />)}
+            </div>
+            {latencyPoints.length > 1 && (<>
+              <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Latency (ms)</div>
+              <Sparkline points={latencyPoints} width={680} height={70} />
+            </>)}
+            {valuePoints.length > 1 && (<>
+              <div className="muted" style={{ fontSize: 12, margin: '14px 0 4px' }}>SNMP metric (value)</div>
+              <Sparkline points={valuePoints} width={680} height={70} color="var(--brand)" />
+            </>)}
+          </>
+        )}
       </Panel>
       <Panel title="Checks" pad={false}>
         {list.length === 0 ? <EmptyState icon={Activity} title="No checks for this device" message="Add a monitor under the Operations tab." />
           : (
             <table className="data-table">
-              <thead><tr><th>Kind</th><th>Port</th><th>Status</th><th>Latency</th><th>Interval</th><th>Last run</th></tr></thead>
+              <thead><tr><th>Kind</th><th>Port / OID</th><th>Status</th><th>Latency</th><th>Interval</th><th>Fails</th><th>Last run</th></tr></thead>
               <tbody>{list.map((c) => (
-                <tr key={c.id}><td style={{ textTransform: 'uppercase', fontWeight: 600 }}>{c.kind}</td><td>{c.target_port ?? '—'}</td><td><StatusPill status={c.last_status} /></td><td className="mono">{c.last_latency_ms != null ? `${c.last_latency_ms.toFixed(1)} ms` : '—'}</td><td>{c.interval_seconds}s</td><td className="muted">{timeAgo(c.last_run_at)}</td></tr>
+                <tr key={c.id}><td style={{ textTransform: 'uppercase', fontWeight: 600 }}>{c.kind}</td><td className="mono">{c.kind === 'snmp' ? (c.oid ?? 'sysUpTime') : (c.target_port ?? '—')}</td><td><StatusPill status={c.last_status} /></td><td className="mono">{c.last_latency_ms != null ? `${c.last_latency_ms.toFixed(1)} ms` : '—'}</td><td>{c.interval_seconds}s</td><td>{c.consecutive_failures}</td><td className="muted">{timeAgo(c.last_run_at)}</td></tr>
               ))}</tbody>
             </table>
           )}
       </Panel>
+    </div>
+  )
+}
+
+function Stat({ label, value, tone }: { label: string; value: string; tone?: 'ok' | 'warn' | 'crit' }) {
+  const color = tone === 'ok' ? 'var(--ok)' : tone === 'warn' ? 'var(--warn)' : tone === 'crit' ? 'var(--crit)' : 'var(--text)'
+  return (
+    <div className="card" style={{ margin: 0, padding: '10px 14px' }}>
+      <div className="muted" style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '.04em' }}>{label}</div>
+      <div style={{ fontSize: 20, fontWeight: 800, color, marginTop: 2 }}>{value}</div>
     </div>
   )
 }
