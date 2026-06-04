@@ -183,6 +183,12 @@ func (s *Server) routes() {
 		r.Get("/assets/lifecycle", s.assetLifecycleRegister)
 		// --- Multi-site rollup (#22) ----------------------------------
 		r.Get("/sites/overview", s.sitesOverview)
+		// --- Backup & Restore (#25) -----------------------------------
+		r.Get("/admin/backup/export", s.exportBackup)
+		r.Post("/admin/backup/validate", s.validateBackup)
+		r.Get("/admin/backup/runs", s.listBackupRuns)
+		r.Post("/admin/backup/record-external", s.recordExternalBackup)
+		r.Get("/admin/dr-readiness", s.drReadiness)
 		// --- NetFlow Analytics (#12) ----------------------------------
 		r.Get("/netflow/overview", s.flowOverview)
 		r.Get("/netflow/top-talkers", s.flowTopTalkers)

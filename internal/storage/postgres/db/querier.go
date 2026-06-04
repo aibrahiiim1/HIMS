@@ -171,6 +171,7 @@ type Querier interface {
 	GetWorkOrder(ctx context.Context, id uuid.UUID) (WorkOrder, error)
 	// ===== Audit log ===========================================================
 	InsertAuditLog(ctx context.Context, arg InsertAuditLogParams) error
+	InsertBackupRun(ctx context.Context, arg InsertBackupRunParams) (BackupRun, error)
 	InsertConfigBackup(ctx context.Context, arg InsertConfigBackupParams) (InsertConfigBackupRow, error)
 	InsertFlowRecord(ctx context.Context, arg InsertFlowRecordParams) error
 	InsertMibObject(ctx context.Context, arg InsertMibObjectParams) error
@@ -179,6 +180,7 @@ type Querier interface {
 	// The unique index idx_notif_once makes a duplicate 'sent' for the same
 	// (channel, alert) a no-op, so RETURNING yields a row only on a real insert.
 	InsertNotificationLog(ctx context.Context, arg InsertNotificationLogParams) (NotificationLog, error)
+	LastSuccessfulBackup(ctx context.Context) (BackupRun, error)
 	ListARPForDevice(ctx context.Context, deviceID uuid.UUID) ([]ListARPForDeviceRow, error)
 	ListAccessPoints(ctx context.Context, controllerDeviceID uuid.UUID) ([]AccessPoint, error)
 	ListActiveMaintenanceWindows(ctx context.Context) ([]MaintenanceWindow, error)
@@ -199,6 +201,7 @@ type Querier interface {
 	// text (summary) / time range. NULL args are ignored.
 	ListAuditLogFiltered(ctx context.Context, arg ListAuditLogFilteredParams) ([]AuditLog, error)
 	ListBMCSensors(ctx context.Context, deviceID uuid.UUID) ([]BmcSensor, error)
+	ListBackupRuns(ctx context.Context) ([]BackupRun, error)
 	ListChildLocations(ctx context.Context, parentID *uuid.UUID) ([]Location, error)
 	// Metadata only (no content_encrypted) — newest first.
 	ListConfigBackupsByDevice(ctx context.Context, arg ListConfigBackupsByDeviceParams) ([]ListConfigBackupsByDeviceRow, error)

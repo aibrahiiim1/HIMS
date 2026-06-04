@@ -92,6 +92,18 @@ type AuditLog struct {
 	Details    []byte    `json:"details"`
 }
 
+type BackupRun struct {
+	ID        int64     `json:"id"`
+	At        time.Time `json:"at"`
+	Kind      string    `json:"kind"`
+	Status    string    `json:"status"`
+	Tables    int32     `json:"tables"`
+	Rows      int32     `json:"rows"`
+	SizeBytes int64     `json:"size_bytes"`
+	Actor     string    `json:"actor"`
+	Detail    string    `json:"detail"`
+}
+
 type BmcInfo struct {
 	DeviceID        uuid.UUID `json:"device_id"`
 	Vendor          *string   `json:"vendor"`

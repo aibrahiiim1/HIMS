@@ -1044,3 +1044,29 @@ export interface SiteRollup {
   open_alerts: number
   by_category: Record<string, number>
 }
+
+// #25 Backup & Restore.
+export interface DRCheck { item: string; ok: boolean; note: string }
+export interface DRReadiness {
+  db_connected: boolean
+  key_loaded: boolean
+  key_fingerprint: string
+  last_backup_at: string | null
+  last_backup_kind: string
+  last_backup_age_hours: number
+  recent_backup: boolean
+  device_count: number
+  credential_count: number
+  checklist: DRCheck[]
+}
+export interface BackupRun {
+  id: number
+  at: string
+  kind: string
+  status: string
+  tables: number
+  rows: number
+  size_bytes: number
+  actor: string
+  detail: string
+}
