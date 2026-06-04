@@ -190,28 +190,32 @@ type CredentialGroupMember struct {
 }
 
 type Device struct {
-	ID               uuid.UUID   `json:"id"`
-	LocationID       *uuid.UUID  `json:"location_id"`
-	PrimaryIp        *netip.Addr `json:"primary_ip"`
-	Hostname         *string     `json:"hostname"`
-	Name             string      `json:"name"`
-	Vendor           *string     `json:"vendor"`
-	Model            *string     `json:"model"`
-	Serial           *string     `json:"serial"`
-	OsVersion        *string     `json:"os_version"`
-	Category         string      `json:"category"`
-	Status           string      `json:"status"`
-	Driver           *string     `json:"driver"`
-	CredentialID     *uuid.UUID  `json:"credential_id"`
-	LastDiscoveryAt  *time.Time  `json:"last_discovery_at"`
-	LastMonitoringAt *time.Time  `json:"last_monitoring_at"`
-	Metadata         []byte      `json:"metadata"`
-	CreatedAt        time.Time   `json:"created_at"`
-	UpdatedAt        time.Time   `json:"updated_at"`
-	DeletedAt        *time.Time  `json:"deleted_at"`
-	Vlan             *string     `json:"vlan"`
-	DeviceClass      *string     `json:"device_class"`
-	Location         *string     `json:"location"`
+	ID                     uuid.UUID   `json:"id"`
+	LocationID             *uuid.UUID  `json:"location_id"`
+	PrimaryIp              *netip.Addr `json:"primary_ip"`
+	Hostname               *string     `json:"hostname"`
+	Name                   string      `json:"name"`
+	Vendor                 *string     `json:"vendor"`
+	Model                  *string     `json:"model"`
+	Serial                 *string     `json:"serial"`
+	OsVersion              *string     `json:"os_version"`
+	Category               string      `json:"category"`
+	Status                 string      `json:"status"`
+	Driver                 *string     `json:"driver"`
+	CredentialID           *uuid.UUID  `json:"credential_id"`
+	LastDiscoveryAt        *time.Time  `json:"last_discovery_at"`
+	LastMonitoringAt       *time.Time  `json:"last_monitoring_at"`
+	Metadata               []byte      `json:"metadata"`
+	CreatedAt              time.Time   `json:"created_at"`
+	UpdatedAt              time.Time   `json:"updated_at"`
+	DeletedAt              *time.Time  `json:"deleted_at"`
+	Vlan                   *string     `json:"vlan"`
+	DeviceClass            *string     `json:"device_class"`
+	Location               *string     `json:"location"`
+	OsFamily               string      `json:"os_family"`
+	ConfidenceScore        *int16      `json:"confidence_score"`
+	ClassificationEvidence []byte      `json:"classification_evidence"`
+	ClassificationLocked   bool        `json:"classification_locked"`
 }
 
 type DeviceFact struct {

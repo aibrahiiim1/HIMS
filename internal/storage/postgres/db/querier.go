@@ -232,6 +232,7 @@ type Querier interface {
 	// ===== Device templates ====================================================
 	ListDeviceTemplates(ctx context.Context) ([]DeviceTemplate, error)
 	ListDevicesByCategory(ctx context.Context, category string) ([]Device, error)
+	ListDevicesByOSFamily(ctx context.Context, osFamily string) ([]Device, error)
 	ListDevicesByRole(ctx context.Context, role string) ([]Device, error)
 	// Devices with a reachable IP but no monitoring check yet — the seeder turns
 	// each into a default TCP check (port chosen by category).
@@ -354,6 +355,9 @@ type Querier interface {
 	SearchMibObjects(ctx context.Context, name string) ([]MibObject, error)
 	SetAlertRuleEnabled(ctx context.Context, arg SetAlertRuleEnabledParams) (AlertRule, error)
 	SetAlertWorkOrder(ctx context.Context, arg SetAlertWorkOrderParams) error
+	// Operator manual override: lock (true) freezes auto-classification for this
+	// device; unlock (false) lets the next discovery re-classify it.
+	SetClassificationLock(ctx context.Context, arg SetClassificationLockParams) (Device, error)
 	// Bind-on-success: record the credential that last authenticated.
 	SetDeviceCredential(ctx context.Context, arg SetDeviceCredentialParams) error
 	// Stores the scan spec (mode/targets/creds) so the job can be re-run as-is.
@@ -376,6 +380,11 @@ type Querier interface {
 	UpdateCredentialSecret(ctx context.Context, arg UpdateCredentialSecretParams) error
 	// Operator edit of a device's identity fields (Inventory CRUD).
 	UpdateDevice(ctx context.Context, arg UpdateDeviceParams) (Device, error)
+	// Auto-classification write: set category + OS family + subtype + confidence +
+	// evidence trail in one shot. The `classification_locked = false` guard makes
+	// this an atomic no-op on operator-overridden devices (0 rows affected →
+	// pgx.ErrNoRows), so a manual classification is never silently overwritten.
+	UpdateDeviceClassification(ctx context.Context, arg UpdateDeviceClassificationParams) (Device, error)
 	// Reflect the worst current check status onto the device row so device lists
 	// show a live health badge without a per-row sample query.
 	UpdateDeviceMonitoringStatus(ctx context.Context, arg UpdateDeviceMonitoringStatusParams) error

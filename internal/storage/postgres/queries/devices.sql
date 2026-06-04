@@ -114,3 +114,32 @@ SELECT d.* FROM devices d
 JOIN device_roles r ON r.device_id = d.id
 WHERE r.role = $1
 ORDER BY d.name;
+
+-- name: UpdateDeviceClassification :one
+-- Auto-classification write: set category + OS family + subtype + confidence +
+-- evidence trail in one shot. The `classification_locked = false` guard makes
+-- this an atomic no-op on operator-overridden devices (0 rows affected →
+-- pgx.ErrNoRows), so a manual classification is never silently overwritten.
+UPDATE devices SET
+    category = $2,
+    os_family = $3,
+    device_class = $4,
+    confidence_score = $5,
+    classification_evidence = $6,
+    updated_at = now()
+WHERE id = $1 AND deleted_at IS NULL AND classification_locked = false
+RETURNING *;
+
+-- name: SetClassificationLock :one
+-- Operator manual override: lock (true) freezes auto-classification for this
+-- device; unlock (false) lets the next discovery re-classify it.
+UPDATE devices SET
+    classification_locked = $2,
+    updated_at = now()
+WHERE id = $1 AND deleted_at IS NULL
+RETURNING *;
+
+-- name: ListDevicesByOSFamily :many
+SELECT * FROM devices
+WHERE os_family = $1 AND deleted_at IS NULL
+ORDER BY category, name;
