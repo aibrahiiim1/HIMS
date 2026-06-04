@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,6 +34,10 @@ type dqIssue struct {
 
 const dqSampleCap = 100
 
+// lowConfidenceThreshold: auto-classifications scoring below this (out of 100)
+// are surfaced for operator confirmation in the Data Quality center.
+const lowConfidenceThreshold = 50
+
 // credentialedCategories are device classes that normally need a bound
 // credential; missing creds elsewhere (printers, cameras, unknown) is expected
 // and would only add noise.
@@ -55,7 +60,7 @@ func (s *Server) dataQuality(w http.ResponseWriter, r *http.Request) {
 
 	ipGroups := map[string][]db.Device{}
 	nameGroups := map[string][]db.Device{}
-	var missingLoc, missingVendor, missingCreds, unknownCat, stale []db.Device
+	var missingLoc, missingVendor, missingCreds, unknownCat, stale, lowConf []db.Device
 
 	for _, d := range devs {
 		if d.PrimaryIp != nil && d.PrimaryIp.IsValid() {
@@ -78,6 +83,12 @@ func (s *Server) dataQuality(w http.ResponseWriter, r *http.Request) {
 		}
 		if d.LastDiscoveryAt == nil || d.LastDiscoveryAt.Before(staleBefore) {
 			stale = append(stale, d)
+		}
+		// Weakly auto-classified devices (scored but below the confidence bar) —
+		// an operator should confirm and Lock them. Unscored/unknown devices are
+		// already covered by "Unclassified", so exclude them here.
+		if d.Category != "unknown" && !d.ClassificationLocked && d.ConfidenceScore != nil && *d.ConfidenceScore < lowConfidenceThreshold {
+			lowConf = append(lowConf, d)
 		}
 	}
 
@@ -130,6 +141,7 @@ func (s *Server) dataQuality(w http.ResponseWriter, r *http.Request) {
 	addIssue("missing_location", "Missing location", "Devices not assigned to a site/location. Assign them so they roll up correctly in Sites Health and reports.", "warning", missingLoc)
 	addIssue("missing_credentials", "Missing credentials", "Credentialed device classes (switches, firewalls, servers…) with no bound credential cannot be deeply collected. Bind a working credential.", "warning", missingCreds)
 	addIssue("unknown_category", "Unclassified devices", "Devices still classified as 'unknown'. Enrich with SNMP/CLI or set the type manually so they appear in the right inventory views.", "info", unknownCat)
+	addIssue("low_confidence", "Low-confidence classification", "Devices auto-classified below "+strconv.Itoa(lowConfidenceThreshold)+"% confidence. Open the device, Re-classify (or bind a credential for deeper signals), then Lock once correct.", "info", lowConf)
 	addIssue("missing_vendor", "Missing vendor", "Devices with no vendor recorded. Vendor enriches fingerprinting, reports and lifecycle.", "info", missingVendor)
 
 	// Stable order: critical first, then warning, then info; ties by count desc.
