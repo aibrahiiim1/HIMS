@@ -5,7 +5,7 @@ import {
   Plug, BatteryCharging, ShieldAlert, Camera, Video, Phone, CircleHelp, Brain,
   Map, Route as RouteIcon, ClipboardList, Wrench, Package, DollarSign, Building2,
   FileChartColumn, FileSearch, ChartLine, Tag, Download,
-  Users, ShieldCheck, LayoutTemplate, ScanLine, Settings, FileClock, Lock, Activity, MonitorPlay, ClipboardCheck, Send,
+  Users, ShieldCheck, LayoutTemplate, ScanLine, Settings, FileClock, Lock, Activity, MonitorPlay, ClipboardCheck, Send, FileCode,
 } from 'lucide-react'
 
 export type BadgeKey = 'alerts' | 'failed_scans' | 'unknown' | 'work_orders'
@@ -107,6 +107,7 @@ export const NAV: NavGroup[] = [
     title: 'Operations',
     items: [
       { label: 'Work Orders', icon: ClipboardList, to: '/work-orders', badge: 'work_orders' },
+      { label: 'Config Backup', icon: FileCode, to: '/config-backups' },
       { label: 'Systems', icon: Wrench, to: '/systems' },
       { label: 'Spare Parts', icon: Package, to: '/spare-parts' },
       { label: 'Expenses', icon: DollarSign, to: '/expenses' },

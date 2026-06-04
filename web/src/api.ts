@@ -12,7 +12,12 @@ async function post<T>(path: string, body: unknown): Promise<T> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${path}`)
+  if (!r.ok) {
+    // Surface the server's plain-text reason (e.g. "bind an 'ssh' credential
+    // first") so operators get actionable feedback, not just a status code.
+    const detail = (await r.text().catch(() => '')).trim()
+    throw new Error(detail || `${r.status} ${r.statusText}: ${path}`)
+  }
   return r.json()
 }
 
@@ -853,3 +858,47 @@ export interface CredentialGroup {
   binding_count: number
 }
 
+
+// ---- Config Backup (#10) + Drift (#11) --------------------------------------
+export interface ConfigBackup {
+  id: string
+  device_id: string
+  captured_at: string
+  captured_by: string
+  source: string
+  driver: string
+  command: string
+  sha256: string
+  size_bytes: number
+  changed: boolean
+}
+
+export interface ConfigOverview {
+  total_backups: number
+  devices_backed_up: number
+  changed_today: number
+  recent: (ConfigBackup & { device_name: string })[]
+}
+
+export interface ConfigDiffLine {
+  op: number // ' '(32) context, '+'(43) added, '-'(45) removed
+  text: string
+}
+
+export interface ConfigDiff {
+  a: { id: string; captured_at: string; sha256: string }
+  b: { id: string; captured_at: string; sha256: string }
+  added: number
+  removed: number
+  lines: ConfigDiffLine[]
+}
+
+export interface ConfigBackupContent {
+  id: string
+  device_id: string
+  captured_at: string
+  command: string
+  driver: string
+  sha256: string
+  content: string
+}

@@ -127,6 +127,21 @@ type CameraInfo struct {
 	LastSeenAt   time.Time `json:"last_seen_at"`
 }
 
+type ConfigBackup struct {
+	ID               uuid.UUID `json:"id"`
+	DeviceID         uuid.UUID `json:"device_id"`
+	CapturedAt       time.Time `json:"captured_at"`
+	CapturedBy       string    `json:"captured_by"`
+	Source           string    `json:"source"`
+	Driver           string    `json:"driver"`
+	Command          string    `json:"command"`
+	ContentEncrypted []byte    `json:"content_encrypted"`
+	KeyID            string    `json:"key_id"`
+	Sha256           string    `json:"sha256"`
+	SizeBytes        int32     `json:"size_bytes"`
+	Changed          bool      `json:"changed"`
+}
+
 type Credential struct {
 	ID                 uuid.UUID `json:"id"`
 	Name               string    `json:"name"`

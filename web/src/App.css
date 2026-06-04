@@ -789,3 +789,11 @@ select.field { cursor: pointer; }
 .hero-stat b { font-size: var(--fs-base); color: var(--text); font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 150px; }
 .hero-stat small { font-size: var(--fs-sm); color: var(--text-faint); }
 @media (max-width: 720px) { .device-hero-stats { grid-template-columns: 1fr; } }
+
+/* Config Backup & Drift (#10/#11) */
+.data-table tr.row-selected > td { background: var(--info-bg); }
+.config-diff { margin: 0; max-height: 560px; overflow: auto; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.5; background: var(--bg-elev, #0d1117); }
+.config-diff > div { padding: 0 12px; white-space: pre-wrap; word-break: break-all; }
+.config-diff .diff-add { background: rgba(46,160,67,.18); color: var(--text); }
+.config-diff .diff-del { background: rgba(248,81,73,.18); color: var(--text); }
+.config-diff .diff-ctx { color: var(--text-faint); }

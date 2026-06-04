@@ -171,6 +171,13 @@ func (s *Server) routes() {
 		r.Get("/devices/{id}/phones", s.devicePhones)
 		r.Get("/devices/{id}/ups", s.deviceUPS)
 
+		// --- Config Backup (#10) + Drift (#11) ------------------------
+		r.Get("/devices/{id}/config-backups", s.listDeviceConfigBackups)
+		r.Post("/devices/{id}/config-backups", s.captureConfigBackup)
+		r.Get("/config-backups/diff", s.diffConfigBackups) // ?a=&b=
+		r.Get("/config-backups/{id}/content", s.getConfigBackupContent)
+		r.Get("/config/overview", s.configOverview)
+
 		// --- Topology & search ----------------------------------------
 		// IP/MAC/name → switch+port+path (the headline Phase 1 feature).
 		r.Get("/search", s.search) // ?q=<IP|MAC|name>

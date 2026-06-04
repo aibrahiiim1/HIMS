@@ -43,6 +43,8 @@ type Querier interface {
 	// ErrNoRows — which the handler maps to "insufficient stock" (409). This is
 	// the atomic-DB-signal pattern: no SELECT-then-UPDATE TOCTOU window.
 	ConsumePartToWorkOrder(ctx context.Context, arg ConsumePartToWorkOrderParams) (WorkOrderPart, error)
+	// Overview KPIs: total versions, distinct devices backed up, and changes today.
+	CountConfigBackupStats(ctx context.Context) (CountConfigBackupStatsRow, error)
 	CountCredentialsNeedingReentry(ctx context.Context) (int64, error)
 	CountDevicesNeedingAttention(ctx context.Context) (int64, error)
 	// ===== Credential secret accounting / recovery =============================
@@ -139,12 +141,17 @@ type Querier interface {
 	GetAlert(ctx context.Context, id uuid.UUID) (Alert, error)
 	GetBMCInfo(ctx context.Context, deviceID uuid.UUID) (BmcInfo, error)
 	GetCameraInfo(ctx context.Context, deviceID uuid.UUID) (CameraInfo, error)
+	// Full row including the encrypted blob — used only by the key-gated
+	// content/diff endpoints, never by list responses.
+	GetConfigBackupContent(ctx context.Context, id uuid.UUID) (GetConfigBackupContentRow, error)
 	GetCredential(ctx context.Context, id uuid.UUID) (Credential, error)
 	GetDevice(ctx context.Context, id uuid.UUID) (Device, error)
 	GetDiscoveryJob(ctx context.Context, id uuid.UUID) (DiscoveryJob, error)
 	// ===== Encryption key lifecycle (metadata only — never the key) ===========
 	GetEncryptionMetadata(ctx context.Context) (EncryptionMetadatum, error)
 	GetFirewallStatus(ctx context.Context, deviceID uuid.UUID) (FirewallStatus, error)
+	// Drift lookup: the most recent backup's hash for this device.
+	GetLatestConfigBackup(ctx context.Context, deviceID uuid.UUID) (GetLatestConfigBackupRow, error)
 	GetLocation(ctx context.Context, id uuid.UUID) (Location, error)
 	GetMonitoringCheck(ctx context.Context, id uuid.UUID) (MonitoringCheck, error)
 	GetNotificationChannel(ctx context.Context, id uuid.UUID) (NotificationChannel, error)
@@ -155,6 +162,7 @@ type Querier interface {
 	GetWorkOrder(ctx context.Context, id uuid.UUID) (WorkOrder, error)
 	// ===== Audit log ===========================================================
 	InsertAuditLog(ctx context.Context, arg InsertAuditLogParams) error
+	InsertConfigBackup(ctx context.Context, arg InsertConfigBackupParams) (InsertConfigBackupRow, error)
 	InsertMibObject(ctx context.Context, arg InsertMibObjectParams) error
 	InsertMonitoringSample(ctx context.Context, arg InsertMonitoringSampleParams) error
 	// ---- Delivery log ---------------------------------------------------------
@@ -174,6 +182,8 @@ type Querier interface {
 	ListAuditLog(ctx context.Context, arg ListAuditLogParams) ([]AuditLog, error)
 	ListBMCSensors(ctx context.Context, deviceID uuid.UUID) ([]BmcSensor, error)
 	ListChildLocations(ctx context.Context, parentID *uuid.UUID) ([]Location, error)
+	// Metadata only (no content_encrypted) — newest first.
+	ListConfigBackupsByDevice(ctx context.Context, arg ListConfigBackupsByDeviceParams) ([]ListConfigBackupsByDeviceRow, error)
 	ListCredentialBlobs(ctx context.Context) ([]ListCredentialBlobsRow, error)
 	// All credentials as resolver candidates (the "try everything" default for a
 	// scan when the operator selects none). Metadata only — no secret.
@@ -237,6 +247,8 @@ type Querier interface {
 	ListPortVlans(ctx context.Context, deviceID uuid.UUID) ([]PortVlan, error)
 	ListPrinterSupplies(ctx context.Context, deviceID uuid.UUID) ([]PrinterSupply, error)
 	ListPurchases(ctx context.Context) ([]Purchase, error)
+	// Fleet activity feed for the Config page: recent captures with device name.
+	ListRecentConfigBackups(ctx context.Context, limit int32) ([]ListRecentConfigBackupsRow, error)
 	ListRoles(ctx context.Context) ([]Role, error)
 	ListRootLocations(ctx context.Context) ([]Location, error)
 	// (channel_id, alert_id) pairs already delivered, so the dispatcher skips them.
