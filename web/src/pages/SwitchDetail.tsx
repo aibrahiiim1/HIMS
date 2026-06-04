@@ -4,6 +4,7 @@ import { useParams } from 'react-router-dom'
 import { Network, Cable, Layers, Share2, Activity, Settings, Gauge, LayoutGrid, Table, Router } from 'lucide-react'
 import { api, type Interface, type VLAN, type Neighbor, type TopologyLink, type MonitoringCheck, type MonitoringSample, type MacEntry, type ArpEntry } from '../api'
 import { DeviceHeader } from '../components/DeviceHeader'
+import { ClassificationCard } from '../components/ClassificationCard'
 import { DeviceOps } from '../components/DeviceOps'
 import { SwitchPorts } from '../components/SwitchPorts'
 import { Panel, TabBar, Kpi, StatusPill, EmptyState, Sparkline, timeAgo } from '../components/ui'
@@ -49,6 +50,7 @@ export function SwitchDetail() {
             <Kpi label="Neighbors" value={neighbors.data?.length ?? 0} icon={Share2} tone="default" sub="LLDP / CDP" />
             <Kpi label="Topology Links" value={topo.data?.length ?? 0} icon={Network} tone="default" />
           </div>
+          <div style={{ marginBottom: 16 }}><ClassificationCard deviceId={id!} /></div>
           <div className="grid-2">
             <Panel title="Top Interfaces" icon={Cable} pad={false}>
               {ifList.length === 0 ? <EmptyState icon={Cable} title="No interfaces collected" />

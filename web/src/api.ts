@@ -980,6 +980,19 @@ export interface Subnet {
   vlan_id?: number | null
 }
 
+// Device classification (OS/NVR-discovery add-on).
+export interface ClassificationEvidence {
+  source: string; signal: string; category?: string; os_family?: string; subtype?: string; confidence: number; observed_at?: string
+}
+export interface Classification {
+  category: string; os_family: string; device_class: string
+  confidence_score: number | null; classification_locked: boolean
+  evidence: ClassificationEvidence[]
+}
+export interface ReclassifyResponse {
+  changed: boolean; locked?: boolean; message?: string; classification: Classification
+}
+
 // Universal credential testing — per-pair result; secrets never returned.
 export interface CredTestResult {
   credential_id: string
