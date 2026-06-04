@@ -642,6 +642,15 @@ export interface KeyReveal { key?: string; new_key?: string; fingerprint: string
 export interface ReentryCred { id: string; name: string; kind: string; weak: boolean; needs_secret_reentry: boolean; created_at: string; updated_at: string }
 export interface GuideSection { title: string; body: string }
 
+export interface InfrastructureHealth {
+  overall: { score: number; status: string; confidence: string; limited_reasons: string[] }
+  sections: { name: string; status: string; score: number; included: boolean; reason: string }[]
+  alerts: {
+    status: string; open_critical: number; open_warning: number; acknowledged: number
+    unresolved: number; last_alert_at?: string | null; active_rules: number
+  }
+}
+
 export interface OperationalHealth {
   discovery: {
     status: string; last_scan_at?: string | null; last_scan_status: string

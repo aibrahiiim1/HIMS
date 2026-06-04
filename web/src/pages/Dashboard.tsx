@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Server, Wifi, WifiOff, Bell, ClipboardList, ShieldAlert,
   Radar, Activity, TriangleAlert, RefreshCw, Clock, Boxes, TrendingUp, Lock, KeyRound, HeartPulse, Network,
 } from 'lucide-react'
-import { api, type Device, type Alert, type DiscoveryJob, type MonitoringOverviewRow, type RoleSummaryRow, type ExpenseByCategory, type EncryptionStatus, type OperationalHealth } from '../api'
+import { api, type Device, type Alert, type DiscoveryJob, type MonitoringOverviewRow, type RoleSummaryRow, type ExpenseByCategory, type EncryptionStatus, type OperationalHealth, type InfrastructureHealth } from '../api'
 import {
   PageHeader, Panel, Kpi, HealthRing, Donut, Legend, BarList, Sparkline,
   ActivityFeed, EmptyState, StatusPill, OperationalHealthPanel, colorFor, timeAgo,
@@ -46,6 +46,43 @@ function dayLabel(iso?: string | null): string {
 
 interface SecRow { label: string; value: React.ReactNode }
 
+const SEC_BADGE: Record<string, string> = { healthy: 'badge-up', warning: 'badge-warning', critical: 'badge-down', unknown: 'badge-unknown' }
+const OVERALL_LABEL: Record<string, string> = { excellent: 'Excellent', good: 'Good', needs_attention: 'Needs Attention', critical: 'Critical', unknown: 'Not enough data' }
+const OVERALL_BADGE: Record<string, string> = { excellent: 'badge-up', good: 'badge-up', needs_attention: 'badge-warning', critical: 'badge-down', unknown: 'badge-unknown' }
+
+function InfraHealthCard({ data }: { data?: InfrastructureHealth }) {
+  if (!data) return <Panel title="Overall Infrastructure Health" icon={Activity}><div className="loading">Loading…</div></Panel>
+  const o = data.overall
+  const confCls = o.confidence === 'high' ? 'badge-up' : o.confidence === 'limited' ? 'badge-warning' : 'badge-unknown'
+  return (
+    <Panel title="Overall Infrastructure Health" icon={Activity} actions={<span className={`badge ${OVERALL_BADGE[o.status] ?? 'badge-unknown'}`}>{OVERALL_LABEL[o.status] ?? o.status}</span>}>
+      <div className="infra-card">
+        <div className="infra-score">
+          {o.confidence === 'unknown'
+            ? <div style={{ fontSize: 40, fontWeight: 800, color: 'var(--text-faint)' }}>—</div>
+            : <HealthRing score={o.score} size={120} label="Score" />}
+          <span className="infra-score-label">{OVERALL_LABEL[o.status] ?? o.status}</span>
+        </div>
+        <div className="infra-sections">
+          {data.sections.map((s) => (
+            <div key={s.name} className="infra-sec-row">
+              <span className="muted">{s.name}{!s.included && s.reason ? <small> — {s.reason}</small> : null}</span>
+              <span className={`badge ${SEC_BADGE[s.status] ?? 'badge-unknown'}`}>{s.status === 'unknown' ? 'Not collected' : s.status}</span>
+            </div>
+          ))}
+          <div className="infra-conf">
+            <span className="muted" style={{ fontSize: 12 }}>Confidence:</span>
+            <span className={`badge ${confCls}`} style={{ textTransform: 'capitalize' }}>{o.confidence}</span>
+            {o.confidence === 'limited' && o.limited_reasons.length > 0 && (
+              <span className="infra-reason">Reason: {o.limited_reasons.join('; ')}</span>
+            )}
+          </div>
+        </div>
+      </div>
+    </Panel>
+  )
+}
+
 export function Dashboard() {
   const dash = useQuery({ queryKey: ['dashboard'], queryFn: () => api.get<DashboardData>('/dashboard'), refetchInterval: 30_000 })
   const mon = useQuery({ queryKey: ['mon-overview'], queryFn: () => api.get<MonitoringOverviewRow[]>('/monitoring/overview'), refetchInterval: 30_000 })
@@ -54,6 +91,7 @@ export function Dashboard() {
   const alerts = useQuery({ queryKey: ['alerts'], queryFn: () => api.get<Alert[]>('/alerts'), refetchInterval: 30_000 })
   const enc = useQuery({ queryKey: ['enc-status'], queryFn: () => api.get<EncryptionStatus>('/security/encryption/status'), refetchInterval: 60_000, retry: 0 })
   const oph = useQuery({ queryKey: ['operational-health'], queryFn: () => api.get<OperationalHealth>('/dashboard/operational-health'), refetchInterval: 30_000, retry: 0 })
+  const infra = useQuery({ queryKey: ['infra-health'], queryFn: () => api.get<InfrastructureHealth>('/dashboard/infrastructure-health'), refetchInterval: 30_000, retry: 0 })
 
   const h = dash.data?.headline ?? {}
   const devs = devices.data ?? []
@@ -125,6 +163,8 @@ export function Dashboard() {
           </>
         }
       />
+
+      <InfraHealthCard data={infra.data} />
 
       {/* KPI row */}
       <div className="kpi-grid">
@@ -234,6 +274,7 @@ export function Dashboard() {
           {(() => {
             const o = oph.data
             const d = o?.discovery, m = o?.monitoring, tp = o?.topology
+            const a = infra.data?.alerts
             return (
               <>
                 <OperationalHealthPanel
@@ -262,7 +303,7 @@ export function Dashboard() {
                     { label: 'Last Collection', value: ago(m.last_collection_at) },
                     { label: 'Collection Status', value: <span style={{ textTransform: 'capitalize' }}>{m.collection_status}</span> },
                   ] : []}
-                  impact="Monitoring detects outages; stale collection or offline devices need attention."
+                  impact={m && !m.last_collection_at ? 'Monitoring collection has not run yet — run a sweep to populate availability.' : 'Monitoring detects outages; stale collection or offline devices need attention.'}
                   action={<Link className="btn btn-ghost btn-sm" to="/monitoring">Open Monitoring →</Link>}
                 />
                 <OperationalHealthPanel
@@ -278,6 +319,20 @@ export function Dashboard() {
                   ] : []}
                   impact="Topology reflects physical links; low coverage means the network map is incomplete."
                   action={<Link className="btn btn-ghost btn-sm" to="/topology">Open Topology →</Link>}
+                />
+                <OperationalHealthPanel
+                  title="Alert Health" icon={Bell} status={a?.status ?? 'unknown'}
+                  notCollectedReason="Alert data is unavailable."
+                  rows={a ? [
+                    { label: 'Open Critical Alerts', value: <span style={{ color: a.open_critical > 0 ? 'var(--crit)' : undefined }}>{a.open_critical}</span> },
+                    { label: 'Open Warning Alerts', value: a.open_warning },
+                    { label: 'Acknowledged', value: a.acknowledged },
+                    { label: 'Unresolved', value: a.unresolved },
+                    { label: 'Last Alert', value: ago(a.last_alert_at) },
+                    { label: 'Active Rules', value: a.active_rules },
+                  ] : []}
+                  impact="Unresolved critical alerts mean active incidents needing attention."
+                  action={<Link className="btn btn-ghost btn-sm" to="/alerts">Open Alerts →</Link>}
                 />
               </>
             )

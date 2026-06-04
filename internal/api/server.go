@@ -75,6 +75,7 @@ func (s *Server) routes() {
 		// --- Executive dashboard (cross-cutting rollups) -------------
 		r.Get("/dashboard", s.dashboard)
 		r.Get("/dashboard/operational-health", s.operationalHealth)
+		r.Get("/dashboard/infrastructure-health", s.infrastructureHealth)
 
 		// --- Discovery (operator-launched subnet scans) --------------
 		r.Get("/discovery/jobs", s.listDiscoveryJobs)

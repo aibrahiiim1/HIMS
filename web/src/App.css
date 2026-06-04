@@ -684,6 +684,16 @@ select.field { cursor: pointer; }
 .port-detail-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
 .port-detail-head strong { font-size: var(--fs-lg); }
 
+/* ---- Infrastructure health score card ------------------------------------- */
+.infra-card { display: flex; gap: 28px; align-items: center; flex-wrap: wrap; }
+.infra-score { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 150px; }
+.infra-score-label { font-size: var(--fs-lg); font-weight: 700; }
+.infra-sections { flex: 1; min-width: 280px; display: flex; flex-direction: column; gap: 7px; }
+.infra-sec-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: var(--fs-md); }
+.infra-sec-row .muted small { display: block; }
+.infra-conf { display: flex; align-items: center; gap: 8px; margin-top: 4px; flex-wrap: wrap; }
+.infra-reason { font-size: var(--fs-sm); color: var(--text-muted); }
+
 /* ---- Dashboard security health -------------------------------------------- */
 .sec-health { list-style: none; display: flex; flex-direction: column; }
 .sec-health li { display: flex; align-items: center; justify-content: space-between; padding: 9px 0; border-bottom: 1px solid var(--border); font-size: var(--fs-md); }
