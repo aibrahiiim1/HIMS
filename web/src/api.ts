@@ -175,6 +175,27 @@ export interface TopologyLink {
   link_source: string
 }
 
+export interface TopologyGraphNode {
+  id: string
+  name: string
+  ip?: string | null
+  category: string
+  layer: string
+  degree: number
+}
+export interface TopologyGraphEdge {
+  source_id: string
+  target_id: string
+  source: string
+  confidence: string
+  if_name?: string | null
+}
+export interface TopologyGraph {
+  nodes: TopologyGraphNode[]
+  edges: TopologyGraphEdge[]
+  layers: Record<string, number>
+}
+
 export interface SwitchPortEntry {
   switch_id: string
   switch_name: string

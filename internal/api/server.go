@@ -175,6 +175,7 @@ func (s *Server) routes() {
 		// IP/MAC/name → switch+port+path (the headline Phase 1 feature).
 		r.Get("/search", s.search) // ?q=<IP|MAC|name>
 		r.Get("/topology/links", s.allLinks)
+		r.Get("/topology/graph", s.topologyGraph)
 		r.Post("/topology/rebuild", s.rebuildTopology)
 
 		// --- Roles (CMDB role cut: databases, AD/DNS/DHCP, …) --------
@@ -681,28 +682,39 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 // data across all devices, resolving neighbor management IPs to managed devices.
 // Operator-triggered; the collector also rebuilds incrementally per cycle.
 func (s *Server) rebuildTopology(w http.ResponseWriter, r *http.Request) {
-	nd, nl, err := s.rebuildTopologyOnce(r.Context())
+	nd, nl, stale, err := s.rebuildTopologyOnce(r.Context())
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	s.audit(r, "topology", "topology.rebuild", "topology", "", "Rebuilt topology links from LLDP/CDP neighbors", map[string]any{"devices": nd, "links": nl})
-	writeJSON(w, http.StatusOK, map[string]any{"devices_processed": nd, "links_built": nl})
+	s.audit(r, "topology", "topology.rebuild", "topology", "", "Rebuilt topology links from LLDP/CDP neighbors", map[string]any{"devices": nd, "links": nl, "stale_removed": stale})
+	writeJSON(w, http.StatusOK, map[string]any{"devices_processed": nd, "links_built": nl, "stale_removed": stale})
 }
 
-// rebuildTopologyOnce re-derives topology links across all devices. Shared by
-// the operator endpoint and the background auto-rebuilder.
-func (s *Server) rebuildTopologyOnce(ctx context.Context) (devices, links int, err error) {
+// topologyGraph returns the layer-classified, confidence-rated topology graph.
+func (s *Server) topologyGraph(w http.ResponseWriter, r *http.Request) {
+	g, err := s.topo.Graph(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, g)
+}
+
+// rebuildTopologyOnce re-derives topology links across all devices, then prunes
+// links not re-seen in 7 days. Shared by the operator endpoint + auto-rebuilder.
+func (s *Server) rebuildTopologyOnce(ctx context.Context) (devices, links int, staleRemoved int64, err error) {
 	devs, err := s.queries.ListAllDevices(ctx)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
 	ids := make([]uuid.UUID, 0, len(devs))
 	for _, d := range devs {
 		ids = append(ids, d.ID)
 	}
 	nd, nl := s.topo.RebuildAll(ctx, ids)
-	return nd, nl, nil
+	stale, _ := s.topo.CleanupStaleLinks(ctx, 7*24*time.Hour)
+	return nd, nl, stale, nil
 }
 
 // StartTopologyRebuilder runs an initial topology rebuild shortly after startup
@@ -719,10 +731,10 @@ func (s *Server) StartTopologyRebuilder(ctx context.Context, interval time.Durat
 				return
 			case <-timer.C:
 			}
-			if nd, nl, err := s.rebuildTopologyOnce(ctx); err != nil {
+			if nd, nl, stale, err := s.rebuildTopologyOnce(ctx); err != nil {
 				slog.Warn("topology auto-rebuild failed", "error", err)
 			} else {
-				slog.Info("topology auto-rebuild", "devices", nd, "links", nl)
+				slog.Info("topology auto-rebuild", "devices", nd, "links", nl, "stale_removed", stale)
 			}
 			timer.Reset(interval)
 		}

@@ -33,6 +33,7 @@ type Querier interface {
 	ListTopologyLinks(ctx context.Context, localDeviceID uuid.UUID) ([]db.TopologyLink, error)
 	ListAllTopologyLinks(ctx context.Context) ([]db.ListAllTopologyLinksRow, error)
 	UpsertTopologyLink(ctx context.Context, arg db.UpsertTopologyLinkParams) error
+	DeleteStaleTopologyLinks(ctx context.Context, before time.Time) (int64, error)
 	ListNeighbors(ctx context.Context, deviceID uuid.UUID) ([]db.Neighbor, error)
 	// Path Finder enrichment (source + last-seen attribution, upstream walk).
 	GetDevice(ctx context.Context, id uuid.UUID) (db.Device, error)
@@ -142,6 +143,183 @@ func (e *Engine) AllLinks(ctx context.Context) ([]Link, error) {
 		out = append(out, lk)
 	}
 	return out, nil
+}
+
+// GraphNode is a device in the topology graph with its inferred layer + degree.
+type GraphNode struct {
+	ID       uuid.UUID `json:"id"`
+	Name     string    `json:"name"`
+	IP       *string   `json:"ip,omitempty"`
+	Category string    `json:"category"`
+	Layer    string    `json:"layer"`  // core|distribution|access|edge|gateway|wireless|host|endpoint
+	Degree   int       `json:"degree"` // distinct neighbors
+}
+
+// GraphEdge is a deduplicated, undirected topology link with a confidence rating.
+type GraphEdge struct {
+	SourceID   uuid.UUID `json:"source_id"`
+	TargetID   uuid.UUID `json:"target_id"`
+	Source     string    `json:"source"`     // lldp|cdp|mac|arp
+	Confidence string    `json:"confidence"` // high|medium|low
+	IfName     *string   `json:"if_name,omitempty"`
+}
+
+// Graph is the topology graph for the map UI: layer-classified nodes,
+// deduplicated confidence-rated edges, and per-layer counts.
+type Graph struct {
+	Nodes  []GraphNode    `json:"nodes"`
+	Edges  []GraphEdge    `json:"edges"`
+	Layers map[string]int `json:"layers"`
+}
+
+// Graph builds the layer-aware topology graph from resolved links.
+func (e *Engine) Graph(ctx context.Context) (Graph, error) {
+	rows, err := e.q.ListAllTopologyLinks(ctx)
+	if err != nil {
+		return Graph{}, err
+	}
+	type nodeAcc struct {
+		node      GraphNode
+		neighbors map[uuid.UUID]bool
+	}
+	nodes := map[uuid.UUID]*nodeAcc{}
+	ensure := func(id uuid.UUID, name, cat string, ip *netip.Addr) *nodeAcc {
+		n, ok := nodes[id]
+		if !ok {
+			n = &nodeAcc{node: GraphNode{ID: id, Name: name, Category: cat}, neighbors: map[uuid.UUID]bool{}}
+			if ip != nil && ip.IsValid() {
+				s := ip.String()
+				n.node.IP = &s
+			}
+			nodes[id] = n
+		}
+		return n
+	}
+
+	edgeKey := map[string]*GraphEdge{}
+	for _, r := range rows {
+		if r.RemoteDeviceID == nil {
+			continue // only managed-to-managed edges form the graph
+		}
+		ln := ensure(r.LocalDeviceID, r.LocalName, r.LocalCategory, r.LocalIp)
+		rname := ""
+		if r.RemoteName != nil {
+			rname = *r.RemoteName
+		}
+		rcat := ""
+		if r.RemoteCategory != nil {
+			rcat = *r.RemoteCategory
+		}
+		rn := ensure(*r.RemoteDeviceID, rname, rcat, r.RemoteIpCol)
+		ln.neighbors[*r.RemoteDeviceID] = true
+		rn.neighbors[r.LocalDeviceID] = true
+
+		// Dedup the undirected edge (A→B and B→A collapse); keep best confidence.
+		a, b := r.LocalDeviceID, *r.RemoteDeviceID
+		if a.String() > b.String() {
+			a, b = b, a
+		}
+		key := a.String() + "|" + b.String()
+		conf := linkConfidence(r.LinkSource, r.LastSeenAt)
+		if ex, ok := edgeKey[key]; !ok {
+			edgeKey[key] = &GraphEdge{SourceID: a, TargetID: b, Source: r.LinkSource, Confidence: conf, IfName: r.LocalIfName}
+		} else if confRank(conf) > confRank(ex.Confidence) {
+			ex.Confidence, ex.Source = conf, r.LinkSource
+		}
+	}
+
+	// Max degree among switch-like nodes drives core/distribution detection.
+	maxSwitchDeg := 0
+	for _, n := range nodes {
+		n.node.Degree = len(n.neighbors)
+		if isSwitchLike(n.node.Category) && n.node.Degree > maxSwitchDeg {
+			maxSwitchDeg = n.node.Degree
+		}
+	}
+
+	g := Graph{Layers: map[string]int{}}
+	for _, n := range nodes {
+		n.node.Layer = classifyLayer(n.node.Category, n.node.Degree, maxSwitchDeg)
+		g.Layers[n.node.Layer]++
+		g.Nodes = append(g.Nodes, n.node)
+	}
+	for _, e := range edgeKey {
+		g.Edges = append(g.Edges, *e)
+	}
+	return g, nil
+}
+
+// CleanupStaleLinks removes topology links not re-seen since the cutoff.
+func (e *Engine) CleanupStaleLinks(ctx context.Context, olderThan time.Duration) (int64, error) {
+	return e.q.DeleteStaleTopologyLinks(ctx, time.Now().UTC().Add(-olderThan))
+}
+
+func isSwitchLike(cat string) bool {
+	switch cat {
+	case "switch", "router", "unknown", "":
+		return true
+	}
+	return false
+}
+
+// classifyLayer infers a device's topology layer from category + link degree.
+func classifyLayer(cat string, degree, maxSwitchDeg int) string {
+	switch cat {
+	case "firewall":
+		return "edge"
+	case "router", "gateway":
+		return "gateway"
+	case "wireless_controller", "access_point":
+		return "wireless"
+	case "server", "virtual_host", "storage", "database", "printer", "ups", "camera", "nvr", "pbx":
+		return "host"
+	}
+	// switch / unknown: layer by connectivity degree.
+	switch {
+	case maxSwitchDeg >= 2 && degree >= maxSwitchDeg:
+		return "core"
+	case degree >= 2:
+		return "distribution"
+	default:
+		return "access"
+	}
+}
+
+func confRank(c string) int {
+	switch c {
+	case "high":
+		return 2
+	case "medium":
+		return 1
+	default:
+		return 0
+	}
+}
+
+// linkConfidence rates a link from its evidence source and freshness:
+// LLDP/CDP are authoritative (high); MAC-derived medium; ARP low; any link not
+// seen in over 7 days is downgraded one step.
+func linkConfidence(source string, lastSeen time.Time) string {
+	rank := 0
+	switch source {
+	case "lldp", "cdp":
+		rank = 2
+	case "mac":
+		rank = 1
+	default: // arp / unknown
+		rank = 0
+	}
+	if time.Since(lastSeen) > 7*24*time.Hour {
+		rank--
+	}
+	switch {
+	case rank >= 2:
+		return "high"
+	case rank == 1:
+		return "medium"
+	default:
+		return "low"
+	}
 }
 
 // SearchIP resolves an IP to the switch port it's connected to, with the full

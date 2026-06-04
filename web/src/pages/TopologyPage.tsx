@@ -1,81 +1,88 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import cytoscape from 'cytoscape'
-import { Network, Share2, Cable, Workflow, RefreshCw } from 'lucide-react'
-import { api, type TopologyLink } from '../api'
+import { Network, Cable, RefreshCw, Layers } from 'lucide-react'
+import { api, type TopologyGraph } from '../api'
 import { PageHeader, Panel, Kpi, EmptyState } from '../components/ui'
+
+// Layer → node colour (core/distribution/access/edge/gateway/wireless/host).
+const LAYER_COLOR: Record<string, string> = {
+  core: '#8b5cf6', distribution: '#2563eb', access: '#22c55e',
+  edge: '#ef4444', gateway: '#f59e0b', wireless: '#06b6d4', host: '#64748b',
+}
+const layerColor = (l: string) => LAYER_COLOR[l] ?? '#64748b'
+// Confidence → edge styling.
+const CONF_COLOR: Record<string, string> = { high: '#16a34a', medium: '#f59e0b', low: '#ef4444' }
 
 export function TopologyPage() {
   const qc = useQueryClient()
   const [msg, setMsg] = useState('')
   const { data, isLoading, error } = useQuery({
-    queryKey: ['topology-links'],
-    queryFn: () => api.get<TopologyLink[]>('/topology/links'),
+    queryKey: ['topology-graph'],
+    queryFn: () => api.get<TopologyGraph>('/topology/graph'),
   })
   const rebuild = useMutation({
-    mutationFn: () => api.post<{ devices_processed: number; links_built: number }>('/topology/rebuild', {}),
+    mutationFn: () => api.post<{ devices_processed: number; links_built: number; stale_removed: number }>('/topology/rebuild', {}),
     onSuccess: (d) => {
-      setMsg(`Rebuilt from LLDP/CDP neighbors: ${d.links_built} links across ${d.devices_processed} devices.`)
-      qc.invalidateQueries({ queryKey: ['topology-links'] })
+      setMsg(`Rebuilt: ${d.links_built} links across ${d.devices_processed} devices${d.stale_removed ? `, pruned ${d.stale_removed} stale` : ''}.`)
+      qc.invalidateQueries({ queryKey: ['topology-graph'] })
     },
     onError: (e) => setMsg((e as Error).message),
   })
   const ref = useRef<HTMLDivElement>(null)
 
-  const stats = useMemo(() => {
-    const nodes = new Set<string>(), stubs = new Set<string>()
-    const protos: Record<string, number> = {}
-    for (const l of data ?? []) {
-      nodes.add(l.local_device_id)
-      const remoteID = l.remote_device_id ?? `stub:${l.remote_sys_name ?? l.remote_ip ?? 'unknown'}`
-      nodes.add(remoteID)
-      if (!l.remote_device_id) stubs.add(remoteID)
-      protos[l.link_source] = (protos[l.link_source] ?? 0) + 1
-    }
-    return { nodeCount: nodes.size, stubCount: stubs.size, linkCount: (data ?? []).length, protos }
-  }, [data])
+  const layers = data?.layers ?? {}
+  const nodeCount = data?.nodes.length ?? 0
+  const edgeCount = data?.edges.length ?? 0
+  const lowConf = useMemo(() => (data?.edges ?? []).filter((e) => e.confidence === 'low').length, [data])
 
   useEffect(() => {
-    if (!ref.current || !data || data.length === 0) return
-    const nodes = new Map<string, { id: string; label: string }>()
-    const edges: { source: string; target: string; label: string }[] = []
-    for (const l of data) {
-      nodes.set(l.local_device_id, { id: l.local_device_id, label: l.local_device_name })
-      const remoteID = l.remote_device_id ?? `stub:${l.remote_sys_name ?? l.remote_ip ?? 'unknown'}`
-      if (!nodes.has(remoteID)) nodes.set(remoteID, { id: remoteID, label: l.remote_device_name ?? l.remote_sys_name ?? l.remote_ip ?? '?' })
-      edges.push({ source: l.local_device_id, target: remoteID, label: l.local_if_name ?? '' })
-    }
+    if (!ref.current || !data || data.nodes.length === 0) return
     const cy = cytoscape({
       container: ref.current,
       elements: [
-        ...[...nodes.values()].map((n) => ({ data: { id: n.id, label: n.label } })),
-        ...edges.map((e, i) => ({ data: { id: `e${i}`, source: e.source, target: e.target, label: e.label } })),
+        ...data.nodes.map((n) => ({ data: { id: n.id, label: n.name, color: layerColor(n.layer), layer: n.layer } })),
+        ...data.edges.map((e, i) => ({
+          data: { id: `e${i}`, source: e.source_id, target: e.target_id, label: e.if_name ?? '' },
+          classes: `conf-${e.confidence}`,
+        })),
       ],
       style: [
         { selector: 'node', style: {
-          'background-color': '#2563eb', label: 'data(label)', color: '#fff',
+          'background-color': 'data(color)', label: 'data(label)', color: '#fff',
           'font-size': 10, 'text-valign': 'center', 'text-halign': 'center',
-          width: 58, height: 58, 'text-wrap': 'wrap', 'text-max-width': '52px', 'font-weight': 600,
-          'border-width': 3, 'border-color': '#1d4ed8',
+          width: 56, height: 56, 'text-wrap': 'wrap', 'text-max-width': '50px', 'font-weight': 600,
+          'border-width': 3, 'border-color': '#0f172a', 'border-opacity': 0.35,
         } },
-        { selector: 'node[id ^= "stub:"]', style: { 'background-color': '#94a3b8', 'border-color': '#64748b' } },
         { selector: 'edge', style: {
-          width: 2, 'line-color': '#94a3b8', 'curve-style': 'bezier',
+          width: 2.5, 'line-color': '#94a3b8', 'curve-style': 'bezier',
           label: 'data(label)', 'font-size': 8, color: '#64748b', 'target-arrow-shape': 'none',
         } },
+        { selector: 'edge.conf-high', style: { 'line-color': CONF_COLOR.high, 'line-style': 'solid' } },
+        { selector: 'edge.conf-medium', style: { 'line-color': CONF_COLOR.medium, 'line-style': 'dashed' } },
+        { selector: 'edge.conf-low', style: { 'line-color': CONF_COLOR.low, 'line-style': 'dotted' } },
+        { selector: 'node:selected', style: { 'border-color': '#111', 'border-opacity': 1, 'border-width': 4 } },
       ],
       layout: { name: 'cose', animate: false, padding: 30 },
     })
+    // Device neighborhood: tapping a node highlights it + its direct neighbors.
+    cy.on('tap', 'node', (ev) => {
+      const node = ev.target
+      const hood = node.closedNeighborhood()
+      cy.elements().style('opacity', 0.18)
+      hood.style('opacity', 1)
+    })
+    cy.on('tap', (ev) => { if (ev.target === cy) cy.elements().style('opacity', 1) })
     return () => cy.destroy()
   }, [data])
 
-  const hasData = data && data.length > 0
+  const hasData = nodeCount > 0
 
   return (
     <div>
       <PageHeader
         title="Network Topology" icon={Network}
-        subtitle="Layer-2/3 map from LLDP/CDP neighbors and MAC/ARP correlation"
+        subtitle="Layer-aware map from LLDP/CDP — core/distribution/access detection, link confidence, auto stale-pruning"
         actions={
           <button className="btn btn-primary" disabled={rebuild.isPending} onClick={() => rebuild.mutate()}>
             <RefreshCw size={15} className={rebuild.isPending ? 'spin' : ''} /> {rebuild.isPending ? 'Rebuilding…' : 'Rebuild links'}
@@ -85,20 +92,29 @@ export function TopologyPage() {
       {msg && <div className="enc-banner info" style={{ marginBottom: 12 }}>{msg}</div>}
 
       <div className="kpi-grid">
-        <Kpi label="Mapped Nodes" value={stats.nodeCount} icon={Network} tone="info" />
-        <Kpi label="Links" value={stats.linkCount} icon={Cable} tone="default" />
-        <Kpi label="External Neighbors" value={stats.stubCount} icon={Share2} tone="default" sub="not yet in CMDB" />
-        <Kpi label="Protocols" value={Object.keys(stats.protos).length} icon={Workflow} tone="default" sub={Object.keys(stats.protos).join(', ') || '—'} />
+        <Kpi label="Mapped Nodes" value={nodeCount} icon={Network} tone="info" />
+        <Kpi label="Links" value={edgeCount} icon={Cable} tone="default" sub={lowConf ? `${lowConf} low-confidence` : 'all corroborated'} />
+        <Kpi label="Core / Distribution" value={`${layers.core ?? 0} / ${layers.distribution ?? 0}`} icon={Layers} tone="default" />
+        <Kpi label="Access / Edge" value={`${layers.access ?? 0} / ${(layers.edge ?? 0) + (layers.gateway ?? 0)}`} icon={Layers} tone="default" />
       </div>
 
       <Panel
         title="Topology Map" icon={Network}
-        subtitle="Grey nodes are neighbors not yet inventoried"
+        subtitle="Nodes coloured by layer · edges by confidence · click a node to focus its neighborhood"
+        actions={
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, fontSize: 11 }}>
+            {Object.entries(LAYER_COLOR).filter(([k]) => (layers[k] ?? 0) > 0).map(([k, c]) => (
+              <span key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <i style={{ width: 9, height: 9, borderRadius: 9, background: c, display: 'inline-block' }} /> {k}
+              </span>
+            ))}
+          </div>
+        }
       >
         {isLoading && <div className="loading">Loading topology…</div>}
         {error && <div className="error-msg">{(error as Error).message}</div>}
-        {data && data.length === 0 && (
-          <EmptyState icon={Network} title="No topology links yet" message="Discover switches to populate LLDP/CDP neighbors and build the map." />
+        {data && nodeCount === 0 && (
+          <EmptyState icon={Network} title="No topology links yet" message="Discover switches to populate LLDP/CDP neighbors, then Rebuild links to build the map." />
         )}
         <div ref={ref} className="topology-wrap" style={{ display: hasData ? 'block' : 'none' }} />
       </Panel>

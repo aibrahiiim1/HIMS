@@ -93,6 +93,19 @@ func (q *Queries) DeleteStalePortVlans(ctx context.Context, arg DeleteStalePortV
 	return err
 }
 
+const deleteStaleTopologyLinks = `-- name: DeleteStaleTopologyLinks :execrows
+DELETE FROM topology_links WHERE last_seen_at < $1
+`
+
+// Prune links not re-seen since the cutoff (a neighbor that stopped reporting).
+func (q *Queries) DeleteStaleTopologyLinks(ctx context.Context, lastSeenAt time.Time) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteStaleTopologyLinks, lastSeenAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteStaleVlans = `-- name: DeleteStaleVlans :exec
 DELETE FROM vlans
 WHERE device_id = $1 AND last_seen_at < $2 AND collection_source = $3

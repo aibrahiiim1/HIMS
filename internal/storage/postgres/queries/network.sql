@@ -164,6 +164,10 @@ JOIN devices ld ON ld.id = tl.local_device_id AND ld.deleted_at IS NULL
 LEFT JOIN devices rd ON rd.id = tl.remote_device_id AND rd.deleted_at IS NULL
 ORDER BY ld.name, tl.local_if_index;
 
+-- name: DeleteStaleTopologyLinks :execrows
+-- Prune links not re-seen since the cutoff (a neighbor that stopped reporting).
+DELETE FROM topology_links WHERE last_seen_at < $1;
+
 -- ---- Read APIs for the device detail Ports / MAC / ARP tabs --------------
 
 -- name: ListMACForDevice :many

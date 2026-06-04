@@ -112,6 +112,8 @@ type Querier interface {
 	DeleteStalePortVlans(ctx context.Context, arg DeleteStalePortVlansParams) error
 	DeleteStalePrinterSupplies(ctx context.Context, arg DeleteStalePrinterSuppliesParams) error
 	DeleteStaleServerStorage(ctx context.Context, arg DeleteStaleServerStorageParams) error
+	// Prune links not re-seen since the cutoff (a neighbor that stopped reporting).
+	DeleteStaleTopologyLinks(ctx context.Context, lastSeenAt time.Time) (int64, error)
 	DeleteStaleVlans(ctx context.Context, arg DeleteStaleVlansParams) error
 	DeleteStaleVpnTunnels(ctx context.Context, arg DeleteStaleVpnTunnelsParams) error
 	DeleteSubnet(ctx context.Context, id uuid.UUID) error

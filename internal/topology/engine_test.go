@@ -21,6 +21,7 @@ type fakeQuerier struct {
 	macTables    map[uuid.UUID][]db.ListMACForDeviceRow
 	arpTables    map[uuid.UUID][]db.ListARPForDeviceRow
 	links        map[uuid.UUID][]db.TopologyLink
+	allLinks     []db.ListAllTopologyLinksRow
 }
 
 func (f *fakeQuerier) GetDevice(_ context.Context, id uuid.UUID) (db.Device, error) {
@@ -57,8 +58,11 @@ func (f *fakeQuerier) SearchByMAC(_ context.Context, _ string) ([]db.SearchByMAC
 func (f *fakeQuerier) ListTopologyLinks(_ context.Context, id uuid.UUID) ([]db.TopologyLink, error) {
 	return f.links[id], nil
 }
+func (f *fakeQuerier) DeleteStaleTopologyLinks(_ context.Context, _ time.Time) (int64, error) {
+	return 0, nil
+}
 func (f *fakeQuerier) ListAllTopologyLinks(_ context.Context) ([]db.ListAllTopologyLinksRow, error) {
-	return nil, nil
+	return f.allLinks, nil
 }
 func (f *fakeQuerier) UpsertTopologyLink(_ context.Context, _ db.UpsertTopologyLinkParams) error {
 	return nil
@@ -121,6 +125,58 @@ func TestSearchMAC_FindsSwitch(t *testing.T) {
 	}
 	if sp.PortRole == nil || *sp.PortRole != "edge" {
 		t.Errorf("PortRole = %v, want edge", sp.PortRole)
+	}
+}
+
+func TestGraph_LayersAndConfidence(t *testing.T) {
+	core, dist, acc, fw := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	now := time.Now().UTC()
+	link := func(a uuid.UUID, ac string, b uuid.UUID, bn, bc, src string) db.ListAllTopologyLinksRow {
+		bb := b
+		bnn := bn
+		bcc := bc
+		return db.ListAllTopologyLinksRow{
+			LocalDeviceID: a, LocalName: "L", LocalCategory: ac,
+			RemoteDeviceID: &bb, RemoteName: &bnn, RemoteCategory: &bcc,
+			LinkSource: src, LastSeenAt: now,
+		}
+	}
+	// core links to dist, acc and fw (degree 3); dist links to core + acc (degree 2);
+	// acc links to core + dist (degree 2)... make acc degree 1 by only linking acc<-core.
+	q := &fakeQuerier{allLinks: []db.ListAllTopologyLinksRow{
+		link(core, "switch", dist, "DIST", "switch", "lldp"),
+		link(core, "switch", fw, "FW", "firewall", "lldp"),
+		link(dist, "switch", core, "CORE", "switch", "cdp"),
+		link(acc, "switch", core, "CORE", "switch", "arp"), // acc only via ARP → low confidence
+	}}
+	g, err := New(q).Graph(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	layer := map[uuid.UUID]string{}
+	for _, n := range g.Nodes {
+		layer[n.ID] = n.Layer
+	}
+	if layer[core] != "core" {
+		t.Errorf("core layer = %q, want core", layer[core])
+	}
+	if layer[fw] != "edge" {
+		t.Errorf("firewall layer = %q, want edge", layer[fw])
+	}
+	if layer[acc] != "access" {
+		t.Errorf("access layer = %q, want access (degree 1)", layer[acc])
+	}
+	// Edges deduped (core<->dist reported from both sides collapses to one).
+	if len(g.Edges) != 3 {
+		t.Fatalf("edges = %d, want 3 (deduped)", len(g.Edges))
+	}
+	// The core<->acc edge is arp-sourced → low confidence.
+	for _, e := range g.Edges {
+		if (e.SourceID == core && e.TargetID == acc) || (e.SourceID == acc && e.TargetID == core) {
+			if e.Confidence != "low" {
+				t.Errorf("core<->acc confidence = %q, want low (arp)", e.Confidence)
+			}
+		}
 	}
 }
 
