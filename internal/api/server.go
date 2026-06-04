@@ -300,7 +300,9 @@ func (s *Server) routes() {
 		r.Post("/rbac/roles/{id}/permissions", s.setRolePermissions)
 		r.Get("/rbac/permissions", s.listPermissions)
 		r.Post("/rbac/permissions", s.createPermission)
+		r.Post("/rbac/permissions/seed", s.seedPermissions)
 		r.Delete("/rbac/permissions/{id}", s.deletePermission)
+		r.Get("/rbac/matrix", s.rbacMatrix)
 
 		r.Get("/device-templates", s.listDeviceTemplates)
 		r.Post("/device-templates", s.createDeviceTemplate)

@@ -1,26 +1,27 @@
-import { Fragment, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
-import { ShieldCheck, Users as UsersIcon, KeyRound, Plus } from 'lucide-react'
-import { api, type AppUser, type Role, type Permission } from '../api'
+import { ShieldCheck, Users as UsersIcon, KeyRound, Plus, Grid3x3, DownloadCloud, Check } from 'lucide-react'
+import { api, type AppUser, type Role, type Permission, type RBACMatrix, type Location, locationPaths } from '../api'
 import { PageHeader, Panel, TabBar, EmptyState, timeAgo } from '../components/ui'
 
-type Tab = 'users' | 'roles' | 'permissions'
-const TABS: Tab[] = ['users', 'roles', 'permissions']
+type Tab = 'users' | 'roles' | 'permissions' | 'matrix'
+const TABS: Tab[] = ['users', 'roles', 'permissions', 'matrix']
 
 export function AccessControl() {
   const { tab: param } = useParams<{ tab: string }>()
   const [tab, setTab] = useState<Tab>(TABS.includes(param as Tab) ? (param as Tab) : 'users')
   return (
     <div>
-      <PageHeader title="Roles & Permissions" icon={ShieldCheck} subtitle="User access management — accounts, roles and the permissions they grant" />
+      <PageHeader title="Roles & Permissions" icon={ShieldCheck} subtitle="User access management — site-scoped accounts, roles, and a role×permission matrix" />
       <TabBar
-        tabs={[{ key: 'users', label: 'Users', icon: UsersIcon }, { key: 'roles', label: 'Roles', icon: ShieldCheck }, { key: 'permissions', label: 'Permissions', icon: KeyRound }]}
+        tabs={[{ key: 'users', label: 'Users', icon: UsersIcon }, { key: 'roles', label: 'Roles', icon: ShieldCheck }, { key: 'permissions', label: 'Permissions', icon: KeyRound }, { key: 'matrix', label: 'Matrix', icon: Grid3x3 }]}
         active={tab} onChange={(k) => setTab(k as Tab)}
       />
       {tab === 'users' && <UsersTab />}
       {tab === 'roles' && <RolesTab />}
       {tab === 'permissions' && <PermissionsTab />}
+      {tab === 'matrix' && <MatrixTab />}
     </div>
   )
 }
@@ -29,43 +30,55 @@ function UsersTab() {
   const qc = useQueryClient()
   const q = useQuery({ queryKey: ['rbac-users'], queryFn: () => api.get<AppUser[]>('/rbac/users') })
   const roles = useQuery({ queryKey: ['rbac-roles'], queryFn: () => api.get<Role[]>('/rbac/roles') })
+  const locs = useQuery({ queryKey: ['locations-all'], queryFn: () => api.get<Location[]>('/locations/all') })
+  const locPath = useMemo(() => locationPaths(locs.data ?? []), [locs.data])
   const inv = () => qc.invalidateQueries({ queryKey: ['rbac-users'] })
-  const [form, setForm] = useState({ username: '', full_name: '', email: '' })
+  const [form, setForm] = useState({ username: '', full_name: '', email: '', location_id: '' })
   const [editRoles, setEditRoles] = useState<string | null>(null)
 
-  const create = useMutation({ mutationFn: () => api.post('/rbac/users', form), onSuccess: () => { setForm({ username: '', full_name: '', email: '' }); inv() } })
+  const create = useMutation({ mutationFn: () => api.post('/rbac/users', { ...form, location_id: form.location_id || null }), onSuccess: () => { setForm({ username: '', full_name: '', email: '', location_id: '' }); inv() } })
   const del = useMutation({ mutationFn: (id: string) => api.del(`/rbac/users/${id}`), onSuccess: inv })
-  const toggle = useMutation({ mutationFn: (u: AppUser) => api.patch(`/rbac/users/${u.id}`, { full_name: u.full_name, email: u.email, is_active: !u.is_active }), onSuccess: inv })
+  const patch = useMutation({ mutationFn: (b: { u: AppUser; change: Partial<AppUser> }) => api.patch(`/rbac/users/${b.u.id}`, { full_name: b.u.full_name, email: b.u.email, is_active: b.u.is_active, location_id: b.u.location_id ?? null, ...b.change }), onSuccess: inv })
 
   const rows = q.data ?? []
+  const siteOptions = (locs.data ?? []).filter((l) => l.kind === 'hotel' || l.kind === 'group')
   return (
     <>
       <Panel title="New User" icon={Plus}>
-        <div className="row">
+        <div className="row" style={{ flexWrap: 'wrap', gap: 8 }}>
           <input className="field" placeholder="username" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
           <input className="field" placeholder="full name" value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} />
           <input className="field" placeholder="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+          <select className="field" value={form.location_id} onChange={(e) => setForm({ ...form, location_id: e.target.value })} title="Site scope">
+            <option value="">All sites (global)</option>
+            {siteOptions.map((l) => <option key={l.id} value={l.id}>{locPath[l.id] ?? l.name}</option>)}
+          </select>
           <button className="btn btn-primary" disabled={!form.username || create.isPending} onClick={() => create.mutate()}>Add user</button>
         </div>
       </Panel>
       <Panel title="Users" icon={UsersIcon} subtitle={`${rows.length}`} pad={false}>
         {q.isLoading && <div className="loading">Loading…</div>}
-        {q.data && rows.length === 0 && <EmptyState icon={UsersIcon} title="No users yet" message="Add operator accounts and assign them roles." />}
+        {q.data && rows.length === 0 && <EmptyState icon={UsersIcon} title="No users yet" message="Add operator accounts, scope them to a site, and assign roles." />}
         {rows.length > 0 && (
           <table className="data-table">
-            <thead><tr><th>Username</th><th>Name</th><th>Email</th><th>Status</th><th>Created</th><th></th></tr></thead>
+            <thead><tr><th>Username</th><th>Name</th><th>Site scope</th><th>Status</th><th>Created</th><th></th></tr></thead>
             <tbody>
               {rows.map((u) => (
                 <Fragment key={u.id}>
                   <tr>
                     <td className="cell-name">{u.username}</td>
                     <td>{u.full_name || '—'}</td>
-                    <td>{u.email || '—'}</td>
+                    <td>
+                      <select className="field" style={{ minWidth: 150 }} value={u.location_id ?? ''} onChange={(e) => patch.mutate({ u, change: { location_id: e.target.value || null } })}>
+                        <option value="">All sites</option>
+                        {siteOptions.map((l) => <option key={l.id} value={l.id}>{locPath[l.id] ?? l.name}</option>)}
+                      </select>
+                    </td>
                     <td>{u.is_active ? <span className="badge badge-up">active</span> : <span className="badge badge-disabled">disabled</span>}</td>
                     <td className="muted">{timeAgo(u.created_at)}</td>
                     <td className="cell-actions">
                       <button className="btn btn-ghost btn-xs" onClick={() => setEditRoles(editRoles === u.id ? null : u.id)}>Roles</button>
-                      <button className="btn btn-ghost btn-xs" onClick={() => toggle.mutate(u)}>{u.is_active ? 'Disable' : 'Enable'}</button>
+                      <button className="btn btn-ghost btn-xs" onClick={() => patch.mutate({ u, change: { is_active: !u.is_active } })}>{u.is_active ? 'Disable' : 'Enable'}</button>
                       <button className="btn btn-ghost btn-xs" style={{ color: 'var(--crit)' }} onClick={() => del.mutate(u.id)}>Delete</button>
                     </td>
                   </tr>
@@ -79,6 +92,58 @@ function UsersTab() {
         )}
       </Panel>
     </>
+  )
+}
+
+function MatrixTab() {
+  const qc = useQueryClient()
+  const q = useQuery({ queryKey: ['rbac-matrix'], queryFn: () => api.get<RBACMatrix>('/rbac/matrix') })
+  const inv = () => qc.invalidateQueries({ queryKey: ['rbac-matrix'] })
+  const seed = useMutation({ mutationFn: () => api.post('/rbac/permissions/seed', {}), onSuccess: inv })
+  // Toggle one permission for one role: recompute that role's full set and save.
+  const setRole = useMutation({
+    mutationFn: (b: { roleId: string; permIds: string[] }) => api.post(`/rbac/roles/${b.roleId}/permissions`, { permission_ids: b.permIds }),
+    onSuccess: inv,
+  })
+  const m = q.data
+  const roles = m?.roles ?? []
+  const perms = m?.permissions ?? []
+
+  const toggle = (roleId: string, permId: string) => {
+    const cur = new Set(m?.grants[roleId] ?? [])
+    if (cur.has(permId)) cur.delete(permId); else cur.add(permId)
+    setRole.mutate({ roleId, permIds: [...cur] })
+  }
+
+  return (
+    <Panel title="Role × Permission Matrix" icon={Grid3x3} subtitle={`${roles.length} roles · ${perms.length} permissions`}
+      actions={<button className="btn btn-sm" disabled={seed.isPending} onClick={() => seed.mutate()}><DownloadCloud size={14} /> Seed standard permissions</button>}>
+      {q.isLoading && <div className="loading">Loading…</div>}
+      {m && perms.length === 0 && <EmptyState icon={KeyRound} title="No permissions" message="Click “Seed standard permissions” to load the built-in catalog, then grant them to roles here." action={<button className="btn btn-primary btn-sm" onClick={() => seed.mutate()}>Seed standard permissions</button>} />}
+      {m && roles.length === 0 && perms.length > 0 && <EmptyState icon={ShieldCheck} title="No roles" message="Create roles under the Roles tab to grant permissions." />}
+      {roles.length > 0 && perms.length > 0 && (
+        <div style={{ overflowX: 'auto' }}>
+          <table className="data-table matrix-table">
+            <thead><tr><th style={{ textAlign: 'left' }}>Permission</th>{roles.map((r) => <th key={r.id} title={r.description}>{r.name}</th>)}</tr></thead>
+            <tbody>
+              {perms.map((p) => (
+                <tr key={p.id}>
+                  <td className="mono" title={p.description}>{p.code}</td>
+                  {roles.map((r) => {
+                    const on = (m?.grants[r.id] ?? []).includes(p.id)
+                    return (
+                      <td key={r.id} style={{ textAlign: 'center', cursor: 'pointer' }} onClick={() => toggle(r.id, p.id)}>
+                        {on ? <Check size={15} style={{ color: 'var(--ok, #16a34a)' }} /> : <span style={{ color: 'var(--text-faint)' }}>·</span>}
+                      </td>
+                    )
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Panel>
   )
 }
 

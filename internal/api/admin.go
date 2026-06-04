@@ -73,10 +73,11 @@ func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Username string `json:"username"`
-		FullName string `json:"full_name"`
-		Email    string `json:"email"`
-		IsActive *bool  `json:"is_active"`
+		Username   string  `json:"username"`
+		FullName   string  `json:"full_name"`
+		Email      string  `json:"email"`
+		IsActive   *bool   `json:"is_active"`
+		LocationID *string `json:"location_id"`
 	}
 	if !decodeJSON(w, r, &req) {
 		return
@@ -91,6 +92,7 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
 	}
 	row, err := s.queries.CreateUser(r.Context(), db.CreateUserParams{
 		Username: req.Username, FullName: req.FullName, Email: req.Email, IsActive: active,
+		LocationID: parseUUIDPtr(req.LocationID),
 	})
 	if err != nil {
 		writeErr(w, err)
@@ -106,15 +108,17 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		FullName string `json:"full_name"`
-		Email    string `json:"email"`
-		IsActive bool   `json:"is_active"`
+		FullName   string  `json:"full_name"`
+		Email      string  `json:"email"`
+		IsActive   bool    `json:"is_active"`
+		LocationID *string `json:"location_id"`
 	}
 	if !decodeJSON(w, r, &req) {
 		return
 	}
 	row, err := s.queries.UpdateUser(r.Context(), db.UpdateUserParams{
 		ID: id, FullName: req.FullName, Email: req.Email, IsActive: req.IsActive,
+		LocationID: parseUUIDPtr(req.LocationID),
 	})
 	if err != nil {
 		writeErr(w, err)

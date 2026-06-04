@@ -810,3 +810,9 @@ select.field { cursor: pointer; }
   .panel { break-inside: avoid; box-shadow: none; border-color: #ddd; }
   body { background: #fff; }
 }
+
+/* RBAC role×permission matrix */
+.matrix-table th { text-align: center; white-space: nowrap; }
+.matrix-table th:first-child, .matrix-table td:first-child { text-align: left; position: sticky; left: 0; background: var(--surface); }
+.matrix-table td { user-select: none; }
+.matrix-table tbody tr:hover td { background: var(--surface-2); }

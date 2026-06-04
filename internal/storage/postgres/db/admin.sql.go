@@ -125,15 +125,16 @@ func (q *Queries) CreateRole(ctx context.Context, arg CreateRoleParams) (Role, e
 }
 
 const createUser = `-- name: CreateUser :one
-INSERT INTO users (username, full_name, email, is_active)
-VALUES ($1,$2,$3,$4) RETURNING id, username, full_name, email, is_active, created_at, updated_at
+INSERT INTO users (username, full_name, email, is_active, location_id)
+VALUES ($1,$2,$3,$4,$5) RETURNING id, username, full_name, email, is_active, created_at, updated_at, location_id
 `
 
 type CreateUserParams struct {
-	Username string `json:"username"`
-	FullName string `json:"full_name"`
-	Email    string `json:"email"`
-	IsActive bool   `json:"is_active"`
+	Username   string     `json:"username"`
+	FullName   string     `json:"full_name"`
+	Email      string     `json:"email"`
+	IsActive   bool       `json:"is_active"`
+	LocationID *uuid.UUID `json:"location_id"`
 }
 
 func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, error) {
@@ -142,6 +143,7 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		arg.FullName,
 		arg.Email,
 		arg.IsActive,
+		arg.LocationID,
 	)
 	var i User
 	err := row.Scan(
@@ -152,6 +154,7 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.IsActive,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.LocationID,
 	)
 	return i, err
 }
@@ -429,7 +432,7 @@ func (q *Queries) ListRoles(ctx context.Context) ([]Role, error) {
 
 const listUsers = `-- name: ListUsers :many
 
-SELECT id, username, full_name, email, is_active, created_at, updated_at FROM users ORDER BY username
+SELECT id, username, full_name, email, is_active, created_at, updated_at, location_id FROM users ORDER BY username
 `
 
 // ===== RBAC: users / roles / permissions ==================================
@@ -450,6 +453,7 @@ func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
 			&i.IsActive,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.LocationID,
 		); err != nil {
 			return nil, err
 		}
@@ -622,15 +626,16 @@ func (q *Queries) UpdateDeviceTemplate(ctx context.Context, arg UpdateDeviceTemp
 }
 
 const updateUser = `-- name: UpdateUser :one
-UPDATE users SET full_name=$2, email=$3, is_active=$4, updated_at=now()
-WHERE id=$1 RETURNING id, username, full_name, email, is_active, created_at, updated_at
+UPDATE users SET full_name=$2, email=$3, is_active=$4, location_id=$5, updated_at=now()
+WHERE id=$1 RETURNING id, username, full_name, email, is_active, created_at, updated_at, location_id
 `
 
 type UpdateUserParams struct {
-	ID       uuid.UUID `json:"id"`
-	FullName string    `json:"full_name"`
-	Email    string    `json:"email"`
-	IsActive bool      `json:"is_active"`
+	ID         uuid.UUID  `json:"id"`
+	FullName   string     `json:"full_name"`
+	Email      string     `json:"email"`
+	IsActive   bool       `json:"is_active"`
+	LocationID *uuid.UUID `json:"location_id"`
 }
 
 func (q *Queries) UpdateUser(ctx context.Context, arg UpdateUserParams) (User, error) {
@@ -639,6 +644,7 @@ func (q *Queries) UpdateUser(ctx context.Context, arg UpdateUserParams) (User, e
 		arg.FullName,
 		arg.Email,
 		arg.IsActive,
+		arg.LocationID,
 	)
 	var i User
 	err := row.Scan(
@@ -649,6 +655,7 @@ func (q *Queries) UpdateUser(ctx context.Context, arg UpdateUserParams) (User, e
 		&i.IsActive,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.LocationID,
 	)
 	return i, err
 }

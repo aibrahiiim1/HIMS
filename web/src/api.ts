@@ -706,10 +706,18 @@ export interface AppUser {
   full_name: string
   email: string
   is_active: boolean
+  location_id?: string | null
   created_at: string
   updated_at: string
 }
 export interface Role { id: string; name: string; description: string; created_at: string }
+
+// #23 RBAC permission matrix.
+export interface RBACMatrix {
+  roles: Role[]
+  permissions: Permission[]
+  grants: Record<string, string[]> // roleID -> permissionID[]
+}
 export interface Permission { id: string; code: string; description: string; created_at: string }
 export interface DeviceTemplate {
   id: string
