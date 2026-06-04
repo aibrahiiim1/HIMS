@@ -205,7 +205,7 @@ func (q *Queries) FindMACOnSwitches(ctx context.Context, mac string) ([]FindMACO
 const listARPForDevice = `-- name: ListARPForDevice :many
 SELECT a.id, a.ip_address, a.mac, a.if_index, a.collection_source, a.last_seen_at,
        i.if_name AS if_name,
-       owner.name AS owner_name
+       COALESCE(owner.name, '') AS owner_name
 FROM arp_entries a
 LEFT JOIN interfaces i ON i.device_id = a.device_id AND i.if_index = a.if_index
 LEFT JOIN LATERAL (
@@ -369,7 +369,7 @@ const listMACForDevice = `-- name: ListMACForDevice :many
 SELECT m.id, m.mac, m.vlan_id, m.if_index, m.fdb_status,
        m.collection_source, m.last_seen_at,
        i.if_name AS if_name,
-       owner.name AS owner_name,
+       COALESCE(owner.name, '') AS owner_name,
        owner.vendor AS owner_vendor
 FROM mac_addresses m
 LEFT JOIN interfaces i ON i.device_id = m.device_id AND i.if_index = m.if_index
