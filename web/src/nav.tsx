@@ -150,11 +150,11 @@ export const NAV: NavGroup[] = [
   {
     title: 'Reports',
     items: [
-      { label: 'Inventory Reports', icon: FileChartColumn, to: soon('inventory-reports') },
-      { label: 'Discovery Reports', icon: FileSearchIcon, to: soon('discovery-reports') },
-      { label: 'Availability Reports', icon: ChartLine, to: soon('availability-reports') },
-      { label: 'Vendor Reports', icon: Tag, to: soon('vendor-reports') },
-      { label: 'Export Center', icon: Download, to: soon('export-center') },
+      { label: 'Inventory Reports', icon: FileChartColumn, to: '/reports/inventory' },
+      { label: 'Discovery Reports', icon: FileSearchIcon, to: '/reports/discovery' },
+      { label: 'Availability Reports', icon: ChartLine, to: '/reports/availability' },
+      { label: 'Vendor Reports', icon: Tag, to: '/reports/vendors' },
+      { label: 'Export Center', icon: Download, to: '/reports/export' },
     ],
   },
   {

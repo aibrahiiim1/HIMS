@@ -1,9 +1,11 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Radar, Boxes, CircleX, Clock } from 'lucide-react'
 import {
   api, locationPaths,
   type DiscoveryJob, type DiscoveryResult, type Location, type Credential,
 } from '../api'
+import { PageHeader, Kpi, timeAgo } from '../components/ui'
 
 // ---------- shared styles ----------
 const btn: React.CSSProperties = { padding: '8px 16px', background: '#1565c0', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 14, fontWeight: 600 }
@@ -53,13 +55,26 @@ export function Discovery() {
   })
   const afterLaunch = (j: DiscoveryJob) => { setJobID(j.id); setTab('Jobs'); qc.invalidateQueries({ queryKey: ['discovery-jobs'] }) }
 
+  const jobList = jobs.data ?? []
+  const lastJob = [...jobList].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0]
+  const foundTotal = jobList.reduce((a, j) => a + j.found_count, 0)
+  const failedCount = jobList.filter((j) => j.status === 'failed').length
+
   return (
     <div>
+      <PageHeader title="Discovery Center" icon={Radar} subtitle="Scan networks, import assets, and onboard devices into inventory" />
+
+      <div className="kpi-grid">
+        <Kpi label="Scan Jobs" value={jobList.length} icon={Radar} tone="info" />
+        <Kpi label="Devices Found" value={foundTotal} icon={Boxes} tone="default" sub="all scans" />
+        <Kpi label="Failed Scans" value={failedCount} icon={CircleX} tone={failedCount > 0 ? 'crit' : 'default'} />
+        <Kpi label="Last Scan" value={lastJob ? timeAgo(lastJob.created_at) : '—'} icon={Clock} tone="default" sub={lastJob?.scope_cidr ?? undefined} />
+      </div>
+
       <div className="card">
-        <h2>Discovery</h2>
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        <div className="seg">
           {TABS.map((t) => (
-            <button key={t} onClick={() => setTab(t)} style={{ ...ghost, ...(tab === t ? { background: '#1565c0', color: '#fff', borderColor: '#1565c0' } : {}) }}>
+            <button key={t} className={'seg-chip' + (tab === t ? ' active' : '')} onClick={() => setTab(t)}>
               {t}{t === 'Jobs' && jobs.data ? ` (${jobs.data.length})` : ''}
             </button>
           ))}

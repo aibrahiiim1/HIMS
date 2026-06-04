@@ -27,6 +27,7 @@ import { Mibs } from './pages/Mibs'
 import { Settings } from './pages/Settings'
 import { Inventory } from './pages/Inventory'
 import { Locations } from './pages/Locations'
+import { Reports } from './pages/Reports'
 import { ComingSoon } from './pages/ComingSoon'
 import { Sidebar } from './components/Sidebar'
 import { Topbar } from './components/Topbar'
@@ -110,6 +111,8 @@ function Shell() {
             <Route path="/settings" element={<Settings />} />
             <Route path="/inventory" element={<Inventory />} />
             <Route path="/locations" element={<Locations />} />
+            <Route path="/reports" element={<Reports />} />
+            <Route path="/reports/:view" element={<Reports />} />
             <Route path="/soon/:slug" element={<ComingSoon />} />
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
