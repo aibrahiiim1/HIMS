@@ -540,6 +540,7 @@ export interface AlertRule {
   auto_work_order: boolean
   work_order_priority: string
   enabled: boolean
+  escalate_after_minutes: number
 }
 
 export interface Alert {
@@ -553,7 +554,31 @@ export interface Alert {
   work_order_id?: string | null
   opened_at: string
   acknowledged_at?: string | null
+  acknowledged_by?: string | null
+  escalated: boolean
+  escalated_at?: string | null
   resolved_at?: string | null
+}
+
+export interface AlertEvent {
+  id: number
+  alert_id: string
+  at: string
+  kind: string
+  actor: string
+  note: string
+}
+
+export interface MaintenanceWindow {
+  id: string
+  scope: string
+  device_id?: string | null
+  location_id?: string | null
+  reason: string
+  starts_at: string
+  ends_at: string
+  created_by: string
+  created_at: string
 }
 
 export interface MonitoringCheck {
