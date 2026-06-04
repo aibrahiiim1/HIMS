@@ -323,6 +323,7 @@ func (s *Server) routes() {
 		r.Get("/rbac/users", s.listUsers)
 		r.Post("/rbac/users", s.createUser)
 		r.Patch("/rbac/users/{id}", s.updateUser)
+		r.Post("/rbac/users/{id}/password", s.adminSetPassword)
 		r.Delete("/rbac/users/{id}", s.deleteUser)
 		r.Get("/rbac/users/{id}/roles", s.userRoles)
 		r.Post("/rbac/users/{id}/roles", s.setUserRoles)

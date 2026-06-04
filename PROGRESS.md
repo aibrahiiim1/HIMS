@@ -66,12 +66,13 @@ Making the completed roadmap safe + usable in a real deployment. Fleet reachabil
 
 | Priority | Item | Status |
 |---|---|---|
-| P1 | Auth / Session / RBAC enforcement | 🟡 Stage A done (login + sessions + authed actor); B (permission enforce) + C (site-scope) next |
+| P1 | Auth / Session / RBAC enforcement | 🟡 A (login/sessions/actor) + B (permission enforce) done; C (site-scope) next |
 | P2 | Operational gates activation | 🔴 NVR range reachable; switch gates documented |
 | P3 | Data cleanup (Data Quality Center) | 🔴 |
 | P4 | Production deploy validation | 🟡 hims-migrate up verified on 000037; encryption/runtime/DR earlier |
 | Add-on | OS/NVR discovery + classification + universal credential testing | 🔴 |
 
+- **P1 Stage B — RBAC permission enforcement**: pure `requiredPermission(method, path)` policy (unit-tested) maps each route to a permission code — sensitive resources gated for all methods (credentials/encryption→credentials.manage, rbac→rbac.manage, audit→audit.read, settings→settings.manage, admin backup→rbac.manage), operational read-vs-write split (devices.read/write, discovery.run, alerts.read/ack/manage, work_orders.read/manage, config.backup, reports.view/schedule, monitoring.read, topology.read), everything else authenticated-only. `authMiddleware` checks it after session resolution → 403; admin (rbac.manage) bypasses. Added admin set-password endpoint (`POST /rbac/users/{id}/password`, rbac.manage-gated) so admins can onboard non-bootstrap users. Verified live: a viewer (devices.read only) got 200 GET /devices, 403 POST /devices, 403 /credentials, 403 /audit-log, 200 /dashboard; admin got 200 everywhere. **Acceptance met: permissions are enforced.** (Nav-item hiding for limited users is a later UX polish; backend is the security boundary.)
 - **P1 Stage A — Authentication + sessions + authenticated actor**: migration 000037 (`users.password_hash` bcrypt + `sessions` storing only sha256(token)); `internal/auth` (bcrypt + token gen/hash, unit-tested); `POST /auth/login|logout`, `GET /auth/me`, `POST /auth/password`; session-cookie `authMiddleware` on all `/api/v1` (allow-lists login + openapi) with an **open-mode safety valve** until the first password exists; **bootstrap admin** from `HIMS_ADMIN_USER`/`HIMS_ADMIN_PASSWORD` (creates admin + all-permissions role, activates enforcement); `s.audit` now attributes the **authenticated** actor (X-Actor only as fallback). Frontend: login screen + `AuthGate` (calls /me, drops to login on 401) + Topbar user/logout. Verified live: unauth→401, bad-pw→401, login→cookie+identity(admin,18 perms), authed→200, /me, **audit shows actor=admin** for login + work-order create, logout→session invalidated→401. Migrate-up applied 000037 cleanly. **Acceptance met: a real user can log in; audit shows real authenticated actors.**
 
 ## Changelog

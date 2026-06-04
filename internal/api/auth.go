@@ -61,6 +61,11 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			http.Error(w, "authentication required", http.StatusUnauthorized)
 			return
 		}
+		// RBAC: enforce the permission this route requires (admin bypasses).
+		if perm := requiredPermission(r.Method, p); perm != "" && !id.can(perm) {
+			http.Error(w, "forbidden: requires permission "+perm, http.StatusForbidden)
+			return
+		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), idKey, id)))
 	})
 }
@@ -200,6 +205,39 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = s.queries.DeleteUserSessions(r.Context(), u.ID) // force re-login elsewhere
 	s.auditAs(id.Username, r, "user", "auth.password_change", "user", u.ID.String(), "Changed own password", nil)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// adminSetPassword handles POST /rbac/users/{id}/password — an admin sets or
+// resets another user's password (gated by rbac.manage on the /rbac route).
+// Existing sessions for that user are revoked.
+func (s *Server) adminSetPassword(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseUUIDParam(w, r, "id")
+	if !ok {
+		return
+	}
+	var req struct {
+		Password string `json:"password"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if len(req.Password) < 8 {
+		http.Error(w, "password must be at least 8 characters", http.StatusBadRequest)
+		return
+	}
+	hash, err := auth.HashPassword(req.Password)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.queries.SetUserPassword(r.Context(), db.SetUserPasswordParams{ID: id, PasswordHash: hash}); err != nil {
+		writeErr(w, err)
+		return
+	}
+	_ = s.queries.DeleteUserSessions(r.Context(), id)
+	s.authActive.Store(true)
+	s.audit(r, "user", "user.password_set", "user", id.String(), "Set user password", nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 
