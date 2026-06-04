@@ -240,6 +240,14 @@ func (s *Server) routes() {
 		r.Post("/maintenance-windows", s.createMaintenanceWindow)
 		r.Delete("/maintenance-windows/{id}", s.deleteMaintenanceWindow)
 
+		// --- Notifications (channels + delivery log) -----------------
+		r.Get("/notification-channels", s.listNotificationChannels)
+		r.Post("/notification-channels", s.createNotificationChannel)
+		r.Patch("/notification-channels/{id}", s.setNotificationChannelEnabled)
+		r.Delete("/notification-channels/{id}", s.deleteNotificationChannel)
+		r.Post("/notification-channels/{id}/test", s.testNotificationChannel)
+		r.Get("/notification-log", s.listNotificationLog)
+
 		// --- Credentials (encrypted at rest; secrets never returned) -
 		r.Get("/credentials", s.listCredentials)
 		r.Post("/credentials", s.createCredential)

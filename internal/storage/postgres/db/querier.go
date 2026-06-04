@@ -66,6 +66,8 @@ type Querier interface {
 	// ---- Maintenance windows (alert suppression) ------------------------------
 	CreateMaintenanceWindow(ctx context.Context, arg CreateMaintenanceWindowParams) (MaintenanceWindow, error)
 	CreateMibFile(ctx context.Context, arg CreateMibFileParams) (MibFile, error)
+	// ---- Notification channels ------------------------------------------------
+	CreateNotificationChannel(ctx context.Context, arg CreateNotificationChannelParams) (NotificationChannel, error)
 	CreateOIDMapping(ctx context.Context, arg CreateOIDMappingParams) (OidMapping, error)
 	CreatePermission(ctx context.Context, arg CreatePermissionParams) (Permission, error)
 	// ---- Purchases ------------------------------------------------------------
@@ -93,6 +95,7 @@ type Querier interface {
 	DeleteLookup(ctx context.Context, id uuid.UUID) error
 	DeleteMaintenanceWindow(ctx context.Context, id uuid.UUID) error
 	DeleteMonitoringCheck(ctx context.Context, id uuid.UUID) error
+	DeleteNotificationChannel(ctx context.Context, id uuid.UUID) error
 	DeleteOIDMapping(ctx context.Context, id uuid.UUID) error
 	DeletePermission(ctx context.Context, id uuid.UUID) error
 	DeletePurchase(ctx context.Context, id uuid.UUID) error
@@ -142,6 +145,7 @@ type Querier interface {
 	GetFirewallStatus(ctx context.Context, deviceID uuid.UUID) (FirewallStatus, error)
 	GetLocation(ctx context.Context, id uuid.UUID) (Location, error)
 	GetMonitoringCheck(ctx context.Context, id uuid.UUID) (MonitoringCheck, error)
+	GetNotificationChannel(ctx context.Context, id uuid.UUID) (NotificationChannel, error)
 	GetSparePart(ctx context.Context, id uuid.UUID) (SparePart, error)
 	GetSystem(ctx context.Context, id uuid.UUID) (System, error)
 	GetUPSStatus(ctx context.Context, deviceID uuid.UUID) (UpsStatus, error)
@@ -151,6 +155,10 @@ type Querier interface {
 	InsertAuditLog(ctx context.Context, arg InsertAuditLogParams) error
 	InsertMibObject(ctx context.Context, arg InsertMibObjectParams) error
 	InsertMonitoringSample(ctx context.Context, arg InsertMonitoringSampleParams) error
+	// ---- Delivery log ---------------------------------------------------------
+	// The unique index idx_notif_once makes a duplicate 'sent' for the same
+	// (channel, alert) a no-op, so RETURNING yields a row only on a real insert.
+	InsertNotificationLog(ctx context.Context, arg InsertNotificationLogParams) (NotificationLog, error)
 	ListARPForDevice(ctx context.Context, deviceID uuid.UUID) ([]ListARPForDeviceRow, error)
 	ListAccessPoints(ctx context.Context, controllerDeviceID uuid.UUID) ([]AccessPoint, error)
 	ListActiveMaintenanceWindows(ctx context.Context) ([]MaintenanceWindow, error)
@@ -217,6 +225,10 @@ type Querier interface {
 	ListMonitoringSamplesByDevice(ctx context.Context, arg ListMonitoringSamplesByDeviceParams) ([]MonitoringSample, error)
 	ListNVRChannels(ctx context.Context, nvrDeviceID uuid.UUID) ([]NvrChannel, error)
 	ListNeighbors(ctx context.Context, deviceID uuid.UUID) ([]Neighbor, error)
+	// Alerts worth notifying about: still open or escalated, opened recently.
+	ListNotifiableAlerts(ctx context.Context) ([]ListNotifiableAlertsRow, error)
+	ListNotificationChannels(ctx context.Context) ([]NotificationChannel, error)
+	ListNotificationLog(ctx context.Context) ([]NotificationLog, error)
 	ListOIDMappings(ctx context.Context) ([]OidMapping, error)
 	ListPbxPhones(ctx context.Context, deviceID uuid.UUID) ([]PbxPhone, error)
 	ListPermissions(ctx context.Context) ([]Permission, error)
@@ -225,6 +237,8 @@ type Querier interface {
 	ListPurchases(ctx context.Context) ([]Purchase, error)
 	ListRoles(ctx context.Context) ([]Role, error)
 	ListRootLocations(ctx context.Context) ([]Location, error)
+	// (channel_id, alert_id) pairs already delivered, so the dispatcher skips them.
+	ListSentNotificationPairs(ctx context.Context) ([]ListSentNotificationPairsRow, error)
 	ListServerStorage(ctx context.Context, deviceID uuid.UUID) ([]ServerStorage, error)
 	ListSettings(ctx context.Context) ([]ListSettingsRow, error)
 	ListSpareParts(ctx context.Context) ([]SparePart, error)
@@ -294,6 +308,7 @@ type Querier interface {
 	// Stores the scan spec (mode/targets/creds) so the job can be re-run as-is.
 	SetDiscoveryJobMetadata(ctx context.Context, arg SetDiscoveryJobMetadataParams) error
 	SetMonitoringCheckEnabled(ctx context.Context, arg SetMonitoringCheckEnabledParams) (MonitoringCheck, error)
+	SetNotificationChannelEnabled(ctx context.Context, arg SetNotificationChannelEnabledParams) (NotificationChannel, error)
 	SetRolePermissionsClear(ctx context.Context, roleID uuid.UUID) error
 	SetUserRolesClear(ctx context.Context, userID uuid.UUID) error
 	TotalExpenses(ctx context.Context) (float64, error)

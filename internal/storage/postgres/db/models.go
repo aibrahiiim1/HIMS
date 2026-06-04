@@ -431,6 +431,29 @@ type Neighbor struct {
 	LastSeenAt       time.Time   `json:"last_seen_at"`
 }
 
+type NotificationChannel struct {
+	ID              uuid.UUID `json:"id"`
+	Name            string    `json:"name"`
+	Type            string    `json:"type"`
+	TargetEncrypted []byte    `json:"target_encrypted"`
+	KeyID           string    `json:"key_id"`
+	MinSeverity     string    `json:"min_severity"`
+	QuietStartMin   *int32    `json:"quiet_start_min"`
+	QuietEndMin     *int32    `json:"quiet_end_min"`
+	Enabled         bool      `json:"enabled"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+type NotificationLog struct {
+	ID        int64      `json:"id"`
+	ChannelID uuid.UUID  `json:"channel_id"`
+	AlertID   *uuid.UUID `json:"alert_id"`
+	At        time.Time  `json:"at"`
+	Status    string     `json:"status"`
+	Detail    string     `json:"detail"`
+}
+
 type NvrChannel struct {
 	ID             uuid.UUID   `json:"id"`
 	NvrDeviceID    uuid.UUID   `json:"nvr_device_id"`

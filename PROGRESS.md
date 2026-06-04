@@ -17,7 +17,7 @@ Legend: ✅ done · 🟡 core done, richer phase remaining · 🟠 basic exists,
 | 4 | Topology Intelligence | 🟡 | links built+resolved+auto-rebuild, 70% coverage — `6284a2c`,`f67b7a1`; remaining: layer detection, link confidence, stale cleanup |
 | 5 | Real Monitoring Engine | 🟡 | in-process continuous availability+latency time-series + SNMP scalar — `86cf918`; remaining #5b: CPU/mem/disk/temp + interface counters schema+collection |
 | 6 | Alert Engine | ✅ | rules+dedup+auto-resolve+WO bridge + **maintenance windows (suppression)** + **alert timeline** + **ack-by-actor + notes** + **escalation** + status/severity filters — `7b7a0ee` (backend) + frontend |
-| 7 | Notifications | 🔴 | Email/Telegram/Teams/Slack + templates + quiet hours + test |
+| 7 | Notifications | 🟡 | **backend done** — Slack/Teams/Telegram/webhook/email channels (encrypted targets), severity + quiet-hours filtering, background dispatcher (dedup), test endpoint, delivery log; frontend page next |
 | 8 | Device Templates Engine | 🟠 | CRUD exists; needs OID sets, default monitors/alerts, health rules |
 | 9 | Vendor Fingerprint Library | 🟠 | CRUD exists; needs comprehensive multi-source library |
 | 10 | Config Backup | 🔴 | SSH backup, versions, diff, drift detection |

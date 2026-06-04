@@ -139,6 +139,10 @@ func main() {
 	// evaluating alerts each sweep.
 	srv.StartMonitoring(context.Background(), 30*time.Second)
 
+	// Deliver alert notifications to configured channels (Slack/Teams/Telegram/
+	// webhook/email), honoring severity thresholds + quiet hours.
+	srv.StartNotifier(context.Background(), 30*time.Second)
+
 	slog.Info("hims-api starting", "addr", addr, "pid", os.Getpid(), "version", version, "commit", gitCommit())
 	if err := http.Serve(ln, srv); err != nil {
 		slog.Error("server failed", "error", err)
