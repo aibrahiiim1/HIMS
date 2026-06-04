@@ -311,6 +311,8 @@ type Querier interface {
 	// for the same (rule, check) is a no-op. RETURNING yields a row ONLY on a
 	// real insert, so the engine fires the work-order bridge exactly once.
 	OpenAlert(ctx context.Context, arg OpenAlertParams) (Alert, error)
+	// Open (unresolved) alert counts per device, for site rollups.
+	OpenAlertCountsByDevice(ctx context.Context) ([]OpenAlertCountsByDeviceRow, error)
 	PermissionsForRole(ctx context.Context, roleID uuid.UUID) ([]Permission, error)
 	// Persist the rollup the engine computed (status + failure counter) onto the
 	// check after a poll. History rows go to monitoring_samples separately.

@@ -111,3 +111,9 @@ SELECT * FROM maintenance_windows WHERE now() >= starts_at AND now() < ends_at;
 
 -- name: DeleteMaintenanceWindow :exec
 DELETE FROM maintenance_windows WHERE id = $1;
+
+-- name: OpenAlertCountsByDevice :many
+-- Open (unresolved) alert counts per device, for site rollups.
+SELECT device_id, COUNT(*)::bigint AS n
+FROM alerts WHERE status <> 'resolved' AND device_id IS NOT NULL
+GROUP BY device_id;

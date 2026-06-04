@@ -118,6 +118,7 @@ export const NAV: NavGroup[] = [
   {
     title: 'Organization',
     items: [
+      { label: 'Multi-Site View', icon: Building2, to: '/sites' },
       { label: 'Locations', icon: Building2, to: '/locations' },
     ],
   },

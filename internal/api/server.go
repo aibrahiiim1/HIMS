@@ -181,6 +181,8 @@ func (s *Server) routes() {
 		r.Get("/devices/{id}/lifecycle", s.getDeviceLifecycle)
 		r.Put("/devices/{id}/lifecycle", s.putDeviceLifecycle)
 		r.Get("/assets/lifecycle", s.assetLifecycleRegister)
+		// --- Multi-site rollup (#22) ----------------------------------
+		r.Get("/sites/overview", s.sitesOverview)
 		// --- NetFlow Analytics (#12) ----------------------------------
 		r.Get("/netflow/overview", s.flowOverview)
 		r.Get("/netflow/top-talkers", s.flowTopTalkers)

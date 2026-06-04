@@ -612,6 +612,38 @@ func (q *Queries) OpenAlert(ctx context.Context, arg OpenAlertParams) (Alert, er
 	return i, err
 }
 
+const openAlertCountsByDevice = `-- name: OpenAlertCountsByDevice :many
+SELECT device_id, COUNT(*)::bigint AS n
+FROM alerts WHERE status <> 'resolved' AND device_id IS NOT NULL
+GROUP BY device_id
+`
+
+type OpenAlertCountsByDeviceRow struct {
+	DeviceID uuid.UUID `json:"device_id"`
+	N        int64     `json:"n"`
+}
+
+// Open (unresolved) alert counts per device, for site rollups.
+func (q *Queries) OpenAlertCountsByDevice(ctx context.Context) ([]OpenAlertCountsByDeviceRow, error) {
+	rows, err := q.db.Query(ctx, openAlertCountsByDevice)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []OpenAlertCountsByDeviceRow{}
+	for rows.Next() {
+		var i OpenAlertCountsByDeviceRow
+		if err := rows.Scan(&i.DeviceID, &i.N); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const resolveAlert = `-- name: ResolveAlert :one
 UPDATE alerts SET status = 'resolved', resolved_at = now()
 WHERE id = $1 AND status <> 'resolved'

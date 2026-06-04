@@ -1030,3 +1030,17 @@ export interface AssetRegister {
   total_cost: number
   summary: Record<string, number>
 }
+
+// #22 Multi-Site / Hotel View.
+export interface SiteRollup {
+  site_id: string
+  site_name: string
+  kind: string
+  devices: number
+  up: number
+  down: number
+  warning: number
+  unknown: number
+  open_alerts: number
+  by_category: Record<string, number>
+}

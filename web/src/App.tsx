@@ -41,6 +41,7 @@ import { Notifications } from './pages/Notifications'
 import { ConfigBackups } from './pages/ConfigBackups'
 import { NetFlow } from './pages/NetFlow'
 import { AssetLifecycle } from './pages/AssetLifecycle'
+import { MultiSite } from './pages/MultiSite'
 import { Sidebar } from './components/Sidebar'
 import { Topbar } from './components/Topbar'
 import { useBadges } from './hooks/useBadges'
@@ -127,6 +128,7 @@ function Shell() {
             <Route path="/config-backups" element={<ConfigBackups />} />
             <Route path="/netflow" element={<NetFlow />} />
             <Route path="/assets" element={<AssetLifecycle />} />
+            <Route path="/sites" element={<MultiSite />} />
             <Route path="/search" element={<SearchPage />} />
             <Route path="/work-orders" element={<WorkOrders />} />
             <Route path="/systems" element={<Systems />} />
