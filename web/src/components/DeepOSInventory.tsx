@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { RefreshCw, Cpu } from 'lucide-react'
-import { api, type OSInventoryBundle } from '../api'
+import { api, type OSInventoryBundle, type Classification, type AuthMe } from '../api'
 
 function fmtBytes(n?: number | null): string {
   if (n == null || n === 0) return 'Not collected'
@@ -19,10 +19,20 @@ function fmtUptime(s?: number | null): string {
 // DeepOSInventory renders the authenticated deep OS inventory (WinRM/SSH) for a
 // device: a summary plus disks/network/services/processes/software/roles/events.
 // Absent data shows "Not collected" / "Not collected yet" — never fabricated. A
-// Collect button runs an on-demand collection (needs a bound credential).
-export function DeepOSInventory({ deviceId }: { deviceId: string }) {
+// Collect button (shown only to users with devices.write) runs an on-demand
+// collection (needs a bound credential).
+//
+// Visibility: the card renders when the device is a Windows/Linux host
+// (os_family) OR already has an OS-inventory row, OR `alwaysShow` is set (the
+// Server detail page). This lets the generic device page surface deep inventory
+// for Windows workstations / Linux hosts that don't route through ServerDetail,
+// while staying hidden for switches/cameras/etc.
+export function DeepOSInventory({ deviceId, alwaysShow }: { deviceId: string; alwaysShow?: boolean }) {
   const qc = useQueryClient()
   const q = useQuery({ queryKey: ['os-inventory', deviceId], queryFn: () => api.get<OSInventoryBundle>(`/devices/${deviceId}/os-inventory`) })
+  // Shared with ClassificationCard's query key — react-query dedupes the fetch.
+  const cls = useQuery({ queryKey: ['classification', deviceId], queryFn: () => api.get<Classification>(`/devices/${deviceId}/classification`) })
+  const me = useQuery({ queryKey: ['me'], queryFn: () => api.get<AuthMe>('/auth/me') })
   const collect = useMutation({
     mutationFn: () => api.post(`/devices/${deviceId}/collect-os`, {}),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['os-inventory', deviceId] }),
@@ -30,11 +40,23 @@ export function DeepOSInventory({ deviceId }: { deviceId: string }) {
 
   const b = q.data
   const inv = b?.inventory ?? null
-  const collectBtn = (
+  const osFamily = cls.data?.os_family ?? ''
+  const isOSHost = osFamily === 'windows' || osFamily === 'linux'
+  const canCollect = !!(me.data?.admin || me.data?.permissions?.includes('devices.write'))
+
+  // Still loading the signals we gate on — don't flash the card.
+  if (q.isLoading || cls.isLoading) {
+    return null
+  }
+  if (!alwaysShow && !isOSHost && !inv) {
+    return null // not an OS host and nothing collected → hide entirely
+  }
+
+  const collectBtn = canCollect ? (
     <button className="btn btn-sm" disabled={collect.isPending} onClick={() => collect.mutate()}>
       <RefreshCw size={13} /> {collect.isPending ? 'Collecting…' : inv ? 'Re-collect' : 'Collect OS'}
     </button>
-  )
+  ) : null
   const err = collect.error ? (collect.error as Error).message : null
 
   return (

@@ -5,6 +5,7 @@ import { Network, Cable, Layers, Share2, Activity, Settings, Gauge, LayoutGrid, 
 import { api, type Interface, type VLAN, type Neighbor, type TopologyLink, type MonitoringCheck, type MonitoringSample, type MacEntry, type ArpEntry } from '../api'
 import { DeviceHeader } from '../components/DeviceHeader'
 import { ClassificationCard } from '../components/ClassificationCard'
+import { DeepOSInventory } from '../components/DeepOSInventory'
 import { DeviceOps } from '../components/DeviceOps'
 import { SwitchPorts } from '../components/SwitchPorts'
 import { Panel, TabBar, Kpi, StatusPill, EmptyState, Sparkline, timeAgo } from '../components/ui'
@@ -51,6 +52,7 @@ export function SwitchDetail() {
             <Kpi label="Topology Links" value={topo.data?.length ?? 0} icon={Network} tone="default" />
           </div>
           <div style={{ marginBottom: 16 }}><ClassificationCard deviceId={id!} /></div>
+          <DeepOSInventory deviceId={id!} />
           <div className="grid-2">
             <Panel title="Top Interfaces" icon={Cable} pad={false}>
               {ifList.length === 0 ? <EmptyState icon={Cable} title="No interfaces collected" />

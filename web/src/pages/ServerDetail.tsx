@@ -35,7 +35,7 @@ export function ServerDetail() {
   return (
     <div>
       <DeviceHeader deviceId={deviceId} icon={Server} />
-      <DeepOSInventory deviceId={deviceId} />
+      <DeepOSInventory deviceId={deviceId} alwaysShow />
       <div className="card">
         <h2>Resource Summary</h2>
         {roles.data && roles.data.length > 0 && (
