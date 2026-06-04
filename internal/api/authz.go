@@ -3,7 +3,51 @@ package api
 import (
 	"net/http"
 	"strings"
+
+	"github.com/google/uuid"
 )
+
+// inScope reports whether a device (at deviceLoc) is within a user's site
+// scope. A nil userSite is global (sees everything). A site-scoped user sees a
+// device only if their site is the device's location or an ancestor of it
+// (walking up the locations tree). Unassigned devices (nil location) are not
+// visible to a site-scoped user. Pure + cycle-guarded → unit-tested.
+func inScope(userSite, deviceLoc *uuid.UUID, parent map[uuid.UUID]uuid.UUID) bool {
+	if userSite == nil {
+		return true
+	}
+	if deviceLoc == nil {
+		return false
+	}
+	cur := *deviceLoc
+	for i := 0; i < 64; i++ {
+		if cur == *userSite {
+			return true
+		}
+		next, ok := parent[cur]
+		if !ok || next == uuid.Nil || next == cur {
+			return false
+		}
+		cur = next
+	}
+	return false
+}
+
+// deviceIDFromPath extracts a device UUID from a "/api/v1/devices/{id}/..."
+// path. Non-UUID second segments (import-csv, bulk-delete, collection-summary)
+// return false — those are list/bulk operations, not single-device access.
+func deviceIDFromPath(path string) (uuid.UUID, bool) {
+	parts := strings.Split(strings.Trim(strings.TrimPrefix(path, "/api/v1"), "/"), "/")
+	for i := 0; i+1 < len(parts); i++ {
+		if parts[i] == "devices" {
+			if id, err := uuid.Parse(parts[i+1]); err == nil {
+				return id, true
+			}
+			return uuid.Nil, false
+		}
+	}
+	return uuid.Nil, false
+}
 
 // requiredPermission maps an HTTP method + /api/v1 path to the permission code
 // a caller must hold. "" means "any authenticated user" (dashboards, system,

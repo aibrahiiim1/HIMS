@@ -66,6 +66,13 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			http.Error(w, "forbidden: requires permission "+perm, http.StatusForbidden)
 			return
 		}
+		// Site scope: a site-bound user may only touch devices within their site.
+		if id.SiteID != nil {
+			if devID, ok := deviceIDFromPath(p); ok && !s.deviceInScope(r.Context(), devID, id.SiteID) {
+				http.Error(w, "forbidden: device is outside your site", http.StatusForbidden)
+				return
+			}
+		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), idKey, id)))
 	})
 }
@@ -92,6 +99,32 @@ func (s *Server) resolveSession(r *http.Request) *identity {
 		UserID: sess.UserID, Username: sess.Username, SiteID: sess.LocationID,
 		Perms: perms, Admin: perms["rbac.manage"],
 	}
+}
+
+// locationParents loads the locations tree into a child→parent map for scope
+// resolution. The table is tiny, so a per-request fetch is fine.
+func (s *Server) locationParents(ctx context.Context) map[uuid.UUID]uuid.UUID {
+	out := map[uuid.UUID]uuid.UUID{}
+	locs, err := s.queries.ListLocations(ctx)
+	if err != nil {
+		return out
+	}
+	for _, l := range locs {
+		if l.ParentID != nil {
+			out[l.ID] = *l.ParentID
+		}
+	}
+	return out
+}
+
+// deviceInScope reports whether a device is within the given site scope.
+// A missing device resolves to false (hides existence from out-of-site users).
+func (s *Server) deviceInScope(ctx context.Context, devID uuid.UUID, siteID *uuid.UUID) bool {
+	dev, err := s.queries.GetDevice(ctx, devID)
+	if err != nil {
+		return false
+	}
+	return inScope(siteID, dev.LocationID, s.locationParents(ctx))
 }
 
 type loginReq struct {

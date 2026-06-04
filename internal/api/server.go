@@ -388,7 +388,7 @@ func (s *Server) listDevices(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, rows)
+		writeJSON(w, http.StatusOK, s.scopeDevices(ctx, rows))
 		return
 	}
 	if cat == "" {
@@ -399,7 +399,24 @@ func (s *Server) listDevices(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, rows)
+	writeJSON(w, http.StatusOK, s.scopeDevices(ctx, rows))
+}
+
+// scopeDevices filters a device list to the requester's site scope (global
+// users + open mode pass through unchanged).
+func (s *Server) scopeDevices(ctx context.Context, rows []db.Device) []db.Device {
+	id, ok := identityFrom(ctx)
+	if !ok || id == nil || id.SiteID == nil {
+		return rows
+	}
+	parent := s.locationParents(ctx)
+	out := make([]db.Device, 0, len(rows))
+	for _, d := range rows {
+		if inScope(id.SiteID, d.LocationID, parent) {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 func (s *Server) deviceInterfaces(w http.ResponseWriter, r *http.Request) {
