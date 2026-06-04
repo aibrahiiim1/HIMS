@@ -7,6 +7,7 @@ package db
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -39,6 +40,42 @@ type AddUserRoleParams struct {
 func (q *Queries) AddUserRole(ctx context.Context, arg AddUserRoleParams) error {
 	_, err := q.db.Exec(ctx, addUserRole, arg.UserID, arg.RoleID)
 	return err
+}
+
+const auditFacets = `-- name: AuditFacets :many
+SELECT 'category' AS kind, category AS value, count(*)::bigint AS n FROM audit_log GROUP BY category
+UNION ALL
+SELECT 'actor', actor, count(*)::bigint FROM audit_log GROUP BY actor
+UNION ALL
+SELECT 'entity_type', entity_type, count(*)::bigint FROM audit_log WHERE entity_type <> '' GROUP BY entity_type
+ORDER BY kind, n DESC
+`
+
+type AuditFacetsRow struct {
+	Kind  string `json:"kind"`
+	Value string `json:"value"`
+	N     int64  `json:"n"`
+}
+
+// Distinct filter values (+counts) for the audit filter UI, in one round-trip.
+func (q *Queries) AuditFacets(ctx context.Context) ([]AuditFacetsRow, error) {
+	rows, err := q.db.Query(ctx, auditFacets)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AuditFacetsRow{}
+	for rows.Next() {
+		var i AuditFacetsRow
+		if err := rows.Scan(&i.Kind, &i.Value, &i.N); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const createDeviceTemplate = `-- name: CreateDeviceTemplate :one
@@ -307,6 +344,71 @@ type ListAuditLogParams struct {
 
 func (q *Queries) ListAuditLog(ctx context.Context, arg ListAuditLogParams) ([]AuditLog, error) {
 	rows, err := q.db.Query(ctx, listAuditLog, arg.Limit, arg.Category)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AuditLog{}
+	for rows.Next() {
+		var i AuditLog
+		if err := rows.Scan(
+			&i.ID,
+			&i.At,
+			&i.Actor,
+			&i.Action,
+			&i.Category,
+			&i.EntityType,
+			&i.EntityID,
+			&i.Summary,
+			&i.Details,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAuditLogFiltered = `-- name: ListAuditLogFiltered :many
+SELECT id, at, actor, action, category, entity_type, entity_id, summary, details FROM audit_log
+WHERE ($2::text IS NULL OR category = $2)
+  AND ($3::text IS NULL OR actor = $3)
+  AND ($4::text IS NULL OR entity_type = $4)
+  AND ($5::text IS NULL OR action = $5)
+  AND ($6::text IS NULL OR summary ILIKE '%' || $6 || '%')
+  AND ($7::timestamptz IS NULL OR at >= $7)
+  AND ($8::timestamptz IS NULL OR at <= $8)
+ORDER BY at DESC
+LIMIT $1
+`
+
+type ListAuditLogFilteredParams struct {
+	Limit      int32      `json:"limit"`
+	Category   *string    `json:"category"`
+	Actor      *string    `json:"actor"`
+	EntityType *string    `json:"entity_type"`
+	Action     *string    `json:"action"`
+	Q          *string    `json:"q"`
+	FromAt     *time.Time `json:"from_at"`
+	ToAt       *time.Time `json:"to_at"`
+}
+
+// Deep filtering: any subset of category / actor / entity_type / action / free
+// text (summary) / time range. NULL args are ignored.
+func (q *Queries) ListAuditLogFiltered(ctx context.Context, arg ListAuditLogFilteredParams) ([]AuditLog, error) {
+	rows, err := q.db.Query(ctx, listAuditLogFiltered,
+		arg.Limit,
+		arg.Category,
+		arg.Actor,
+		arg.EntityType,
+		arg.Action,
+		arg.Q,
+		arg.FromAt,
+		arg.ToAt,
+	)
 	if err != nil {
 		return nil, err
 	}

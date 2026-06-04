@@ -5,10 +5,12 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/coralsearesorts/hims/internal/reports"
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
 )
 
@@ -536,18 +538,45 @@ type auditDTO struct {
 	Details    json.RawMessage `json:"details"`
 }
 
-func (s *Server) listAuditLog(w http.ResponseWriter, r *http.Request) {
+// auditFilterParams parses the shared deep-filter query params (category,
+// actor, action, entity_type, q, from, to, limit) into a query arg struct.
+func auditFilterParams(r *http.Request) db.ListAuditLogFilteredParams {
+	qp := r.URL.Query()
 	limit := int32(200)
-	if v := r.URL.Query().Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 1000 {
+	if v := qp.Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 5000 {
 			limit = int32(n)
 		}
 	}
-	var cat *string
-	if c := r.URL.Query().Get("category"); c != "" {
-		cat = &c
+	str := func(k string) *string {
+		if v := qp.Get(k); v != "" {
+			return &v
+		}
+		return nil
 	}
-	rows, err := s.queries.ListAuditLog(r.Context(), db.ListAuditLogParams{Limit: limit, Category: cat})
+	ts := func(k string) *time.Time {
+		v := qp.Get(k)
+		if v == "" {
+			return nil
+		}
+		// Accept date (YYYY-MM-DD) or full RFC3339.
+		if t, err := time.Parse("2006-01-02", v); err == nil {
+			return &t
+		}
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			return &t
+		}
+		return nil
+	}
+	return db.ListAuditLogFilteredParams{
+		Limit: limit, Category: str("category"), Actor: str("actor"),
+		EntityType: str("entity_type"), Action: str("action"), Q: str("q"),
+		FromAt: ts("from"), ToAt: ts("to"),
+	}
+}
+
+func (s *Server) listAuditLog(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.queries.ListAuditLogFiltered(r.Context(), auditFilterParams(r))
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -561,4 +590,46 @@ func (s *Server) listAuditLog(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// auditFacets handles GET /audit-log/facets — distinct categories / actors /
+// entity types (+counts) for the filter dropdowns.
+func (s *Server) auditFacets(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.queries.AuditFacets(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	out := map[string][]map[string]any{"category": {}, "actor": {}, "entity_type": {}}
+	for _, f := range rows {
+		out[f.Kind] = append(out[f.Kind], map[string]any{"value": f.Value, "count": f.N})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// exportAuditLog handles GET /audit-log/export — streams the filtered audit
+// trail as CSV (compliance export).
+func (s *Server) exportAuditLog(w http.ResponseWriter, r *http.Request) {
+	params := auditFilterParams(r)
+	params.Limit = 5000
+	rows, err := s.queries.ListAuditLogFiltered(r.Context(), params)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	sheet := reports.Sheet{Name: "Audit", Headers: []string{"When", "Category", "Action", "Summary", "Actor", "Entity Type", "Entity ID"}}
+	for _, a := range rows {
+		sheet.Rows = append(sheet.Rows, []string{
+			a.At.Format("2006-01-02 15:04:05Z07:00"), a.Category, a.Action, a.Summary, a.Actor, a.EntityType, a.EntityID,
+		})
+	}
+	rep := reports.Report{Title: "Audit Trail", Generated: time.Now().UTC(), Sheets: []reports.Sheet{sheet}}
+	b, err := rep.CSV()
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "text/csv")
+	w.Header().Set("Content-Disposition", "attachment; filename=\"audit-"+time.Now().UTC().Format("20060102-1504")+".csv\"")
+	_, _ = w.Write(b)
 }

@@ -909,6 +909,13 @@ export interface AuditEntry {
   details: unknown
 }
 
+// #24 Audit — facet values for filter dropdowns.
+export interface AuditFacets {
+  category: { value: string; count: number }[]
+  actor: { value: string; count: number }[]
+  entity_type: { value: string; count: number }[]
+}
+
 // locationPaths builds a map of location id -> full path label
 // ("Hotel A / Main Building / IT Office") from a flat locations list.
 export function locationPaths(locs: Location[]): Record<string, string> {

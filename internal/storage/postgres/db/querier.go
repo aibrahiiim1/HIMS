@@ -27,6 +27,8 @@ type Querier interface {
 	// Absolute set of on-hand quantity (a stock count / receiving correction).
 	// The CHECK (quantity >= 0) constraint rejects negative results.
 	AdjustSparePartStock(ctx context.Context, arg AdjustSparePartStockParams) (SparePart, error)
+	// Distinct filter values (+counts) for the audit filter UI, in one round-trip.
+	AuditFacets(ctx context.Context) ([]AuditFacetsRow, error)
 	BindCredentialGroup(ctx context.Context, arg BindCredentialGroupParams) (CredentialBinding, error)
 	// Assign vlan/device_class/location to many devices at once (multi-select).
 	// Only the provided (non-null) fields are changed — COALESCE keeps the rest —
@@ -186,6 +188,9 @@ type Querier interface {
 	// Used by the topology graph to build the full picture.
 	ListAllTopologyLinks(ctx context.Context) ([]ListAllTopologyLinksRow, error)
 	ListAuditLog(ctx context.Context, arg ListAuditLogParams) ([]AuditLog, error)
+	// Deep filtering: any subset of category / actor / entity_type / action / free
+	// text (summary) / time range. NULL args are ignored.
+	ListAuditLogFiltered(ctx context.Context, arg ListAuditLogFilteredParams) ([]AuditLog, error)
 	ListBMCSensors(ctx context.Context, deviceID uuid.UUID) ([]BmcSensor, error)
 	ListChildLocations(ctx context.Context, parentID *uuid.UUID) ([]Location, error)
 	// Metadata only (no content_encrypted) — newest first.

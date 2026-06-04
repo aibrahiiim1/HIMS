@@ -123,6 +123,7 @@ func (s *Server) createWorkOrder(w http.ResponseWriter, r *http.Request) {
 		EventType:   "created",
 		Note:        strptr("Work order created"),
 	})
+	s.audit(r, "work_order", "work_order.create", "work_order", wo.ID.String(), "Created work order: "+wo.Title, map[string]any{"priority": wo.Priority})
 	writeJSON(w, http.StatusCreated, wo)
 }
 
@@ -205,6 +206,7 @@ func (s *Server) updateWorkOrder(w http.ResponseWriter, r *http.Request) {
 			WorkOrderID: id, EventType: "note", Note: &req.Note,
 		})
 	}
+	s.audit(r, "work_order", "work_order.update", "work_order", id.String(), "Updated work order: "+wo.Title, map[string]any{"status": wo.Status})
 	writeJSON(w, http.StatusOK, wo)
 }
 
@@ -272,6 +274,7 @@ func (s *Server) createSystem(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	s.audit(r, "config", "system.create", "system", sys.ID.String(), "Created system/license: "+sys.Name, nil)
 	writeJSON(w, http.StatusCreated, sys)
 }
 

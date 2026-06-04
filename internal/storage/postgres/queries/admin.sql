@@ -105,3 +105,26 @@ SELECT * FROM audit_log
 WHERE (sqlc.narg('category')::text IS NULL OR category = sqlc.narg('category'))
 ORDER BY at DESC
 LIMIT $1;
+
+-- name: ListAuditLogFiltered :many
+-- Deep filtering: any subset of category / actor / entity_type / action / free
+-- text (summary) / time range. NULL args are ignored.
+SELECT * FROM audit_log
+WHERE (sqlc.narg('category')::text IS NULL OR category = sqlc.narg('category'))
+  AND (sqlc.narg('actor')::text IS NULL OR actor = sqlc.narg('actor'))
+  AND (sqlc.narg('entity_type')::text IS NULL OR entity_type = sqlc.narg('entity_type'))
+  AND (sqlc.narg('action')::text IS NULL OR action = sqlc.narg('action'))
+  AND (sqlc.narg('q')::text IS NULL OR summary ILIKE '%' || sqlc.narg('q') || '%')
+  AND (sqlc.narg('from_at')::timestamptz IS NULL OR at >= sqlc.narg('from_at'))
+  AND (sqlc.narg('to_at')::timestamptz IS NULL OR at <= sqlc.narg('to_at'))
+ORDER BY at DESC
+LIMIT $1;
+
+-- name: AuditFacets :many
+-- Distinct filter values (+counts) for the audit filter UI, in one round-trip.
+SELECT 'category' AS kind, category AS value, count(*)::bigint AS n FROM audit_log GROUP BY category
+UNION ALL
+SELECT 'actor', actor, count(*)::bigint FROM audit_log GROUP BY actor
+UNION ALL
+SELECT 'entity_type', entity_type, count(*)::bigint FROM audit_log WHERE entity_type <> '' GROUP BY entity_type
+ORDER BY kind, n DESC;

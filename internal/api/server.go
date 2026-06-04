@@ -318,6 +318,8 @@ func (s *Server) routes() {
 		r.Delete("/vendor-fingerprints/{id}", s.deleteVendorFingerprint)
 
 		r.Get("/audit-log", s.listAuditLog)
+		r.Get("/audit-log/facets", s.auditFacets)
+		r.Get("/audit-log/export", s.exportAuditLog)
 
 		// --- Security: encryption key lifecycle ----------------------
 		r.Get("/security/encryption/status", s.encryptionStatus)

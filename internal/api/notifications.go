@@ -179,6 +179,7 @@ func (s *Server) deleteNotificationChannel(w http.ResponseWriter, r *http.Reques
 		writeErr(w, err)
 		return
 	}
+	s.audit(r, "monitoring", "notification.channel.delete", "notification_channel", id.String(), "Deleted a notification channel", nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 
