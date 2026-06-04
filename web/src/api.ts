@@ -183,6 +183,8 @@ export interface SwitchPortEntry {
   if_name?: string | null
   vlan_id: number
   port_role?: string | null
+  source?: string | null
+  last_seen_at?: string | null
 }
 
 export interface SearchResult {
@@ -193,9 +195,17 @@ export interface SearchResult {
   device_name?: string | null
   switch_port: SwitchPortEntry[]
   path: PathStep[]
+  arp_device_id?: string | null
+  arp_device_name?: string | null
+  arp_source?: string | null
+  arp_last_seen?: string | null
+  confidence: string
+  confidence_reasons: string[]
 }
 
 export interface PathStep {
+  hop: number
+  role: string
   device_id?: string | null
   device_name?: string | null
   ip?: string | null
@@ -203,6 +213,7 @@ export interface PathStep {
   if_name?: string | null
   vlan_id?: number | null
   port_role?: string | null
+  source?: string | null
 }
 
 export interface ServerStorage {

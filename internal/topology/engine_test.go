@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/netip"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -16,6 +17,23 @@ type fakeQuerier struct {
 	macRows      []db.SearchByMACRow
 	devRow       *db.SearchByIPRow
 	hostnameRows []db.SearchByHostnameRow
+	devices      map[uuid.UUID]db.Device
+	macTables    map[uuid.UUID][]db.ListMACForDeviceRow
+	arpTables    map[uuid.UUID][]db.ListARPForDeviceRow
+	links        map[uuid.UUID][]db.TopologyLink
+}
+
+func (f *fakeQuerier) GetDevice(_ context.Context, id uuid.UUID) (db.Device, error) {
+	if d, ok := f.devices[id]; ok {
+		return d, nil
+	}
+	return db.Device{}, nil
+}
+func (f *fakeQuerier) ListMACForDevice(_ context.Context, id uuid.UUID) ([]db.ListMACForDeviceRow, error) {
+	return f.macTables[id], nil
+}
+func (f *fakeQuerier) ListARPForDevice(_ context.Context, id uuid.UUID) ([]db.ListARPForDeviceRow, error) {
+	return f.arpTables[id], nil
 }
 
 func (f *fakeQuerier) FindMACByIP(_ context.Context, _ netip.Addr) ([]db.FindMACByIPRow, error) {
@@ -36,8 +54,8 @@ func (f *fakeQuerier) SearchByHostname(_ context.Context, _ *string) ([]db.Searc
 func (f *fakeQuerier) SearchByMAC(_ context.Context, _ string) ([]db.SearchByMACRow, error) {
 	return f.macRows, nil
 }
-func (f *fakeQuerier) ListTopologyLinks(_ context.Context, _ uuid.UUID) ([]db.TopologyLink, error) {
-	return nil, nil
+func (f *fakeQuerier) ListTopologyLinks(_ context.Context, id uuid.UUID) ([]db.TopologyLink, error) {
+	return f.links[id], nil
 }
 func (f *fakeQuerier) ListAllTopologyLinks(_ context.Context) ([]db.ListAllTopologyLinksRow, error) {
 	return nil, nil
@@ -103,6 +121,56 @@ func TestSearchMAC_FindsSwitch(t *testing.T) {
 	}
 	if sp.PortRole == nil || *sp.PortRole != "edge" {
 		t.Errorf("PortRole = %v, want edge", sp.PortRole)
+	}
+}
+
+func TestSearchMAC_PathAndConfidence(t *testing.T) {
+	mac := "aa:bb:cc:dd:ee:ff"
+	accID, fwID := uuid.New(), uuid.New()
+	ifIdx := int32(17)
+	ifName := "Gi1/0/17"
+	uplink := "Gi1/0/24"
+	role := "access"
+	swIP := netip.MustParseAddr("172.21.96.24")
+	now := time.Now().UTC()
+	q := &fakeQuerier{
+		macRows: []db.SearchByMACRow{
+			{Mac: mac, VlanID: 15, IfIndex: &ifIdx, DeviceID: accID, SwitchName: "SW-ACC01", SwitchIp: &swIP, IfName: &ifName, PortRole: &role},
+		},
+		macTables: map[uuid.UUID][]db.ListMACForDeviceRow{
+			accID: {{Mac: mac, VlanID: 15, CollectionSource: "snmp", LastSeenAt: now}},
+		},
+		devices: map[uuid.UUID]db.Device{
+			fwID: {ID: fwID, Name: "FW-EDGE", Category: "firewall"},
+		},
+		links: map[uuid.UUID][]db.TopologyLink{
+			accID: {{LocalDeviceID: accID, RemoteDeviceID: &fwID, LocalIfName: &uplink, LinkSource: "lldp"}},
+		},
+	}
+	e := New(q)
+	res, err := e.SearchMAC(context.Background(), mac)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Source + freshness attribution on the access port.
+	sp := res.SwitchPort[0]
+	if sp.Source == nil || *sp.Source != "snmp" {
+		t.Errorf("Source = %v, want snmp", sp.Source)
+	}
+	if sp.LastSeenAt == nil {
+		t.Error("LastSeenAt not attributed")
+	}
+	// Path: endpoint -> access -> firewall (via LLDP).
+	roles := []string{}
+	for _, p := range res.Path {
+		roles = append(roles, p.Role)
+	}
+	if len(res.Path) < 3 || res.Path[1].Role != "access" || res.Path[len(res.Path)-1].Role != "firewall" {
+		t.Fatalf("unexpected path roles %v", roles)
+	}
+	// LLDP-corroborated, fresh, access port -> high confidence.
+	if res.Confidence != "high" {
+		t.Errorf("Confidence = %q, want high (reasons: %v)", res.Confidence, res.ConfidenceReasons)
 	}
 }
 
