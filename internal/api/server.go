@@ -230,6 +230,15 @@ func (s *Server) routes() {
 
 		r.Get("/audit-log", s.listAuditLog)
 
+		// --- Security: encryption key lifecycle ----------------------
+		r.Get("/security/encryption/status", s.encryptionStatus)
+		r.Post("/security/encryption/generate", s.encryptionGenerate)
+		r.Post("/security/encryption/validate", s.encryptionValidate)
+		r.Post("/security/encryption/rotate", s.encryptionRotate)
+		r.Post("/security/encryption/reset-credentials", s.encryptionResetCredentials)
+		r.Get("/security/encryption/recovery-guide", s.encryptionRecoveryGuide)
+		r.Get("/security/encryption/needs-reentry", s.credentialsNeedingReentry)
+
 		// --- MIB upload engine ---------------------------------------
 		r.Get("/mibs", s.listMibFiles)
 		r.Post("/mibs", s.uploadMib)

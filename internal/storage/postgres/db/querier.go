@@ -28,6 +28,10 @@ type Querier interface {
 	// Only the provided (non-null) fields are changed — COALESCE keeps the rest —
 	// so an operator can set just location, just class, just vlan, or any combo.
 	BulkAssignClassification(ctx context.Context, arg BulkAssignClassificationParams) (int64, error)
+	// Lost-key recovery: wipe only the secret fields; preserve the record,
+	// metadata, assignments and group memberships. Flag for re-entry.
+	ClearAllCredentialSecrets(ctx context.Context) error
+	ClearReentryFlag(ctx context.Context, id uuid.UUID) error
 	// ---- Work-order parts (stock consumption) ---------------------------------
 	// Atomic: decrement stock AND record the consumption in ONE statement. The
 	// UPDATE's WHERE quantity >= $3 is the precondition; if it fails to match,
@@ -35,11 +39,16 @@ type Querier interface {
 	// ErrNoRows — which the handler maps to "insufficient stock" (409). This is
 	// the atomic-DB-signal pattern: no SELECT-then-UPDATE TOCTOU window.
 	ConsumePartToWorkOrder(ctx context.Context, arg ConsumePartToWorkOrderParams) (WorkOrderPart, error)
+	CountCredentialsNeedingReentry(ctx context.Context) (int64, error)
 	CountDevicesNeedingAttention(ctx context.Context) (int64, error)
+	// ===== Credential secret accounting / recovery =============================
+	CountEncryptedCredentials(ctx context.Context) (int64, error)
 	// Systems whose license OR support expires within 90 days (or already has).
 	CountExpiringSystems(ctx context.Context) (int64, error)
 	CountOpenAlerts(ctx context.Context) (int64, error)
 	CountOpenWorkOrders(ctx context.Context) (int64, error)
+	// Blobs sealed under a key id other than the one currently loaded.
+	CountUndecryptableCredentials(ctx context.Context, keyID string) (int64, error)
 	// ---- Alert rules ----------------------------------------------------------
 	CreateAlertRule(ctx context.Context, arg CreateAlertRuleParams) (AlertRule, error)
 	CreateCredential(ctx context.Context, arg CreateCredentialParams) (Credential, error)
@@ -117,6 +126,8 @@ type Querier interface {
 	GetCredential(ctx context.Context, id uuid.UUID) (Credential, error)
 	GetDevice(ctx context.Context, id uuid.UUID) (Device, error)
 	GetDiscoveryJob(ctx context.Context, id uuid.UUID) (DiscoveryJob, error)
+	// ===== Encryption key lifecycle (metadata only — never the key) ===========
+	GetEncryptionMetadata(ctx context.Context) (EncryptionMetadatum, error)
 	GetFirewallStatus(ctx context.Context, deviceID uuid.UUID) (FirewallStatus, error)
 	GetLocation(ctx context.Context, id uuid.UUID) (Location, error)
 	GetMonitoringCheck(ctx context.Context, id uuid.UUID) (MonitoringCheck, error)
@@ -140,6 +151,7 @@ type Querier interface {
 	ListAuditLog(ctx context.Context, arg ListAuditLogParams) ([]AuditLog, error)
 	ListBMCSensors(ctx context.Context, deviceID uuid.UUID) ([]BmcSensor, error)
 	ListChildLocations(ctx context.Context, parentID *uuid.UUID) ([]Location, error)
+	ListCredentialBlobs(ctx context.Context) ([]ListCredentialBlobsRow, error)
 	// All credentials as resolver candidates (the "try everything" default for a
 	// scan when the operator selects none). Metadata only — no secret.
 	ListCredentialCandidates(ctx context.Context) ([]ListCredentialCandidatesRow, error)
@@ -152,6 +164,7 @@ type Querier interface {
 	// Groups with member + binding counts for the scan-time group multi-select.
 	ListCredentialGroups(ctx context.Context) ([]ListCredentialGroupsRow, error)
 	ListCredentials(ctx context.Context) ([]Credential, error)
+	ListCredentialsNeedingReentry(ctx context.Context) ([]ListCredentialsNeedingReentryRow, error)
 	ListDeviceFacts(ctx context.Context, deviceID uuid.UUID) ([]DeviceFact, error)
 	ListDeviceRoles(ctx context.Context, deviceID uuid.UUID) ([]DeviceRole, error)
 	// ===== Device templates ====================================================
@@ -237,6 +250,8 @@ type Querier interface {
 	// Persist the rollup the engine computed (status + failure counter) onto the
 	// check after a poll. History rows go to monitoring_samples separately.
 	RecordMonitoringResult(ctx context.Context, arg RecordMonitoringResultParams) (MonitoringCheck, error)
+	// Bump version + stamp the rotation; sets the new key's fingerprint.
+	RecordRotation(ctx context.Context, arg RecordRotationParams) error
 	ResolveAlert(ctx context.Context, id uuid.UUID) (Alert, error)
 	// The resolver-assembly query: for a device IP, return every credential in a
 	// group bound to either a subnet that contains the IP (more specific) or a
@@ -267,6 +282,7 @@ type Querier interface {
 	SetUserRolesClear(ctx context.Context, userID uuid.UUID) error
 	TotalExpenses(ctx context.Context) (float64, error)
 	TouchDeviceDiscovery(ctx context.Context, arg TouchDeviceDiscoveryParams) error
+	TouchValidation(ctx context.Context) error
 	// Rename + weak-flag update (Credentials CRUD edit).
 	UpdateCredentialMeta(ctx context.Context, arg UpdateCredentialMetaParams) (Credential, error)
 	// Used by key rotation: re-seal the secret under a new key + KeyID.
@@ -295,6 +311,8 @@ type Querier interface {
 	UpsertBMCSensor(ctx context.Context, arg UpsertBMCSensorParams) error
 	UpsertCameraInfo(ctx context.Context, arg UpsertCameraInfoParams) (CameraInfo, error)
 	UpsertDeviceFact(ctx context.Context, arg UpsertDeviceFactParams) error
+	// Adopt / record the current key's fingerprint (generate + first-run adopt).
+	UpsertEncryptionMetadata(ctx context.Context, arg UpsertEncryptionMetadataParams) error
 	UpsertFirewallStatus(ctx context.Context, arg UpsertFirewallStatusParams) error
 	UpsertHAMember(ctx context.Context, arg UpsertHAMemberParams) error
 	// ---- Interfaces -----------------------------------------------------------

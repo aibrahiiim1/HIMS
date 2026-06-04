@@ -12,20 +12,22 @@ import (
 // only. The encrypted blob and key id never leave the server, and the
 // plaintext secret is never echoed back.
 type credentialDTO struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Kind      string `json:"kind"`
-	Weak      bool   `json:"weak"`
-	CreatedAt string `json:"created_at"`
+	ID                 string `json:"id"`
+	Name               string `json:"name"`
+	Kind               string `json:"kind"`
+	Weak               bool   `json:"weak"`
+	NeedsSecretReentry bool   `json:"needs_secret_reentry"`
+	CreatedAt          string `json:"created_at"`
 }
 
 func toCredentialDTO(c db.Credential) credentialDTO {
 	return credentialDTO{
-		ID:        c.ID.String(),
-		Name:      c.Name,
-		Kind:      c.Kind,
-		Weak:      c.Weak,
-		CreatedAt: c.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		ID:                 c.ID.String(),
+		Name:               c.Name,
+		Kind:               c.Kind,
+		Weak:               c.Weak,
+		NeedsSecretReentry: c.NeedsSecretReentry,
+		CreatedAt:          c.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
 }
 
@@ -128,6 +130,9 @@ func (s *Server) updateCredential(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		weak = isWeakSecret(cur.Kind, req.Secret)
+		// A freshly entered secret clears any "needs re-entry" flag from a reset.
+		_ = s.queries.ClearReentryFlag(ctx, id)
+		s.audit(r, "credential", "credential.secret.reenter", "credential", id.String(), "Re-entered credential secret", nil)
 	}
 	c, err := s.queries.UpdateCredentialMeta(ctx, db.UpdateCredentialMetaParams{ID: id, Name: name, Weak: weak})
 	if err != nil {

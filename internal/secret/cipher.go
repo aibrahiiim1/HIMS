@@ -29,9 +29,54 @@ var ErrKeyMismatch = errors.New("secret: blob sealed with a different key (KeyID
 
 // Cipher seals and opens secrets with one AES-256-GCM key.
 type Cipher struct {
-	aead  cipher.AEAD
-	keyID string
+	aead        cipher.AEAD
+	keyID       string
+	fingerprint string
 }
+
+// colonHex renders bytes as upper-case colon-separated hex (AA:BB:CC…), the
+// conventional fingerprint display.
+func colonHex(b []byte) string {
+	const hexd = "0123456789ABCDEF"
+	out := make([]byte, 0, len(b)*3)
+	for i, x := range b {
+		if i > 0 {
+			out = append(out, ':')
+		}
+		out = append(out, hexd[x>>4], hexd[x&0x0f])
+	}
+	return string(out)
+}
+
+// GenerateKey returns a fresh cryptographically-secure 32-byte AES-256 key,
+// base64-encoded — suitable for HIMS_ENCRYPTION_KEY. The raw key is the
+// caller's responsibility; it is never persisted by this package.
+func GenerateKey() (string, error) {
+	key := make([]byte, 32)
+	if _, err := io.ReadFull(rand.Reader, key); err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(key), nil
+}
+
+// FingerprintForKey returns the full SHA-256 fingerprint (colon-hex) of a
+// base64 key without constructing a cipher — used to record/compare key
+// identity. It validates the key is decodable 32 bytes.
+func FingerprintForKey(keyB64 string) (fingerprint, keyID string, err error) {
+	key, err := base64.StdEncoding.DecodeString(keyB64)
+	if err != nil {
+		return "", "", fmt.Errorf("secret: key is not valid base64: %w", err)
+	}
+	if len(key) != 32 {
+		return "", "", fmt.Errorf("secret: key must be 32 bytes (AES-256), got %d", len(key))
+	}
+	sum := sha256.Sum256(key)
+	return colonHex(sum[:]), hex.EncodeToString(sum[:4]), nil
+}
+
+// Fingerprint is the full SHA-256 fingerprint (colon-hex) of the loaded key.
+// It is one-way: it identifies the key without revealing it.
+func (c *Cipher) Fingerprint() string { return c.fingerprint }
 
 // NewCipher builds a Cipher from a base64-encoded 32-byte key. The KeyID is a
 // short, non-reversible fingerprint of the key (first 8 hex of SHA-256) used
@@ -53,7 +98,7 @@ func NewCipher(keyB64 string) (*Cipher, error) {
 		return nil, err
 	}
 	sum := sha256.Sum256(key)
-	return &Cipher{aead: aead, keyID: hex.EncodeToString(sum[:4])}, nil
+	return &Cipher{aead: aead, keyID: hex.EncodeToString(sum[:4]), fingerprint: colonHex(sum[:])}, nil
 }
 
 // KeyID is the fingerprint of the loaded key.

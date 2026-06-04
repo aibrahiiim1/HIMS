@@ -4,8 +4,8 @@ import { FileClock } from 'lucide-react'
 import { api, type AuditEntry } from '../api'
 import { PageHeader, Panel, EmptyState, timeAgo } from '../components/ui'
 
-const CATS = ['all', 'user', 'discovery', 'inventory', 'credential', 'config', 'general']
-const catCls = (c: string) => ({ user: 'badge-access', discovery: 'badge-lldp', inventory: 'badge-up', credential: 'badge-warning', config: 'badge-trunk' }[c] ?? 'badge-unknown')
+const CATS = ['all', 'user', 'discovery', 'inventory', 'credential', 'config', 'security', 'general']
+const catCls = (c: string) => ({ user: 'badge-access', discovery: 'badge-lldp', inventory: 'badge-up', credential: 'badge-warning', config: 'badge-trunk', security: 'badge-down' }[c] ?? 'badge-unknown')
 
 export function AuditLog() {
   const [cat, setCat] = useState('all')

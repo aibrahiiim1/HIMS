@@ -5,7 +5,7 @@ import {
   Plug, BatteryCharging, ShieldAlert, Camera, Video, Phone, CircleHelp, Brain,
   Map, ClipboardList, Wrench, Package, DollarSign, Building2,
   FileChartColumn, FileSearch, ChartLine, Tag, Download,
-  Users, ShieldCheck, LayoutTemplate, ScanLine, Settings, FileClock,
+  Users, ShieldCheck, LayoutTemplate, ScanLine, Settings, FileClock, Lock,
 } from 'lucide-react'
 
 export type BadgeKey = 'alerts' | 'failed_scans' | 'unknown' | 'work_orders'
@@ -133,6 +133,7 @@ export const NAV: NavGroup[] = [
       { label: 'Roles & Permissions', icon: ShieldCheck, to: '/access-control/roles' },
       { label: 'Device Templates', icon: LayoutTemplate, to: '/device-templates' },
       { label: 'Vendor Fingerprints', icon: ScanLine, to: '/vendor-fingerprints' },
+      { label: 'Encryption', icon: Lock, to: '/security/encryption' },
       { label: 'System Settings', icon: Settings, to: '/settings' },
       { label: 'Audit Log', icon: FileClock, to: '/audit-log' },
     ],

@@ -115,15 +115,16 @@ type CameraInfo struct {
 }
 
 type Credential struct {
-	ID            uuid.UUID `json:"id"`
-	Name          string    `json:"name"`
-	Kind          string    `json:"kind"`
-	EncryptedBlob []byte    `json:"encrypted_blob"`
-	KeyID         string    `json:"key_id"`
-	Weak          bool      `json:"weak"`
-	Metadata      []byte    `json:"metadata"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID                 uuid.UUID `json:"id"`
+	Name               string    `json:"name"`
+	Kind               string    `json:"kind"`
+	EncryptedBlob      []byte    `json:"encrypted_blob"`
+	KeyID              string    `json:"key_id"`
+	Weak               bool      `json:"weak"`
+	Metadata           []byte    `json:"metadata"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
+	NeedsSecretReentry bool      `json:"needs_secret_reentry"`
 }
 
 type CredentialBinding struct {
@@ -229,6 +230,17 @@ type DiscoveryResult struct {
 	ProbeData []byte     `json:"probe_data"`
 	Error     *string    `json:"error"`
 	ProbedAt  time.Time  `json:"probed_at"`
+}
+
+type EncryptionMetadatum struct {
+	ID               int32      `json:"id"`
+	Fingerprint      string     `json:"fingerprint"`
+	KeyID            string     `json:"key_id"`
+	Algorithm        string     `json:"algorithm"`
+	Version          int32      `json:"version"`
+	CreatedAt        time.Time  `json:"created_at"`
+	LastRotationAt   *time.Time `json:"last_rotation_at"`
+	LastValidationAt *time.Time `json:"last_validation_at"`
 }
 
 type FirewallHaMember struct {

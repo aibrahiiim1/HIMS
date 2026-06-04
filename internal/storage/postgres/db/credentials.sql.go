@@ -57,7 +57,7 @@ func (q *Queries) BindCredentialGroup(ctx context.Context, arg BindCredentialGro
 const createCredential = `-- name: CreateCredential :one
 INSERT INTO credentials (name, kind, encrypted_blob, key_id, weak, metadata)
 VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, name, kind, encrypted_blob, key_id, weak, metadata, created_at, updated_at
+RETURNING id, name, kind, encrypted_blob, key_id, weak, metadata, created_at, updated_at, needs_secret_reentry
 `
 
 type CreateCredentialParams struct {
@@ -89,6 +89,7 @@ func (q *Queries) CreateCredential(ctx context.Context, arg CreateCredentialPara
 		&i.Metadata,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.NeedsSecretReentry,
 	)
 	return i, err
 }
@@ -129,7 +130,7 @@ func (q *Queries) DeleteCredential(ctx context.Context, id uuid.UUID) error {
 }
 
 const getCredential = `-- name: GetCredential :one
-SELECT id, name, kind, encrypted_blob, key_id, weak, metadata, created_at, updated_at FROM credentials WHERE id = $1
+SELECT id, name, kind, encrypted_blob, key_id, weak, metadata, created_at, updated_at, needs_secret_reentry FROM credentials WHERE id = $1
 `
 
 func (q *Queries) GetCredential(ctx context.Context, id uuid.UUID) (Credential, error) {
@@ -145,6 +146,7 @@ func (q *Queries) GetCredential(ctx context.Context, id uuid.UUID) (Credential, 
 		&i.Metadata,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.NeedsSecretReentry,
 	)
 	return i, err
 }
@@ -306,7 +308,7 @@ func (q *Queries) ListCredentialGroups(ctx context.Context) ([]ListCredentialGro
 }
 
 const listCredentials = `-- name: ListCredentials :many
-SELECT id, name, kind, encrypted_blob, key_id, weak, metadata, created_at, updated_at FROM credentials ORDER BY name
+SELECT id, name, kind, encrypted_blob, key_id, weak, metadata, created_at, updated_at, needs_secret_reentry FROM credentials ORDER BY name
 `
 
 func (q *Queries) ListCredentials(ctx context.Context) ([]Credential, error) {
@@ -328,6 +330,7 @@ func (q *Queries) ListCredentials(ctx context.Context) ([]Credential, error) {
 			&i.Metadata,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.NeedsSecretReentry,
 		); err != nil {
 			return nil, err
 		}
@@ -404,7 +407,7 @@ func (q *Queries) ResolveCandidatesForIP(ctx context.Context, arg ResolveCandida
 const updateCredentialMeta = `-- name: UpdateCredentialMeta :one
 UPDATE credentials SET name = $2, weak = $3, updated_at = now()
 WHERE id = $1
-RETURNING id, name, kind, encrypted_blob, key_id, weak, metadata, created_at, updated_at
+RETURNING id, name, kind, encrypted_blob, key_id, weak, metadata, created_at, updated_at, needs_secret_reentry
 `
 
 type UpdateCredentialMetaParams struct {
@@ -427,6 +430,7 @@ func (q *Queries) UpdateCredentialMeta(ctx context.Context, arg UpdateCredential
 		&i.Metadata,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.NeedsSecretReentry,
 	)
 	return i, err
 }

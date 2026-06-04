@@ -684,6 +684,19 @@ select.field { cursor: pointer; }
 .port-detail-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
 .port-detail-head strong { font-size: var(--fs-lg); }
 
+/* ---- Encryption banners / key reveal modal -------------------------------- */
+.enc-banner { display: flex; align-items: flex-start; gap: 9px; padding: 11px 14px; border-radius: var(--radius); font-size: var(--fs-md); border: 1px solid var(--border); }
+.enc-banner svg { flex: none; margin-top: 1px; }
+.enc-banner.warn { background: var(--warn-bg); color: var(--warn); border-color: var(--warn); }
+.enc-banner.crit { background: var(--crit-bg); color: var(--crit); border-color: var(--crit); }
+.enc-banner.info { background: var(--info-bg); color: var(--info); border-color: var(--info); }
+.enc-banner code { font-family: ui-monospace, monospace; background: rgba(0,0,0,.08); padding: 0 4px; border-radius: 3px; }
+
+.modal-scrim { position: fixed; inset: 0; background: rgba(8,12,22,.6); z-index: 100; display: flex; align-items: center; justify-content: center; padding: 20px; }
+.modal { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); padding: var(--space-6); max-width: 620px; width: 100%; }
+.modal h2 { display: flex; align-items: center; gap: 8px; font-size: var(--fs-lg); margin-bottom: 12px; }
+.key-box { background: var(--surface-3); border: 1px dashed var(--border-strong); border-radius: var(--radius-sm); padding: 12px 14px; word-break: break-all; font-size: var(--fs-md); color: var(--text); user-select: all; }
+
 /* ---- Settings layout ------------------------------------------------------ */
 .settings-layout { display: grid; grid-template-columns: 220px 1fr; gap: var(--space-4); align-items: start; }
 .settings-nav { display: flex; flex-direction: column; gap: 3px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 8px; box-shadow: var(--shadow-sm); position: sticky; top: 0; }

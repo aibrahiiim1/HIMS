@@ -621,6 +621,27 @@ export interface VendorFingerprint {
   enabled: boolean
   created_at: string
 }
+export interface EncryptionStatus {
+  status: 'enabled' | 'pending_restart' | 'missing'
+  configured: boolean
+  enabled: boolean
+  algorithm: string
+  fingerprint: string
+  key_id: string
+  version: number
+  created_at?: string | null
+  last_rotation_at?: string | null
+  last_validation_at?: string | null
+  encrypted_count: number
+  needs_reset_count: number
+  undecryptable_count: number
+  fingerprint_match: boolean
+  warnings: string[]
+}
+export interface KeyReveal { key?: string; new_key?: string; fingerprint: string; key_id: string; instructions: string; rotated?: number; failed?: { name: string; reason: string }[] }
+export interface ReentryCred { id: string; name: string; kind: string; weak: boolean; needs_secret_reentry: boolean; created_at: string; updated_at: string }
+export interface GuideSection { title: string; body: string }
+
 export interface AuditEntry {
   id: number
   at: string
