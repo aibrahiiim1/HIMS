@@ -23,11 +23,11 @@ Legend: ✅ done · 🟡 core done, richer phase remaining · 🟠 basic exists,
 | 10 | Config Backup | 🔴 | SSH backup, versions, diff, drift detection |
 | 11 | Config Drift / Change Tracking | 🔴 | depends on #10 |
 | 12 | NetFlow / sFlow Analytics | 🔴 | top talkers, protocols, bandwidth |
-| 13 | Wireless Intelligence | 🟡 | controllers/APs collected; needs rich UI |
-| 14 | Firewall Intelligence | 🟡 | status/VPN/HA/licenses collected; needs rich UI |
+| 13 | Wireless Intelligence | 🟡 | **data-gated** — no wireless controllers/APs collected in this fleet (access_points=0); detail UI ready, needs a controller collection run |
+| 14 | Firewall Intelligence | ✅ | FortiGate Pro UI: HA/sessions/VPN-up-total/members KPIs, status, CPU/mem/disk meters, VPN tunnel table (up/down + traffic), cluster members, licenses, interfaces — verified live (3 FortiGates, 36 tunnels) |
 | 15 | Server Intelligence | 🟡 | CPU/RAM/disk/storage via SNMP; needs services/processes/events |
-| 16 | Camera / NVR Intelligence | 🟡 | ONVIF collected; needs channels/recording/lost-video |
-| 17 | Voice / PBX Intelligence | 🟡 | CUCM phones collected; needs registration/gateways/trunks |
+| 16 | Camera / NVR Intelligence | 🟡 | **data-gated** — 116 cameras discovered but camera_info/nvr_channels=0 (no ONVIF deep-collect yet); detail UI ready, needs an ONVIF collection run |
+| 17 | Voice / PBX Intelligence | 🟡 | **data-gated** — no PBX/CUCM in this fleet (pbx_phones=0); detail UI ready, needs a CUCM/AXL collection run |
 | 18 | Asset Lifecycle | 🔴 | warranty/EOL/owner/cost/maintenance history |
 | 19 | Work Orders Integration | 🟠 | WOs exist; needs device/alert linking, SLA, history |
 | 20 | Maintenance Windows | ✅ | delivered as part of #6 — global/site/device scoped, time-bounded, suppress alert firing, auto-expire; CRUD UI on Alerts → Maintenance |
@@ -62,6 +62,8 @@ Supporting fixes this program: runtime key unlock (`3ef8293`), single-instance g
 - Created progress tracker. Starting **#6 Alert Engine** (full finalization).
 - **#6 Alert Engine backend** (`7b7a0ee`): migration 000029 (maintenance_windows + alert_events + alerts.acknowledged_by/escalated + alert_rules.escalate_after_minutes); engine suppression + timeline events + escalation; ack-by-actor; CRUD/timeline/note/maintenance endpoints; suppression unit test. Verified live (31 alerts opened, timeline, ack-by-alice, global window → 31 suppressed).
 - **#6 Alert Engine frontend**: Alerts page rebuilt with Alerts/Rules/Maintenance tabs, escalated KPI+badge, status filter, alert timeline drawer + notes, maintenance-window scheduler/list, rule escalation field. **#6 and #20 complete.**
+- **#14 Firewall Intelligence**: FirewallDetail rebuilt to the enterprise design — KPI header (HA mode / active sessions / VPN up-total / cluster members), Firewall Status DefList, CPU/mem/disk meters, VPN tunnel table (up/down + in/out traffic), cluster members, licenses, interfaces. Verified live on a FortiGate (195k sessions, 10/12 tunnels up). **#14 complete.**
+- **#13/#16/#17 status**: domain *collectors* exist (built phases 7/8/9/voice) but this fleet has no collected wireless/ONVIF/CUCM detail data (access_points/camera_info/nvr_channels/pbx_phones all 0; though 116 cameras are discovered). Their detail UIs render-on-data; building richer empty views would be unverifiable polish, so they're marked data-gated pending a collection run rather than shipped blind.
 - **#5b Monitoring time-series viz**: device-detail Monitoring tab rebuilt into a Performance & Availability view — uptime % (windowed), latency avg/min/max + trend sparkline, a per-sample status timeline strip, and an SNMP-metric (value_num) trend — all over the real monitoring_samples series (2,510+ samples accumulated live). **#5 complete** (tabular counters deferred + documented above).
 - **#4 Topology Intelligence finalized**: `/topology/graph` with layer detection (core/distribution/access by link degree + category → edge/gateway/wireless/host), link confidence (LLDP/CDP=high, MAC=medium, ARP=low, downgraded when stale), undirected edge dedup, stale-link pruning (>7d, on every rebuild), and a layer-coloured cytoscape map with click-to-focus neighborhood. Verified live: 44 nodes / 44 deduped edges, layers core 1 / dist 23 / access 20. Engine unit test covers layer + confidence + dedup. **#4 complete.**
 - **#7 Notifications** (`eb39a9e` backend + frontend): internal/notify senders (Slack/Teams/Telegram/webhook/email) + pure decision logic (severity + quiet hours, unit-tested); channels with AES-GCM-encrypted targets (never returned), background dispatcher with one-delivery-per-(channel,alert) dedup, test endpoint, delivery log; Administration → Notifications page (per-type channel form, test button, log). Verified: encrypted-at-rest blob, metadata-only DTO, test path executes + logs. **#7 complete.**
