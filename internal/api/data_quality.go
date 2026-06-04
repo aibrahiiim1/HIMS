@@ -144,6 +144,26 @@ func (s *Server) dataQuality(w http.ResponseWriter, r *http.Request) {
 	addIssue("low_confidence", "Low-confidence classification", "Devices auto-classified below "+strconv.Itoa(lowConfidenceThreshold)+"% confidence. Open the device, Re-classify (or bind a credential for deeper signals), then Lock once correct.", "info", lowConf)
 	addIssue("missing_vendor", "Missing vendor", "Devices with no vendor recorded. Vendor enriches fingerprinting, reports and lifecycle.", "info", missingVendor)
 
+	// Servers/endpoints that have never had a deep OS inventory collected.
+	if rows, err := s.queries.ListDevicesWithoutOSInventory(ctx); err == nil && len(rows) > 0 {
+		devs := make([]dqDevice, 0, len(rows))
+		for i, d := range rows {
+			if i >= dqSampleCap {
+				break
+			}
+			dd := dqDevice{ID: d.ID.String(), Name: d.Name, Category: d.Category}
+			if d.PrimaryIp != nil && d.PrimaryIp.IsValid() {
+				dd.PrimaryIP = d.PrimaryIp.String()
+			}
+			devs = append(devs, dd)
+		}
+		issues = append(issues, dqIssue{
+			Key: "os_not_inventoried", Label: "OS not inventoried", Severity: "info",
+			Description: "Servers/endpoints with no deep OS inventory yet. Open the device, bind a working credential (WinRM for Windows, SSH for Linux) and use Collect OS to gather OS/hardware/services/software.",
+			Count:       len(rows), Devices: devs,
+		})
+	}
+
 	// Stable order: critical first, then warning, then info; ties by count desc.
 	rank := map[string]int{"critical": 0, "warning": 1, "info": 2}
 	sort.SliceStable(issues, func(i, j int) bool {

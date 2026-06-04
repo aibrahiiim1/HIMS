@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -11,8 +12,43 @@ import (
 	"github.com/coralsearesorts/hims/internal/domain"
 	"github.com/coralsearesorts/hims/internal/osinv"
 	"github.com/coralsearesorts/hims/internal/ssh"
+	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
+	"github.com/jackc/pgx/v5"
 	"github.com/masterzen/winrm"
 )
+
+// getOSInventory handles GET /devices/{id}/os-inventory — the full deep-inventory
+// bundle (1:1 summary + all 1:N collections) for a device. "inventory" is null
+// when the device has never been OS-inventoried, which the UI renders as
+// "Not collected yet". Empty collections come back as [] (emit_empty_slices).
+func (s *Server) getOSInventory(w http.ResponseWriter, r *http.Request) {
+	ctx, id, ok := pathDevice(w, r)
+	if !ok {
+		return
+	}
+	var invPtr *db.OsInventory
+	if inv, err := s.queries.GetOSInventory(ctx, id); err == nil {
+		invPtr = &inv
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		writeErr(w, err)
+		return
+	}
+	disks, _ := s.queries.ListOSDisks(ctx, id)
+	nics, _ := s.queries.ListOSNics(ctx, id)
+	svcs, _ := s.queries.ListOSServices(ctx, id)
+	procs, _ := s.queries.ListOSProcesses(ctx, id)
+	soft, _ := s.queries.ListOSSoftware(ctx, id)
+	roles, _ := s.queries.ListOSRoles(ctx, id)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"inventory": invPtr,
+		"disks":     disks,
+		"nics":      nics,
+		"services":  svcs,
+		"processes": procs,
+		"software":  soft,
+		"roles":     roles,
+	})
+}
 
 // Deep OS Inventory — on-demand authenticated collection for a single device.
 // Windows uses WinRM/PowerShell (Get-CimInstance), Linux uses SSH. The device's

@@ -160,6 +160,7 @@ func (s *Server) routes() {
 		r.Delete("/devices/{id}", s.deleteDevice)
 		r.Get("/devices/{id}/classification", s.getClassification)
 		r.Post("/devices/{id}/reclassify", s.reclassifyDevice)
+		r.Get("/devices/{id}/os-inventory", s.getOSInventory)
 		r.Post("/devices/{id}/collect-os", s.collectOSInventory)
 		r.Post("/devices/{id}/classification-lock", s.setClassificationLock)
 		r.Get("/devices/{id}/interfaces", s.deviceInterfaces)

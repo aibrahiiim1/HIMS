@@ -980,6 +980,33 @@ export interface Subnet {
   vlan_id?: number | null
 }
 
+// Deep OS Inventory (Windows via WinRM, Linux via SSH). All summary fields are
+// nullable — null renders as "Not collected".
+export interface OSInventory {
+  collection_method: string; collected_at: string
+  hostname?: string | null; fqdn?: string | null; domain?: string | null; workgroup?: string | null
+  logged_on_user?: string | null
+  os_caption?: string | null; os_version?: string | null; os_build?: string | null
+  os_edition?: string | null; os_arch?: string | null; kernel?: string | null
+  install_date?: string | null; last_boot?: string | null; uptime_seconds?: number | null; timezone?: string | null
+  manufacturer?: string | null; model?: string | null; serial?: string | null; asset_tag?: string | null
+  bios_version?: string | null; bios_date?: string | null
+  cpu_model?: string | null; cpu_sockets?: number | null; cpu_cores?: number | null
+  ram_total_bytes?: number | null; ram_slots?: number | null; swap_total_bytes?: number | null
+  events_critical_24h?: number | null; events_error_24h?: number | null; events_warning_24h?: number | null
+  last_critical_event?: string | null
+}
+export interface OSDisk { name: string; model?: string | null; serial?: string | null; filesystem?: string | null; size_bytes?: number | null; total_bytes?: number | null; free_bytes?: number | null; health?: string | null }
+export interface OSNic { name: string; mac?: string | null; ip_addresses?: string | null; gateway?: string | null; dns_servers?: string | null; dhcp_enabled?: boolean | null; link_speed_mbps?: number | null }
+export interface OSService { name: string; display_name?: string | null; status?: string | null; start_type?: string | null; account?: string | null; description?: string | null }
+export interface OSProcess { pid: number; name: string; cpu_pct?: number | null; mem_bytes?: number | null; start_time?: string | null }
+export interface OSSoftware { name: string; version: string; publisher?: string | null; arch?: string | null; install_date?: string | null }
+export interface OSRole { role: string; collection_source: string }
+export interface OSInventoryBundle {
+  inventory: OSInventory | null
+  disks: OSDisk[]; nics: OSNic[]; services: OSService[]; processes: OSProcess[]; software: OSSoftware[]; roles: OSRole[]
+}
+
 // Device classification (OS/NVR-discovery add-on).
 export interface ClassificationEvidence {
   source: string; signal: string; category?: string; os_family?: string; subtype?: string; confidence: number; observed_at?: string

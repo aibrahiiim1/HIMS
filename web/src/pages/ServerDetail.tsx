@@ -4,6 +4,7 @@ import { Server } from 'lucide-react'
 import { api, type ServerStorage, type DeviceFact, type DeviceRole, type Interface, type BMCInfo, type BMCSensor } from '../api'
 import { DeviceOps } from '../components/DeviceOps'
 import { DeviceHeader } from '../components/DeviceHeader'
+import { DeepOSInventory } from '../components/DeepOSInventory'
 
 const healthBadge = (h?: string | null) =>
   h === 'OK' ? 'up' : h === 'Critical' ? 'down' : h === 'Warning' ? 'warning' : 'unknown'
@@ -34,6 +35,7 @@ export function ServerDetail() {
   return (
     <div>
       <DeviceHeader deviceId={deviceId} icon={Server} />
+      <DeepOSInventory deviceId={deviceId} />
       <div className="card">
         <h2>Resource Summary</h2>
         {roles.data && roles.data.length > 0 && (
