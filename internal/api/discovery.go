@@ -287,6 +287,19 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 					} else {
 						enrichment = "VMware collection incomplete: " + vc.Reason
 					}
+				} else if cat := string(r.Match.Category); (cat == string(domain.CatCamera) || cat == string(domain.CatNVR)) && s.cipher() != nil {
+					// Camera/NVR candidate — try ONVIF/HTTP credentials and, on
+					// success, collect device info + classify camera vs NVR (Stage C).
+					cctx, ccancel := context.WithTimeout(ctx, 90*time.Second)
+					cv := s.runCCTVCollection(cctx, dev)
+					ccancel()
+					if cv.ok() {
+						enrichment = "ONVIF facts collected (" + cv.Category + ")"
+					} else if cv.Reason == "no_credential" {
+						enrichment = "CCTV candidate — needs ONVIF/HTTP credential"
+					} else {
+						enrichment = "ONVIF collection incomplete: " + cv.Reason
+					}
 				}
 			}
 		}
