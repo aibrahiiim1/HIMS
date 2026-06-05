@@ -366,9 +366,15 @@ func scanNextAction(category string, bound bool, boundKind string) string {
 	case "server":
 		return "Needs WinRM/SSH credential for deep OS inventory"
 	case "pbx", "voice_gateway", "ip_phone":
-		return "Needs CUCM AXL / vendor credential to collect call-manager facts"
+		// CUCM AXL needs the AXL schema version + service-account URL (vendor
+		// config a user/password credential can't carry) — onboard via the
+		// Controllers import where the operator supplies it.
+		return "Voice/PBX detected — onboard via Discovery → Controllers (CUCM AXL URL + version) or add vendor credential"
 	case "wireless_controller", "access_point":
-		return "Needs vendor API/HTTP credential for controller/AP inventory"
+		// Wireless controllers need vendor connection params (UniFi site / Omada
+		// controller-id / Ruckus API base) beyond user:pass — onboard via the
+		// Controllers import.
+		return "Wireless controller detected — onboard via Discovery → Controllers (controller URL + site)"
 	case "switch", "router", "firewall", "printer", "ups":
 		return "Needs SNMP/SSH credential to manage + enrich"
 	case "unknown", "":

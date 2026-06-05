@@ -42,3 +42,22 @@ above — and even then build the detection, UI, docs, and next-action around it
 - Preserve manual classification locks. Respect RBAC + site-scope.
 - Dev API: `bin/hims-api.exe`, key from gitignored `bin/dev-encryption-key`,
   Postgres on `localhost:5433` (container `hims-pg`), listens `:8090`.
+
+## Discovery scan onboarding — protocol coverage + honest gates
+
+A scan detects all classes (broad ports + safe evidence), classifies with
+confidence, tries the right credentials, binds ONLY on auth success, persists
+every attempt to credential-test history, and shows a per-device next-action.
+
+Authenticated-in-scan today: SNMP (switch/router/firewall/printer/UPS), WinRM
+(Windows), SSH (Linux), ONVIF (camera/NVR/DVR), vSphere (ESXi virtual_host).
+
+Config-gated (NOT a silent defer — detection + classification + next-action +
+the Controllers-import path are all built): **wireless controllers** and **CUCM
+voice** require vendor-specific connection parameters a `user:password`
+credential can't carry — UniFi `site`, Omada `controller-id`, Ruckus `apiBase`,
+CUCM AXL `schema version` + service-account URL. These onboard via
+`Discovery → Controllers import` (POST /discovery/controller-import) where the
+operator supplies that config; the scan classifies them as candidates and points
+there. Lifting this gate = letting the scan carry those params (operator config),
+not a missing capability.
