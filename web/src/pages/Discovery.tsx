@@ -5,7 +5,6 @@ import { Radar, Boxes, CircleX, Clock, KeyRound } from 'lucide-react'
 import {
   api, locationPaths,
   type DiscoveryJob, type DiscoveryResult, type Location, type Credential, type AccessCoverage,
-  type ScanProfileResult,
 } from '../api'
 import { PageHeader, Kpi, timeAgo } from '../components/ui'
 
@@ -32,21 +31,81 @@ const CTRL_KINDS = ['unifi', 'ruckus', 'omada', 'extreme', 'vsphere', 'hyperv', 
 const jobBadge = (s: string) => (s === 'running' ? 'warning' : s === 'completed' ? 'up' : s === 'failed' || s === 'cancelled' ? 'down' : 'unknown')
 const outcomeBadge = (o: string) => (o === 'enrolled' ? 'up' : o === 'failed' ? 'down' : o === 'classified' ? 'access' : 'unknown')
 
-// ProfileCell renders the Vendor Connection Profile outcome for a scanned
-// VMware/CCTV/wireless/voice candidate: whether a profile resolved, whether the
-// test/login succeeded, and whether collection succeeded. Absent for categories
-// that don't use profiles.
-function ProfileCell({ p }: { p?: ScanProfileResult | null }) {
+// profileVendorHint maps a scanned category to the vendor_type to pre-select when
+// creating a profile from a Scan Result. Wireless has several vendor types, so the
+// operator picks — we leave it blank there.
+function profileVendorHint(category?: string | null): string {
+  switch (category) {
+    case 'virtual_host': return 'vmware'
+    case 'camera': case 'nvr': return 'cctv'
+    case 'pbx': case 'voice_gateway': case 'ip_phone': return 'cucm'
+    default: return ''
+  }
+}
+
+// ProfileCell renders the Vendor Connection Profile state for a scanned
+// VMware/CCTV/wireless/voice candidate with unambiguous messaging + actions, so
+// the operator never has to guess why a deep collection did or didn't happen:
+//   • No matching profile found        → Create Vendor Profile
+//   • Matching profile found           → Open Vendor Profile
+//   • Profile test succeeded / failed  → (with the failure reason)
+//   • Collection succeeded / failed    → Retry with profile
+function ProfileCell({ r, qc, jobID }: { r: DiscoveryResult; qc: ReturnType<typeof useQueryClient>; jobID: string | null }) {
+  const p = r.probe_data?.profile
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState('')
+
+  // Categories that don't use vendor profiles: nothing to show.
   if (!p) return <span className="muted">—</span>
-  if (!p.resolved) return <span className="badge badge-warning" title="No matching Vendor Connection Profile — create one in Discovery → Vendor Profiles">no profile</span>
-  const testBadge = p.test_ok === undefined ? null
-    : <span className={`badge badge-${p.test_ok ? 'up' : 'down'}`} title={p.detail ?? ''}>{p.test_ok ? 'test ok' : 'test failed'}</span>
-  const collBadge = p.collection_ok === undefined ? null
-    : <span className={`badge badge-${p.collection_ok ? 'up' : 'down'}`} title={p.detail ?? ''}>{p.collection_ok ? 'collected' : 'collect failed'}</span>
+
+  const linkCell: React.CSSProperties = { color: '#90caf9', fontSize: 11, cursor: 'pointer', textDecoration: 'underline' }
+
+  // ---- No matching profile -------------------------------------------------
+  if (!p.resolved) {
+    const vt = profileVendorHint(r.category)
+    const params = new URLSearchParams({ create: '1' })
+    if (vt) params.set('vendor_type', vt)
+    if (r.device_id) params.set('device_id', r.device_id)
+    if (r.ip) params.set('target_url', r.ip)
+    return (
+      <div>
+        <span className="badge badge-warning">No matching profile</span>
+        <div style={{ marginTop: 4 }}>
+          <Link to={`/vendor-profiles?${params.toString()}`} style={linkCell}>+ Create Vendor Profile</Link>
+        </div>
+      </div>
+    )
+  }
+
+  // ---- Matching profile found ----------------------------------------------
+  const retry = async () => {
+    setBusy(true); setMsg('')
+    try {
+      const res = await api.post<{ collected: boolean; detail: string }>(`/vendor-profiles/${p.id}/run-collection`, { device_id: r.device_id ?? '' })
+      setMsg(res.detail)
+      if (jobID) qc.invalidateQueries({ queryKey: ['discovery-job', jobID] })
+    } catch (e) {
+      setMsg((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const testState = p.test_ok === undefined ? null
+    : <span className={`badge badge-${p.test_ok ? 'up' : 'down'}`} title={p.detail ?? ''}>{p.test_ok ? 'Profile test succeeded' : 'Profile test failed'}</span>
+  const collState = p.collection_ok === undefined ? null
+    : <span className={`badge badge-${p.collection_ok ? 'up' : 'down'}`} title={p.detail ?? ''}>{p.collection_ok ? 'Collection succeeded' : 'Collection failed'}</span>
+
   return (
     <div>
-      <div><Link to="/vendor-profiles" title={p.detail ?? ''}>{p.name || p.vendor_type || 'profile'}</Link></div>
-      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 2 }}>{testBadge}{collBadge}</div>
+      <div style={{ fontSize: 11 }}><span className="badge badge-up">Matching profile</span> <strong>{p.name || p.vendor_type}</strong></div>
+      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 3 }}>{testState}{collState}</div>
+      {!p.collection_ok && p.detail && <div className="muted" style={{ fontSize: 11, marginTop: 3 }}>{p.detail}</div>}
+      <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
+        <Link to={`/vendor-profiles?open=${p.id}`} style={linkCell}>Open Vendor Profile</Link>
+        {r.device_id && <span style={{ ...linkCell, opacity: busy ? 0.5 : 1 }} onClick={() => !busy && retry()}>{busy ? 'Retrying…' : 'Retry with profile'}</span>}
+      </div>
+      {msg && <div className="muted" style={{ fontSize: 11, marginTop: 3 }}>{msg}</div>}
     </div>
   )
 }
@@ -454,7 +513,7 @@ function JobsTab({ jobs, jobID, setJobID, detail, setMsg, qc }: { jobs: Discover
                         ))}
                       </td>
                       <td>{d.bound_cred ? <span className="badge badge-up">{d.bound_cred}</span> : <span className="muted">—</span>}</td>
-                      <td style={{ fontSize: 11 }}><ProfileCell p={d.profile} /></td>
+                      <td style={{ fontSize: 11, minWidth: 160 }}><ProfileCell r={r} qc={qc} jobID={jobID} /></td>
                       <td className="muted" style={{ fontSize: 11 }}>{d.enrichment || '—'}</td>
                       <td style={{ fontSize: 12 }}>{r.error ? <span className="error-msg">{r.error}</span> : (d.next_action ?? '—')}</td>
                     </tr>

@@ -323,14 +323,28 @@ func (s *Server) runVendorProfileCollection(w http.ResponseWriter, r *http.Reque
 		writeErr(w, err)
 		return
 	}
-	if p.DeviceID == nil {
+
+	// An optional device_id in the body lets the operator retry a site/global
+	// profile against a specific scanned device (the "Retry with profile" action
+	// in Scan Results). Otherwise we use the profile's bound device.
+	var body struct {
+		DeviceID string `json:"device_id"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	targetDevice := p.DeviceID
+	if strings.TrimSpace(body.DeviceID) != "" {
+		if did, perr := uuid.Parse(strings.TrimSpace(body.DeviceID)); perr == nil {
+			targetDevice = &did
+		}
+	}
+	if targetDevice == nil {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"collected": false,
-			"detail":    "this profile is site-level — it is used automatically during a scan. Bind it to a device to run an on-demand collection.",
+			"detail":    "this profile is site-level — it is used automatically during a scan. Bind it to a device (or retry from a Scan Result) to run an on-demand collection.",
 		})
 		return
 	}
-	dev, err := s.queries.GetDevice(ctx, *p.DeviceID)
+	dev, err := s.queries.GetDevice(ctx, *targetDevice)
 	if err != nil {
 		writeErr(w, err)
 		return

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import {
   api, type VendorProfile, type VendorProfileTestResponse, type Credential,
   type Location, type Device, type EncryptionStatus,
@@ -11,6 +11,10 @@ import {
 // credential with a target URL + per-vendor connection params and an optional
 // site/device binding, so the scan (and manual Test / Run Collection) can
 // actually authenticate and collect. Secrets never appear here.
+
+// CreatePreset prefills the create form when arriving from a Scan Result
+// "Create Vendor Profile" link (?create=1&vendor_type=…&device_id=…&target_url=…).
+interface CreatePreset { vendorType: string; deviceID: string; targetURL: string }
 
 const btn: React.CSSProperties = {
   padding: '8px 16px', background: '#1565c0', color: '#fff', border: 'none',
@@ -74,6 +78,7 @@ function EncryptionGate() {
 
 export function VendorProfiles() {
   const qc = useQueryClient()
+  const [params, setParams] = useSearchParams()
   const [show, setShow] = useState(false)
   const [edit, setEdit] = useState<VendorProfile | null>(null)
   const [testResult, setTestResult] = useState<Record<string, VendorProfileTestResponse>>({})
@@ -106,6 +111,20 @@ export function VendorProfiles() {
 
   const locName = (id?: string) => locs.data?.find((l) => l.id === id)?.name
 
+  // Deep links from Scan Results, derived from the URL during render (no effect):
+  //   ?create=1 (+vendor_type/device_id/target_url) → prefilled create form
+  //   ?open=<id>                                     → that profile, for editing
+  const createParam = !!params.get('create')
+  const presetFromParams: CreatePreset | null = createParam
+    ? { vendorType: params.get('vendor_type') || '', deviceID: params.get('device_id') || '', targetURL: params.get('target_url') || '' }
+    : null
+  const openParam = params.get('open')
+  const openProfile = openParam ? (list.data?.find((p) => p.id === openParam) ?? null) : null
+  const editTarget = edit ?? openProfile
+  const showForm = show || createParam || !!editTarget
+  const clearParams = () => { if (params.toString()) setParams({}, { replace: true }) }
+  const closeForm = () => { setShow(false); setEdit(null); clearParams() }
+
   return (
     <div>
       <EncryptionGate />
@@ -122,17 +141,18 @@ export function VendorProfiles() {
           verify connectivity now, and <strong>Run Collection</strong> to collect against a
           device-bound profile on demand.
         </p>
-        <button style={btn} onClick={() => { setEdit(null); setShow((v) => !v) }}>{show && !edit ? 'Cancel' : '+ New profile'}</button>
+        <button style={btn} onClick={() => { if (showForm) { closeForm() } else { setEdit(null); setShow(true) } }}>{showForm && !editTarget ? 'Cancel' : '+ New profile'}</button>
       </div>
 
-      {(show || edit) && (
+      {showForm && (
         <ProfileForm
-          key={edit?.id ?? 'new'}
-          profile={edit}
+          key={editTarget?.id ?? 'new'}
+          profile={editTarget}
+          preset={editTarget ? null : presetFromParams}
           credentials={creds.data ?? []}
           locations={locs.data ?? []}
-          onDone={() => { setShow(false); setEdit(null); refresh() }}
-          onCancel={() => { setShow(false); setEdit(null) }}
+          onDone={() => { closeForm(); refresh() }}
+          onCancel={closeForm}
         />
       )}
 
@@ -200,20 +220,22 @@ export function VendorProfiles() {
   )
 }
 
-function ProfileForm({ profile, credentials, locations, onDone, onCancel }: {
+function ProfileForm({ profile, preset, credentials, locations, onDone, onCancel }: {
   profile: VendorProfile | null
+  preset?: CreatePreset | null
   credentials: Credential[]
   locations: Location[]
   onDone: () => void
   onCancel: () => void
 }) {
   const editing = !!profile
+  const presetVT = preset?.vendorType && vendorDef(preset.vendorType) ? preset.vendorType : ''
   const [name, setName] = useState(profile?.name ?? '')
-  const [vendorType, setVendorType] = useState(profile?.vendor_type ?? 'vmware')
-  const [targetURL, setTargetURL] = useState(profile?.target_url ?? '')
+  const [vendorType, setVendorType] = useState(profile?.vendor_type ?? (presetVT || 'vmware'))
+  const [targetURL, setTargetURL] = useState(profile?.target_url ?? preset?.targetURL ?? '')
   const [credentialID, setCredentialID] = useState(profile?.credential_id ?? '')
   const [locationID, setLocationID] = useState(profile?.location_id ?? '')
-  const [deviceID, setDeviceID] = useState(profile?.device_id ?? '')
+  const [deviceID, setDeviceID] = useState(profile?.device_id ?? preset?.deviceID ?? '')
   const [deviceFilter, setDeviceFilter] = useState('')
   const [cfg, setCfg] = useState<Record<string, string>>(() => {
     const c = (profile?.config ?? {}) as Record<string, unknown>

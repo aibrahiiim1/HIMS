@@ -426,6 +426,7 @@ type scanDetail struct {
 // resolved / no-profile / test ok|fail / collection ok|fail + the profile name.
 type scanProfileResult struct {
 	Resolved     bool   `json:"resolved"`
+	ID           string `json:"id,omitempty"` // profile id → Open / Retry actions
 	Name         string `json:"name,omitempty"`
 	VendorType   string `json:"vendor_type,omitempty"`
 	TestOK       *bool  `json:"test_ok,omitempty"`       // authentication/login succeeded
@@ -438,7 +439,7 @@ type scanProfileResult struct {
 func profResultFrom(p db.VendorConnectionProfile, pc profileCollect) *scanProfileResult {
 	auth, coll := pc.AuthOK, pc.CollectionOK
 	return &scanProfileResult{
-		Resolved: true, Name: p.Name, VendorType: p.VendorType,
+		Resolved: true, ID: p.ID.String(), Name: p.Name, VendorType: p.VendorType,
 		TestOK: &auth, CollectionOK: &coll, Detail: pc.Detail,
 	}
 }

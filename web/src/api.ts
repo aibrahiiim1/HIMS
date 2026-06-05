@@ -494,6 +494,7 @@ export interface ScanCredAttempt { kind: string; protocol: string; category: str
 // during the scan for this host: resolved? test/login ok? collection ok?
 export interface ScanProfileResult {
   resolved: boolean
+  id?: string
   name?: string
   vendor_type?: string
   test_ok?: boolean
