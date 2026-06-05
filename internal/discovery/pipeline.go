@@ -26,11 +26,65 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/coralsearesorts/hims/internal/credresolver"
+	"github.com/coralsearesorts/hims/internal/credtest"
 	"github.com/coralsearesorts/hims/internal/domain"
 	"github.com/coralsearesorts/hims/internal/driver"
 	"github.com/coralsearesorts/hims/internal/driver/swsnmp"
 	"github.com/coralsearesorts/hims/internal/snmp"
 )
+
+func hasPortN(ports []int, p int) bool {
+	for _, x := range ports {
+		if x == p {
+			return true
+		}
+	}
+	return false
+}
+
+// fingerprintFromPorts builds the credential-resolver fingerprint from the open
+// TCP ports. SNMP is always enabled — it is UDP/161 and therefore invisible to a
+// TCP port scan, so we must always offer SNMP candidates (switches/printers).
+// The TCP-detectable protocols are gated on their port being open.
+func fingerprintFromPorts(ports []int) credresolver.Fingerprint {
+	return credresolver.Fingerprint{
+		SNMP:  true,
+		SSH:   hasPortN(ports, 22),
+		WinRM: hasPortN(ports, 5985) || hasPortN(ports, 5986),
+		HTTP:  hasPortN(ports, 80) || hasPortN(ports, 443) || hasPortN(ports, 8000) || hasPortN(ports, 8080) || hasPortN(ports, 8443),
+		LDAP:  hasPortN(ports, 389) || hasPortN(ports, 636),
+	}
+}
+
+// portAllowsProto gates a non-SNMP credential test to a host that actually
+// exposes that protocol's port (don't WinRM-probe a host with no 5985 open).
+func portAllowsProto(ports []int, kind domain.CredentialKind) bool {
+	switch kind {
+	case domain.CredSSH:
+		return hasPortN(ports, 22)
+	case domain.CredWinRM:
+		return hasPortN(ports, 5985) || hasPortN(ports, 5986)
+	case domain.CredONVIF, domain.CredHTTPBasic, domain.CredVendorAPI:
+		return hasPortN(ports, 80) || hasPortN(ports, 443) || hasPortN(ports, 8000) || hasPortN(ports, 8080) || hasPortN(ports, 8443)
+	}
+	return false
+}
+
+// provisionalCategory is the best-effort category for a host that authenticated
+// via a non-SNMP credential during the scan, before a deep OS collection refines
+// it. Windows→endpoint and Linux(SSH)→server are then corrected by Collect OS
+// using the real OS caption; ONVIF→camera is already definitive.
+func provisionalCategory(kind domain.CredentialKind) domain.DeviceCategory {
+	switch kind {
+	case domain.CredWinRM:
+		return domain.CatEndpoint
+	case domain.CredSSH:
+		return domain.CatServer
+	case domain.CredONVIF:
+		return domain.CatCamera
+	}
+	return domain.CatUnknown
+}
 
 // HostResult accumulates what the pipeline learned about one IP.
 type HostResult struct {
@@ -97,9 +151,13 @@ const explicitTierSpecificity = 100
 func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg PipelineConfig) HostResult { //nolint:gocritic
 	r := HostResult{IP: ip}
 
-	// Step 1: TCP port scan — management ports for switches/servers plus the
-	// service ports the role-inference engine keys on (DNS/DC/DB).
-	r.OpenPorts = scanPorts(ctx, ip, []int{22, 23, 53, 80, 88, 161, 389, 443, 1433, 1521, 3389, 5432, 8080}, cfg.PortTimeout)
+	// Step 1: TCP port scan — management ports for every device class (switches/
+	// servers via SSH/SNMP-mgmt, Windows via SMB/RPC/WinRM/RDP, cameras via
+	// RTSP/HTTP, printers via JetDirect) plus the service ports role inference
+	// keys on (DNS/DC/DB). This breadth lets the scan DETECT non-SNMP hosts
+	// (Windows workstations, Linux, cameras) that the old switch-centric list
+	// missed entirely.
+	r.OpenPorts = scanPorts(ctx, ip, []int{22, 23, 53, 80, 88, 135, 161, 389, 443, 445, 554, 636, 1433, 1521, 3389, 5432, 5985, 5986, 8000, 8080, 8443, 9100}, cfg.PortTimeout)
 	r.Probe = driver.Probe{IP: ip, OpenTCPPorts: r.OpenPorts}
 
 	// Step 2: Resolve credential candidates (scope-bound + operator-selected /
@@ -110,7 +168,7 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 	}
 	groups = append(groups, cfg.ExtraGroups...)
 	candidates := credresolver.Resolve(credresolver.Input{
-		Fingerprint: credresolver.Fingerprint{SNMP: true}, Groups: groups,
+		Fingerprint: fingerprintFromPorts(r.OpenPorts), Groups: groups,
 	})
 
 	// Step 3: SNMP probe for sysDescr + sysObjectID. Try the resolved/selected
@@ -183,6 +241,34 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 		}
 	}
 
+	// Step 3c: Non-SNMP authenticated probe. SNMP classifies network gear; Windows
+	// (WinRM), Linux (SSH) and cameras (ONVIF/HTTP) need their own auth. Try the
+	// resolved non-SNMP candidates — gated to the host's open management port —
+	// and bind the first that authenticates. This is what onboards workstations /
+	// servers / VM hosts instead of leaving them "unknown" with no credential.
+	// Skipped once SNMP already bound a credential (switches).
+	var authedKind domain.CredentialKind
+	if r.BoundCred == nil {
+		for _, cand := range candidates {
+			if cand.Kind == domain.CredSNMPv2c || cand.Kind == domain.CredSNMPv3 {
+				continue
+			}
+			if !portAllowsProto(r.OpenPorts, cand.Kind) {
+				continue
+			}
+			dec, derr := cfg.Decrypt(ctx, cand.ID)
+			if derr != nil || dec.Community == "" {
+				continue
+			}
+			if credtest.Test(ctx, string(cand.Kind), dec.Community, ip.String(), credtest.Options{}).OK() {
+				c := cand
+				r.BoundCred = &c // bind-on-success
+				authedKind = cand.Kind
+				break
+			}
+		}
+	}
+
 	// Step 4: Aliveness. A host is enrolled only if it actually responded — an
 	// open TCP port or an SNMP answer. This stops a subnet scan from enrolling
 	// every empty address as an "unknown" device.
@@ -196,6 +282,16 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 
 	// Step 5: Driver classification (now informed by the real-credential probe).
 	r.MatchedDrv, r.Match = cfg.Registry.Best(r.Probe)
+
+	// If no driver matched but a non-SNMP credential authenticated, assign a
+	// provisional category so the host isn't left "unknown". A deep OS collection
+	// (run by the orchestrator for WinRM/SSH binds) then refines workstation vs
+	// server from the real OS caption.
+	if (r.Match.Category == "" || r.Match.Category == domain.CatUnknown) && authedKind != "" {
+		if cat := provisionalCategory(authedKind); cat != domain.CatUnknown {
+			r.Match = driver.Match{Category: cat, Confidence: 55}
+		}
+	}
 
 	// Step 6: Deep collection — only when a driver matched AND we hold a live
 	// authenticated SNMP session.
