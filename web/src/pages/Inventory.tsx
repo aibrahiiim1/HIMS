@@ -231,7 +231,10 @@ export function Inventory() {
             </thead>
             <tbody>
               {pageRows.map((d) => {
-                const base = DETAIL_BASE[d.category]
+                // Categories without a dedicated list base fall back to /devices,
+                // which dispatches to the right template by category (unknown /
+                // unclassified → a neutral generic page, never the switch page).
+                const base = DETAIL_BASE[d.category] ?? '/devices'
                 const isEd = editing?.id === d.id
                 if (isEd && editing) {
                   return (

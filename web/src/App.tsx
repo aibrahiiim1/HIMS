@@ -6,7 +6,6 @@ import { Login } from './pages/Login'
 import { DeviceList } from './pages/DeviceList'
 import { Dashboard } from './pages/Dashboard'
 import { Discovery } from './pages/Discovery'
-import { SwitchDetail } from './pages/SwitchDetail'
 import { ServerDetail } from './pages/ServerDetail'
 import { EndpointDetail } from './pages/EndpointDetail'
 import { FirewallDetail } from './pages/FirewallDetail'
@@ -16,6 +15,7 @@ import { PrinterDetail } from './pages/PrinterDetail'
 import { UPSDetail } from './pages/UPSDetail'
 import { PbxDetail } from './pages/PbxDetail'
 import { WirelessDetail } from './pages/WirelessDetail'
+import { DeviceDetailDispatch } from './pages/DeviceDetailDispatch'
 import { TopologyPage } from './pages/TopologyPage'
 import { SearchPage } from './pages/SearchPage'
 import { WorkOrders } from './pages/WorkOrders'
@@ -100,7 +100,7 @@ function Shell({ me, onLogout }: { me?: AuthMe; onLogout: () => void }) {
             <Route path="/" element={<DeviceList category="switch" title="Switches" detailBase="/devices" />} />
             <Route path="/servers" element={<DeviceList category="server" title="Servers" detailBase="/servers" />} />
             <Route path="/firewalls" element={<DeviceList category="firewall" title="Firewalls" detailBase="/firewalls" />} />
-            <Route path="/devices/:id" element={<SwitchDetail />} />
+            <Route path="/devices/:id" element={<DeviceDetailDispatch />} />
             <Route path="/servers/:id" element={<ServerDetail />} />
             <Route path="/virtual-hosts" element={<DeviceList category="virtual_host" title="Virtual Hosts" detailBase="/virtual-hosts" />} />
             <Route path="/virtual-hosts/:id" element={<VirtualHostDetail />} />
