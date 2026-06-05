@@ -14,6 +14,7 @@ import (
 
 	"github.com/coralsearesorts/hims/internal/api"
 	"github.com/coralsearesorts/hims/internal/drivers"
+	"github.com/coralsearesorts/hims/internal/osinv"
 	"github.com/coralsearesorts/hims/internal/secret"
 	"github.com/coralsearesorts/hims/internal/storage/postgres"
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
@@ -57,6 +58,10 @@ func main() {
 	// Driver registry — logged at startup so ops can confirm the build.
 	reg := drivers.Builtin()
 	slog.Info("drivers registered", "names", reg.Names())
+
+	// WinRM client configuration — logged once so ops can confirm the auth mode
+	// (NTLM + WSMan message encryption, basic_auth=false) without guessing.
+	slog.Info("winrm client configured", osinv.WinRMClientInfo()...)
 
 	// Postgres pool (URL from env; skip connection during development if unset).
 	dbURL := os.Getenv("HIMS_DATABASE_URL")

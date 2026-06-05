@@ -42,8 +42,9 @@ func (o Outcome) OK() bool { return o.Category == CatSuccess }
 
 // Options tunes a test.
 type Options struct {
-	Timeout   time.Duration
-	LegacyKEX bool // try legacy SSH KEX/ciphers for old switches
+	Timeout        time.Duration
+	LegacyKEX      bool   // try legacy SSH KEX/ciphers for old switches
+	CredentialName string // optional display label for safe debug logs (never a secret)
 }
 
 func (o Options) timeout() time.Duration {
@@ -124,7 +125,7 @@ func Test(ctx context.Context, kind, secret, host string, opts Options) Outcome 
 	case "onvif":
 		return finish(testONVIF(ctx, secret, host, opts.timeout()))
 	case "winrm":
-		return finish(testWinRM(ctx, secret, host, opts.timeout()))
+		return finish(testWinRM(ctx, secret, host, opts.timeout(), opts.CredentialName))
 	default:
 		return finish(Outcome{Category: CatUnsupported, Detail: "no tester for kind " + kind})
 	}
@@ -215,11 +216,11 @@ func testONVIF(ctx context.Context, secret, host string, timeout time.Duration) 
 	return Outcome{Category: CatSuccess, Detail: "ONVIF GetDeviceInformation ok"}
 }
 
-func testWinRM(ctx context.Context, secret, host string, timeout time.Duration) Outcome {
+func testWinRM(ctx context.Context, secret, host string, timeout time.Duration, credName string) Outcome {
 	user, pass := SplitUserPass(secret)
 	// Use the SAME WinRM transport the deep-inventory collector uses (NTLM +
 	// WSMan message encryption) so a "Test" result matches what Collect will do.
-	if err := osinv.WinRMCheckAuth(ctx, host, user, pass, timeout); err != nil {
+	if err := osinv.WinRMCheckAuth(ctx, host, user, pass, timeout, credName); err != nil {
 		cat, detail := categorizeErr(err.Error())
 		return Outcome{Category: cat, Detail: detail}
 	}

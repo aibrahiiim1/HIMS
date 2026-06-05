@@ -319,11 +319,14 @@ func credKindMatchesMethod(kind, method string) bool {
 // transport (WinRM NTLM+encryption, or SSH).
 func (s *Server) collectWithCred(ctx context.Context, method, ip, user, pass string) (osinv.Report, error) {
 	if method == "winrm" {
+		start := time.Now()
 		cl, err := osinv.NewWinRMClient(ip, user, pass, 120*time.Second)
-		if err != nil {
-			return osinv.Report{}, err
+		var rep osinv.Report
+		if err == nil {
+			rep, err = osinv.CollectWindows(ctx, osinv.WinRMRunner{C: cl})
 		}
-		return osinv.CollectWindows(ctx, osinv.WinRMRunner{C: cl})
+		osinv.LogWinRMAttempt(ip, user, "deep-collect", 120*time.Second, time.Since(start), pass, err)
+		return rep, err
 	}
 	return osinv.CollectLinux(ctx, sshRunnerOS{host: ip, creds: ssh.Creds{Username: user, Password: pass}, timeout: 45 * time.Second})
 }

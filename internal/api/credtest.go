@@ -140,7 +140,7 @@ func (s *Server) testCredentials(w http.ResponseWriter, r *http.Request) {
 			case res.IP == "":
 				res.Category, res.Detail = credtest.CatError, "device has no IP to probe"
 			default:
-				o := credtest.Test(ctx, j.c.kind, j.c.secret, res.IP, credtest.Options{LegacyKEX: req.LegacyKEX})
+				o := credtest.Test(ctx, j.c.kind, j.c.secret, res.IP, credtest.Options{LegacyKEX: req.LegacyKEX, CredentialName: j.c.name})
 				res.Protocol, res.Category, res.Detail, res.LatencyMS = o.Protocol, o.Category, o.Detail, o.LatencyMS
 			}
 			res.Success = res.Category == credtest.CatSuccess
