@@ -2,7 +2,7 @@ import type { ComponentType } from 'react'
 import {
   LayoutDashboard, Bell, Search, HeartPulse, Radar, BookOpen, KeyRound,
   Boxes, Layers, Network, Flame, Wifi, Cpu, Server, HardDrive, MonitorSmartphone,
-  Plug, BatteryCharging, ShieldAlert, Camera, Video, Phone, CircleHelp, Brain,
+  Plug, BatteryCharging, ShieldAlert, Camera, Video, Phone, CircleHelp, Brain, Laptop,
   Map, Route as RouteIcon, Waypoints, ClipboardList, Wrench, Package, DollarSign, Building2,
   FileChartColumn, FileSearch, ChartLine, Tag, Download,
   Users, ShieldCheck, LayoutTemplate, ScanLine, Settings, FileClock, Lock, Activity, MonitorPlay, ClipboardCheck, Send, FileCode, BadgeCheck, DatabaseBackup,
@@ -77,6 +77,7 @@ export const NAV: NavGroup[] = [
       {
         label: 'Endpoints & Peripherals', icon: MonitorSmartphone,
         children: [
+          { label: 'Workstations', to: '/workstations', icon: Laptop },
           { label: 'Printers', to: '/printers', icon: Plug },
           { label: 'UPS', to: '/ups', icon: BatteryCharging },
         ],
