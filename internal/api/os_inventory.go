@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/coralsearesorts/hims/internal/classify"
 	"github.com/coralsearesorts/hims/internal/credtest"
 	"github.com/coralsearesorts/hims/internal/domain"
 	"github.com/coralsearesorts/hims/internal/osinv"
@@ -185,6 +186,14 @@ func (s *Server) runOSCollection(ctx context.Context, d db.Device) osCollectResu
 		// A successful authenticated collection is proof the host is up right now
 		// — reflect that so a stale 'down' from a discovery probe doesn't linger.
 		_ = s.queries.UpdateDeviceMonitoringStatus(ctx, db.UpdateDeviceMonitoringStatusParams{ID: d.ID, Status: "up"})
+		// Auto-correct classification from the authoritative OS caption we just
+		// collected. This closes the discovery loop: a Windows box that came in as
+		// "server" (SNMP sysDescr) or "unknown" (no SNMP) is reclassified to its
+		// true workstation-vs-server class the moment it's collected — the operator
+		// no longer has to click Reclassify by hand. The UpdateDeviceClassification
+		// query is an atomic no-op on classification-locked devices, so a manual
+		// operator override is never overwritten.
+		s.reclassifyFromCaption(ctx, d, rep.OS.Caption)
 		res.Status = "collected"
 		res.CredentialUsed = cd.name
 		res.Roles = osinv.DetectRoles(rep)
@@ -194,6 +203,33 @@ func (s *Server) runOSCollection(ctx context.Context, d db.Device) osCollectResu
 	}
 	res.Reason, res.Detail = lastReason, lastDetail+" (tried "+strconv.Itoa(len(cands))+" credential(s))"
 	return res
+}
+
+// reclassifyFromCaption corrects a device's category/os_family/device_class from
+// the authenticated OS caption (the strongest OS signal HIMS has). Best-effort:
+// any error or an unrecognised caption leaves the existing classification
+// untouched, and the underlying query no-ops on classification-locked devices.
+func (s *Server) reclassifyFromCaption(ctx context.Context, d db.Device, caption string) {
+	if caption == "" {
+		return
+	}
+	cres := classify.FromEvidence(classify.OSCaption(caption))
+	if cres.Confidence == 0 || cres.Category == string(domain.CatUnknown) {
+		return
+	}
+	blob, err := domain.MarshalEvidence(cres.Evidence)
+	if err != nil {
+		return
+	}
+	var dcPtr *string
+	if cres.Subtype != "" {
+		dcPtr = &cres.Subtype
+	}
+	conf := int16(cres.Confidence)
+	_, _ = s.queries.UpdateDeviceClassification(ctx, db.UpdateDeviceClassificationParams{
+		ID: d.ID, Category: cres.Category, OsFamily: cres.OSFamily,
+		DeviceClass: dcPtr, ConfidenceScore: &conf, ClassificationEvidence: blob,
+	})
 }
 
 type osCred struct {
