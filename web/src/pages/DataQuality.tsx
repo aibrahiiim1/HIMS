@@ -56,7 +56,7 @@ export function DataQuality() {
                       <thead><tr><th>Device</th><th>IP</th><th>Category</th><th>Vendor</th>{iss.devices.some((d) => d.note) && <th>Note</th>}</tr></thead>
                       <tbody>
                         {iss.devices.map((d) => {
-                          const base = detailBase[d.category]
+                          const base = detailBase[d.category] ?? '/devices' // unmapped (unknown/endpoint) → dispatcher
                           return (
                             <tr key={d.id + (d.note ?? '')}>
                               <td>{base ? <Link className="cell-name" to={`${base}/${d.id}`}>{d.name}</Link> : <span className="cell-name">{d.name}</span>}</td>

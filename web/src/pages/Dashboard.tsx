@@ -346,7 +346,7 @@ export function Dashboard() {
               : (
                 <ul className="activity">
                   {critical.map((d) => {
-                    const base = detailBase[d.category]
+                    const base = detailBase[d.category] ?? '/devices' // unmapped (unknown/endpoint) → dispatcher
                     return (
                       <li key={d.id} className="activity-item">
                         <span className="activity-dot tone-crit"><WifiOff size={13} /></span>

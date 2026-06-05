@@ -113,7 +113,7 @@ export function SearchPage() {
             <Panel title="Devices" icon={Boxes} subtitle={`${devHits.length}`} pad={false}>
               <table className="data-table"><thead><tr><th>Device</th><th>IP</th><th>Category</th><th>Vendor</th><th>Status</th></tr></thead>
                 <tbody>{devHits.map((d) => {
-                  const base = detailBase[d.category]
+                  const base = detailBase[d.category] ?? '/devices' // unmapped (unknown/endpoint) → dispatcher
                   return <tr key={d.id}>
                     <td><div className="dev-cell"><span className="dev-avatar" style={{ background: colorFor(d.category) }}>{d.category.charAt(0).toUpperCase()}</span>
                       <div className="dev-meta">{base ? <Link className="cell-name" to={`${base}/${d.id}`}>{d.name}</Link> : <span className="cell-name">{d.name}</span>}{d.serial && <small>SN {d.serial}</small>}</div></div></td>
