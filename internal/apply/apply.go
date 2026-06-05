@@ -422,6 +422,29 @@ func identity(res discovery.HostResult) (name string, hostname, vendor, model, s
 		model = nonEmpty(res.Facts.Model)
 		serial = nonEmpty(res.Facts.Serial)
 		osVersion = nonEmpty(res.Facts.OSVersion)
+		// Embedded/appliance drivers (ONVIF camera, UPS-MIB, Redfish BMC, wireless
+		// REST) report identity in their own snap rather than the top-level Facts.
+		// Fall back to those so the Inventory list's Vendor/Model columns populate
+		// for those device classes too, not just SNMP switches/servers.
+		if vendor == nil || model == nil {
+			var v, m string
+			switch {
+			case res.Facts.Camera != nil:
+				v, m = res.Facts.Camera.Manufacturer, res.Facts.Camera.Model
+			case res.Facts.UPS != nil:
+				v, m = res.Facts.UPS.Manufacturer, res.Facts.UPS.Model
+			case res.Facts.BMC != nil:
+				v, m = res.Facts.BMC.Vendor, res.Facts.BMC.Model
+			case res.Facts.WLAN != nil:
+				v = res.Facts.WLAN.Vendor
+			}
+			if vendor == nil {
+				vendor = nonEmpty(v)
+			}
+			if model == nil {
+				model = nonEmpty(m)
+			}
+		}
 	}
 	return
 }

@@ -409,6 +409,12 @@ type Querier interface {
 	// this an atomic no-op on operator-overridden devices (0 rows affected →
 	// pgx.ErrNoRows), so a manual classification is never silently overwritten.
 	UpdateDeviceClassification(ctx context.Context, arg UpdateDeviceClassificationParams) (Device, error)
+	// Fill the device's identity/hardware fields from an authenticated deep-OS
+	// collection (manufacturer/model/serial/OS caption/hostname). COALESCE(NULLIF…)
+	// means a blank incoming value never wipes an existing one — collection only
+	// ENRICHES the row, so the Inventory list columns (Vendor/Model/OS) populate
+	// without clobbering anything a prior SNMP probe or operator edit set.
+	UpdateDeviceHardwareInfo(ctx context.Context, arg UpdateDeviceHardwareInfoParams) error
 	// Reflect the worst current check status onto the device row so device lists
 	// show a live health badge without a per-row sample query.
 	UpdateDeviceMonitoringStatus(ctx context.Context, arg UpdateDeviceMonitoringStatusParams) error

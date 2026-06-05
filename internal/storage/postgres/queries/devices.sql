@@ -56,6 +56,21 @@ UPDATE devices SET
 WHERE id = $1 AND deleted_at IS NULL
 RETURNING *;
 
+-- name: UpdateDeviceHardwareInfo :exec
+-- Fill the device's identity/hardware fields from an authenticated deep-OS
+-- collection (manufacturer/model/serial/OS caption/hostname). COALESCE(NULLIF…)
+-- means a blank incoming value never wipes an existing one — collection only
+-- ENRICHES the row, so the Inventory list columns (Vendor/Model/OS) populate
+-- without clobbering anything a prior SNMP probe or operator edit set.
+UPDATE devices SET
+    vendor = COALESCE(NULLIF(sqlc.arg('vendor')::text, ''), vendor),
+    model = COALESCE(NULLIF(sqlc.arg('model')::text, ''), model),
+    serial = COALESCE(NULLIF(sqlc.arg('serial')::text, ''), serial),
+    os_version = COALESCE(NULLIF(sqlc.arg('os_version')::text, ''), os_version),
+    hostname = COALESCE(NULLIF(sqlc.arg('hostname')::text, ''), hostname),
+    updated_at = now()
+WHERE id = sqlc.arg('id') AND deleted_at IS NULL;
+
 -- name: BulkAssignClassification :execrows
 -- Assign vlan/device_class/location to many devices at once (multi-select).
 -- Only the provided (non-null) fields are changed — COALESCE keeps the rest —

@@ -818,6 +818,43 @@ func (q *Queries) UpdateDeviceClassification(ctx context.Context, arg UpdateDevi
 	return i, err
 }
 
+const updateDeviceHardwareInfo = `-- name: UpdateDeviceHardwareInfo :exec
+UPDATE devices SET
+    vendor = COALESCE(NULLIF($1::text, ''), vendor),
+    model = COALESCE(NULLIF($2::text, ''), model),
+    serial = COALESCE(NULLIF($3::text, ''), serial),
+    os_version = COALESCE(NULLIF($4::text, ''), os_version),
+    hostname = COALESCE(NULLIF($5::text, ''), hostname),
+    updated_at = now()
+WHERE id = $6 AND deleted_at IS NULL
+`
+
+type UpdateDeviceHardwareInfoParams struct {
+	Vendor    string    `json:"vendor"`
+	Model     string    `json:"model"`
+	Serial    string    `json:"serial"`
+	OsVersion string    `json:"os_version"`
+	Hostname  string    `json:"hostname"`
+	ID        uuid.UUID `json:"id"`
+}
+
+// Fill the device's identity/hardware fields from an authenticated deep-OS
+// collection (manufacturer/model/serial/OS caption/hostname). COALESCE(NULLIF…)
+// means a blank incoming value never wipes an existing one — collection only
+// ENRICHES the row, so the Inventory list columns (Vendor/Model/OS) populate
+// without clobbering anything a prior SNMP probe or operator edit set.
+func (q *Queries) UpdateDeviceHardwareInfo(ctx context.Context, arg UpdateDeviceHardwareInfoParams) error {
+	_, err := q.db.Exec(ctx, updateDeviceHardwareInfo,
+		arg.Vendor,
+		arg.Model,
+		arg.Serial,
+		arg.OsVersion,
+		arg.Hostname,
+		arg.ID,
+	)
+	return err
+}
+
 const updateDiscoveredDevice = `-- name: UpdateDiscoveredDevice :one
 UPDATE devices SET
     hostname = $2, name = $3, vendor = $4, model = $5, serial = $6,
