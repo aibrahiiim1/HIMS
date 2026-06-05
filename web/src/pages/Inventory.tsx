@@ -8,6 +8,7 @@ import { PageHeader, Panel, Kpi, BarList, EmptyState, StatusPill, colorFor } fro
 const DETAIL_BASE: Record<string, string> = {
   switch: '/devices', server: '/servers', virtual_host: '/virtual-hosts', firewall: '/firewalls',
   camera: '/cctv', nvr: '/cctv', wireless_controller: '/wlan', printer: '/printers', ups: '/ups', pbx: '/pbx',
+  endpoint: '/workstations',
 }
 const CATEGORIES = [
   'unknown', 'switch', 'router', 'firewall', 'access_point', 'wireless_controller', 'server',

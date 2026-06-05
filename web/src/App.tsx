@@ -8,6 +8,7 @@ import { Dashboard } from './pages/Dashboard'
 import { Discovery } from './pages/Discovery'
 import { SwitchDetail } from './pages/SwitchDetail'
 import { ServerDetail } from './pages/ServerDetail'
+import { EndpointDetail } from './pages/EndpointDetail'
 import { FirewallDetail } from './pages/FirewallDetail'
 import { VirtualHostDetail } from './pages/VirtualHostDetail'
 import { CctvDetail } from './pages/CctvDetail'
@@ -109,7 +110,8 @@ function Shell({ me, onLogout }: { me?: AuthMe; onLogout: () => void }) {
             <Route path="/cctv/:id" element={<CctvDetail />} />
             <Route path="/wlan" element={<DeviceList category="wireless_controller" title="Wireless Controllers" detailBase="/wlan" />} />
             <Route path="/wlan/:id" element={<WirelessDetail />} />
-            <Route path="/workstations" element={<DeviceList category="endpoint" title="Workstations" detailBase="/devices" />} />
+            <Route path="/workstations" element={<DeviceList category="endpoint" title="Workstations" detailBase="/workstations" />} />
+            <Route path="/workstations/:id" element={<EndpointDetail />} />
             <Route path="/printers" element={<DeviceList category="printer" title="Printers" detailBase="/printers" />} />
             <Route path="/printers/:id" element={<PrinterDetail />} />
             <Route path="/ups" element={<DeviceList category="ups" title="UPS Units" detailBase="/ups" />} />

@@ -182,6 +182,9 @@ func (s *Server) runOSCollection(ctx context.Context, d db.Device) osCollectResu
 		// Bind-on-success so the working credential sticks to this device.
 		cid := cd.id
 		_ = s.queries.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: d.ID, CredentialID: &cid})
+		// A successful authenticated collection is proof the host is up right now
+		// — reflect that so a stale 'down' from a discovery probe doesn't linger.
+		_ = s.queries.UpdateDeviceMonitoringStatus(ctx, db.UpdateDeviceMonitoringStatusParams{ID: d.ID, Status: "up"})
 		res.Status = "collected"
 		res.CredentialUsed = cd.name
 		res.Roles = osinv.DetectRoles(rep)
