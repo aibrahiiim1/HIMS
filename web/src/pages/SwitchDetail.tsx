@@ -7,6 +7,7 @@ import { DeviceHeader } from '../components/DeviceHeader'
 import { ClassificationCard } from '../components/ClassificationCard'
 import { DeepOSInventory } from '../components/DeepOSInventory'
 import { DeviceOps } from '../components/DeviceOps'
+import { DeviceCredentialHealth } from '../components/DeviceCredentialHealth'
 import { SwitchPorts } from '../components/SwitchPorts'
 import { Panel, TabBar, Kpi, StatusPill, EmptyState, Sparkline, timeAgo, usePaged, Pager } from '../components/ui'
 
@@ -114,7 +115,7 @@ export function SwitchDetail() {
       )}
 
       {tab === 'monitoring' && <MonitoringTab id={id!} />}
-      {tab === 'operations' && <DeviceOps deviceId={id!} />}
+      {tab === 'operations' && <><DeviceCredentialHealth deviceId={id!} /><DeviceOps deviceId={id!} /></>}
     </div>
   )
 }

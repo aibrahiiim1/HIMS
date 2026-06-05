@@ -164,6 +164,54 @@ func (s *Server) dataQuality(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// Credential-health issues — derived from real bindings, collection evidence
+	// and persisted credential-test history (access map + test map). All counts
+	// are real; classes that legitimately have no signal yet simply don't appear.
+	if am, aerr := s.deviceAccessMap(ctx); aerr == nil {
+		tm, _ := s.deviceTestMap(ctx)
+		isWin := func(d db.Device) bool { return d.OsFamily == "windows" }
+		isLin := func(d db.Device) bool { return d.OsFamily == "linux" }
+		inCat := func(d db.Device, cats ...string) bool {
+			for _, c := range cats {
+				if d.Category == c {
+					return true
+				}
+			}
+			return false
+		}
+		var credFailed, neverTested, winNoWinRM, linNoSSH, camNoONVIF, swNoSSH []db.Device
+		for _, d := range devs {
+			da := am[d.ID]
+			ts := tm[d.ID]
+			if ts != nil && ts.authFailed && !da.managed() {
+				credFailed = append(credFailed, d)
+			}
+			// "Never tested" only for classes we'd expect to test (avoid noise).
+			testable := credentialedCategories[d.Category] || inCat(d, "camera", "nvr") || isWin(d) || isLin(d)
+			if testable && (ts == nil || !ts.tested) {
+				neverTested = append(neverTested, d)
+			}
+			if isWin(d) && !accessSatisfies(da, "winrm") {
+				winNoWinRM = append(winNoWinRM, d)
+			}
+			if isLin(d) && !accessSatisfies(da, "ssh") {
+				linNoSSH = append(linNoSSH, d)
+			}
+			if inCat(d, "camera", "nvr") && !accessSatisfies(da, "onvif") {
+				camNoONVIF = append(camNoONVIF, d)
+			}
+			if inCat(d, "switch", "router", "firewall") && !accessSatisfies(da, "ssh") {
+				swNoSSH = append(swNoSSH, d)
+			}
+		}
+		addIssue("credential_failed", "Failed credentials", "The latest credential test for these devices was rejected (authentication failed) and no other working method is bound. Fix the credential or bind a working one.", "warning", credFailed)
+		addIssue("never_tested", "Never credential-tested", "These devices (servers, network gear, cameras, Windows/Linux hosts) have no saved credential-test result yet. Run a credential test so HIMS knows what works.", "info", neverTested)
+		addIssue("windows_no_winrm", "Windows without working WinRM", "Windows hosts with no successful WinRM access (bound, collected, or tested). WinRM is needed for deep OS inventory.", "warning", winNoWinRM)
+		addIssue("linux_no_ssh", "Linux without working SSH", "Linux hosts with no successful SSH access. SSH is needed for deep OS inventory.", "warning", linNoSSH)
+		addIssue("camera_no_onvif", "Cameras/NVRs without ONVIF", "Cameras/NVRs with no successful ONVIF access. ONVIF is needed for device-info and stream inventory.", "warning", camNoONVIF)
+		addIssue("switch_no_ssh", "Switches/firewalls without SSH", "Network devices with no successful SSH access. SSH enables CLI collection and config backup beyond SNMP.", "info", swNoSSH)
+	}
+
 	// Stable order: critical first, then warning, then info; ties by count desc.
 	rank := map[string]int{"critical": 0, "warning": 1, "info": 2}
 	sort.SliceStable(issues, func(i, j int) bool {

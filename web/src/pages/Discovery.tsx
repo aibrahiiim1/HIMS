@@ -1,9 +1,10 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Radar, Boxes, CircleX, Clock } from 'lucide-react'
+import { Radar, Boxes, CircleX, Clock, KeyRound } from 'lucide-react'
 import {
   api, locationPaths,
-  type DiscoveryJob, type DiscoveryResult, type Location, type Credential,
+  type DiscoveryJob, type DiscoveryResult, type Location, type Credential, type AccessCoverage,
 } from '../api'
 import { PageHeader, Kpi, timeAgo } from '../components/ui'
 
@@ -55,6 +56,8 @@ export function Discovery() {
   })
   const afterLaunch = (j: DiscoveryJob) => { setJobID(j.id); setTab('Jobs'); qc.invalidateQueries({ queryKey: ['discovery-jobs'] }) }
 
+  const cov = useQuery({ queryKey: ['access-coverage'], queryFn: () => api.get<AccessCoverage>('/dashboard/access-coverage'), retry: 0 })
+
   const jobList = jobs.data ?? []
   const lastJob = [...jobList].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0]
   const foundTotal = jobList.reduce((a, j) => a + j.found_count, 0)
@@ -69,6 +72,11 @@ export function Discovery() {
         <Kpi label="Devices Found" value={foundTotal} icon={Boxes} tone="default" sub="all scans" />
         <Kpi label="Failed Scans" value={failedCount} icon={CircleX} tone={failedCount > 0 ? 'crit' : 'default'} />
         <Kpi label="Last Scan" value={lastJob ? timeAgo(lastJob.created_at) : '—'} icon={Clock} tone="default" sub={lastJob?.scope_cidr ?? undefined} />
+        <Link to="/inventory?access=unmanaged" style={{ textDecoration: 'none' }}>
+          <Kpi label="Credential Coverage" value={cov.data ? `${cov.data.coverage_percent}%` : '—'} icon={KeyRound}
+            tone={cov.data ? (cov.data.coverage_percent >= 75 ? 'ok' : cov.data.coverage_percent >= 40 ? 'warn' : 'crit') : 'default'}
+            sub={cov.data ? `${cov.data.managed_devices}/${cov.data.total_devices} managed · ${cov.data.unmanaged_devices} need creds` : undefined} />
+        </Link>
       </div>
 
       <div className="card">

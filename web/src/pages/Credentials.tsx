@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { api, type Credential, type EncryptionStatus, type Device, type CredTestResponse, type CredTestResult } from '../api'
+import { CredentialRunsPanel, CredentialHistoryPanel } from '../components/CredentialTestHistory'
 
 function EncryptionGate() {
   const q = useQuery({ queryKey: ['enc-status'], queryFn: () => api.get<EncryptionStatus>('/security/encryption/status'), retry: 0 })
@@ -36,6 +37,7 @@ export function Credentials() {
   const [edit, setEdit] = useState<string | null>(null)
   const [editName, setEditName] = useState('')
   const [editSecret, setEditSecret] = useState('')
+  const [hist, setHist] = useState<{ id: string; name: string } | null>(null)
   const list = useQuery({ queryKey: ['credentials'], queryFn: () => api.get<Credential[]>('/credentials') })
   const refresh = () => qc.invalidateQueries({ queryKey: ['credentials'] })
 
@@ -95,6 +97,7 @@ export function Credentials() {
                     <td>{c.weak ? <span className="badge badge-warning">weak</span> : '—'}</td>
                     <td>{c.created_at?.slice(0, 10)}</td>
                     <td style={{ whiteSpace: 'nowrap' }}>
+                      <button style={ghost} onClick={() => setHist(hist?.id === c.id ? null : { id: c.id, name: c.name })}>History</button>{' '}
                       <button style={ghost} onClick={() => startEdit(c)}>Edit</button>{' '}
                       <button style={{ ...ghost, color: '#ef9a9a', borderColor: '#ef9a9a' }} onClick={() => { if (confirm(`Delete credential "${c.name}"? It will be unbound from any devices.`)) del.mutate(c.id) }}>Delete</button>
                     </td>
@@ -108,6 +111,10 @@ export function Credentials() {
           <div className="error-msg" style={{ marginTop: 8 }}>{((save.error || del.error) as Error).message}</div>
         )}
       </div>
+
+      {hist && <CredentialHistoryPanel credentialId={hist.id} credentialName={hist.name} />}
+
+      <CredentialRunsPanel />
     </div>
   )
 }

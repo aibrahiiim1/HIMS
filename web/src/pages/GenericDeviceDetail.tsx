@@ -13,6 +13,7 @@ import { DeviceHeader } from '../components/DeviceHeader'
 import { ClassificationCard } from '../components/ClassificationCard'
 import { DeepOSInventory } from '../components/DeepOSInventory'
 import { DeviceOps } from '../components/DeviceOps'
+import { DeviceCredentialHealth } from '../components/DeviceCredentialHealth'
 
 // GenericDeviceDetail is the operator-useful fallback template for devices with
 // no type-specific page — primarily "unknown" (discovered/pingable but not yet
@@ -36,6 +37,7 @@ export function GenericDeviceDetail() {
       {/* No alwaysShow: the OS panel surfaces only when the device actually is a
           Windows/Linux host or already has inventory. */}
       <DeepOSInventory deviceId={id} />
+      <DeviceCredentialHealth deviceId={id} />
       <DeviceOps deviceId={id} />
       <WorkOrdersCard deviceId={id} />
       <ActivityCard deviceId={id} />

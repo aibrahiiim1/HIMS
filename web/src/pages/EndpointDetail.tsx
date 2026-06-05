@@ -4,6 +4,7 @@ import { DeviceHeader } from '../components/DeviceHeader'
 import { ClassificationCard } from '../components/ClassificationCard'
 import { DeepOSInventory } from '../components/DeepOSInventory'
 import { DeviceOps } from '../components/DeviceOps'
+import { DeviceCredentialHealth } from '../components/DeviceCredentialHealth'
 
 // EndpointDetail is the template for user computers / workstations (category
 // "endpoint"). Unlike the switch template it shows NO ports/VLANs/MAC tables —
@@ -17,6 +18,7 @@ export function EndpointDetail() {
       <DeviceHeader deviceId={deviceId} icon={Laptop} />
       <div style={{ marginBottom: 16 }}><ClassificationCard deviceId={deviceId} /></div>
       <DeepOSInventory deviceId={deviceId} alwaysShow />
+      <DeviceCredentialHealth deviceId={deviceId} />
       <DeviceOps deviceId={deviceId} />
     </div>
   )

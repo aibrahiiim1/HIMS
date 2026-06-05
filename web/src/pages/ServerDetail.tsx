@@ -5,6 +5,7 @@ import { api, type ServerStorage, type DeviceFact, type DeviceRole, type Interfa
 import { DeviceOps } from '../components/DeviceOps'
 import { DeviceHeader } from '../components/DeviceHeader'
 import { DeepOSInventory } from '../components/DeepOSInventory'
+import { DeviceCredentialHealth } from '../components/DeviceCredentialHealth'
 
 const healthBadge = (h?: string | null) =>
   h === 'OK' ? 'up' : h === 'Critical' ? 'down' : h === 'Warning' ? 'warning' : 'unknown'
@@ -127,6 +128,7 @@ export function ServerDetail() {
         </div>
       )}
 
+      <DeviceCredentialHealth deviceId={deviceId} />
       <DeviceOps deviceId={deviceId} />
     </div>
   )

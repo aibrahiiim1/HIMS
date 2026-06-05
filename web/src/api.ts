@@ -1189,6 +1189,33 @@ export interface AccessProtocol {
   source: string // bound_credential | evidence | mixed
 }
 export interface AccessReason { reason: string; count: number }
+
+// Credential test history (persisted; secrets never present).
+export interface CredTestRun {
+  id: string
+  started_at: string
+  finished_at?: string
+  actor: string
+  pairs: number
+  successes: number
+  failures: number
+}
+export interface CredTestHistory {
+  id: string
+  run_id: string
+  device_id: string
+  device_name?: string
+  credential_id?: string
+  credential_name: string
+  kind: string
+  protocol: string
+  category: string
+  success: boolean
+  detail: string
+  latency_ms: number
+  tested_at: string
+  actor: string
+}
 export interface AccessCoverage {
   total_devices: number
   managed_devices: number
