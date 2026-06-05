@@ -25,6 +25,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/coralsearesorts/hims/internal/classify"
 	"github.com/coralsearesorts/hims/internal/credresolver"
 	"github.com/coralsearesorts/hims/internal/credtest"
 	"github.com/coralsearesorts/hims/internal/domain"
@@ -32,6 +33,18 @@ import (
 	"github.com/coralsearesorts/hims/internal/driver/swsnmp"
 	"github.com/coralsearesorts/hims/internal/snmp"
 )
+
+// CredAttempt records one credential↔host authentication attempt during a scan,
+// so the orchestrator can persist it to credential-test history (success AND
+// failure, with a non-secret reason). No secret is ever captured here.
+type CredAttempt struct {
+	CredentialID uuid.UUID
+	Kind         domain.CredentialKind
+	Protocol     string
+	Success      bool
+	Category     string // credtest category: success|auth_failed|unreachable|...
+	Detail       string // non-secret reason
+}
 
 func hasPortN(ports []int, p int) bool {
 	for _, x := range ports {
@@ -96,8 +109,10 @@ type HostResult struct {
 	Match      driver.Match
 	// Credential the pipeline authenticated with (nil = no auth yet).
 	BoundCred *credresolver.CredRef
-	Facts     *driver.Facts
-	Error     error
+	// CredAttempts is every authentication attempt made this run (for history).
+	CredAttempts []CredAttempt
+	Facts        *driver.Facts
+	Error        error
 }
 
 // CandidateFetcher abstracts the DB call that assembles credentials for an IP.
@@ -211,7 +226,9 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 		if cand.Kind == domain.CredSNMPv3 && dec.V3 != nil {
 			tgt = snmp.Target{Addr: ip, Version: snmp.V3, V3: dec.V3, Timeout: cfg.SNMPTimeout}
 		}
-		if probe(tgt) {
+		ok := probe(tgt)
+		r.CredAttempts = append(r.CredAttempts, snmpAttempt(cand, ok))
+		if ok {
 			c := cand
 			r.BoundCred = &c // bind-on-success (only for stored credentials)
 			break
@@ -260,7 +277,12 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 			if derr != nil || dec.Community == "" {
 				continue
 			}
-			if credtest.Test(ctx, string(cand.Kind), dec.Community, ip.String(), credtest.Options{}).OK() {
+			out := credtest.Test(ctx, string(cand.Kind), dec.Community, ip.String(), credtest.Options{})
+			r.CredAttempts = append(r.CredAttempts, CredAttempt{
+				CredentialID: cand.ID, Kind: cand.Kind, Protocol: out.Protocol,
+				Success: out.OK(), Category: out.Category, Detail: out.Detail,
+			})
+			if out.OK() {
 				c := cand
 				r.BoundCred = &c // bind-on-success
 				authedKind = cand.Kind
@@ -283,13 +305,42 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 	// Step 5: Driver classification (now informed by the real-credential probe).
 	r.MatchedDrv, r.Match = cfg.Registry.Best(r.Probe)
 
-	// If no driver matched but a non-SNMP credential authenticated, assign a
-	// provisional category so the host isn't left "unknown". A deep OS collection
-	// (run by the orchestrator for WinRM/SSH binds) then refines workstation vs
-	// server from the real OS caption.
-	if (r.Match.Category == "" || r.Match.Category == domain.CatUnknown) && authedKind != "" {
+	// Step 5b: Evidence-based candidate classification. When no driver claimed the
+	// host, derive a best-effort category from SAFE UNAUTHENTICATED evidence —
+	// open ports, SNMP sysDescr, HTTP server/title, SSH banner — so the host is
+	// explained (Windows endpoint, Linux, camera, printer…) instead of a blank
+	// "unknown", even if no credential authenticated. This never counts as
+	// managed access; it is only a classification hint with its own confidence.
+	if r.Match.Category == "" || r.Match.Category == domain.CatUnknown {
+		ev := classify.OpenPorts(r.OpenPorts)
+		if r.Probe.SNMPSysDescr != "" {
+			ev = append(ev, classify.SNMPSysDescr(r.Probe.SNMPSysDescr)...)
+		}
+		if r.Probe.HTTPServer != "" || r.Probe.Hints["http_title"] != "" {
+			ev = append(ev, classify.HTTPServer(r.Probe.HTTPServer, r.Probe.Hints["http_title"])...)
+		}
+		if hasPortN(r.OpenPorts, 22) {
+			if banner := grabSSHBanner(ctx, ip, cfg.PortTimeout); banner != "" {
+				ev = append(ev, classify.SSHBanner(banner)...)
+			}
+		}
+		res := classify.FromEvidence(ev)
+		switch {
+		case res.Category != "" && res.Category != string(domain.CatUnknown) && res.Confidence > 0:
+			r.Match = driver.Match{Category: domain.DeviceCategory(res.Category), Confidence: res.Confidence}
+		case res.OSFamily == domain.OSFamilyWindows:
+			// Windows signals (RDP/SMB/WinRM) with no specific category → endpoint candidate.
+			r.Match = driver.Match{Category: domain.CatEndpoint, Confidence: 35}
+		}
+	}
+
+	// If a non-SNMP credential AUTHENTICATED, that's a stronger signal than
+	// unauthenticated evidence — assign the protocol's provisional category. A
+	// deep OS collection (run by the orchestrator for WinRM/SSH binds) then
+	// refines workstation vs server from the real OS caption.
+	if authedKind != "" {
 		if cat := provisionalCategory(authedKind); cat != domain.CatUnknown {
-			r.Match = driver.Match{Category: cat, Confidence: 55}
+			r.Match = driver.Match{Category: cat, Confidence: 60}
 		}
 	}
 
@@ -307,6 +358,35 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 		_ = authCli.Close()
 	}
 	return r
+}
+
+// snmpAttempt records one SNMP credential probe outcome for credential-test
+// history. Non-secret reason strings only.
+func snmpAttempt(cand credresolver.CredRef, ok bool) CredAttempt {
+	cat, detail := "auth_failed", "no SNMP response (wrong community or no access)"
+	if ok {
+		cat, detail = "success", "authenticated"
+	}
+	return CredAttempt{CredentialID: cand.ID, Kind: cand.Kind, Protocol: "snmp", Success: ok, Category: cat, Detail: detail}
+}
+
+// grabSSHBanner reads the SSH server identification line (e.g.
+// "SSH-2.0-OpenSSH_8.0p1 Ubuntu-...") — safe, unauthenticated OS evidence.
+func grabSSHBanner(ctx context.Context, ip netip.Addr, timeout time.Duration) string {
+	if timeout <= 0 {
+		timeout = 1500 * time.Millisecond
+	}
+	cctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	conn, err := (&net.Dialer{Timeout: timeout}).DialContext(cctx, "tcp", net.JoinHostPort(ip.String(), "22"))
+	if err != nil {
+		return ""
+	}
+	defer conn.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(timeout))
+	buf := make([]byte, 256)
+	n, _ := conn.Read(buf)
+	return strings.TrimSpace(string(buf[:n]))
 }
 
 // --- Transport helpers --------------------------------------------------------

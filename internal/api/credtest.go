@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/coralsearesorts/hims/internal/credtest"
+	"github.com/coralsearesorts/hims/internal/discovery"
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
 	"github.com/google/uuid"
 )
@@ -182,6 +183,46 @@ func (s *Server) testCredentials(w http.ResponseWriter, r *http.Request) {
 		"successes": successes,
 		"failures":  len(results) - successes,
 	})
+}
+
+// persistScanCredAttempts saves the credential authentication attempts a
+// discovery scan made against one device (success AND failure, with non-secret
+// reasons) to credential-test history — so the scan's auth outcomes show up in
+// Credential Test History, Data Quality, and Management Access Coverage exactly
+// like a manual test. Best-effort.
+func (s *Server) persistScanCredAttempts(ctx context.Context, dev db.Device, attempts []discovery.CredAttempt) {
+	if len(attempts) == 0 {
+		return
+	}
+	succ := 0
+	for _, a := range attempts {
+		if a.Success {
+			succ++
+		}
+	}
+	run, err := s.queries.InsertCredentialTestRun(ctx, db.InsertCredentialTestRunParams{
+		Actor: "discovery-scan", Pairs: int32(len(attempts)),
+		Successes: int32(succ), Failures: int32(len(attempts) - succ),
+	})
+	if err != nil {
+		return
+	}
+	names := map[uuid.UUID]string{}
+	for _, a := range attempts {
+		name, ok := names[a.CredentialID]
+		if !ok {
+			if c, e := s.queries.GetCredential(ctx, a.CredentialID); e == nil {
+				name = c.Name
+			}
+			names[a.CredentialID] = name
+		}
+		cid := a.CredentialID
+		_ = s.queries.InsertCredentialTestResult(ctx, db.InsertCredentialTestResultParams{
+			RunID: run.ID, DeviceID: dev.ID, CredentialID: &cid, CredentialName: name,
+			Kind: string(a.Kind), Protocol: a.Protocol, Category: a.Category, Success: a.Success,
+			Detail: a.Detail, LatencyMs: 0, Actor: "discovery-scan",
+		})
+	}
 }
 
 // persistCredentialTest saves one run and its results. Returns the run id ("" on

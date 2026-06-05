@@ -254,16 +254,21 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 		if r.Alive {
 			s.recordResult(hctx, jobID, ip, r, id, err)
 		}
-		// A WinRM/SSH bind means we onboarded a Windows/Linux host. Run a deep OS
-		// collection to refine its classification (workstation vs server) and
-		// enrich vendor/model/OS — reusing the just-bound credential. Best-effort
-		// with its own budget so it never stalls or fails the scan.
-		if err == nil && id != uuid.Nil && r.BoundCred != nil && s.cipher() != nil &&
-			(r.BoundCred.Kind == domain.CredWinRM || r.BoundCred.Kind == domain.CredSSH) {
+		// Post-onboarding follow-ups for an enrolled host (best-effort).
+		if err == nil && id != uuid.Nil {
 			if dev, derr := s.queries.GetDevice(ctx, id); derr == nil {
-				cctx, ccancel := context.WithTimeout(ctx, 2*time.Minute)
-				_ = s.runOSCollection(cctx, dev)
-				ccancel()
+				// Persist every credential auth attempt (success + failure + reason)
+				// to credential-test history → feeds Coverage / Data Quality.
+				s.persistScanCredAttempts(ctx, dev, r.CredAttempts)
+				// A WinRM/SSH bind means we onboarded a Windows/Linux host. Run a
+				// deep OS collection to refine classification (workstation vs
+				// server) and enrich vendor/model/OS — reusing the bound credential.
+				if r.BoundCred != nil && s.cipher() != nil &&
+					(r.BoundCred.Kind == domain.CredWinRM || r.BoundCred.Kind == domain.CredSSH) {
+					cctx, ccancel := context.WithTimeout(ctx, 2*time.Minute)
+					_ = s.runOSCollection(cctx, dev)
+					ccancel()
+				}
 			}
 		}
 		return id, err

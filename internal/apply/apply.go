@@ -138,21 +138,28 @@ func (a *Applier) reconcile(ctx context.Context, ip netip.Addr, locationID *uuid
 	// location_id/vlan/class. A DB unique index on primary_ip (live, non-null)
 	// is the hard backstop; if a concurrent job wins the insert race, we catch
 	// the conflict and update instead.
-	update := func(id uuid.UUID) (db.Device, error) {
+	update := func(existing db.Device) (db.Device, error) {
+		// Preserve a manual classification lock: an operator who locked the
+		// category owns it — discovery enriches everything else but must not
+		// overwrite the category they pinned.
+		category := create.Category
+		if existing.ClassificationLocked {
+			category = existing.Category
+		}
 		return a.w.UpdateDiscoveredDevice(ctx, db.UpdateDiscoveredDeviceParams{
-			ID: id, Hostname: create.Hostname, Name: create.Name, Vendor: create.Vendor,
+			ID: existing.ID, Hostname: create.Hostname, Name: create.Name, Vendor: create.Vendor,
 			Model: create.Model, Serial: create.Serial, OsVersion: create.OsVersion,
-			Category: create.Category, Driver: create.Driver, Status: create.Status,
+			Category: category, Driver: create.Driver, Status: create.Status,
 		})
 	}
 	if existing, err := a.w.LiveDeviceByIP(ctx, &ip); err == nil {
-		return update(existing.ID)
+		return update(existing)
 	}
 	dev, err := a.w.CreateDevice(ctx, create)
 	if err != nil {
 		// Lost an insert race (unique index). Re-find and update instead.
 		if existing, e2 := a.w.LiveDeviceByIP(ctx, &ip); e2 == nil {
-			return update(existing.ID)
+			return update(existing)
 		}
 		return db.Device{}, err
 	}
