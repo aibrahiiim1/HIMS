@@ -495,6 +495,130 @@ function ADTab({ locations, locPath, onLaunch, setMsg }: { locations: Location[]
   )
 }
 
+// ---------- Onboarding Actions ----------
+// Derives the operational blocker buckets (Windows WinRM / Linux SSH / Network
+// SNMP) straight from THIS job's scan results (probe_data) and turns each into an
+// actionable card: count, sample devices, cause, next action, and a button wired
+// to an EXISTING endpoint (credential test / re-scan). No new discovery features —
+// just makes the current blockers operationally clear.
+function OnboardingActions({ results, qc, setMsg, onRescan, rescanning }: {
+  results: DiscoveryResult[]
+  qc: ReturnType<typeof useQueryClient>
+  setMsg: (s: string) => void
+  onRescan: () => void
+  rescanning: boolean
+}) {
+  const creds = useQuery({ queryKey: ['credentials'], queryFn: () => api.get<Credential[]>('/credentials') })
+  const winrmCredIds = (creds.data ?? []).filter((c) => c.kind === 'winrm').map((c) => c.id)
+  const sshCredIds = (creds.data ?? []).filter((c) => c.kind === 'ssh').map((c) => c.id)
+
+  const test = useMutation({
+    mutationFn: (v: { credIds: string[]; devIds: string[] }) =>
+      api.post<{ successes: number; failures: number; pairs: number }>('/credentials/test', { credential_ids: v.credIds, device_ids: v.devIds }),
+    onSuccess: (r) => { setMsg(`Credential test: ${r.successes} ok / ${r.failures} failed of ${r.pairs} pair(s). Check Credential Health on the devices.`); qc.invalidateQueries({ queryKey: ['access-coverage'] }) },
+    onError: (e) => setMsg((e as Error).message),
+  })
+
+  // --- bucket helpers (read straight from probe_data, identical logic to the report) ---
+  const att = (r: DiscoveryResult) => r.probe_data?.cred_attempts ?? []
+  const ok = (r: DiscoveryResult, p: string) => att(r).some((a) => a.protocol === p && a.success) || (r.probe_data?.bound_cred ?? '').startsWith(p === 'snmp' ? 'snmp' : p)
+  const cat = (r: DiscoveryResult, p: string, c: string) => att(r).some((a) => a.protocol === p && a.category === c)
+  const portOpen = (r: DiscoveryResult, ...ps: number[]) => ps.some((p) => (r.probe_data?.open_ports ?? []).includes(p))
+  const ips = (rs: DiscoveryResult[], n = 6) => rs.slice(0, n).map((r) => r.ip).join(', ') + (rs.length > n ? ` … (+${rs.length - n})` : '')
+  const devIds = (rs: DiscoveryResult[]) => rs.map((r) => r.device_id).filter((x): x is string => !!x)
+
+  const win = results.filter((r) => r.probe_data?.candidate === 'windows')
+  const winOk = win.filter((r) => ok(r, 'winrm'))
+  const winAuth = win.filter((r) => !ok(r, 'winrm') && cat(r, 'winrm', 'auth_failed'))
+  const winUnreach = win.filter((r) => !ok(r, 'winrm') && cat(r, 'winrm', 'unreachable'))
+  const winClosed = win.filter((r) => !ok(r, 'winrm') && !cat(r, 'winrm', 'auth_failed') && !cat(r, 'winrm', 'unreachable') && !portOpen(r, 5985, 5986))
+
+  const lin = results.filter((r) => r.probe_data?.candidate === 'linux')
+  const linOk = lin.filter((r) => ok(r, 'ssh'))
+  const linAuth = lin.filter((r) => !ok(r, 'ssh') && cat(r, 'ssh', 'auth_failed'))
+  const linClosed = lin.filter((r) => !ok(r, 'ssh') && !cat(r, 'ssh', 'auth_failed'))
+
+  const net = results.filter((r) => ['switch', 'router', 'firewall'].includes(r.category ?? ''))
+  const netOk = net.filter((r) => ok(r, 'snmp'))
+
+  type Card = {
+    key: string; title: string; tone: 'ok' | 'warn' | 'crit'; count: number; sample: string
+    cause: string; action: string; instructions?: React.ReactNode; button?: React.ReactNode
+  }
+  const cards: Card[] = []
+
+  if (winOk.length) cards.push({ key: 'win-ok', title: 'Windows · WinRM working', tone: 'ok', count: winOk.length, sample: ips(winOk), cause: 'WinRM authenticated; deep OS inventory collected.', action: 'None — onboarded.' })
+  if (winAuth.length) cards.push({
+    key: 'win-auth', title: 'Windows · WinRM auth_failed', tone: 'warn', count: winAuth.length, sample: ips(winAuth),
+    cause: 'WinRM reachable (5985 open) but the credential was rejected — wrong password or username format.',
+    action: 'Set the WinRM credential username as UPN (dpm@coralsearesorts.com) OR NetBIOS (coralsearesorts\\dpm). NTLM often needs the NetBIOS form. Then retry.',
+    button: <button style={ghost} disabled={!winrmCredIds.length || test.isPending} onClick={() => test.mutate({ credIds: winrmCredIds, devIds: devIds(winAuth) })}>{test.isPending ? 'Testing…' : 'Retry WinRM credential test'}</button>,
+  })
+  if (winUnreach.length) cards.push({
+    key: 'win-unreach', title: 'Windows · WinRM unreachable', tone: 'warn', count: winUnreach.length, sample: ips(winUnreach),
+    cause: '5985 looked open but the WinRM/WSMan handshake failed (service not listening or filtered).',
+    action: 'Confirm the WinRM service is running and listener bound; then re-scan.',
+    button: <button style={ghost} disabled={rescanning} onClick={onRescan}>{rescanning ? 'Re-scanning…' : 'Re-scan scope'}</button>,
+  })
+  if (winClosed.length) cards.push({
+    key: 'win-closed', title: 'Windows · WinRM disabled / 5985 closed', tone: 'crit', count: winClosed.length, sample: ips(winClosed),
+    cause: 'No WinRM evidence — port 5985/5986 is closed, so WinRM was not attempted. This is a host-configuration/firewall blocker, NOT a credential issue. No credential will help until WinRM is enabled.',
+    action: 'Enable PowerShell Remoting (ideally fleet-wide via GPO), open the firewall, then re-scan.',
+    instructions: (
+      <div style={{ fontSize: 11, marginTop: 6 }}>
+        <div className="muted">Per host (admin PowerShell):</div>
+        <code style={codeBox}>Enable-PSRemoting -Force</code>
+        <div className="muted" style={{ marginTop: 4 }}>Fleet-wide (GPO): Computer Config → Policies → Admin Templates → Windows Components → Windows Remote Management (WinRM) → WinRM Service → <em>Allow remote server management through WinRM = Enabled</em>; + Firewall inbound allow TCP 5985.</div>
+        <div className="muted" style={{ marginTop: 4 }}>Test a host's port:</div>
+        <code style={codeBox}>Test-NetConnection {winClosed[0]?.ip ?? '<ip>'} -Port 5985</code>
+      </div>
+    ),
+    button: <button style={ghost} disabled={rescanning} onClick={onRescan}>{rescanning ? 'Re-scanning…' : 'Re-scan after enabling WinRM'}</button>,
+  })
+
+  if (linOk.length) cards.push({ key: 'lin-ok', title: 'Linux · SSH working', tone: 'ok', count: linOk.length, sample: ips(linOk), cause: 'SSH authenticated; OS inventory collected.', action: 'None — onboarded.' })
+  if (linAuth.length) cards.push({
+    key: 'lin-auth', title: 'Linux · SSH auth_failed', tone: 'warn', count: linAuth.length, sample: ips(linAuth),
+    cause: 'Port 22 reachable but the SSH credential was rejected.',
+    action: 'Verify the account allows SSH login (sshd_config: PermitRootLogin yes, PasswordAuthentication yes) and the password is current — or add another SSH credential, then retry.',
+    button: (
+      <span style={{ display: 'inline-flex', gap: 8 }}>
+        <button style={ghost} disabled={!sshCredIds.length || test.isPending} onClick={() => test.mutate({ credIds: sshCredIds, devIds: devIds(linAuth) })}>{test.isPending ? 'Testing…' : 'Retry SSH credential test'}</button>
+        <Link to="/credentials" style={{ ...ghost, textDecoration: 'none' }}>Add SSH credential</Link>
+      </span>
+    ),
+  })
+  if (linClosed.length) cards.push({ key: 'lin-closed', title: 'Linux · SSH unreachable / 22 closed', tone: 'warn', count: linClosed.length, sample: ips(linClosed), cause: 'Port 22 not reachable — SSH not attempted.', action: 'Enable sshd / open port 22, then re-scan.', button: <button style={ghost} disabled={rescanning} onClick={onRescan}>{rescanning ? 'Re-scanning…' : 'Re-scan scope'}</button> })
+
+  if (netOk.length) cards.push({ key: 'net-ok', title: 'Network · SNMP working', tone: 'ok', count: netOk.length, sample: ips(netOk), cause: 'Switches/firewalls authenticated via SNMP; interfaces/topology collected.', action: 'Completed — no action.' })
+
+  if (cards.length === 0) return null
+  const toneColor = { ok: '#2e7d32', warn: '#8a6d00', crit: '#b71c1c' }
+
+  return (
+    <div className="card">
+      <h3>Onboarding actions <span className="muted" style={{ fontSize: 12, fontWeight: 400 }}>— what's blocking the rest of this scan, and how to fix it</span></h3>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 12 }}>
+        {cards.map((c) => (
+          <div key={c.key} style={{ border: `1px solid ${toneColor[c.tone]}44`, borderLeft: `4px solid ${toneColor[c.tone]}`, borderRadius: 8, padding: 12, background: 'var(--surface-2, #f7f9fc)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+              <strong style={{ fontSize: 13 }}>{c.title}</strong>
+              <span className="badge" style={{ background: toneColor[c.tone], color: '#fff' }}>{c.count}</span>
+            </div>
+            <div className="mono muted" style={{ fontSize: 11, marginTop: 4 }}>{c.sample}</div>
+            <div style={{ fontSize: 12, marginTop: 6 }}><span className="muted">Cause: </span>{c.cause}</div>
+            <div style={{ fontSize: 12, marginTop: 4 }}><span className="muted">Next: </span>{c.action}</div>
+            {c.instructions}
+            {c.button && <div style={{ marginTop: 8 }}>{c.button}</div>}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+const codeBox: React.CSSProperties = { display: 'block', background: '#0d1b2a', color: '#9be7a0', padding: '4px 8px', borderRadius: 4, fontSize: 11, margin: '2px 0', overflowX: 'auto' }
+
 // ---------- Jobs ----------
 function JobsTab({ jobs, jobID, setJobID, detail, setMsg, qc }: { jobs: DiscoveryJob[]; jobID: string | null; setJobID: (s: string | null) => void; detail?: { job: DiscoveryJob; results: DiscoveryResult[] }; setMsg: (s: string) => void; qc: ReturnType<typeof useQueryClient> }) {
   const refresh = () => qc.invalidateQueries({ queryKey: ['discovery-jobs'] })
@@ -529,6 +653,10 @@ function JobsTab({ jobs, jobID, setJobID, detail, setMsg, qc }: { jobs: Discover
           </table>
         )}
       </div>
+
+      {jobID && detail && detail.results.length > 0 && (
+        <OnboardingActions results={detail.results} qc={qc} setMsg={setMsg} onRescan={() => rerun.mutate(jobID)} rescanning={rerun.isPending} />
+      )}
 
       {jobID && detail && (
         <div className="card">
