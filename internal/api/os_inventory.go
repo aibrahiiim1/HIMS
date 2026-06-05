@@ -187,8 +187,15 @@ func (s *Server) runOSCollection(ctx context.Context, d db.Device) osCollectResu
 	var rep osinv.Report
 	switch res.Method {
 	case "winrm":
-		ep := winrm.NewEndpoint(res.IP, 5985, false, false, nil, nil, nil, 90*time.Second)
-		cl, e := winrm.NewClient(ep, user, pass)
+		// NTLM + WSMan message encryption: Windows defaults reject Basic/
+		// unencrypted (listeners advertise Negotiate only, AllowUnencrypted=false).
+		ep := winrm.NewEndpoint(res.IP, 5985, false, false, nil, nil, nil, 120*time.Second)
+		params := winrm.NewParameters("PT180S", "en-US", 153600)
+		params.TransportDecorator = func() winrm.Transporter {
+			enc, _ := winrm.NewEncryption("ntlm") // only errors on unsupported protocol
+			return enc
+		}
+		cl, e := winrm.NewClientWithParameters(ep, user, pass, params)
 		if e != nil {
 			res.Reason, res.Detail = categorizeCollectErr("winrm", e.Error())
 			return res

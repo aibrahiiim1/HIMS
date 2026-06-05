@@ -65,7 +65,7 @@ func (m *mockWriter) DeleteStaleOSRoles(context.Context, db.DeleteStaleOSRolesPa
 }
 
 func TestPersist_Windows(t *testing.T) {
-	rep, err := ParseWindows([]byte(winFixture))
+	rep, err := CollectWindows(context.Background(), winMock{})
 	if err != nil {
 		t.Fatal(err)
 	}
