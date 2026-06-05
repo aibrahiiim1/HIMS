@@ -606,6 +606,34 @@ export interface Credential {
   created_at: string
 }
 
+// Vendor Connection Profile — operator-configured integration endpoint
+// (vCenter / Hikvision / wireless controller / CUCM) that closes a "config
+// gate" so the scan and manual Test/Run can authenticate + collect. Secrets are
+// never returned; only the bound credential's name is surfaced.
+export interface VendorProfile {
+  id: string
+  name: string
+  vendor_type: string
+  target_url: string
+  credential_id?: string
+  credential_name?: string
+  location_id?: string
+  device_id?: string
+  config: Record<string, unknown>
+  enabled: boolean
+  last_test_at?: string
+  last_test_ok?: boolean | null
+  last_test_detail?: string
+  last_collection_at?: string
+  last_collection_detail?: string
+  status: string
+}
+
+export interface VendorProfileTestResponse {
+  ok: boolean
+  detail: string
+}
+
 export interface AlertRule {
   id: string
   name: string

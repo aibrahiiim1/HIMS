@@ -287,6 +287,40 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 					} else {
 						enrichment = "VMware collection incomplete: " + vc.Reason
 					}
+				} else if cat := string(r.Match.Category); (cat == string(domain.CatWirelessController) || cat == string(domain.CatAccessPoint)) && s.cipher() != nil {
+					// Wireless controller candidate — use a matching Vendor Connection
+					// Profile (controller URL + site) if the operator configured one.
+					if prof, found := s.resolveScanProfile(ctx, cat, dev.ID, dev.LocationID); found {
+						cctx, ccancel := context.WithTimeout(ctx, 90*time.Second)
+						ok, detail := s.collectWirelessProfile(cctx, prof, dev)
+						ccancel()
+						_ = s.queries.SetVendorProfileCollection(ctx, db.SetVendorProfileCollectionParams{ID: prof.ID, LastCollectionDetail: detail})
+						enrichment = detail
+						if !ok {
+							enrichment = "Wireless profile collection incomplete: " + detail
+						}
+					} else {
+						enrichment = "Wireless controller — add a Vendor Connection Profile (Discovery → Vendor Profiles) to onboard"
+					}
+				} else if cat := string(r.Match.Category); (cat == string(domain.CatPBX) || cat == string(domain.CatVoiceGateway)) && s.cipher() != nil {
+					// Voice/PBX candidate — use a matching CUCM Vendor Connection Profile.
+					if prof, found := s.resolveScanProfile(ctx, cat, dev.ID, dev.LocationID); found {
+						cctx, ccancel := context.WithTimeout(ctx, 90*time.Second)
+						ok, detail := false, ""
+						if prof.VendorType == "cucm" {
+							ok, detail = s.collectCUCMProfile(cctx, prof, dev)
+						} else {
+							detail = prof.VendorType + " deep collection not implemented yet — profile recorded; detection + classification active"
+						}
+						ccancel()
+						_ = s.queries.SetVendorProfileCollection(ctx, db.SetVendorProfileCollectionParams{ID: prof.ID, LastCollectionDetail: detail})
+						enrichment = detail
+						if !ok {
+							enrichment = "Voice profile: " + detail
+						}
+					} else {
+						enrichment = "Voice/PBX — add a Vendor Connection Profile (Discovery → Vendor Profiles) to onboard"
+					}
 				} else if cat := string(r.Match.Category); (cat == string(domain.CatCamera) || cat == string(domain.CatNVR)) && s.cipher() != nil {
 					// Camera/NVR candidate — try ONVIF/HTTP credentials and, on
 					// success, collect device info + classify camera vs NVR (Stage C).

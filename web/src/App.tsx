@@ -25,6 +25,7 @@ import { Alerts } from './pages/Alerts'
 import { SpareParts } from './pages/SpareParts'
 import { Expenses } from './pages/Expenses'
 import { Credentials } from './pages/Credentials'
+import { VendorProfiles } from './pages/VendorProfiles'
 import { Mibs } from './pages/Mibs'
 import { Settings } from './pages/Settings'
 import { Inventory } from './pages/Inventory'
@@ -146,6 +147,7 @@ function Shell({ me, onLogout }: { me?: AuthMe; onLogout: () => void }) {
             <Route path="/spare-parts" element={<SpareParts />} />
             <Route path="/expenses" element={<Expenses />} />
             <Route path="/credentials" element={<Credentials />} />
+            <Route path="/vendor-profiles" element={<VendorProfiles />} />
             <Route path="/mibs" element={<Mibs />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/inventory" element={<Inventory />} />

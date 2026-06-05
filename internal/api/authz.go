@@ -65,7 +65,7 @@ func requiredPermission(method, path string) string {
 
 	switch tag {
 	// --- sensitive: same permission for read + write ---
-	case "credentials", "credential-groups", "security": // security = encryption
+	case "credentials", "credential-groups", "vendor-profiles", "security": // security = encryption
 		return "credentials.manage"
 	case "rbac":
 		return "rbac.manage"

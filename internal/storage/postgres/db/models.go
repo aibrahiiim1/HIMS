@@ -855,6 +855,26 @@ type UserRole struct {
 	RoleID uuid.UUID `json:"role_id"`
 }
 
+type VendorConnectionProfile struct {
+	ID                   uuid.UUID  `json:"id"`
+	Name                 string     `json:"name"`
+	VendorType           string     `json:"vendor_type"`
+	TargetUrl            string     `json:"target_url"`
+	CredentialID         *uuid.UUID `json:"credential_id"`
+	LocationID           *uuid.UUID `json:"location_id"`
+	DeviceID             *uuid.UUID `json:"device_id"`
+	Config               []byte     `json:"config"`
+	Enabled              bool       `json:"enabled"`
+	LastTestAt           *time.Time `json:"last_test_at"`
+	LastTestOk           *bool      `json:"last_test_ok"`
+	LastTestDetail       string     `json:"last_test_detail"`
+	LastCollectionAt     *time.Time `json:"last_collection_at"`
+	LastCollectionDetail string     `json:"last_collection_detail"`
+	Status               string     `json:"status"`
+	CreatedAt            time.Time  `json:"created_at"`
+	UpdatedAt            time.Time  `json:"updated_at"`
+}
+
 type VendorFingerprint struct {
 	ID         uuid.UUID `json:"id"`
 	Kind       string    `json:"kind"`

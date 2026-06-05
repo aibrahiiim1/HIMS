@@ -86,6 +86,9 @@ type Querier interface {
 	CreateSystem(ctx context.Context, arg CreateSystemParams) (System, error)
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
 	CreateVendorFingerprint(ctx context.Context, arg CreateVendorFingerprintParams) (VendorFingerprint, error)
+	// Vendor connection profile CRUD + resolution. No secrets are stored here; the
+	// credential reference points at the encrypted credentials table.
+	CreateVendorProfile(ctx context.Context, arg CreateVendorProfileParams) (VendorConnectionProfile, error)
 	CreateWorkOrder(ctx context.Context, arg CreateWorkOrderParams) (WorkOrder, error)
 	// Whether a group is already bound to a location (guards duplicate binds).
 	CredentialGroupLocationBound(ctx context.Context, arg CredentialGroupLocationBoundParams) (bool, error)
@@ -140,6 +143,7 @@ type Querier interface {
 	DeleteUser(ctx context.Context, id uuid.UUID) error
 	DeleteUserSessions(ctx context.Context, userID uuid.UUID) error
 	DeleteVendorFingerprint(ctx context.Context, id uuid.UUID) error
+	DeleteVendorProfile(ctx context.Context, id uuid.UUID) error
 	DeviceCountByCategory(ctx context.Context) ([]DeviceCountByCategoryRow, error)
 	DeviceCountByStatus(ctx context.Context) ([]DeviceCountByStatusRow, error)
 	// Mark open, unacknowledged, not-yet-escalated alerts as escalated once they
@@ -187,6 +191,7 @@ type Querier interface {
 	GetSystem(ctx context.Context, id uuid.UUID) (System, error)
 	GetUPSStatus(ctx context.Context, deviceID uuid.UUID) (UpsStatus, error)
 	GetUserByUsername(ctx context.Context, username string) (User, error)
+	GetVendorProfile(ctx context.Context, id uuid.UUID) (VendorConnectionProfile, error)
 	GetWLANControllerInfo(ctx context.Context, deviceID uuid.UUID) (WlanControllerInfo, error)
 	GetWorkOrder(ctx context.Context, id uuid.UUID) (WorkOrder, error)
 	// ===== Audit log ===========================================================
@@ -346,6 +351,7 @@ type Querier interface {
 	ListVMsByHost(ctx context.Context, hostDeviceID uuid.UUID) ([]VirtualMachine, error)
 	// ===== Vendor fingerprints =================================================
 	ListVendorFingerprints(ctx context.Context) ([]VendorFingerprint, error)
+	ListVendorProfiles(ctx context.Context) ([]VendorConnectionProfile, error)
 	ListVlans(ctx context.Context, deviceID uuid.UUID) ([]Vlan, error)
 	ListVpnTunnels(ctx context.Context, deviceID uuid.UUID) ([]FirewallVpnTunnel, error)
 	ListWorkOrderEvents(ctx context.Context, workOrderID uuid.UUID) ([]WorkOrderEvent, error)
@@ -393,6 +399,10 @@ type Querier interface {
 	ResolveCandidatesForIP(ctx context.Context, arg ResolveCandidatesForIPParams) ([]ResolveCandidatesForIPRow, error)
 	// Auto-resolve: any un-resolved alert whose check has recovered to 'up'.
 	ResolveRecoveredAlerts(ctx context.Context) ([]ResolveRecoveredAlertsRow, error)
+	// Profiles applicable to a device during a scan: a profile bound to this exact
+	// device, or one bound to this location (site-level), or an unbound global
+	// profile — for the given vendor_type. Most specific first.
+	ResolveVendorProfiles(ctx context.Context, arg ResolveVendorProfilesParams) ([]VendorConnectionProfile, error)
 	// Fleet-wide role rollup: how many devices hold each role (the CMDB role cut).
 	RoleSummary(ctx context.Context) ([]RoleSummaryRow, error)
 	RolesForUser(ctx context.Context, userID uuid.UUID) ([]Role, error)
@@ -418,6 +428,8 @@ type Querier interface {
 	SetRolePermissionsClear(ctx context.Context, roleID uuid.UUID) error
 	SetUserPassword(ctx context.Context, arg SetUserPasswordParams) error
 	SetUserRolesClear(ctx context.Context, userID uuid.UUID) error
+	SetVendorProfileCollection(ctx context.Context, arg SetVendorProfileCollectionParams) error
+	SetVendorProfileTest(ctx context.Context, arg SetVendorProfileTestParams) error
 	// Roll up aggregate rows of one kind over a recent window, highest bytes first.
 	TopFlowEntries(ctx context.Context, arg TopFlowEntriesParams) ([]TopFlowEntriesRow, error)
 	TotalExpenses(ctx context.Context) (float64, error)
@@ -455,6 +467,7 @@ type Querier interface {
 	UpdateSystem(ctx context.Context, arg UpdateSystemParams) (System, error)
 	UpdateUser(ctx context.Context, arg UpdateUserParams) (User, error)
 	UpdateVendorFingerprint(ctx context.Context, arg UpdateVendorFingerprintParams) (VendorFingerprint, error)
+	UpdateVendorProfile(ctx context.Context, arg UpdateVendorProfileParams) (VendorConnectionProfile, error)
 	UpdateWorkOrder(ctx context.Context, arg UpdateWorkOrderParams) (WorkOrder, error)
 	// ---- ARP entries ---------------------------------------------------------
 	UpsertARP(ctx context.Context, arg UpsertARPParams) error

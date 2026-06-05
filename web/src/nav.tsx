@@ -53,6 +53,7 @@ export const NAV: NavGroup[] = [
       { label: 'Discovery Center', icon: Radar, to: '/discovery', badge: 'failed_scans' },
       { label: 'MIB Browser', icon: BookOpen, to: '/mibs' },
       { label: 'Credentials', icon: KeyRound, to: '/credentials' },
+      { label: 'Vendor Profiles', icon: Plug, to: '/vendor-profiles' },
     ],
   },
   {
