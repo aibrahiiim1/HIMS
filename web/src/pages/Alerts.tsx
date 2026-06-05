@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Bell, TriangleAlert, CircleCheck, ListChecks, Play, Plus, Wrench, ArrowUpCircle, Clock, X, Trash2 } from 'lucide-react'
 import { api, type Alert, type AlertRule, type AlertEvent, type MaintenanceWindow, type Device, type Location, locationPaths } from '../api'
-import { PageHeader, Panel, Kpi, EmptyState, StatusPill, TabBar, timeAgo } from '../components/ui'
+import { PageHeader, Panel, Kpi, EmptyState, StatusPill, TabBar, timeAgo, usePaged, Pager } from '../components/ui'
 
 const sevCls = (s: string) => (s === 'critical' ? 'badge-down' : s === 'warning' ? 'badge-warning' : 'badge-unknown')
 const SeverityBadge = ({ s }: { s: string }) => <span className={`badge ${sevCls(s)}`}>{s}</span>
@@ -41,6 +41,7 @@ export function Alerts() {
 
   const shownAlerts = useMemo(() => list.filter((a) =>
     statusF === 'all' ? true : statusF === 'active' ? a.status !== 'resolved' : a.status === statusF), [list, statusF])
+  const pagedAlerts = usePaged(shownAlerts, { pageSize: 10 })
 
   return (
     <div>
@@ -91,7 +92,7 @@ export function Alerts() {
             <table className="data-table">
               <thead><tr><th>Severity</th><th>Status</th><th>Message</th><th>Opened</th><th>WO</th><th></th></tr></thead>
               <tbody>
-                {shownAlerts.map((a) => (
+                {pagedAlerts.slice.map((a) => (
                   <tr key={a.id}>
                     <td><SeverityBadge s={a.severity} />{a.escalated && <span className="badge badge-down" style={{ marginLeft: 6 }}><ArrowUpCircle size={11} /> esc</span>}</td>
                     <td><StatusPill status={a.status === 'open' ? 'down' : a.status === 'acknowledged' ? 'warning' : 'up'} label={a.status} /></td>
@@ -108,6 +109,7 @@ export function Alerts() {
               </tbody>
             </table>
           )}
+          {shownAlerts.length > 0 && <Pager page={pagedAlerts.page} pages={pagedAlerts.pages} total={pagedAlerts.total} pageSize={pagedAlerts.pageSize} onPage={pagedAlerts.setPage} />}
         </Panel>
       )}
 

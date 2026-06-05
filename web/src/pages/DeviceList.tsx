@@ -1,9 +1,9 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { Boxes, Wifi, WifiOff, Server, Radar } from 'lucide-react'
 import { api, type Device } from '../api'
-import { PageHeader, Panel, Kpi, StatusPill, EmptyState, colorFor } from '../components/ui'
+import { PageHeader, Panel, Kpi, StatusPill, EmptyState, colorFor, usePaged, Pager } from '../components/ui'
 
 interface Props {
   category: string
@@ -23,6 +23,15 @@ export function DeviceList({ category, title, detailBase }: Props) {
   const online = all.filter((d) => (d.status || '').toLowerCase() === 'up').length
   const offline = all.filter((d) => isOffline(d.status)).length
   const vendors = useMemo(() => new Set(all.map((d) => d.vendor || 'Unknown')).size, [data])
+
+  const [q, setQ] = useState('')
+  const filtered = useMemo(() => {
+    const t = q.trim().toLowerCase()
+    if (!t) return all
+    return all.filter((d) => d.name.toLowerCase().includes(t) || (d.primary_ip ?? '').includes(t) ||
+      (d.vendor ?? '').toLowerCase().includes(t) || (d.model ?? '').toLowerCase().includes(t) || (d.hostname ?? '').toLowerCase().includes(t))
+  }, [data, q])
+  const paged = usePaged(filtered, { pageSize: 10 })
 
   return (
     <div>
@@ -47,12 +56,17 @@ export function DeviceList({ category, title, detailBase }: Props) {
           />
         )}
         {data && data.length > 0 && (
+          <>
+          <div style={{ padding: '8px 10px' }}>
+            <input placeholder="Filter by name / IP / vendor / model…" value={q} onChange={(e) => { setQ(e.target.value); paged.setPage(0) }}
+              style={{ padding: '6px 10px', border: '1px solid #2a3a47', borderRadius: 6, fontSize: 13, width: 320, maxWidth: '100%' }} />
+          </div>
           <table className="data-table">
             <thead>
               <tr><th>Device</th><th>IP</th><th>Vendor</th><th>Model</th><th>OS</th><th>Driver</th><th>Status</th></tr>
             </thead>
             <tbody>
-              {data.map((d) => (
+              {paged.slice.map((d) => (
                 <tr key={d.id}>
                   <td>
                     <div className="dev-cell">
@@ -73,6 +87,8 @@ export function DeviceList({ category, title, detailBase }: Props) {
               ))}
             </tbody>
           </table>
+          <Pager page={paged.page} pages={paged.pages} total={paged.total} pageSize={paged.pageSize} onPage={paged.setPage} />
+          </>
         )}
       </Panel>
     </div>

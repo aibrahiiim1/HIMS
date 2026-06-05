@@ -8,7 +8,7 @@ import { ClassificationCard } from '../components/ClassificationCard'
 import { DeepOSInventory } from '../components/DeepOSInventory'
 import { DeviceOps } from '../components/DeviceOps'
 import { SwitchPorts } from '../components/SwitchPorts'
-import { Panel, TabBar, Kpi, StatusPill, EmptyState, Sparkline, timeAgo } from '../components/ui'
+import { Panel, TabBar, Kpi, StatusPill, EmptyState, Sparkline, timeAgo, usePaged, Pager } from '../components/ui'
 
 type Tab = 'overview' | 'ports' | 'mac' | 'arp' | 'interfaces' | 'vlans' | 'neighbors' | 'topology' | 'monitoring' | 'operations'
 const operLabel = (s?: number | null) => (s === 1 ? 'up' : s === 2 ? 'down' : 'unknown')
@@ -241,11 +241,12 @@ function MacTable({ id }: { id: string }) {
     const t = term.toLowerCase()
     return r.mac.toLowerCase().includes(t) || (r.if_name ?? '').toLowerCase().includes(t) || (r.owner_name ?? '').toLowerCase().includes(t) || (r.owner_vendor ?? '').toLowerCase().includes(t)
   })
+  const paged = usePaged(filtered, { pageSize: 10 })
   return (
     <Panel title="MAC Address Table" icon={Table} subtitle={`${filtered.length} of ${rows.length}`} pad={false}>
       <div className="row" style={{ padding: 'var(--space-4) var(--space-5)', borderBottom: '1px solid var(--border)' }}>
-        <input className="field" style={{ width: 260 }} placeholder="Search MAC / port / device / vendor…" value={term} onChange={(e) => setTerm(e.target.value)} />
-        <select className="field" value={vlan} onChange={(e) => setVlan(e.target.value)}>
+        <input className="field" style={{ width: 260 }} placeholder="Search MAC / port / device / vendor…" value={term} onChange={(e) => { setTerm(e.target.value); paged.setPage(0) }} />
+        <select className="field" value={vlan} onChange={(e) => { setVlan(e.target.value); paged.setPage(0) }}>
           <option value="all">All VLANs</option>
           {vlanOpts.map((v) => <option key={v} value={String(v)}>VLAN {v}</option>)}
         </select>
@@ -256,7 +257,7 @@ function MacTable({ id }: { id: string }) {
         <table className="data-table">
           <thead><tr><th>MAC</th><th>VLAN</th><th>Port</th><th>Owner device</th><th>Vendor</th><th>Source</th><th>Last seen</th></tr></thead>
           <tbody>
-            {filtered.map((m) => (
+            {paged.slice.map((m) => (
               <tr key={m.id}>
                 <td className="mono">{m.mac}</td>
                 <td>{m.vlan_id}</td>
@@ -270,6 +271,7 @@ function MacTable({ id }: { id: string }) {
           </tbody>
         </table>
       )}
+      {filtered.length > 0 && <Pager page={paged.page} pages={paged.pages} total={paged.total} pageSize={paged.pageSize} onPage={paged.setPage} />}
     </Panel>
   )
 }
@@ -283,10 +285,11 @@ function ArpTable({ id }: { id: string }) {
     const t = term.toLowerCase()
     return r.ip_address.toLowerCase().includes(t) || r.mac.toLowerCase().includes(t) || (r.if_name ?? '').toLowerCase().includes(t) || (r.owner_name ?? '').toLowerCase().includes(t)
   })
+  const paged = usePaged(filtered, { pageSize: 10 })
   return (
     <Panel title="ARP Table" icon={Router} subtitle={`${filtered.length} of ${rows.length}`} pad={false}>
       <div className="row" style={{ padding: 'var(--space-4) var(--space-5)', borderBottom: '1px solid var(--border)' }}>
-        <input className="field" style={{ width: 260 }} placeholder="Search IP / MAC / port / device…" value={term} onChange={(e) => setTerm(e.target.value)} />
+        <input className="field" style={{ width: 260 }} placeholder="Search IP / MAC / port / device…" value={term} onChange={(e) => { setTerm(e.target.value); paged.setPage(0) }} />
       </div>
       {q.isLoading && <div className="loading">Loading ARP table…</div>}
       {q.data && rows.length === 0 && <EmptyState icon={Router} title="No ARP entries collected" message="ARP is collected from L3 devices (routers, firewalls, L3 switches)." />}
@@ -294,7 +297,7 @@ function ArpTable({ id }: { id: string }) {
         <table className="data-table">
           <thead><tr><th>IP address</th><th>MAC</th><th>Interface</th><th>Resolved device</th><th>Source</th><th>Last seen</th></tr></thead>
           <tbody>
-            {filtered.map((a) => (
+            {paged.slice.map((a) => (
               <tr key={a.id}>
                 <td className="mono">{a.ip_address}</td>
                 <td className="mono">{a.mac}</td>
@@ -307,6 +310,7 @@ function ArpTable({ id }: { id: string }) {
           </tbody>
         </table>
       )}
+      {filtered.length > 0 && <Pager page={paged.page} pages={paged.pages} total={paged.total} pageSize={paged.pageSize} onPage={paged.setPage} />}
     </Panel>
   )
 }

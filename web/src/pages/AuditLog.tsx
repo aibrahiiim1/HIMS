@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { FileClock, Download, Search, X } from 'lucide-react'
 import { api, type AuditEntry, type AuditFacets } from '../api'
-import { PageHeader, Panel, Kpi, EmptyState, timeAgo } from '../components/ui'
+import { PageHeader, Panel, Kpi, EmptyState, timeAgo, usePaged, Pager } from '../components/ui'
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? '/api/v1'
 const catCls = (c: string) => ({ user: 'badge-access', discovery: 'badge-lldp', inventory: 'badge-up', credential: 'badge-warning', config: 'badge-trunk', security: 'badge-down', work_order: 'badge-info', monitoring: 'badge-info', topology: 'badge-lldp' }[c] ?? 'badge-unknown')
@@ -25,6 +25,7 @@ export function AuditLog() {
     refetchInterval: 30_000,
   })
   const rows = q.data ?? []
+  const paged = usePaged(rows, { pageSize: 10 })
   const active = useMemo(() => Object.values(f).some(Boolean), [f])
   const set = (k: keyof Filters, v: string) => setF((p) => ({ ...p, [k]: v }))
   const fc = facets.data
@@ -77,7 +78,7 @@ export function AuditLog() {
           <table className="data-table">
             <thead><tr><th>When</th><th>Category</th><th>Action</th><th>Summary</th><th>Actor</th><th>Entity</th></tr></thead>
             <tbody>
-              {rows.map((a) => (
+              {paged.slice.map((a) => (
                 <tr key={a.id}>
                   <td className="muted" title={a.at}>{timeAgo(a.at)}</td>
                   <td><span className={`badge ${catCls(a.category)}`}>{a.category}</span></td>
@@ -90,6 +91,7 @@ export function AuditLog() {
             </tbody>
           </table>
         )}
+        {rows.length > 0 && <Pager page={paged.page} pages={paged.pages} total={paged.total} pageSize={paged.pageSize} onPage={paged.setPage} />}
       </Panel>
     </div>
   )

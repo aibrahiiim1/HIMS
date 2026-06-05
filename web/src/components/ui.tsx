@@ -326,7 +326,7 @@ export function DefList({ items }: { items: { label: string; value: ReactNode }[
 // device lists) are fully fetched, so this keeps the DOM small + scrollable
 // without a backend change. Returns the current page slice + Pager props.
 export function usePaged<T>(items: T[], opts?: { pageSize?: number; filter?: string; match?: (it: T, q: string) => boolean }) {
-  const pageSize = opts?.pageSize ?? 50
+  const pageSize = opts?.pageSize ?? 10
   const [page, setPage] = useState(0)
   const q = (opts?.filter ?? '').trim().toLowerCase()
   const filtered = useMemo(() => {

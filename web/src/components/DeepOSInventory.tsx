@@ -160,7 +160,7 @@ function Section({ title, empty, children }: { title: string; empty: boolean; ch
 // PagedSection renders a large collection (services/processes/software) with a
 // filter box + client-side pagination so the DOM stays small and the page
 // doesn't become an endless scroll. Collapsed by default when empty.
-function PagedSection<T>({ title, items, head, row, match, pageSize = 50 }: {
+function PagedSection<T>({ title, items, head, row, match, pageSize = 10 }: {
   title: string
   items: T[]
   head: React.ReactNode

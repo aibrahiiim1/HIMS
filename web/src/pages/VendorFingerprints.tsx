@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ScanLine, Plus, DownloadCloud, FlaskConical, Trash2 } from 'lucide-react'
 import { api, type VendorFingerprint, type FingerprintMatchResp } from '../api'
-import { PageHeader, Panel, Kpi, EmptyState } from '../components/ui'
+import { PageHeader, Panel, Kpi, EmptyState, usePaged, Pager } from '../components/ui'
 
 const KINDS = ['oid', 'service', 'port', 'http', 'ssh']
 const kindCls = (k: string) => (k === 'oid' ? 'badge-info' : k === 'service' ? 'badge-lldp' : k === 'http' ? 'badge-up' : k === 'ssh' ? 'badge-warning' : 'badge-unknown')
@@ -31,6 +31,7 @@ export function VendorFingerprints() {
   const rows = q.data ?? []
   const byKind = (k: string) => rows.filter((r) => r.kind === k).length
   const shown = useMemo(() => { const all = q.data ?? []; return kindFilter ? all.filter((r) => r.kind === kindFilter) : all }, [q.data, kindFilter])
+  const paged = usePaged(shown, { pageSize: 10 })
 
   return (
     <div>
@@ -74,7 +75,7 @@ export function VendorFingerprints() {
           <table className="data-table">
             <thead><tr><th>Kind</th><th>Pattern</th><th>Vendor</th><th>Device type</th><th>Confidence</th><th>Enabled</th><th></th></tr></thead>
             <tbody>
-              {shown.map((f) => (
+              {paged.slice.map((f) => (
                 <tr key={f.id}>
                   <td><span className={`badge ${kindCls(f.kind)}`}>{f.kind}</span></td>
                   <td className="mono">{f.pattern}</td>
@@ -91,6 +92,7 @@ export function VendorFingerprints() {
             </tbody>
           </table>
         )}
+        {shown.length > 0 && <Pager page={paged.page} pages={paged.pages} total={paged.total} pageSize={paged.pageSize} onPage={paged.setPage} />}
       </Panel>
     </div>
   )

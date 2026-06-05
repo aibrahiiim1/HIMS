@@ -79,7 +79,7 @@ export function Inventory() {
   }, [data, cat, classF, locF, q, locPath])
 
   // Paginate the (already-filtered) rows so a 600+ device table stays snappy.
-  const paged = usePaged(rows, { pageSize: 50 })
+  const paged = usePaged(rows, { pageSize: 10 })
   const pageRows = paged.slice
 
   const refresh = () => qc.invalidateQueries({ queryKey: ['devices'] })

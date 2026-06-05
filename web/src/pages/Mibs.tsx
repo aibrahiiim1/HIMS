@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, type MibFile, type MibObject, type OIDMapping } from '../api'
+import { usePaged, Pager } from '../components/ui'
 
 const btn: React.CSSProperties = {
   padding: '8px 16px', background: '#1565c0', color: '#fff', border: 'none',
@@ -27,6 +28,7 @@ export function Mibs() {
     enabled: !!fileID,
   })
   const mappings = useQuery({ queryKey: ['oid-mappings'], queryFn: () => api.get<OIDMapping[]>('/oid-mappings') })
+  const pagedObjects = usePaged(objects.data ?? [], { pageSize: 10 })
 
   const upload = useMutation({
     mutationFn: () => api.post('/mibs', { name, content }),
@@ -86,7 +88,7 @@ export function Mibs() {
             <table>
               <thead><tr><th>Name</th><th>OID</th><th>Syntax</th><th>Kind</th></tr></thead>
               <tbody>
-                {objects.data.map((o) => (
+                {pagedObjects.slice.map((o) => (
                   <tr key={o.id} style={o.unresolved ? { opacity: 0.6 } : undefined}>
                     <td>{o.name}{o.unresolved && <span className="badge badge-warning" style={{ marginLeft: 6 }}>unresolved</span>}</td>
                     <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{o.oid}</td>
@@ -97,6 +99,7 @@ export function Mibs() {
               </tbody>
             </table>
           )}
+          {objects.data && objects.data.length > 0 && <Pager page={pagedObjects.page} pages={pagedObjects.pages} total={pagedObjects.total} pageSize={pagedObjects.pageSize} onPage={pagedObjects.setPage} />}
         </div>
       )}
 
