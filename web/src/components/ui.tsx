@@ -2,6 +2,7 @@
 // This is a shared UI kit: it intentionally co-locates presentational
 // components with their small formatting helpers (timeAgo, colorFor,
 // STATUS_COLOR). The react-refresh rule is an HMR-only nicety, not correctness.
+import { useMemo, useState } from 'react'
 import type { ComponentType, ReactNode } from 'react'
 
 /* ============================================================================
@@ -316,6 +317,42 @@ export function DefList({ items }: { items: { label: string; value: ReactNode }[
         </div>
       ))}
     </dl>
+  )
+}
+
+/* ---- pagination ----------------------------------------------------------- */
+// usePaged is client-side pagination over an already-loaded array, with an
+// optional case-insensitive text filter. Heavy collections (services, software,
+// device lists) are fully fetched, so this keeps the DOM small + scrollable
+// without a backend change. Returns the current page slice + Pager props.
+export function usePaged<T>(items: T[], opts?: { pageSize?: number; filter?: string; match?: (it: T, q: string) => boolean }) {
+  const pageSize = opts?.pageSize ?? 50
+  const [page, setPage] = useState(0)
+  const q = (opts?.filter ?? '').trim().toLowerCase()
+  const filtered = useMemo(() => {
+    if (!q || !opts?.match) return items
+    return items.filter((it) => opts.match!(it, q))
+  }, [items, q, opts])
+  const total = filtered.length
+  const pages = Math.max(1, Math.ceil(total / pageSize))
+  const cur = Math.min(page, pages - 1)
+  const slice = filtered.slice(cur * pageSize, cur * pageSize + pageSize)
+  return { slice, total, page: cur, pages, pageSize, setPage }
+}
+
+export function Pager({ page, pages, total, pageSize, onPage }: {
+  page: number; pages: number; total: number; pageSize: number; onPage: (p: number) => void
+}) {
+  if (total <= pageSize) return null
+  const from = page * pageSize + 1
+  const to = Math.min(total, (page + 1) * pageSize)
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'flex-end', padding: '8px 2px', fontSize: 12 }}>
+      <span className="muted">Showing {from}–{to} of {total}</span>
+      <button className="btn btn-xs btn-ghost" disabled={page <= 0} onClick={() => onPage(page - 1)}>‹ Prev</button>
+      <span className="muted">Page {page + 1} / {pages}</span>
+      <button className="btn btn-xs btn-ghost" disabled={page >= pages - 1} onClick={() => onPage(page + 1)}>Next ›</button>
+    </div>
   )
 }
 

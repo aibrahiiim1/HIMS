@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { Boxes, RefreshCw, Trash2, Search, Wifi, WifiOff, Server, TriangleAlert, Package } from 'lucide-react'
 import { api, type Device, type Lookup, type Location, locationPaths } from '../api'
-import { PageHeader, Panel, Kpi, BarList, EmptyState, StatusPill, colorFor } from '../components/ui'
+import { PageHeader, Panel, Kpi, BarList, EmptyState, StatusPill, colorFor, usePaged, Pager } from '../components/ui'
 
 const DETAIL_BASE: Record<string, string> = {
   switch: '/devices', server: '/servers', virtual_host: '/virtual-hosts', firewall: '/firewalls',
@@ -78,13 +78,17 @@ export function Inventory() {
     return r
   }, [data, cat, classF, locF, q, locPath])
 
+  // Paginate the (already-filtered) rows so a 600+ device table stays snappy.
+  const paged = usePaged(rows, { pageSize: 50 })
+  const pageRows = paged.slice
+
   const refresh = () => qc.invalidateQueries({ queryKey: ['devices'] })
   const toggle = (id: string) => setSel((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n })
-  const allShownSelected = rows.length > 0 && rows.every((d) => sel.has(d.id))
+  const allShownSelected = pageRows.length > 0 && pageRows.every((d) => sel.has(d.id))
   const toggleAll = () => setSel((s) => {
     const n = new Set(s)
-    if (allShownSelected) rows.forEach((d) => n.delete(d.id))
-    else rows.forEach((d) => n.add(d.id))
+    if (allShownSelected) pageRows.forEach((d) => n.delete(d.id))
+    else pageRows.forEach((d) => n.add(d.id))
     return n
   })
   const selRows = useMemo(() => all.filter((d) => sel.has(d.id)), [data, sel])
@@ -226,7 +230,7 @@ export function Inventory() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((d) => {
+              {pageRows.map((d) => {
                 const base = DETAIL_BASE[d.category]
                 const isEd = editing?.id === d.id
                 if (isEd && editing) {
@@ -298,6 +302,7 @@ export function Inventory() {
             </tbody>
           </table>
         )}
+        {rows.length > 0 && <Pager page={paged.page} pages={paged.pages} total={paged.total} pageSize={paged.pageSize} onPage={paged.setPage} />}
       </Panel>
     </div>
   )

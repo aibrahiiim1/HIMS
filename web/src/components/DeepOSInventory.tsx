@@ -1,6 +1,8 @@
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { RefreshCw, Cpu } from 'lucide-react'
 import { api, type OSInventoryBundle, type Classification, type AuthMe } from '../api'
+import { usePaged, Pager } from './ui'
 
 function fmtBytes(n?: number | null): string {
   if (n == null || n === 0) return 'Not collected'
@@ -126,23 +128,20 @@ export function DeepOSInventory({ deviceId, alwaysShow }: { deviceId: string; al
             </table>
           </Section>
 
-          <Section title={`Services (${b.services.length})`} empty={b.services.length === 0}>
-            <table><thead><tr><th>Name</th><th>Status</th><th>Start</th><th>Description</th></tr></thead>
-              <tbody>{b.services.slice(0, 200).map((sv, i) => <tr key={i}><td>{sv.display_name || sv.name}</td><td>{sv.status || '—'}</td><td>{sv.start_type || '—'}</td><td className="muted" style={{ fontSize: 12 }}>{sv.description || ''}</td></tr>)}</tbody>
-            </table>
-          </Section>
+          <PagedSection title="Services" items={b.services}
+            head={<tr><th>Name</th><th>Status</th><th>Start</th><th>Description</th></tr>}
+            match={(sv, q) => (sv.display_name || sv.name || '').toLowerCase().includes(q) || (sv.status || '').toLowerCase().includes(q)}
+            row={(sv, i) => <tr key={i}><td>{sv.display_name || sv.name}</td><td>{sv.status || '—'}</td><td>{sv.start_type || '—'}</td><td className="muted" style={{ fontSize: 12 }}>{sv.description || ''}</td></tr>} />
 
-          <Section title={`Top processes (${b.processes.length})`} empty={b.processes.length === 0}>
-            <table><thead><tr><th>Process</th><th>PID</th><th>Memory</th><th>CPU%</th></tr></thead>
-              <tbody>{b.processes.slice(0, 50).map((p) => <tr key={p.pid}><td>{p.name}</td><td>{p.pid}</td><td>{fmtBytes(p.mem_bytes)}</td><td>{p.cpu_pct ?? '—'}</td></tr>)}</tbody>
-            </table>
-          </Section>
+          <PagedSection title="Top processes" items={b.processes}
+            head={<tr><th>Process</th><th>PID</th><th>Memory</th><th>CPU%</th></tr>}
+            match={(p, q) => p.name.toLowerCase().includes(q)}
+            row={(p) => <tr key={p.pid}><td>{p.name}</td><td>{p.pid}</td><td>{fmtBytes(p.mem_bytes)}</td><td>{p.cpu_pct ?? '—'}</td></tr>} />
 
-          <Section title={`Installed software (${b.software.length})`} empty={b.software.length === 0}>
-            <table><thead><tr><th>Name</th><th>Version</th><th>Publisher</th></tr></thead>
-              <tbody>{b.software.slice(0, 300).map((sw, i) => <tr key={i}><td>{sw.name}</td><td>{sw.version || '—'}</td><td className="muted" style={{ fontSize: 12 }}>{sw.publisher || ''}</td></tr>)}</tbody>
-            </table>
-          </Section>
+          <PagedSection title="Installed software" items={b.software}
+            head={<tr><th>Name</th><th>Version</th><th>Publisher</th></tr>}
+            match={(sw, q) => (sw.name || '').toLowerCase().includes(q) || (sw.publisher || '').toLowerCase().includes(q)}
+            row={(sw, i) => <tr key={i}><td>{sw.name}</td><td>{sw.version || '—'}</td><td className="muted" style={{ fontSize: 12 }}>{sw.publisher || ''}</td></tr>} />
         </>
       )}
     </div>
@@ -154,6 +153,42 @@ function Section({ title, empty, children }: { title: string; empty: boolean; ch
     <details style={{ marginTop: 12 }} open={!empty}>
       <summary style={{ cursor: 'pointer', fontWeight: 600 }}>{title}</summary>
       <div style={{ marginTop: 8 }}>{empty ? <span className="muted">Not collected yet.</span> : children}</div>
+    </details>
+  )
+}
+
+// PagedSection renders a large collection (services/processes/software) with a
+// filter box + client-side pagination so the DOM stays small and the page
+// doesn't become an endless scroll. Collapsed by default when empty.
+function PagedSection<T>({ title, items, head, row, match, pageSize = 50 }: {
+  title: string
+  items: T[]
+  head: React.ReactNode
+  row: (it: T, i: number) => React.ReactNode
+  match?: (it: T, q: string) => boolean
+  pageSize?: number
+}) {
+  const [filter, setFilter] = useState('')
+  const { slice, total, page, pages, setPage } = usePaged(items, { pageSize, filter, match })
+  return (
+    <details style={{ marginTop: 12 }} open={items.length > 0}>
+      <summary style={{ cursor: 'pointer', fontWeight: 600 }}>{title} ({items.length})</summary>
+      <div style={{ marginTop: 8 }}>
+        {items.length === 0 ? <span className="muted">Not collected yet.</span> : (
+          <>
+            {match && (
+              <input
+                placeholder={`Filter ${title.toLowerCase()}…`}
+                value={filter}
+                onChange={(e) => { setFilter(e.target.value); setPage(0) }}
+                style={{ marginBottom: 8, padding: '6px 10px', border: '1px solid #2a3a47', borderRadius: 6, fontSize: 13, width: 280, maxWidth: '100%' }}
+              />
+            )}
+            <table><thead>{head}</thead><tbody>{slice.map(row)}</tbody></table>
+            <Pager page={page} pages={pages} total={total} pageSize={pageSize} onPage={setPage} />
+          </>
+        )}
+      </div>
     </details>
   )
 }
