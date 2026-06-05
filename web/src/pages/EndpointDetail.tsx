@@ -18,7 +18,7 @@ export function EndpointDetail() {
       <DeviceHeader deviceId={deviceId} icon={Laptop} />
       <div style={{ marginBottom: 16 }}><ClassificationCard deviceId={deviceId} /></div>
       <DeepOSInventory deviceId={deviceId} alwaysShow />
-      <DeviceCredentialHealth deviceId={deviceId} />
+      <DeviceCredentialHealth deviceId={deviceId} category="endpoint" />
       <DeviceOps deviceId={deviceId} />
     </div>
   )

@@ -10,12 +10,39 @@ const PROTO_LABEL: Record<string, string> = {
 }
 const label = (k: string) => PROTO_LABEL[k] ?? k
 
+// expectedKindsFor mirrors the backend protocol plan: the credential kind(s) a
+// device of this category is normally managed by. Used to show the "Expected
+// access method" first and collapse irrelevant attempts (so a Windows workstation
+// shows WinRM as its health, not a scary SNMP/ONVIF/SSH failure).
+function expectedKindsFor(category?: string, osFamily?: string): string[] {
+  if (osFamily === 'windows') return ['winrm']
+  if (osFamily === 'linux') return ['ssh']
+  switch (category) {
+    case 'endpoint': case 'workstation': return ['winrm']
+    case 'server': return ['winrm', 'ssh']
+    case 'switch': case 'router': case 'firewall': return ['snmp_v2c', 'ssh']
+    case 'camera': case 'nvr': return ['onvif', 'http_basic']
+    case 'virtual_host': return ['vmware', 'vendor_api']
+    case 'printer': case 'ups': return ['snmp_v2c']
+    case 'pbx': case 'voice_gateway': return ['cucm_axl', 'vendor_api']
+    default: return []
+  }
+}
+const isExpectedKind = (kind: string, expected: string[]) =>
+  expected.includes(kind) || (kind.startsWith('snmp') && expected.some((e) => e.startsWith('snmp')))
+// expectedLabel — the primary expected protocol shown in the header.
+function expectedLabel(category?: string, osFamily?: string): string {
+  const ks = expectedKindsFor(category, osFamily)
+  if (ks.length === 0) return 'SNMP / SSH (network) — depends on device type'
+  return ks.map(label).join(' or ')
+}
+
 // DeviceCredentialHealth is the "Access Methods / Credential Health" section on a
 // device's detail page. It shows, per protocol/credential-kind, the LATEST saved
 // credential-test outcome (success/failure + when + why), plus recent history.
 // Operators can Apply a working credential (bind it to the device) or Retry a
 // failed test — both gated to devices.write. Never shows secrets.
-export function DeviceCredentialHealth({ deviceId }: { deviceId: string }) {
+export function DeviceCredentialHealth({ deviceId, category, osFamily }: { deviceId: string; category?: string; osFamily?: string }) {
   const qc = useQueryClient()
   const me = useQuery({ queryKey: ['me'], queryFn: () => api.get<AuthMe>('/auth/me') })
   const q = useQuery({
@@ -28,6 +55,16 @@ export function DeviceCredentialHealth({ deviceId }: { deviceId: string }) {
   // Which successful credential the operator is applying to a scope (group/site).
   const [scope, setScope] = useState<{ credentialId: string; credentialName: string } | null>(null)
 
+  // Derive the device category when a caller didn't pass it (e.g. the generic
+  // detail page) so the "expected access method" is still correct. Cached query.
+  const devices = useQuery({
+    queryKey: ['devices', 'all'],
+    queryFn: () => api.get<Device[]>('/devices?category=all'),
+    enabled: !category,
+  })
+  const effCategory = category ?? devices.data?.find((d) => d.id === deviceId)?.category
+  const expected = useMemo(() => expectedKindsFor(effCategory, osFamily), [effCategory, osFamily])
+
   // Latest result per credential-kind = the current credential health per protocol.
   const latestByKind = useMemo(() => {
     const m = new Map<string, CredTestHistory>()
@@ -37,6 +74,18 @@ export function DeviceCredentialHealth({ deviceId }: { deviceId: string }) {
     return [...m.values()].sort((a, b) => a.kind.localeCompare(b.kind))
   }, [history])
 
+  // Split into the EXPECTED access method(s) for this device class vs OTHER
+  // attempts (irrelevant protocols probed historically). A result flagged
+  // relevant by the scan counts as expected too.
+  const expectedRows = useMemo(
+    () => latestByKind.filter((h) => isExpectedKind(h.kind, expected) || h.relevant),
+    [latestByKind, expected],
+  )
+  const otherRows = useMemo(
+    () => latestByKind.filter((h) => !(isExpectedKind(h.kind, expected) || h.relevant)),
+    [latestByKind, expected],
+  )
+
   const bind = useMutation({
     mutationFn: (credentialId: string) => api.put(`/devices/${deviceId}/credential`, { credential_id: credentialId }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['devices', 'all'] }); qc.invalidateQueries({ queryKey: ['access-coverage'] }) },
@@ -45,6 +94,34 @@ export function DeviceCredentialHealth({ deviceId }: { deviceId: string }) {
     mutationFn: (v: { credentialId: string }) => api.post('/credentials/test', { credential_ids: [v.credentialId], device_ids: [deviceId] }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['device-cred-tests', deviceId] }); qc.invalidateQueries({ queryKey: ['access-coverage'] }) },
   })
+
+  const renderRow = (h: CredTestHistory) => (
+    <tr key={h.kind}>
+      <td>{label(h.kind)}</td>
+      <td><span className={`badge badge-${h.success ? 'up' : h.category === 'auth_failed' ? 'down' : 'unknown'}`}>{h.success ? 'working' : h.category}</span></td>
+      <td>{h.credential_name || '—'}</td>
+      <td className="muted" title={h.tested_at}>{timeAgo(h.tested_at)}</td>
+      <td className="muted" style={{ fontSize: 12 }}>{h.detail}{h.latency_ms ? ` · ${h.latency_ms}ms` : ''}</td>
+      <td className="cell-actions">
+        {canWrite && h.success && h.credential_id && (
+          <button className="btn btn-ghost btn-xs" disabled={bind.isPending} title="Bind this working credential to the device" onClick={() => bind.mutate(h.credential_id!)}>
+            <Link2 size={12} /> Apply
+          </button>
+        )}
+        {canManageCreds && h.success && h.credential_id && (
+          <button className="btn btn-ghost btn-xs" title="Apply this working credential to a credential group / site" onClick={() => setScope({ credentialId: h.credential_id!, credentialName: h.credential_name })}>
+            <Globe size={12} /> Apply to scope
+          </button>
+        )}
+        {canWrite && !h.success && h.credential_id && (
+          <button className="btn btn-ghost btn-xs" disabled={retry.isPending} title="Re-run this credential test" onClick={() => retry.mutate({ credentialId: h.credential_id! })}>
+            <RefreshCw size={12} /> Retry
+          </button>
+        )}
+      </td>
+    </tr>
+  )
+  const tableHead = <thead><tr><th>Protocol</th><th>Status</th><th>Credential</th><th>Last tested</th><th>Detail</th><th></th></tr></thead>
 
   return (
     <Panel
@@ -56,38 +133,28 @@ export function DeviceCredentialHealth({ deviceId }: { deviceId: string }) {
         <EmptyState icon={KeyRound} title="Not tested yet" message="No credential test has been saved for this device. Use the Credentials page (or the device's operator actions) to test a credential — the result will appear here." />
       )}
 
-      {latestByKind.length > 0 && (
-        <table className="data-table">
-          <thead><tr><th>Protocol</th><th>Status</th><th>Credential</th><th>Last tested</th><th>Detail</th><th></th></tr></thead>
-          <tbody>
-            {latestByKind.map((h) => (
-              <tr key={h.kind}>
-                <td>{label(h.kind)}</td>
-                <td><span className={`badge badge-${h.success ? 'up' : h.category === 'auth_failed' ? 'down' : 'unknown'}`}>{h.success ? 'working' : h.category}</span></td>
-                <td>{h.credential_name || '—'}</td>
-                <td className="muted" title={h.tested_at}>{timeAgo(h.tested_at)}</td>
-                <td className="muted" style={{ fontSize: 12 }}>{h.detail}{h.latency_ms ? ` · ${h.latency_ms}ms` : ''}</td>
-                <td className="cell-actions">
-                  {canWrite && h.success && h.credential_id && (
-                    <button className="btn btn-ghost btn-xs" disabled={bind.isPending} title="Bind this working credential to the device" onClick={() => bind.mutate(h.credential_id!)}>
-                      <Link2 size={12} /> Apply
-                    </button>
-                  )}
-                  {canManageCreds && h.success && h.credential_id && (
-                    <button className="btn btn-ghost btn-xs" title="Apply this working credential to a credential group / site" onClick={() => setScope({ credentialId: h.credential_id!, credentialName: h.credential_name })}>
-                      <Globe size={12} /> Apply to scope
-                    </button>
-                  )}
-                  {canWrite && !h.success && h.credential_id && (
-                    <button className="btn btn-ghost btn-xs" disabled={retry.isPending} title="Re-run this credential test" onClick={() => retry.mutate({ credentialId: h.credential_id! })}>
-                      <RefreshCw size={12} /> Retry
-                    </button>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      {/* Expected access method — the primary protocol for this device type. */}
+      <div style={{ marginBottom: 10, fontSize: 13 }}>
+        <span className="muted">Expected access method: </span>
+        <strong>{expectedLabel(effCategory, osFamily)}</strong>
+      </div>
+
+      {expectedRows.length > 0 ? (
+        <table className="data-table">{tableHead}<tbody>{expectedRows.map(renderRow)}</tbody></table>
+      ) : history.length > 0 ? (
+        <div className="muted" style={{ fontSize: 13, padding: '4px 0 8px' }}>
+          The expected method ({expectedLabel(effCategory, osFamily)}) has not been tested successfully yet. Test or bind a matching credential.
+        </div>
+      ) : null}
+
+      {otherRows.length > 0 && (
+        <details style={{ marginTop: 10 }}>
+          <summary style={{ cursor: 'pointer', fontWeight: 600, fontSize: 13 }}>Other attempts / not applicable ({otherRows.length})</summary>
+          <p className="muted" style={{ fontSize: 12, margin: '6px 0' }}>
+            Protocols probed historically that are not the expected management method for this device type. Failures here are usually expected and not a real problem.
+          </p>
+          <table className="data-table">{tableHead}<tbody>{otherRows.map(renderRow)}</tbody></table>
+        </details>
       )}
 
       {bind.isSuccess && <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>Credential bound ✓</p>}

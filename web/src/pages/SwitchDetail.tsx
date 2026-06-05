@@ -115,7 +115,7 @@ export function SwitchDetail() {
       )}
 
       {tab === 'monitoring' && <MonitoringTab id={id!} />}
-      {tab === 'operations' && <><DeviceCredentialHealth deviceId={id!} /><DeviceOps deviceId={id!} /></>}
+      {tab === 'operations' && <><DeviceCredentialHealth deviceId={id!} category="switch" /><DeviceOps deviceId={id!} /></>}
     </div>
   )
 }

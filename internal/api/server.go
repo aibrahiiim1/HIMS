@@ -143,6 +143,7 @@ func (s *Server) routes() {
 
 		// --- Discovery (operator-launched subnet scans) --------------
 		r.Get("/discovery/jobs", s.listDiscoveryJobs)
+		r.Get("/discovery/scan-preflight", s.scanPreflight)
 		r.Post("/discovery/scan", s.startScan)
 		r.Post("/discovery/controller-import", s.startControllerImport)
 		r.Post("/discovery/ad/browse", s.browseAD)

@@ -128,7 +128,7 @@ export function ServerDetail() {
         </div>
       )}
 
-      <DeviceCredentialHealth deviceId={deviceId} />
+      <DeviceCredentialHealth deviceId={deviceId} category="server" />
       <DeviceOps deviceId={deviceId} />
     </div>
   )

@@ -14,8 +14,8 @@ import (
 
 const insertCredentialTestResult = `-- name: InsertCredentialTestResult :exec
 INSERT INTO credential_test_results
-  (run_id, device_id, credential_id, credential_name, kind, protocol, category, success, detail, latency_ms, actor)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+  (run_id, device_id, credential_id, credential_name, kind, protocol, category, success, detail, latency_ms, actor, relevant)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 `
 
 type InsertCredentialTestResultParams struct {
@@ -30,6 +30,7 @@ type InsertCredentialTestResultParams struct {
 	Detail         string     `json:"detail"`
 	LatencyMs      int64      `json:"latency_ms"`
 	Actor          string     `json:"actor"`
+	Relevant       bool       `json:"relevant"`
 }
 
 func (q *Queries) InsertCredentialTestResult(ctx context.Context, arg InsertCredentialTestResultParams) error {
@@ -45,6 +46,7 @@ func (q *Queries) InsertCredentialTestResult(ctx context.Context, arg InsertCred
 		arg.Detail,
 		arg.LatencyMs,
 		arg.Actor,
+		arg.Relevant,
 	)
 	return err
 }
@@ -210,15 +212,31 @@ SELECT id, run_id, device_id, credential_id, credential_name, kind, protocol,
   ORDER BY success DESC, device_id
 `
 
-func (q *Queries) ListCredentialTestResultsByRun(ctx context.Context, runID uuid.UUID) ([]CredentialTestResult, error) {
+type ListCredentialTestResultsByRunRow struct {
+	ID             uuid.UUID  `json:"id"`
+	RunID          uuid.UUID  `json:"run_id"`
+	DeviceID       uuid.UUID  `json:"device_id"`
+	CredentialID   *uuid.UUID `json:"credential_id"`
+	CredentialName string     `json:"credential_name"`
+	Kind           string     `json:"kind"`
+	Protocol       string     `json:"protocol"`
+	Category       string     `json:"category"`
+	Success        bool       `json:"success"`
+	Detail         string     `json:"detail"`
+	LatencyMs      int64      `json:"latency_ms"`
+	TestedAt       time.Time  `json:"tested_at"`
+	Actor          string     `json:"actor"`
+}
+
+func (q *Queries) ListCredentialTestResultsByRun(ctx context.Context, runID uuid.UUID) ([]ListCredentialTestResultsByRunRow, error) {
 	rows, err := q.db.Query(ctx, listCredentialTestResultsByRun, runID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []CredentialTestResult{}
+	items := []ListCredentialTestResultsByRunRow{}
 	for rows.Next() {
-		var i CredentialTestResult
+		var i ListCredentialTestResultsByRunRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.RunID,
@@ -281,7 +299,7 @@ func (q *Queries) ListCredentialTestRuns(ctx context.Context, limit int32) ([]Cr
 
 const listDeviceCredentialTests = `-- name: ListDeviceCredentialTests :many
 SELECT id, run_id, device_id, credential_id, credential_name, kind, protocol,
-       category, success, detail, latency_ms, tested_at, actor
+       category, success, detail, latency_ms, tested_at, actor, relevant
   FROM credential_test_results
   WHERE device_id = $1
   ORDER BY tested_at DESC
@@ -317,6 +335,7 @@ func (q *Queries) ListDeviceCredentialTests(ctx context.Context, arg ListDeviceC
 			&i.LatencyMs,
 			&i.TestedAt,
 			&i.Actor,
+			&i.Relevant,
 		); err != nil {
 			return nil, err
 		}

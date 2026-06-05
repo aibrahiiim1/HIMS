@@ -5,6 +5,7 @@ import { Radar, Boxes, CircleX, Clock, KeyRound } from 'lucide-react'
 import {
   api, locationPaths,
   type DiscoveryJob, type DiscoveryResult, type Location, type Credential, type AccessCoverage,
+  type ScanPreflight,
 } from '../api'
 import { PageHeader, Kpi, timeAgo } from '../components/ui'
 
@@ -197,6 +198,17 @@ function NetworkScan({ locations, locPath, creds, onLaunch, setMsg }: { location
   })
   const toggleCred = (id: string) => setCredIDs((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]))
 
+  // Preflight: what protocols we're equipped to authenticate with for this scope.
+  const preflight = useQuery({
+    queryKey: ['scan-preflight', location, credIDs.join(',')],
+    queryFn: () => {
+      const p = new URLSearchParams()
+      if (location) p.set('location_id', location)
+      if (credIDs.length) p.set('credential_ids', credIDs.join(','))
+      return api.get<ScanPreflight>(`/discovery/scan-preflight?${p.toString()}`)
+    },
+  })
+
   return (
     <div className="card">
       <h3>Network scan</h3>
@@ -219,6 +231,44 @@ function NetworkScan({ locations, locPath, creds, onLaunch, setMsg }: { location
         <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Credentials to try</div>
         <CredentialPicker creds={creds} selected={credIDs} onChange={setCredIDs} toggle={toggleCred} />
       </div>
+
+      {preflight.data && <ScanPreflightPanel pf={preflight.data} siteSelected={!!location} />}
+    </div>
+  )
+}
+
+// ScanPreflightPanel shows, before the scan runs, what protocols the operator can
+// actually authenticate with (credential counts by kind + VMware/CCTV profiles)
+// and warns about gaps — so a subnet of Windows PCs with no WinRM credential is
+// flagged up front rather than producing a wall of auth_failed results.
+function ScanPreflightPanel({ pf, siteSelected }: { pf: ScanPreflight; siteSelected: boolean }) {
+  const c = pf.credential_counts || {}
+  const chip = (label: string, n: number) => (
+    <span key={label} style={{ display: 'inline-flex', gap: 5, alignItems: 'center', padding: '2px 9px', borderRadius: 12, fontSize: 12, background: n > 0 ? '#e3f2fd' : '#fdecea', color: n > 0 ? '#1565c0' : '#b71c1c', border: `1px solid ${n > 0 ? '#90caf9' : '#ef9a9a'}` }}>
+      {label}<strong>{n}</strong>
+    </span>
+  )
+  return (
+    <div style={{ marginTop: 14, padding: 12, borderRadius: 8, background: 'var(--surface-2, #f7f9fc)', border: '1px solid #d6dee8' }}>
+      <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>Scan preflight — credentials available for this scope</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        {chip('WinRM', c.winrm ?? 0)}
+        {chip('SSH', c.ssh ?? 0)}
+        {chip('SNMP', c.snmp ?? 0)}
+        {chip('ONVIF', c.onvif ?? 0)}
+        {chip('HTTP', c.http_basic ?? 0)}
+        {chip('Vendor API', c.vendor_api ?? 0)}
+        {chip('VMware profiles', pf.vmware_profiles)}
+        {chip('CCTV profiles', pf.cctv_profiles)}
+      </div>
+      {pf.warnings.length > 0 && (
+        <ul style={{ margin: '10px 0 0', paddingLeft: 18 }}>
+          {pf.warnings.map((w, i) => (
+            <li key={i} style={{ fontSize: 12, color: '#8a6d00', marginBottom: 2 }}>⚠ {w}</li>
+          ))}
+        </ul>
+      )}
+      {!siteSelected && <div className="muted" style={{ fontSize: 11, marginTop: 8 }}>Select a site to scope VMware/CCTV profile checks to that site.</div>}
     </div>
   )
 }
@@ -501,16 +551,21 @@ function JobsTab({ jobs, jobID, setJobID, detail, setMsg, qc }: { jobs: Discover
                       <td>
                         {(r.category ?? d.classification ?? 'unknown')}
                         {typeof d.confidence === 'number' && d.confidence > 0 && <span className="muted" style={{ fontSize: 11 }}> · {d.confidence}%</span>}
+                        {d.candidate && <div className="muted" style={{ fontSize: 11 }}>candidate: {d.candidate}</div>}
+                        {(d.expected_protocols ?? []).length > 0 && <div style={{ fontSize: 11 }}>expected: <strong>{(d.expected_protocols ?? []).join(' / ').toUpperCase()}</strong></div>}
                         {(d.evidence ?? []).length > 0 && <div className="muted" style={{ fontSize: 11 }}>{(d.evidence ?? []).join(' · ')}</div>}
                       </td>
                       <td className="muted" style={{ fontSize: 11 }}>{(d.open_ports ?? []).join(', ') || '—'}</td>
                       <td style={{ fontSize: 11 }}>
-                        {(d.cred_attempts ?? []).length === 0 ? <span className="muted">none</span> : (d.cred_attempts ?? []).map((a, i) => (
+                        {(d.cred_attempts ?? []).length === 0 ? <span className="muted">none relevant</span> : (d.cred_attempts ?? []).map((a, i) => (
                           <div key={i}>
                             <span className={`badge badge-${a.success ? 'up' : a.category === 'auth_failed' ? 'down' : 'unknown'}`}>{a.kind}</span>
-                            <span className="muted"> {a.success ? 'ok' : a.category}</span>
+                            <span className="muted"> {a.success ? 'ok' : a.category}{a.relevant ? '' : ' (other)'}</span>
                           </div>
                         ))}
+                        {(d.skipped_protocols ?? []).length > 0 && (
+                          <div className="muted" style={{ fontSize: 10, marginTop: 2 }}>n/a: {(d.skipped_protocols ?? []).join(', ')}</div>
+                        )}
                       </td>
                       <td>{d.bound_cred ? <span className="badge badge-up">{d.bound_cred}</span> : <span className="muted">—</span>}</td>
                       <td style={{ fontSize: 11, minWidth: 160 }}><ProfileCell r={r} qc={qc} jobID={jobID} /></td>

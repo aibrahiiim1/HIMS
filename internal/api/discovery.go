@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/netip"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -110,6 +111,107 @@ func (s *Server) startScan(w http.ResponseWriter, r *http.Request) {
 	go s.runScanJob(job.ID, hosts, locID, concurrency, extra, snmpTO, portTO)
 	s.audit(r, "discovery", "discovery.scan", "discovery_job", job.ID.String(), "Launched discovery scan ("+scopeLabel+")", map[string]any{"hosts": len(hosts), "mode": req.Mode})
 	writeJSON(w, http.StatusAccepted, job)
+}
+
+// scanPreflight handles GET /discovery/scan-preflight. Before a scan starts it
+// reports what protocols the operator is actually equipped to authenticate with
+// — credential counts by kind + VMware/CCTV profile counts for the selected site
+// — plus warnings naming the gaps ("No WinRM credential …"). This sets honest
+// expectations: a subnet of Windows PCs with no WinRM credential will not be
+// onboarded, and the operator learns that up front instead of from a wall of
+// auth_failed results. No secrets returned.
+func (s *Server) scanPreflight(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	locID := parseUUIDPtr(strPtr(r.URL.Query().Get("location_id")))
+	selected := splitCSV(r.URL.Query().Get("credential_ids"))
+
+	creds, err := s.queries.ListCredentials(ctx)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	selSet := map[string]bool{}
+	for _, id := range selected {
+		selSet[id] = true
+	}
+	counts := map[string]int{"snmp": 0, "ssh": 0, "winrm": 0, "onvif": 0, "http_basic": 0, "vendor_api": 0}
+	for _, c := range creds {
+		if len(selSet) > 0 && !selSet[c.ID.String()] {
+			continue
+		}
+		switch c.Kind {
+		case string(domain.CredSNMPv2c), string(domain.CredSNMPv3):
+			counts["snmp"]++
+		case string(domain.CredSSH):
+			counts["ssh"]++
+		case string(domain.CredWinRM):
+			counts["winrm"]++
+		case string(domain.CredONVIF):
+			counts["onvif"]++
+		case string(domain.CredHTTPBasic):
+			counts["http_basic"]++
+		case string(domain.CredVendorAPI):
+			counts["vendor_api"]++
+		}
+	}
+
+	// VMware / CCTV profiles applicable to the selected site (site-bound or global).
+	vmware, cctv := 0, 0
+	if profs, perr := s.queries.ListVendorProfiles(ctx); perr == nil {
+		for _, p := range profs {
+			if !p.Enabled {
+				continue
+			}
+			applies := p.LocationID == nil || (locID != nil && *p.LocationID == *locID)
+			if !applies {
+				continue
+			}
+			switch {
+			case p.VendorType == "vmware":
+				vmware++
+			case p.VendorType == "cctv":
+				cctv++
+			}
+		}
+	}
+
+	var warnings []string
+	if counts["winrm"] == 0 {
+		warnings = append(warnings, "No WinRM credential available — Windows hosts cannot be onboarded (deep OS inventory).")
+	}
+	if counts["ssh"] == 0 {
+		warnings = append(warnings, "No SSH credential available — Linux hosts and CLI-managed network gear cannot be onboarded.")
+	}
+	if counts["snmp"] == 0 {
+		warnings = append(warnings, "No SNMP credential available — switches/routers/printers/UPS rely on default communities only.")
+	}
+	if counts["onvif"] == 0 {
+		warnings = append(warnings, "No ONVIF credential available — cameras/NVRs cannot be authenticated (configure a CCTV Vendor Profile or ONVIF credential).")
+	}
+	if vmware == 0 {
+		warnings = append(warnings, "No VMware profile assigned to this site — ESXi/vCenter hosts will be detected but not collected.")
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"credential_counts": counts,
+		"vmware_profiles":   vmware,
+		"cctv_profiles":     cctv,
+		"warnings":          warnings,
+	})
+}
+
+func splitCSV(s string) []string {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if t := strings.TrimSpace(p); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // rerunSpec is the scan request persisted in a job's metadata for re-runs.
@@ -407,18 +509,22 @@ type scanCredAttemptDTO struct {
 	Category string `json:"category"`
 	Detail   string `json:"detail"`
 	Success  bool   `json:"success"`
+	Relevant bool   `json:"relevant"`
 }
 
 type scanDetail struct {
-	OpenPorts      []int                `json:"open_ports,omitempty"`
-	Classification string               `json:"classification"`
-	Confidence     int                  `json:"confidence"`
-	Evidence       []string             `json:"evidence,omitempty"`
-	CredAttempts   []scanCredAttemptDTO `json:"cred_attempts,omitempty"`
-	BoundCred      string               `json:"bound_cred,omitempty"`
-	Enrichment     string               `json:"enrichment,omitempty"`
-	Profile        *scanProfileResult   `json:"profile,omitempty"`
-	NextAction     string               `json:"next_action"`
+	OpenPorts         []int                `json:"open_ports,omitempty"`
+	Classification    string               `json:"classification"`
+	Confidence        int                  `json:"confidence"`
+	Evidence          []string             `json:"evidence,omitempty"`
+	Candidate         string               `json:"candidate,omitempty"`          // protocol-plan candidate type
+	ExpectedProtocols []string             `json:"expected_protocols,omitempty"` // what the scan expected to manage by
+	SkippedProtocols  []string             `json:"skipped_protocols,omitempty"`  // deliberately not tested (not applicable)
+	CredAttempts      []scanCredAttemptDTO `json:"cred_attempts,omitempty"`
+	BoundCred         string               `json:"bound_cred,omitempty"`
+	Enrichment        string               `json:"enrichment,omitempty"`
+	Profile           *scanProfileResult   `json:"profile,omitempty"`
+	NextAction        string               `json:"next_action"`
 }
 
 // scanProfileResult records how a Vendor Connection Profile was used during the
@@ -522,6 +628,81 @@ func scanNextActionWithProfile(category string, bound bool, boundKind string, pr
 	return scanNextAction(category, bound, boundKind)
 }
 
+// skippedProtocols lists the standard management protocols the scan deliberately
+// did NOT test for this candidate (not applicable) — so the operator sees, e.g.
+// on a Windows host, that SNMP/SSH/ONVIF were intentionally skipped, not failed.
+func skippedProtocols(plan discovery.ProtocolPlan) []string {
+	universe := []struct {
+		label string
+		kind  domain.CredentialKind
+	}{
+		{"SNMP", domain.CredSNMPv2c}, {"SSH", domain.CredSSH},
+		{"WinRM", domain.CredWinRM}, {"ONVIF", domain.CredONVIF},
+	}
+	var out []string
+	for _, p := range universe {
+		if !plan.Relevant(p.kind) {
+			out = append(out, p.label)
+		}
+	}
+	return out
+}
+
+// relevantAttemptCategory returns the outcome category of the first RELEVANT
+// credential attempt (the expected-protocol test), so the next action can be
+// specific ("WinRM auth_failed" vs "WinRM unreachable" vs "not tested").
+func relevantAttemptCategory(attempts []scanCredAttemptDTO) (string, bool) {
+	for _, a := range attempts {
+		if a.Relevant {
+			return a.Category, true
+		}
+	}
+	return "", false
+}
+
+// scanNextActionWithPlan produces the operator next action using the protocol
+// plan + the relevant attempt result. Profile-driven categories defer to the
+// profile-aware action; everything else uses the expected protocol so a Windows
+// host says "check WinRM", a Linux host "enable SSH", etc.
+func scanNextActionWithPlan(category string, bound bool, boundKind string, pr *scanProfileResult, plan discovery.ProtocolPlan, attempts []scanCredAttemptDTO) string {
+	if bound {
+		return "Managed via " + boundKind
+	}
+	if pr != nil { // vmware / cctv / wireless / voice — profile path
+		return scanNextActionWithProfile(category, bound, boundKind, pr)
+	}
+	cat, tested := relevantAttemptCategory(attempts)
+	switch plan.Candidate {
+	case "windows":
+		if !tested {
+			return "Windows host — add a WinRM credential and enable PowerShell Remoting (5985/5986) for deep OS inventory"
+		}
+		if cat == "auth_failed" {
+			return "Expected WinRM; WinRM auth_failed — check the domain username (DOMAIN\\user or user@domain) and password"
+		}
+		return "Expected WinRM; WinRM unreachable — enable WinRM / open 5985-5986 on the host firewall"
+	case "linux":
+		if !tested {
+			return "Linux host — add an SSH credential for deep OS inventory"
+		}
+		if cat == "auth_failed" {
+			return "Expected SSH; SSH auth_failed — check the SSH username/password or key"
+		}
+		return "Expected SSH; SSH unreachable — enable sshd or open port 22"
+	case "network":
+		if !tested {
+			return "Network device — add an SNMP (and SSH) credential to manage + enrich"
+		}
+		if cat == "auth_failed" {
+			return "Expected SNMP/SSH; authentication failed — check the community / SSH credential"
+		}
+		return "Expected SNMP/SSH; unreachable — verify the management protocol is enabled"
+	case "printer":
+		return "Printer — add an SNMP credential (Printer-MIB) to collect supplies/status"
+	}
+	return scanNextActionWithProfile(category, bound, boundKind, pr)
+}
+
 // recordResult writes one actionable discovery_results row for an alive host.
 func (s *Server) recordResult(ctx context.Context, jobID uuid.UUID, ip netip.Addr, r discovery.HostResult, id uuid.UUID, applyErr error, enrichment string, profRes *scanProfileResult) {
 	outcome := "alive"
@@ -565,15 +746,17 @@ func (s *Server) recordResult(ctx context.Context, jobID uuid.UUID, ip netip.Add
 	attempts := make([]scanCredAttemptDTO, 0, len(r.CredAttempts))
 	for _, a := range r.CredAttempts {
 		attempts = append(attempts, scanCredAttemptDTO{
-			Kind: string(a.Kind), Protocol: a.Protocol, Category: a.Category, Detail: a.Detail, Success: a.Success,
+			Kind: string(a.Kind), Protocol: a.Protocol, Category: a.Category, Detail: a.Detail, Success: a.Success, Relevant: a.Relevant,
 		})
 	}
 
 	detail := scanDetail{
 		OpenPorts: r.OpenPorts, Classification: category, Confidence: r.Match.Confidence,
-		Evidence: evidence, CredAttempts: attempts, BoundCred: boundKind,
+		Evidence: evidence, Candidate: r.Plan.Candidate, ExpectedProtocols: r.Plan.Expected,
+		SkippedProtocols: skippedProtocols(r.Plan),
+		CredAttempts:     attempts, BoundCred: boundKind,
 		Enrichment: enrichment, Profile: profRes,
-		NextAction: scanNextActionWithProfile(category, bound, boundKind, profRes),
+		NextAction: scanNextActionWithPlan(category, bound, boundKind, profRes, r.Plan, attempts),
 	}
 	blob, merr := json.Marshal(detail)
 	if merr != nil {

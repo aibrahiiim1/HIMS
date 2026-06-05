@@ -41,6 +41,7 @@ type credTestResultDTO struct {
 	LatencyMS      int64  `json:"latency_ms"`
 	TestedAt       string `json:"tested_at"`
 	Actor          string `json:"actor"`
+	Relevant       bool   `json:"relevant"`
 }
 
 func uuidPtrStr(p *uuid.UUID) string {
@@ -119,6 +120,7 @@ func (s *Server) deviceCredentialTests(w http.ResponseWriter, r *http.Request) {
 			CredentialID: uuidPtrStr(x.CredentialID), CredentialName: x.CredentialName,
 			Kind: x.Kind, Protocol: x.Protocol, Category: x.Category, Success: x.Success,
 			Detail: x.Detail, LatencyMS: x.LatencyMs, TestedAt: x.TestedAt.Format(time.RFC3339), Actor: x.Actor,
+			Relevant: x.Relevant,
 		})
 	}
 	writeJSON(w, http.StatusOK, out)

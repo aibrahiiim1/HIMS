@@ -44,6 +44,7 @@ type CredAttempt struct {
 	Success      bool
 	Category     string // credtest category: success|auth_failed|unreachable|...
 	Detail       string // non-secret reason
+	Relevant     bool   // protocol is the expected/relevant one for this candidate
 }
 
 func hasPortN(ports []int, p int) bool {
@@ -111,8 +112,10 @@ type HostResult struct {
 	BoundCred *credresolver.CredRef
 	// CredAttempts is every authentication attempt made this run (for history).
 	CredAttempts []CredAttempt
-	Facts        *driver.Facts
-	Error        error
+	// Plan is the expected-protocol decision made before credential testing.
+	Plan  ProtocolPlan
+	Facts *driver.Facts
+	Error error
 }
 
 // CandidateFetcher abstracts the DB call that assembles credentials for an IP.
@@ -186,8 +189,40 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 		Fingerprint: fingerprintFromPorts(r.OpenPorts), Groups: groups,
 	})
 
-	// Step 3: SNMP probe for sysDescr + sysObjectID. Try the resolved/selected
-	// SNMP credentials FIRST — a switch using a real community must classify, so
+	// Step 2b: Cheap unauthenticated banners (HTTP Server/title/body + SSH ident)
+	// — gathered BEFORE any credential test so the protocol plan can be decided
+	// from real evidence, not guesses.
+	if httpPort(r.OpenPorts) {
+		if server, title, body := httpBanner(ctx, ip, r.OpenPorts, cfg.PortTimeout); server != "" || title != "" || body != "" {
+			r.Probe.HTTPServer = server
+			if r.Probe.Hints == nil {
+				r.Probe.Hints = map[string]string{}
+			}
+			r.Probe.Hints["http_title"] = title
+			r.Probe.Hints["http_body"] = body
+		}
+	}
+	sshBanner := ""
+	if hasPortN(r.OpenPorts, 22) {
+		sshBanner = grabSSHBanner(ctx, ip, cfg.PortTimeout)
+		if sshBanner != "" {
+			if r.Probe.Hints == nil {
+				r.Probe.Hints = map[string]string{}
+			}
+			r.Probe.Hints["ssh_banner"] = sshBanner
+		}
+	}
+
+	// Step 2c: Protocol plan — decide the expected protocol(s) and which credential
+	// kinds are worth testing for THIS target. This is what stops the scan from
+	// trying SNMP/ONVIF/SSH against an obvious Windows workstation (and recording
+	// the resulting auth_failed as a scary "credential problem").
+	plan := planProtocols(r.OpenPorts, sshBanner, r.Probe.HTTPServer, r.Probe.Hints["http_title"], r.Probe.Hints["http_body"])
+	r.Plan = plan
+
+	// Step 3: SNMP probe for sysDescr + sysObjectID — ONLY when SNMP is relevant
+	// to this candidate (network/printer/unknown). Try the resolved/selected SNMP
+	// credentials FIRST — a switch using a real community must classify, so
 	// classification cannot rely on public/private alone — then fall back to the
 	// default communities. The first that answers gives the probe data, a live
 	// session for deep collection, and (for a stored credential) the bind.
@@ -214,49 +249,36 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 		return true
 	}
 
-	for _, cand := range candidates {
-		if cand.Kind != domain.CredSNMPv2c && cand.Kind != domain.CredSNMPv3 {
-			continue
-		}
-		dec, err := cfg.Decrypt(ctx, cand.ID)
-		if err != nil {
-			continue
-		}
-		tgt := snmp.Target{Addr: ip, Version: snmp.V2c, Community: dec.Community, Timeout: cfg.SNMPTimeout}
-		if cand.Kind == domain.CredSNMPv3 && dec.V3 != nil {
-			tgt = snmp.Target{Addr: ip, Version: snmp.V3, V3: dec.V3, Timeout: cfg.SNMPTimeout}
-		}
-		ok := probe(tgt)
-		r.CredAttempts = append(r.CredAttempts, snmpAttempt(cand, ok))
-		if ok {
-			c := cand
-			r.BoundCred = &c // bind-on-success (only for stored credentials)
-			break
-		}
-	}
-	if authCli == nil { // fallback: default communities, no bind
-		for _, comm := range []string{"public", "private"} {
-			if probe(snmp.Target{Addr: ip, Version: snmp.V2c, Community: comm, Timeout: cfg.SNMPTimeout}) {
+	if plan.SNMPRelevant() {
+		for _, cand := range candidates {
+			if cand.Kind != domain.CredSNMPv2c && cand.Kind != domain.CredSNMPv3 {
+				continue
+			}
+			dec, err := cfg.Decrypt(ctx, cand.ID)
+			if err != nil {
+				continue
+			}
+			tgt := snmp.Target{Addr: ip, Version: snmp.V2c, Community: dec.Community, Timeout: cfg.SNMPTimeout}
+			if cand.Kind == domain.CredSNMPv3 && dec.V3 != nil {
+				tgt = snmp.Target{Addr: ip, Version: snmp.V3, V3: dec.V3, Timeout: cfg.SNMPTimeout}
+			}
+			ok := probe(tgt)
+			r.CredAttempts = append(r.CredAttempts, snmpAttempt(cand, ok))
+			if ok {
+				c := cand
+				r.BoundCred = &c // bind-on-success (only for stored credentials)
 				break
+			}
+		}
+		if authCli == nil { // fallback: default communities, no bind
+			for _, comm := range []string{"public", "private"} {
+				if probe(snmp.Target{Addr: ip, Version: snmp.V2c, Community: comm, Timeout: cfg.SNMPTimeout}) {
+					break
+				}
 			}
 		}
 	}
 	snmpAnswered := r.Probe.SNMPSysDescr != "" || r.Probe.SNMPSysObjectID != ""
-
-	// Step 3b: HTTP banner — for hosts exposing a web port, grab the Server
-	// header + page <title> + a small body snippet so banner-based drivers
-	// (cameras, web apps like Kea/Stork DHCP) can classify a device that has no
-	// SNMP. Cheap: one GET with a short timeout.
-	if httpPort(r.OpenPorts) {
-		if server, title, body := httpBanner(ctx, ip, r.OpenPorts, cfg.PortTimeout); server != "" || title != "" || body != "" {
-			r.Probe.HTTPServer = server
-			if r.Probe.Hints == nil {
-				r.Probe.Hints = map[string]string{}
-			}
-			r.Probe.Hints["http_title"] = title
-			r.Probe.Hints["http_body"] = body
-		}
-	}
 
 	// Step 3c: Non-SNMP authenticated probe. SNMP classifies network gear; Windows
 	// (WinRM), Linux (SSH) and cameras (ONVIF/HTTP) need their own auth. Try the
@@ -270,7 +292,10 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 			if cand.Kind == domain.CredSNMPv2c || cand.Kind == domain.CredSNMPv3 {
 				continue
 			}
-			if !portAllowsProto(r.OpenPorts, cand.Kind) {
+			// Protocol-plan gate: only test credential kinds that are RELEVANT to
+			// this candidate (don't WinRM/ONVIF/SSH-probe a host the evidence says
+			// is something else). The open-port gate stays as a second guard.
+			if !plan.Relevant(cand.Kind) || !portAllowsProto(r.OpenPorts, cand.Kind) {
 				continue
 			}
 			dec, derr := cfg.Decrypt(ctx, cand.ID)
@@ -280,7 +305,7 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 			out := credtest.Test(ctx, string(cand.Kind), dec.Community, ip.String(), credtest.Options{})
 			r.CredAttempts = append(r.CredAttempts, CredAttempt{
 				CredentialID: cand.ID, Kind: cand.Kind, Protocol: out.Protocol,
-				Success: out.OK(), Category: out.Category, Detail: out.Detail,
+				Success: out.OK(), Category: out.Category, Detail: out.Detail, Relevant: true,
 			})
 			if out.OK() {
 				c := cand
@@ -321,10 +346,8 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 			// VMware/ESXi, wireless controllers, CUCM/Alcatel voice — vendor web markers.
 			ev = append(ev, classify.WebVendorMarkers(r.Probe.HTTPServer, r.Probe.Hints["http_title"], r.Probe.Hints["http_body"])...)
 		}
-		if hasPortN(r.OpenPorts, 22) {
-			if banner := grabSSHBanner(ctx, ip, cfg.PortTimeout); banner != "" {
-				ev = append(ev, classify.SSHBanner(banner)...)
-			}
+		if b := r.Probe.Hints["ssh_banner"]; b != "" {
+			ev = append(ev, classify.SSHBanner(b)...)
 		}
 		res := classify.FromEvidence(ev)
 		switch {
@@ -369,7 +392,7 @@ func snmpAttempt(cand credresolver.CredRef, ok bool) CredAttempt {
 	if ok {
 		cat, detail = "success", "authenticated"
 	}
-	return CredAttempt{CredentialID: cand.ID, Kind: cand.Kind, Protocol: "snmp", Success: ok, Category: cat, Detail: detail}
+	return CredAttempt{CredentialID: cand.ID, Kind: cand.Kind, Protocol: "snmp", Success: ok, Category: cat, Detail: detail, Relevant: true}
 }
 
 // grabSSHBanner reads the SSH server identification line (e.g.

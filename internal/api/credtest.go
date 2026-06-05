@@ -220,7 +220,7 @@ func (s *Server) persistScanCredAttempts(ctx context.Context, dev db.Device, att
 		_ = s.queries.InsertCredentialTestResult(ctx, db.InsertCredentialTestResultParams{
 			RunID: run.ID, DeviceID: dev.ID, CredentialID: &cid, CredentialName: name,
 			Kind: string(a.Kind), Protocol: a.Protocol, Category: a.Category, Success: a.Success,
-			Detail: a.Detail, LatencyMs: 0, Actor: "discovery-scan",
+			Detail: a.Detail, LatencyMs: 0, Actor: "discovery-scan", Relevant: a.Relevant,
 		})
 	}
 }
@@ -247,7 +247,7 @@ func (s *Server) persistCredentialTest(ctx context.Context, actor string, result
 		_ = s.queries.InsertCredentialTestResult(ctx, db.InsertCredentialTestResultParams{
 			RunID: run.ID, DeviceID: devID, CredentialID: credPtr, CredentialName: res.CredentialName,
 			Kind: res.Kind, Protocol: res.Protocol, Category: res.Category, Success: res.Success,
-			Detail: res.Detail, LatencyMs: res.LatencyMS, Actor: actor,
+			Detail: res.Detail, LatencyMs: res.LatencyMS, Actor: actor, Relevant: true,
 		})
 	}
 	return run.ID.String()

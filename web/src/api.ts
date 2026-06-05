@@ -489,7 +489,7 @@ export interface DiscoveryJob {
   created_at: string
 }
 
-export interface ScanCredAttempt { kind: string; protocol: string; category: string; detail: string; success: boolean }
+export interface ScanCredAttempt { kind: string; protocol: string; category: string; detail: string; success: boolean; relevant?: boolean }
 // How a Vendor Connection Profile (VMware / CCTV / wireless / voice) was used
 // during the scan for this host: resolved? test/login ok? collection ok?
 export interface ScanProfileResult {
@@ -506,6 +506,9 @@ export interface ScanDetail {
   classification?: string
   confidence?: number
   evidence?: string[]
+  candidate?: string
+  expected_protocols?: string[]
+  skipped_protocols?: string[]
   cred_attempts?: ScanCredAttempt[]
   bound_cred?: string
   enrichment?: string
@@ -523,6 +526,15 @@ export interface DiscoveryResult {
   error?: string | null
   probed_at: string
   probe_data?: ScanDetail | null
+}
+
+// ScanPreflight is shown before launching a scan: what protocols the operator is
+// equipped to authenticate with, and warnings naming the gaps.
+export interface ScanPreflight {
+  credential_counts: Record<string, number>
+  vmware_profiles: number
+  cctv_profiles: number
+  warnings: string[]
 }
 
 export interface MibFile {
@@ -1267,6 +1279,7 @@ export interface CredTestHistory {
   latency_ms: number
   tested_at: string
   actor: string
+  relevant?: boolean
 }
 export interface AccessCoverage {
   total_devices: number
