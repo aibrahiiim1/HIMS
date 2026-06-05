@@ -15,18 +15,18 @@ import (
 	"time"
 
 	"github.com/coralsearesorts/hims/internal/onvif"
+	"github.com/coralsearesorts/hims/internal/osinv"
 	"github.com/coralsearesorts/hims/internal/snmp"
 	"github.com/coralsearesorts/hims/internal/ssh"
-	"github.com/masterzen/winrm"
 )
 
 // Result categories — what an operator triages by.
 const (
-	CatSuccess     = "success"      // authenticated
-	CatAuthFailed  = "auth_failed"  // reached the service, credentials rejected
-	CatUnreachable = "unreachable"  // could not connect (port closed / timeout / no route)
-	CatUnsupported = "unsupported"  // this tester can't probe that kind
-	CatError       = "error"        // anything else (malformed secret, protocol fault)
+	CatSuccess     = "success"     // authenticated
+	CatAuthFailed  = "auth_failed" // reached the service, credentials rejected
+	CatUnreachable = "unreachable" // could not connect (port closed / timeout / no route)
+	CatUnsupported = "unsupported" // this tester can't probe that kind
+	CatError       = "error"       // anything else (malformed secret, protocol fault)
 )
 
 // Outcome is the non-secret result of one credential↔host test.
@@ -217,18 +217,11 @@ func testONVIF(ctx context.Context, secret, host string, timeout time.Duration) 
 
 func testWinRM(ctx context.Context, secret, host string, timeout time.Duration) Outcome {
 	user, pass := SplitUserPass(secret)
-	ep := winrm.NewEndpoint(host, 5985, false, false, nil, nil, nil, timeout)
-	cl, err := winrm.NewClient(ep, user, pass)
-	if err != nil {
-		return Outcome{Category: CatError, Detail: "winrm init failed"}
-	}
-	_, stderr, code, err := cl.RunPSWithContext(ctx, "$null")
-	if err != nil {
+	// Use the SAME WinRM transport the deep-inventory collector uses (NTLM +
+	// WSMan message encryption) so a "Test" result matches what Collect will do.
+	if err := osinv.WinRMCheckAuth(ctx, host, user, pass, timeout); err != nil {
 		cat, detail := categorizeErr(err.Error())
 		return Outcome{Category: cat, Detail: detail}
-	}
-	if code != 0 {
-		return Outcome{Category: CatAuthFailed, Detail: strings.TrimSpace(stderr)}
 	}
 	return Outcome{Category: CatSuccess, Detail: "WinRM login ok"}
 }

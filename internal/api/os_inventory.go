@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -13,11 +13,11 @@ import (
 	"github.com/coralsearesorts/hims/internal/credtest"
 	"github.com/coralsearesorts/hims/internal/domain"
 	"github.com/coralsearesorts/hims/internal/osinv"
+	"github.com/coralsearesorts/hims/internal/secret"
 	"github.com/coralsearesorts/hims/internal/ssh"
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/masterzen/winrm"
 )
 
 // getOSInventory handles GET /devices/{id}/os-inventory — the full deep-inventory
@@ -54,23 +54,10 @@ func (s *Server) getOSInventory(w http.ResponseWriter, r *http.Request) {
 }
 
 // Deep OS Inventory — on-demand authenticated collection for a single device.
-// Windows uses WinRM/PowerShell (Get-CimInstance), Linux uses SSH. The device's
-// BOUND credential is used (find/bind one via Credential Testing first); HIMS
-// never guesses passwords. The secret is decrypted only to run the collection.
-
-// winRunner runs PowerShell over WinRM (satisfies osinv.Runner).
-type winRunner struct{ c *winrm.Client }
-
-func (r winRunner) Run(ctx context.Context, script string) (string, error) {
-	stdout, stderr, code, err := r.c.RunPSWithContext(ctx, script)
-	if err != nil {
-		return "", err
-	}
-	if code != 0 {
-		return "", fmt.Errorf("winrm exit %d: %s", code, strings.TrimSpace(stderr))
-	}
-	return stdout, nil
-}
+// Windows uses WinRM/PowerShell (Get-CimInstance, NTLM + message encryption),
+// Linux uses SSH. Collection auto-tries the device's bound credential then any
+// other matching credential and binds the one that works; HIMS never guesses
+// passwords. Secrets are decrypted only to run the collection.
 
 // sshRunnerOS runs a shell script over SSH (satisfies osinv.Runner).
 type sshRunnerOS struct {
@@ -89,15 +76,16 @@ func (r sshRunnerOS) Run(ctx context.Context, cmd string) (string, error) {
 // actionable reason code + human detail; nothing is faked — a device is only
 // "collected" when the host actually answered and the data persisted.
 type osCollectResult struct {
-	DeviceID string         `json:"device_id"`
-	Name     string         `json:"name"`
-	IP       string         `json:"ip"`
-	Status   string         `json:"status"` // collected | failed
-	Method   string         `json:"method,omitempty"`
-	Reason   string         `json:"reason,omitempty"` // reason code (failed only)
-	Detail   string         `json:"detail"`
-	Counts   map[string]int `json:"counts,omitempty"`
-	Roles    []string       `json:"roles,omitempty"`
+	DeviceID       string         `json:"device_id"`
+	Name           string         `json:"name"`
+	IP             string         `json:"ip"`
+	Status         string         `json:"status"` // collected | failed
+	Method         string         `json:"method,omitempty"`
+	Reason         string         `json:"reason,omitempty"` // reason code (failed only)
+	Detail         string         `json:"detail"`
+	CredentialUsed string         `json:"credential_used,omitempty"`
+	Counts         map[string]int `json:"counts,omitempty"`
+	Roles          []string       `json:"roles,omitempty"`
 }
 
 func (r osCollectResult) ok() bool { return r.Status == "collected" }
@@ -163,61 +151,104 @@ func (s *Server) runOSCollection(ctx context.Context, d db.Device) osCollectResu
 		res.Reason, res.Detail = "no_ip", "device has no IP to collect from"
 		return res
 	}
-	if d.CredentialID == nil {
-		res.Reason, res.Detail = "no_credential", "no credential bound — use Credential Testing to find a working one, then bind it"
-		return res
-	}
 	cph := s.cipher()
 	if cph == nil {
-		res.Reason, res.Detail = "encryption_unavailable", "encryption key not loaded; cannot decrypt the bound credential"
+		res.Reason, res.Detail = "encryption_unavailable", "encryption key not loaded; cannot decrypt credentials"
 		return res
 	}
-	cred, err := s.queries.GetCredential(ctx, *d.CredentialID)
-	if err != nil {
-		res.Reason, res.Detail = "collection_error", "bound credential not found"
-		return res
-	}
-	plain, err := cph.Open(cred.EncryptedBlob, cred.KeyID)
-	if err != nil {
-		res.Reason, res.Detail = "decrypt_failed", "bound credential could not be decrypted (re-enter its secret)"
-		return res
-	}
-	user, pass := credtest.SplitUserPass(string(plain))
 
-	var rep osinv.Report
-	switch res.Method {
-	case "winrm":
-		// NTLM + WSMan message encryption: Windows defaults reject Basic/
-		// unencrypted (listeners advertise Negotiate only, AllowUnencrypted=false).
-		ep := winrm.NewEndpoint(res.IP, 5985, false, false, nil, nil, nil, 120*time.Second)
-		params := winrm.NewParameters("PT180S", "en-US", 153600)
-		params.TransportDecorator = func() winrm.Transporter {
-			enc, _ := winrm.NewEncryption("ntlm") // only errors on unsupported protocol
-			return enc
+	// Build the candidate credential list: the device's BOUND credential first
+	// (operator's explicit choice), then every other credential whose kind suits
+	// the method. The collector tries each until one authenticates and binds the
+	// winner — so the operator only needs ONE working credential in the system,
+	// not the exact one pre-bound to each device.
+	cands := s.osCandidateCreds(ctx, cph, d, res.Method)
+	if len(cands) == 0 {
+		res.Reason, res.Detail = "no_credential", "no usable "+res.Method+" credential — add one (Administration → Credentials) and ensure the encryption key is loaded"
+		return res
+	}
+
+	lastReason, lastDetail := "auth_failed", "no credential authenticated"
+	for _, cd := range cands {
+		rep, err := s.collectWithCred(ctx, res.Method, res.IP, cd.user, cd.pass)
+		if err != nil {
+			lastReason, lastDetail = categorizeCollectErr(res.Method, err.Error())
+			continue
 		}
-		cl, e := winrm.NewClientWithParameters(ep, user, pass, params)
-		if e != nil {
-			res.Reason, res.Detail = categorizeCollectErr("winrm", e.Error())
+		if err := osinv.Persist(ctx, s.queries, d.ID, rep, time.Now().UTC()); err != nil {
+			res.Reason, res.Detail = "persist_error", "collected but failed to save: "+err.Error()
 			return res
 		}
-		rep, err = osinv.CollectWindows(ctx, winRunner{c: cl})
-	case "ssh":
-		rep, err = osinv.CollectLinux(ctx, sshRunnerOS{host: res.IP, creds: ssh.Creds{Username: user, Password: pass}, timeout: 45 * time.Second})
-	}
-	if err != nil {
-		res.Reason, res.Detail = categorizeCollectErr(res.Method, err.Error())
+		// Bind-on-success so the working credential sticks to this device.
+		cid := cd.id
+		_ = s.queries.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: d.ID, CredentialID: &cid})
+		res.Status = "collected"
+		res.CredentialUsed = cd.name
+		res.Roles = osinv.DetectRoles(rep)
+		res.Counts = map[string]int{"disks": len(rep.Disks), "nics": len(rep.Nics), "services": len(rep.Services), "processes": len(rep.Processes), "software": len(rep.Software)}
+		res.Detail = "collected via " + res.Method + " using credential " + cd.name
 		return res
 	}
-
-	if err := osinv.Persist(ctx, s.queries, d.ID, rep, time.Now().UTC()); err != nil {
-		res.Reason, res.Detail = "persist_error", "collected but failed to save: "+err.Error()
-		return res
-	}
-	res.Status = "collected"
-	res.Roles = osinv.DetectRoles(rep)
-	res.Counts = map[string]int{"disks": len(rep.Disks), "nics": len(rep.Nics), "services": len(rep.Services), "processes": len(rep.Processes), "software": len(rep.Software)}
-	res.Detail = "collected via " + res.Method
+	res.Reason, res.Detail = lastReason, lastDetail+" (tried "+strconv.Itoa(len(cands))+" credential(s))"
 	return res
+}
+
+type osCred struct {
+	id         uuid.UUID
+	name       string
+	user, pass string
+}
+
+// osCandidateCreds returns decryptable credentials to try for a method: the
+// device's bound credential first, then all others of a matching kind. Capped.
+func (s *Server) osCandidateCreds(ctx context.Context, cph *secret.Cipher, d db.Device, method string) []osCred {
+	const maxCands = 8
+	var out []osCred
+	seen := map[uuid.UUID]bool{}
+	add := func(c db.Credential) {
+		if seen[c.ID] || len(out) >= maxCands {
+			return
+		}
+		plain, err := cph.Open(c.EncryptedBlob, c.KeyID)
+		if err != nil {
+			return // undecryptable (wrong key / needs re-entry) — skip
+		}
+		u, p := credtest.SplitUserPass(string(plain))
+		out = append(out, osCred{id: c.ID, name: c.Name, user: u, pass: p})
+		seen[c.ID] = true
+	}
+	if d.CredentialID != nil {
+		if c, err := s.queries.GetCredential(ctx, *d.CredentialID); err == nil {
+			add(c)
+		}
+	}
+	all, _ := s.queries.ListCredentials(ctx)
+	for _, c := range all {
+		if credKindMatchesMethod(c.Kind, method) {
+			add(c)
+		}
+	}
+	return out
+}
+
+func credKindMatchesMethod(kind, method string) bool {
+	if method == "winrm" {
+		return kind == "winrm"
+	}
+	return kind == "ssh" || kind == "cli" // linux
+}
+
+// collectWithCred runs the deep collection for one credential over the method's
+// transport (WinRM NTLM+encryption, or SSH).
+func (s *Server) collectWithCred(ctx context.Context, method, ip, user, pass string) (osinv.Report, error) {
+	if method == "winrm" {
+		cl, err := osinv.NewWinRMClient(ip, user, pass, 120*time.Second)
+		if err != nil {
+			return osinv.Report{}, err
+		}
+		return osinv.CollectWindows(ctx, osinv.WinRMRunner{C: cl})
+	}
+	return osinv.CollectLinux(ctx, sshRunnerOS{host: ip, creds: ssh.Creds{Username: user, Password: pass}, timeout: 45 * time.Second})
 }
 
 // collectOSInventory handles POST /devices/{id}/collect-os (single device).
@@ -238,8 +269,8 @@ func (s *Server) collectOSInventory(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit(r, "inventory", "device.collect_os", "device", id.String(),
 		"Collected deep OS inventory for "+d.Name+" via "+res.Method,
-		map[string]any{"method": res.Method, "roles": len(res.Roles)})
-	writeJSON(w, http.StatusOK, map[string]any{"collected": true, "method": res.Method, "counts": res.Counts, "roles": res.Roles})
+		map[string]any{"method": res.Method, "credential": res.CredentialUsed, "roles": len(res.Roles)})
+	writeJSON(w, http.StatusOK, map[string]any{"collected": true, "method": res.Method, "credential_used": res.CredentialUsed, "counts": res.Counts, "roles": res.Roles})
 }
 
 type bulkCollectOSReq struct {
