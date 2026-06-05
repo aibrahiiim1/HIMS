@@ -237,6 +237,15 @@ type Querier interface {
 	ListCredentialGroups(ctx context.Context) ([]ListCredentialGroupsRow, error)
 	ListCredentials(ctx context.Context) ([]Credential, error)
 	ListCredentialsNeedingReentry(ctx context.Context) ([]ListCredentialsNeedingReentryRow, error)
+	// One row per (device, protocol, source) describing a REAL way HIMS can manage
+	// the device. "Managed access" means an authenticated/working method — a bound
+	// credential or proof of a successful authenticated collection — NOT merely an
+	// open port. Open-port classification evidence is deliberately excluded here.
+	//
+	// source values: 'bound_credential' (devices.credential_id) outranks 'evidence'
+	// (a child table that only exists because an authenticated collection succeeded).
+	// Aggregation/normalisation of protocol tokens happens in Go (access_coverage.go).
+	ListDeviceAccessSignals(ctx context.Context) ([]ListDeviceAccessSignalsRow, error)
 	ListDeviceFacts(ctx context.Context, deviceID uuid.UUID) ([]DeviceFact, error)
 	ListDeviceRoles(ctx context.Context, deviceID uuid.UUID) ([]DeviceRole, error)
 	// ===== Device templates ====================================================

@@ -133,6 +133,7 @@ func (s *Server) routes() {
 		r.Get("/dashboard", s.dashboard)
 		r.Get("/dashboard/operational-health", s.operationalHealth)
 		r.Get("/dashboard/infrastructure-health", s.infrastructureHealth)
+		r.Get("/dashboard/access-coverage", s.accessCoverage)
 
 		// --- System: runtime identity of THIS API process ------------
 		r.Get("/system/runtime", s.systemRuntime)
@@ -389,25 +390,37 @@ func (s *Server) routes() {
 
 func (s *Server) listDevices(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	cat := r.URL.Query().Get("category")
+	q := r.URL.Query()
+	cat := q.Get("category")
+	access, proto, issue := q.Get("access"), q.Get("accessProtocol"), q.Get("accessIssue")
+
+	var rows []db.Device
+	var err error
 	if cat == "all" {
-		rows, err := s.queries.ListAllDevices(ctx)
-		if err != nil {
-			writeErr(w, err)
-			return
+		rows, err = s.queries.ListAllDevices(ctx)
+	} else {
+		if cat == "" {
+			cat = "switch"
 		}
-		writeJSON(w, http.StatusOK, s.scopeDevices(ctx, rows))
-		return
+		rows, err = s.queries.ListDevicesByCategory(ctx, cat)
 	}
-	if cat == "" {
-		cat = "switch"
-	}
-	rows, err := s.queries.ListDevicesByCategory(ctx, cat)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, s.scopeDevices(ctx, rows))
+	rows = s.scopeDevices(ctx, rows)
+
+	// Management-access drill-down filters (dashboard card → Inventory). Computed
+	// from real bindings + collection evidence only.
+	if access != "" || proto != "" || issue != "" {
+		am, aerr := s.deviceAccessMap(ctx)
+		if aerr != nil {
+			writeErr(w, aerr)
+			return
+		}
+		rows = filterDevicesByAccess(rows, am, access, proto, issue)
+	}
+	writeJSON(w, http.StatusOK, rows)
 }
 
 // scopeDevices filters a device list to the requester's site scope (global
