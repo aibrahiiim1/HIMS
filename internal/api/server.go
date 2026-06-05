@@ -197,6 +197,7 @@ func (s *Server) routes() {
 		r.Get("/devices/{id}/fingerprint-suggestion", s.deviceFingerprintSuggestion)
 		// --- Work orders for a device (#19) ---------------------------
 		r.Get("/devices/{id}/work-orders", s.deviceWorkOrders)
+		r.Get("/devices/{id}/credential-tests", s.deviceCredentialTests)
 		// --- Asset lifecycle (#18) ------------------------------------
 		r.Get("/devices/{id}/lifecycle", s.getDeviceLifecycle)
 		r.Put("/devices/{id}/lifecycle", s.putDeviceLifecycle)
@@ -314,6 +315,9 @@ func (s *Server) routes() {
 		r.Get("/credentials", s.listCredentials)
 		r.Post("/credentials", s.createCredential)
 		r.Post("/credentials/test", s.testCredentials)
+		r.Get("/credentials/{id}/credential-tests", s.credentialCredentialTests)
+		r.Get("/credential-tests/runs", s.listCredentialTestRuns)
+		r.Get("/credential-tests/runs/{id}/results", s.listCredentialTestRunResults)
 		r.Patch("/credentials/{id}", s.updateCredential)
 		r.Delete("/credentials/{id}", s.deleteCredential)
 		r.Get("/credential-groups", s.listCredentialGroups)
@@ -418,7 +422,12 @@ func (s *Server) listDevices(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, aerr)
 			return
 		}
-		rows = filterDevicesByAccess(rows, am, access, proto, issue)
+		tm, terr := s.deviceTestMap(ctx)
+		if terr != nil {
+			writeErr(w, terr)
+			return
+		}
+		rows = filterDevicesByAccess(rows, am, tm, time.Now(), access, proto, issue)
 	}
 	writeJSON(w, http.StatusOK, rows)
 }

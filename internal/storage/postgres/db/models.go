@@ -189,6 +189,32 @@ type CredentialGroupMember struct {
 	Priority     int32     `json:"priority"`
 }
 
+type CredentialTestResult struct {
+	ID             uuid.UUID  `json:"id"`
+	RunID          uuid.UUID  `json:"run_id"`
+	DeviceID       uuid.UUID  `json:"device_id"`
+	CredentialID   *uuid.UUID `json:"credential_id"`
+	CredentialName string     `json:"credential_name"`
+	Kind           string     `json:"kind"`
+	Protocol       string     `json:"protocol"`
+	Category       string     `json:"category"`
+	Success        bool       `json:"success"`
+	Detail         string     `json:"detail"`
+	LatencyMs      int64      `json:"latency_ms"`
+	TestedAt       time.Time  `json:"tested_at"`
+	Actor          string     `json:"actor"`
+}
+
+type CredentialTestRun struct {
+	ID         uuid.UUID  `json:"id"`
+	StartedAt  time.Time  `json:"started_at"`
+	FinishedAt *time.Time `json:"finished_at"`
+	Actor      string     `json:"actor"`
+	Pairs      int32      `json:"pairs"`
+	Successes  int32      `json:"successes"`
+	Failures   int32      `json:"failures"`
+}
+
 type Device struct {
 	ID                     uuid.UUID   `json:"id"`
 	LocationID             *uuid.UUID  `json:"location_id"`

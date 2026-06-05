@@ -26,6 +26,7 @@ const ACCESS_PROTOCOL_LABEL: Record<string, string> = {
 }
 const ACCESS_ISSUE_LABEL: Record<string, string> = {
   no_credential_bound: 'No credential bound', credential_failed: 'Credential failed', not_tested: 'Not tested',
+  stale: 'Stale test (re-verify)', missing_expected_protocol: 'Missing expected protocol',
 }
 
 export function Inventory() {

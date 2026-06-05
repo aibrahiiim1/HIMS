@@ -191,6 +191,10 @@ type Querier interface {
 	InsertAuditLog(ctx context.Context, arg InsertAuditLogParams) error
 	InsertBackupRun(ctx context.Context, arg InsertBackupRunParams) (BackupRun, error)
 	InsertConfigBackup(ctx context.Context, arg InsertConfigBackupParams) (InsertConfigBackupRow, error)
+	InsertCredentialTestResult(ctx context.Context, arg InsertCredentialTestResultParams) error
+	// Credential test history persistence + read models. No secrets are ever stored
+	// or returned — only outcome metadata.
+	InsertCredentialTestRun(ctx context.Context, arg InsertCredentialTestRunParams) (CredentialTestRun, error)
 	InsertFlowRecord(ctx context.Context, arg InsertFlowRecordParams) error
 	InsertMibObject(ctx context.Context, arg InsertMibObjectParams) error
 	InsertMonitoringSample(ctx context.Context, arg InsertMonitoringSampleParams) error
@@ -199,6 +203,11 @@ type Querier interface {
 	// (channel, alert) a no-op, so RETURNING yields a row only on a real insert.
 	InsertNotificationLog(ctx context.Context, arg InsertNotificationLogParams) (NotificationLog, error)
 	LastSuccessfulBackup(ctx context.Context) (BackupRun, error)
+	// The most recent result per (device, credential-kind). This is the read model
+	// behind Management Access Coverage's test-result source, the unmanaged reasons
+	// (failed / not-tested / stale), and the Inventory access filters. One row per
+	// (device, kind) — the latest outcome for that protocol on that device.
+	LatestDeviceKindResults(ctx context.Context) ([]LatestDeviceKindResultsRow, error)
 	ListARPForDevice(ctx context.Context, deviceID uuid.UUID) ([]ListARPForDeviceRow, error)
 	ListAccessPoints(ctx context.Context, controllerDeviceID uuid.UUID) ([]AccessPoint, error)
 	ListActiveMaintenanceWindows(ctx context.Context) ([]MaintenanceWindow, error)
@@ -229,12 +238,16 @@ type Querier interface {
 	ListCredentialCandidates(ctx context.Context) ([]ListCredentialCandidatesRow, error)
 	// The operator-selected credentials for a scan, as resolver candidates.
 	ListCredentialCandidatesByIDs(ctx context.Context, dollar_1 []uuid.UUID) ([]ListCredentialCandidatesByIDsRow, error)
+	// Recent test history for one credential (Credential Detail).
+	ListCredentialCredentialTests(ctx context.Context, arg ListCredentialCredentialTestsParams) ([]ListCredentialCredentialTestsRow, error)
 	// Members of an explicit set of groups (the operator-selected scan groups),
 	// returned in the resolver-input shape. priority orders within the explicit
 	// tier; the scan injects these above scope-resolved candidates.
 	ListCredentialGroupMembers(ctx context.Context, dollar_1 []uuid.UUID) ([]ListCredentialGroupMembersRow, error)
 	// Groups with member + binding counts for the scan-time group multi-select.
 	ListCredentialGroups(ctx context.Context) ([]ListCredentialGroupsRow, error)
+	ListCredentialTestResultsByRun(ctx context.Context, runID uuid.UUID) ([]CredentialTestResult, error)
+	ListCredentialTestRuns(ctx context.Context, limit int32) ([]CredentialTestRun, error)
 	ListCredentials(ctx context.Context) ([]Credential, error)
 	ListCredentialsNeedingReentry(ctx context.Context) ([]ListCredentialsNeedingReentryRow, error)
 	// One row per (device, protocol, source) describing a REAL way HIMS can manage
@@ -246,6 +259,8 @@ type Querier interface {
 	// (a child table that only exists because an authenticated collection succeeded).
 	// Aggregation/normalisation of protocol tokens happens in Go (access_coverage.go).
 	ListDeviceAccessSignals(ctx context.Context) ([]ListDeviceAccessSignalsRow, error)
+	// Full recent test history for one device (Device Detail → Credential Health).
+	ListDeviceCredentialTests(ctx context.Context, arg ListDeviceCredentialTestsParams) ([]CredentialTestResult, error)
 	ListDeviceFacts(ctx context.Context, deviceID uuid.UUID) ([]DeviceFact, error)
 	ListDeviceRoles(ctx context.Context, deviceID uuid.UUID) ([]DeviceRole, error)
 	// ===== Device templates ====================================================

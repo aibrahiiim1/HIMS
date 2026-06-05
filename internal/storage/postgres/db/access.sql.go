@@ -57,6 +57,18 @@ SELECT device_id, protocol::text AS protocol, source::text AS source FROM (
                   CASE WHEN collection_source = 'cli' THEN 'ssh' ELSE 'snmp_v2c' END AS protocol,
                   'evidence' AS source
     FROM interfaces
+
+  -- 11) A saved credential-test whose LATEST result for that (device, kind)
+  --     succeeded — durable proof a credential works, even before/without a bind.
+  UNION ALL
+  SELECT device_id, kind AS protocol, 'test_result' AS source
+    FROM (
+      SELECT DISTINCT ON (device_id, kind) device_id, kind, success
+        FROM credential_test_results
+        WHERE kind <> ''
+        ORDER BY device_id, kind, tested_at DESC
+    ) latest
+    WHERE success
 ) sig
 `
 

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"sort"
@@ -161,15 +162,52 @@ func (s *Server) testCredentials(w http.ResponseWriter, r *http.Request) {
 			successes++
 		}
 	}
+
+	// Persist the run + per-pair results so credential status is durable (powers
+	// Management Access Coverage, Inventory filters, Data Quality, Device/Credential
+	// detail). Best-effort — a persistence failure must not fail the test response.
+	// Only outcome metadata is stored; never secrets.
+	actor := s.actor(r)
+	runID := s.persistCredentialTest(ctx, actor, results, successes)
+
 	// Audit the action — counts only, never secrets.
 	s.audit(r, "credential", "credential.test", "credential", "",
 		"Tested credentials against devices",
 		map[string]any{"credentials": len(creds), "devices": len(devRows), "pairs": len(results), "successes": successes})
 
 	writeJSON(w, http.StatusOK, map[string]any{
+		"run_id":    runID,
 		"results":   results,
 		"pairs":     len(results),
 		"successes": successes,
 		"failures":  len(results) - successes,
 	})
+}
+
+// persistCredentialTest saves one run and its results. Returns the run id ("" on
+// failure). Never stores secrets — only the categorised, non-secret outcome.
+func (s *Server) persistCredentialTest(ctx context.Context, actor string, results []credTestResult, successes int) string {
+	run, err := s.queries.InsertCredentialTestRun(ctx, db.InsertCredentialTestRunParams{
+		Actor: actor, Pairs: int32(len(results)),
+		Successes: int32(successes), Failures: int32(len(results) - successes),
+	})
+	if err != nil {
+		return ""
+	}
+	for _, res := range results {
+		devID, derr := uuid.Parse(res.DeviceID)
+		if derr != nil {
+			continue
+		}
+		var credPtr *uuid.UUID
+		if cid, cerr := uuid.Parse(res.CredentialID); cerr == nil {
+			credPtr = &cid
+		}
+		_ = s.queries.InsertCredentialTestResult(ctx, db.InsertCredentialTestResultParams{
+			RunID: run.ID, DeviceID: devID, CredentialID: credPtr, CredentialName: res.CredentialName,
+			Kind: res.Kind, Protocol: res.Protocol, Category: res.Category, Success: res.Success,
+			Detail: res.Detail, LatencyMs: res.LatencyMS, Actor: actor,
+		})
+	}
+	return run.ID.String()
 }

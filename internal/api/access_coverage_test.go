@@ -2,6 +2,7 @@ package api
 
 import (
 	"testing"
+	"time"
 
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
 	"github.com/google/uuid"
@@ -58,22 +59,60 @@ func TestFilterDevicesByAccess(t *testing.T) {
 		}
 	}
 
-	only(filterDevicesByAccess(rows, am, "managed", "", ""), managedID, "access=managed")
-	only(filterDevicesByAccess(rows, am, "unmanaged", "", ""), unmanagedID, "access=unmanaged")
-	only(filterDevicesByAccess(rows, am, "", "snmp_v2c", ""), managedID, "accessProtocol=snmp_v2c")
-	only(filterDevicesByAccess(rows, am, "", "", "no_credential_bound"), unmanagedID, "accessIssue=no_credential_bound")
+	tm := map[uuid.UUID]*deviceTestStatus{}
+	now := time.Unix(1_700_000_000, 0)
+	f := func(access, proto, issue string) []db.Device {
+		return filterDevicesByAccess(rows, am, tm, now, access, proto, issue)
+	}
+
+	only(f("managed", "", ""), managedID, "access=managed")
+	only(f("unmanaged", "", ""), unmanagedID, "access=unmanaged")
+	only(f("", "snmp_v2c", ""), managedID, "accessProtocol=snmp_v2c")
+	only(f("", "", "no_credential_bound"), unmanagedID, "accessIssue=no_credential_bound")
 
 	// Unknown protocol → no matches.
-	if got := filterDevicesByAccess(rows, am, "", "winrm", ""); len(got) != 0 {
+	if got := f("", "winrm", ""); len(got) != 0 {
 		t.Errorf("accessProtocol=winrm should match nothing, got %d", len(got))
 	}
-	// Non-derivable issue → nothing (never guess).
-	if got := filterDevicesByAccess(rows, am, "", "", "credential_failed"); len(got) != 0 {
-		t.Errorf("accessIssue=credential_failed should match nothing, got %d", len(got))
+	// not_tested: with no test history, both devices qualify (never tested).
+	if got := f("", "", "not_tested"); len(got) != 2 {
+		t.Errorf("accessIssue=not_tested should match both untested devices, got %d", len(got))
+	}
+	// credential_failed: no auth-failure history yet → nothing.
+	if got := f("", "", "credential_failed"); len(got) != 0 {
+		t.Errorf("accessIssue=credential_failed should match nothing without history, got %d", len(got))
 	}
 	// No params → unchanged.
-	if got := filterDevicesByAccess(rows, am, "", "", ""); len(got) != 2 {
+	if got := f("", "", ""); len(got) != 2 {
 		t.Errorf("no params should pass all, got %d", len(got))
+	}
+}
+
+func TestFilterDevicesByAccess_TestHistory(t *testing.T) {
+	failID, staleID, okID := uuid.New(), uuid.New(), uuid.New()
+	rows := []db.Device{{ID: failID, Category: "switch"}, {ID: staleID, Category: "switch"}, {ID: okID, Category: "switch"}}
+	now := time.Unix(1_700_000_000, 0)
+	am := map[uuid.UUID]*deviceAccess{
+		staleID: {protocols: map[string]string{"snmp_v2c": "test_result"}},
+		okID:    {protocols: map[string]string{"snmp_v2c": "test_result"}},
+	}
+	tm := map[uuid.UUID]*deviceTestStatus{
+		failID:  {tested: true, authFailed: true, lastTestedAt: now.Add(-time.Hour), successKinds: map[string]bool{}, failedKinds: map[string]bool{"ssh": true}},
+		staleID: {tested: true, lastTestedAt: now.Add(-60 * 24 * time.Hour), successKinds: map[string]bool{"snmp_v2c": true}, failedKinds: map[string]bool{}},
+		okID:    {tested: true, lastTestedAt: now.Add(-time.Hour), successKinds: map[string]bool{"snmp_v2c": true}, failedKinds: map[string]bool{}},
+	}
+	f := func(issue string) []db.Device { return filterDevicesByAccess(rows, am, tm, now, "", "", issue) }
+
+	if got := f("credential_failed"); len(got) != 1 || got[0].ID != failID {
+		t.Errorf("credential_failed → %v, want [%s]", ids(got), failID)
+	}
+	if got := f("stale"); len(got) != 1 || got[0].ID != staleID {
+		t.Errorf("stale → %v, want [%s]", ids(got), staleID)
+	}
+	// missing_expected_protocol: a switch with no snmp/ssh access → flagged. okID
+	// and staleID have snmp_v2c; failID (no access map entry) is missing both.
+	if got := f("missing_expected_protocol"); len(got) != 1 || got[0].ID != failID {
+		t.Errorf("missing_expected_protocol → %v, want [%s]", ids(got), failID)
 	}
 }
 
