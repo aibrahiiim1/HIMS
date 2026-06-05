@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -161,12 +162,111 @@ func (s *Server) runVSphereCollection(ctx context.Context, d db.Device) vsphereR
 	return res
 }
 
+// profileCollect is the structured outcome of a profile-driven deep collection.
+// AuthOK distinguishes "test/login succeeded" from "collection succeeded" so the
+// Scan Results UI can show test-vs-collection state independently.
+type profileCollect struct {
+	AuthOK       bool
+	CollectionOK bool
+	Detail       string
+	Category     string // refined category (virtual_host / camera / nvr)
+}
+
+// collectVSphereProfile onboards an ESXi/vCenter host using a Vendor Connection
+// Profile: it authenticates to the PROFILE's target URL with the profile's bound
+// credential (not just the scanned device IP), collects host + VM + datastore
+// facts, classifies as esxi/vcenter, binds the credential on success, and records
+// the attempt to Credential Test History. No secrets are logged. Binds only on
+// authenticated success.
+func (s *Server) collectVSphereProfile(ctx context.Context, p db.VendorConnectionProfile, d db.Device) profileCollect {
+	out := profileCollect{Category: string(domain.CatVirtualHost)}
+	user, pass, credID, kind, ok := s.vendorProfileCred(ctx, p)
+	if !ok {
+		out.Detail = "no usable credential bound to this profile (or encryption key not loaded)"
+		return out
+	}
+	sdk := vsphereSDKURL(strings.TrimRight(p.TargetUrl, "/"))
+	inv, ver, model, vendor, err := vsphereLoginCollectURL(ctx, sdk, user, pass)
+	category, detail := "success", "vSphere authenticated"
+	if err != nil {
+		category, detail = categorizeCollectErr("vsphere", err.Error())
+	}
+	s.persistScanCredAttempts(ctx, d, []discovery.CredAttempt{{
+		CredentialID: credID, Kind: kind, Protocol: "vmware",
+		Success: err == nil, Category: category, Detail: detail,
+	}})
+	if err != nil {
+		out.Detail = "vSphere login failed: " + detail
+		return out
+	}
+	out.AuthOK = true
+
+	// vCenter manages multiple hosts; a standalone ESXi reports one. Classify
+	// accordingly (honest heuristic from authenticated evidence).
+	hostName, deviceClass := "", "esxi"
+	if len(inv.Hosts) > 0 {
+		hostName = inv.Hosts[0].Name
+	}
+	if len(inv.Hosts) > 1 {
+		deviceClass = "vcenter"
+	}
+	_ = s.queries.UpdateDeviceHardwareInfo(ctx, db.UpdateDeviceHardwareInfoParams{
+		ID: d.ID, Vendor: vendor, Model: model, OsVersion: ver, Hostname: hostName,
+	})
+	if blob, merr := domain.MarshalEvidence(nil); merr == nil {
+		conf := int16(92)
+		_, _ = s.queries.UpdateDeviceClassification(ctx, db.UpdateDeviceClassificationParams{
+			ID: d.ID, Category: string(domain.CatVirtualHost), OsFamily: "",
+			DeviceClass: &deviceClass, ConfidenceScore: &conf, ClassificationEvidence: blob,
+		})
+	}
+	for _, vm := range inv.VMs {
+		var vcpu, mem *int32
+		if vm.NumCPU > 0 {
+			v := vm.NumCPU
+			vcpu = &v
+		}
+		if vm.MemoryMB > 0 {
+			m := vm.MemoryMB
+			mem = &m
+		}
+		var gos *string
+		if vm.GuestOS != "" {
+			g := vm.GuestOS
+			gos = &g
+		}
+		var vmIP *netip.Addr
+		if a, perr := netip.ParseAddr(vm.IP); perr == nil {
+			vmIP = &a
+		}
+		_, _ = s.queries.UpsertVM(ctx, db.UpsertVMParams{
+			HostDeviceID: d.ID, Name: vm.Name, PowerState: vm.PowerState,
+			Vcpu: vcpu, MemMb: mem, GuestOs: gos, PrimaryIp: vmIP,
+		})
+	}
+	if p.CredentialID != nil {
+		_ = s.queries.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: d.ID, CredentialID: p.CredentialID})
+	}
+	_ = s.queries.UpdateDeviceMonitoringStatus(ctx, db.UpdateDeviceMonitoringStatusParams{ID: d.ID, Status: "up"})
+
+	out.CollectionOK = true
+	out.Detail = deviceClass + " collected via profile " + p.Name + " — " +
+		itoaN(len(inv.Hosts)) + " host(s), " + itoaN(len(inv.VMs)) + " VM(s), " + itoaN(len(inv.Datastores)) + " datastore(s)"
+	return out
+}
+
 // vsphereLoginCollect logs into a vSphere/ESXi endpoint and collects inventory.
 // The session is always logged out. InsecureSkipVerify because ESXi ships a
 // self-signed certificate.
 func vsphereLoginCollect(ctx context.Context, ip, user, pass string) (vsphere.Inventory, string, string, string, error) {
+	return vsphereLoginCollectURL(ctx, "https://"+ip+"/sdk", user, pass)
+}
+
+// vsphereLoginCollectURL is vsphereLoginCollect against an explicit SDK URL (used
+// by profile-driven collection, where the target may differ from the device IP).
+func vsphereLoginCollectURL(ctx context.Context, sdkURL, user, pass string) (vsphere.Inventory, string, string, string, error) {
 	var inv vsphere.Inventory
-	u, err := soap.ParseURL("https://" + ip + "/sdk")
+	u, err := soap.ParseURL(sdkURL)
 	if err != nil {
 		return inv, "", "", "", err
 	}

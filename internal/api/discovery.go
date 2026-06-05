@@ -253,6 +253,7 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 		id, err := applier.Apply(hctx, r, locID)
 		// Post-onboarding follow-ups for an enrolled host (best-effort).
 		enrichment := ""
+		var profRes *scanProfileResult
 		if r.Facts != nil {
 			enrichment = "SNMP facts collected"
 		}
@@ -275,17 +276,34 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 						enrichment = "OS collection incomplete: " + oc.Reason
 					}
 				} else if string(r.Match.Category) == string(domain.CatVirtualHost) && s.cipher() != nil {
-					// ESXi candidate from evidence — try VMware credentials and, on
-					// success, collect host + VM facts and bind (Stage B).
-					cctx, ccancel := context.WithTimeout(ctx, 2*time.Minute)
-					vc := s.runVSphereCollection(cctx, dev)
-					ccancel()
-					if vc.ok() {
-						enrichment = "VMware host + VM facts collected"
-					} else if vc.Reason == "no_credential" {
-						enrichment = "VMware candidate — needs VMware credential"
+					// ESXi/vCenter candidate. PREFER a matching Vendor Connection
+					// Profile (device > site > global) so we authenticate to the
+					// configured vCenter/ESXi URL with the linked credential; fall
+					// back to the device-IP collector when none is configured.
+					if prof, found := s.resolveScanProfile(ctx, string(domain.CatVirtualHost), dev.ID, dev.LocationID); found {
+						cctx, ccancel := context.WithTimeout(ctx, 2*time.Minute)
+						pc := s.collectVSphereProfile(cctx, prof, dev)
+						ccancel()
+						profRes = profResultFrom(prof, pc)
+						_ = s.queries.SetVendorProfileCollection(ctx, db.SetVendorProfileCollectionParams{ID: prof.ID, LastCollectionDetail: pc.Detail})
+						_ = s.queries.SetVendorProfileTest(ctx, db.SetVendorProfileTestParams{ID: prof.ID, LastTestOk: &pc.AuthOK, LastTestDetail: pc.Detail})
+						if pc.CollectionOK {
+							enrichment = "VMware collected via profile " + prof.Name + ": " + pc.Detail
+						} else {
+							enrichment = "VMware profile " + prof.Name + " failed: " + pc.Detail
+						}
 					} else {
-						enrichment = "VMware collection incomplete: " + vc.Reason
+						profRes = &scanProfileResult{Resolved: false}
+						cctx, ccancel := context.WithTimeout(ctx, 2*time.Minute)
+						vc := s.runVSphereCollection(cctx, dev)
+						ccancel()
+						if vc.ok() {
+							enrichment = "VMware host + VM facts collected"
+						} else if vc.Reason == "no_credential" {
+							enrichment = "VMware candidate — no profile configured; add a VMware Vendor Connection Profile"
+						} else {
+							enrichment = "VMware collection incomplete: " + vc.Reason
+						}
 					}
 				} else if cat := string(r.Match.Category); (cat == string(domain.CatWirelessController) || cat == string(domain.CatAccessPoint)) && s.cipher() != nil {
 					// Wireless controller candidate — use a matching Vendor Connection
@@ -295,11 +313,14 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 						ok, detail := s.collectWirelessProfile(cctx, prof, dev)
 						ccancel()
 						_ = s.queries.SetVendorProfileCollection(ctx, db.SetVendorProfileCollectionParams{ID: prof.ID, LastCollectionDetail: detail})
+						_ = s.queries.SetVendorProfileTest(ctx, db.SetVendorProfileTestParams{ID: prof.ID, LastTestOk: &ok, LastTestDetail: detail})
+						profRes = profResultFrom(prof, profileCollect{AuthOK: ok, CollectionOK: ok, Detail: detail})
 						enrichment = detail
 						if !ok {
 							enrichment = "Wireless profile collection incomplete: " + detail
 						}
 					} else {
+						profRes = &scanProfileResult{Resolved: false}
 						enrichment = "Wireless controller — add a Vendor Connection Profile (Discovery → Vendor Profiles) to onboard"
 					}
 				} else if cat := string(r.Match.Category); (cat == string(domain.CatPBX) || cat == string(domain.CatVoiceGateway)) && s.cipher() != nil {
@@ -314,31 +335,53 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 						}
 						ccancel()
 						_ = s.queries.SetVendorProfileCollection(ctx, db.SetVendorProfileCollectionParams{ID: prof.ID, LastCollectionDetail: detail})
+						if prof.VendorType == "cucm" {
+							_ = s.queries.SetVendorProfileTest(ctx, db.SetVendorProfileTestParams{ID: prof.ID, LastTestOk: &ok, LastTestDetail: detail})
+						}
+						profRes = profResultFrom(prof, profileCollect{AuthOK: ok, CollectionOK: ok, Detail: detail})
 						enrichment = detail
 						if !ok {
 							enrichment = "Voice profile: " + detail
 						}
 					} else {
+						profRes = &scanProfileResult{Resolved: false}
 						enrichment = "Voice/PBX — add a Vendor Connection Profile (Discovery → Vendor Profiles) to onboard"
 					}
 				} else if cat := string(r.Match.Category); (cat == string(domain.CatCamera) || cat == string(domain.CatNVR)) && s.cipher() != nil {
-					// Camera/NVR candidate — try ONVIF/HTTP credentials and, on
-					// success, collect device info + classify camera vs NVR (Stage C).
-					cctx, ccancel := context.WithTimeout(ctx, 90*time.Second)
-					cv := s.runCCTVCollection(cctx, dev)
-					ccancel()
-					if cv.ok() {
-						enrichment = "ONVIF facts collected (" + cv.Category + ")"
-					} else if cv.Reason == "no_credential" {
-						enrichment = "CCTV candidate — needs ONVIF/HTTP credential"
+					// Camera/NVR/DVR candidate. PREFER a matching CCTV Vendor Connection
+					// Profile (device > site > global) so we authenticate to the
+					// configured target with the linked ONVIF/HTTP credential; fall back
+					// to the device-IP collector when none is configured.
+					if prof, found := s.resolveScanProfile(ctx, cat, dev.ID, dev.LocationID); found {
+						cctx, ccancel := context.WithTimeout(ctx, 90*time.Second)
+						pc := s.collectCCTVProfile(cctx, prof, dev)
+						ccancel()
+						profRes = profResultFrom(prof, pc)
+						_ = s.queries.SetVendorProfileCollection(ctx, db.SetVendorProfileCollectionParams{ID: prof.ID, LastCollectionDetail: pc.Detail})
+						_ = s.queries.SetVendorProfileTest(ctx, db.SetVendorProfileTestParams{ID: prof.ID, LastTestOk: &pc.AuthOK, LastTestDetail: pc.Detail})
+						if pc.CollectionOK {
+							enrichment = "CCTV collected via profile " + prof.Name + ": " + pc.Detail
+						} else {
+							enrichment = "CCTV profile " + prof.Name + " failed: " + pc.Detail
+						}
 					} else {
-						enrichment = "ONVIF collection incomplete: " + cv.Reason
+						profRes = &scanProfileResult{Resolved: false}
+						cctx, ccancel := context.WithTimeout(ctx, 90*time.Second)
+						cv := s.runCCTVCollection(cctx, dev)
+						ccancel()
+						if cv.ok() {
+							enrichment = "ONVIF facts collected (" + cv.Category + ")"
+						} else if cv.Reason == "no_credential" {
+							enrichment = "CCTV candidate — no profile configured; add a CCTV / ONVIF Vendor Connection Profile"
+						} else {
+							enrichment = "ONVIF collection incomplete: " + cv.Reason
+						}
 					}
 				}
 			}
 		}
 		if r.Alive {
-			s.recordResult(hctx, jobID, ip, r, id, err, enrichment)
+			s.recordResult(hctx, jobID, ip, r, id, err, enrichment, profRes)
 		}
 		return id, err
 	})
@@ -374,7 +417,30 @@ type scanDetail struct {
 	CredAttempts   []scanCredAttemptDTO `json:"cred_attempts,omitempty"`
 	BoundCred      string               `json:"bound_cred,omitempty"`
 	Enrichment     string               `json:"enrichment,omitempty"`
+	Profile        *scanProfileResult   `json:"profile,omitempty"`
 	NextAction     string               `json:"next_action"`
+}
+
+// scanProfileResult records how a Vendor Connection Profile was used during the
+// scan for a VMware/CCTV/wireless/voice candidate, so Scan Results can show:
+// resolved / no-profile / test ok|fail / collection ok|fail + the profile name.
+type scanProfileResult struct {
+	Resolved     bool   `json:"resolved"`
+	Name         string `json:"name,omitempty"`
+	VendorType   string `json:"vendor_type,omitempty"`
+	TestOK       *bool  `json:"test_ok,omitempty"`       // authentication/login succeeded
+	CollectionOK *bool  `json:"collection_ok,omitempty"` // facts collected + persisted
+	Detail       string `json:"detail,omitempty"`
+}
+
+// profResultFrom builds the Scan-Results profile summary from a deep-collection
+// outcome (a resolved profile that was actually exercised during the scan).
+func profResultFrom(p db.VendorConnectionProfile, pc profileCollect) *scanProfileResult {
+	auth, coll := pc.AuthOK, pc.CollectionOK
+	return &scanProfileResult{
+		Resolved: true, Name: p.Name, VendorType: p.VendorType,
+		TestOK: &auth, CollectionOK: &coll, Detail: pc.Detail,
+	}
 }
 
 func truncate(s string, n int) string {
@@ -417,8 +483,46 @@ func scanNextAction(category string, bound bool, boundKind string) string {
 	return "Add a matching credential to onboard"
 }
 
+// scanNextActionWithProfile refines the next action for the profile-driven
+// categories (VMware / CCTV) using how a Vendor Connection Profile resolved and
+// performed during the scan. Other categories fall through to scanNextAction.
+func scanNextActionWithProfile(category string, bound bool, boundKind string, pr *scanProfileResult) string {
+	if bound {
+		return "Managed via " + boundKind
+	}
+	if pr != nil {
+		switch category {
+		case "virtual_host":
+			if !pr.Resolved {
+				return "Create a VMware Vendor Connection Profile (Discovery → Vendor Profiles) to onboard this host"
+			}
+			if pr.CollectionOK == nil || !*pr.CollectionOK {
+				return "VMware profile \"" + pr.Name + "\" failed: " + pr.Detail + " — fix the credential/URL in Vendor Profiles"
+			}
+			return "Managed via VMware profile \"" + pr.Name + "\""
+		case "camera", "nvr":
+			if !pr.Resolved {
+				return "Create a CCTV / ONVIF Vendor Connection Profile (Discovery → Vendor Profiles) to authenticate and confirm camera vs NVR/DVR"
+			}
+			if pr.CollectionOK == nil || !*pr.CollectionOK {
+				return "CCTV profile \"" + pr.Name + "\" failed: " + pr.Detail + " — fix the ONVIF/HTTP credential in Vendor Profiles"
+			}
+			return "Managed via CCTV profile \"" + pr.Name + "\""
+		case "wireless_controller", "access_point", "pbx", "voice_gateway", "ip_phone":
+			if !pr.Resolved {
+				return scanNextAction(category, bound, boundKind)
+			}
+			if pr.CollectionOK == nil || !*pr.CollectionOK {
+				return "Profile \"" + pr.Name + "\" failed: " + pr.Detail + " — fix it in Vendor Profiles"
+			}
+			return "Managed via profile \"" + pr.Name + "\""
+		}
+	}
+	return scanNextAction(category, bound, boundKind)
+}
+
 // recordResult writes one actionable discovery_results row for an alive host.
-func (s *Server) recordResult(ctx context.Context, jobID uuid.UUID, ip netip.Addr, r discovery.HostResult, id uuid.UUID, applyErr error, enrichment string) {
+func (s *Server) recordResult(ctx context.Context, jobID uuid.UUID, ip netip.Addr, r discovery.HostResult, id uuid.UUID, applyErr error, enrichment string, profRes *scanProfileResult) {
 	outcome := "alive"
 	switch {
 	case applyErr != nil:
@@ -467,7 +571,8 @@ func (s *Server) recordResult(ctx context.Context, jobID uuid.UUID, ip netip.Add
 	detail := scanDetail{
 		OpenPorts: r.OpenPorts, Classification: category, Confidence: r.Match.Confidence,
 		Evidence: evidence, CredAttempts: attempts, BoundCred: boundKind,
-		Enrichment: enrichment, NextAction: scanNextAction(category, bound, boundKind),
+		Enrichment: enrichment, Profile: profRes,
+		NextAction: scanNextActionWithProfile(category, bound, boundKind, profRes),
 	}
 	blob, merr := json.Marshal(detail)
 	if merr != nil {

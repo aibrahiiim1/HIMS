@@ -26,6 +26,10 @@ SELECT device_id, protocol::text AS protocol, source::text AS source FROM (
   UNION ALL
   SELECT DISTINCT device_id, 'vendor_api' AS protocol, 'evidence' AS source FROM wlan_controller_info
 
+  -- 4b) VMware vSphere/ESXi inventory (authenticated host/VM collection).
+  UNION ALL
+  SELECT DISTINCT host_device_id AS device_id, 'vmware' AS protocol, 'evidence' AS source FROM virtual_machines
+
   -- 5) BMC out-of-band (Redfish HTTPS/JSON API).
   UNION ALL
   SELECT DISTINCT device_id, 'api_token' AS protocol, 'evidence' AS source FROM bmc_info

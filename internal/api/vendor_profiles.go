@@ -339,15 +339,19 @@ func (s *Server) runVendorProfileCollection(w http.ResponseWriter, r *http.Reque
 	ok, detail := false, ""
 	switch p.VendorType {
 	case "vmware":
-		res := s.runVSphereCollection(ctx, dev)
-		ok, detail = res.ok(), res.Detail
+		res := s.collectVSphereProfile(ctx, p, dev)
+		ok, detail = res.CollectionOK, res.Detail
+		_ = s.queries.SetVendorProfileTest(ctx, db.SetVendorProfileTestParams{ID: id, LastTestOk: &res.AuthOK, LastTestDetail: detail})
 	case "cctv":
-		res := s.runCCTVCollection(ctx, dev)
-		ok, detail = res.ok(), res.Detail
+		res := s.collectCCTVProfile(ctx, p, dev)
+		ok, detail = res.CollectionOK, res.Detail
+		_ = s.queries.SetVendorProfileTest(ctx, db.SetVendorProfileTestParams{ID: id, LastTestOk: &res.AuthOK, LastTestDetail: detail})
 	case "wireless_unifi", "wireless_omada", "wireless_ruckus", "wireless_extreme":
 		ok, detail = s.collectWirelessProfile(ctx, p, dev)
+		_ = s.queries.SetVendorProfileTest(ctx, db.SetVendorProfileTestParams{ID: id, LastTestOk: &ok, LastTestDetail: detail})
 	case "cucm":
 		ok, detail = s.collectCUCMProfile(ctx, p, dev)
+		_ = s.queries.SetVendorProfileTest(ctx, db.SetVendorProfileTestParams{ID: id, LastTestOk: &ok, LastTestDetail: detail})
 	default:
 		detail = p.VendorType + " deep collection not implemented yet — detection + classification + this gate remain active"
 	}
@@ -547,23 +551,31 @@ func (s *Server) resolveScanProfile(ctx context.Context, category string, devID 
 
 // vendorProfileSecret decrypts the profile's bound credential into user/pass.
 func (s *Server) vendorProfileSecret(ctx context.Context, p db.VendorConnectionProfile) (string, string, bool) {
+	u, pw, _, _, ok := s.vendorProfileCred(ctx, p)
+	return u, pw, ok
+}
+
+// vendorProfileCred is vendorProfileSecret plus the credential id + kind, used by
+// profile-driven scan collection to record an accurate Credential Test History
+// attempt (which credential, which kind) on success/failure. Secrets stay in-memory.
+func (s *Server) vendorProfileCred(ctx context.Context, p db.VendorConnectionProfile) (user, pass string, credID uuid.UUID, kind domain.CredentialKind, ok bool) {
 	if p.CredentialID == nil {
-		return "", "", false
+		return "", "", uuid.Nil, "", false
 	}
 	cph := s.cipher()
 	if cph == nil {
-		return "", "", false
+		return "", "", uuid.Nil, "", false
 	}
 	c, err := s.queries.GetCredential(ctx, *p.CredentialID)
 	if err != nil {
-		return "", "", false
+		return "", "", uuid.Nil, "", false
 	}
 	plain, err := cph.Open(c.EncryptedBlob, c.KeyID)
 	if err != nil {
-		return "", "", false
+		return "", "", uuid.Nil, "", false
 	}
 	u, pw := credtest.SplitUserPass(string(plain))
-	return u, pw, true
+	return u, pw, c.ID, domain.CredentialKind(c.Kind), true
 }
 
 func vsphereSDKURL(base string) string {

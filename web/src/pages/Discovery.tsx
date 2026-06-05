@@ -5,6 +5,7 @@ import { Radar, Boxes, CircleX, Clock, KeyRound } from 'lucide-react'
 import {
   api, locationPaths,
   type DiscoveryJob, type DiscoveryResult, type Location, type Credential, type AccessCoverage,
+  type ScanProfileResult,
 } from '../api'
 import { PageHeader, Kpi, timeAgo } from '../components/ui'
 
@@ -30,6 +31,25 @@ const CTRL_KINDS = ['unifi', 'ruckus', 'omada', 'extreme', 'vsphere', 'hyperv', 
 
 const jobBadge = (s: string) => (s === 'running' ? 'warning' : s === 'completed' ? 'up' : s === 'failed' || s === 'cancelled' ? 'down' : 'unknown')
 const outcomeBadge = (o: string) => (o === 'enrolled' ? 'up' : o === 'failed' ? 'down' : o === 'classified' ? 'access' : 'unknown')
+
+// ProfileCell renders the Vendor Connection Profile outcome for a scanned
+// VMware/CCTV/wireless/voice candidate: whether a profile resolved, whether the
+// test/login succeeded, and whether collection succeeded. Absent for categories
+// that don't use profiles.
+function ProfileCell({ p }: { p?: ScanProfileResult | null }) {
+  if (!p) return <span className="muted">—</span>
+  if (!p.resolved) return <span className="badge badge-warning" title="No matching Vendor Connection Profile — create one in Discovery → Vendor Profiles">no profile</span>
+  const testBadge = p.test_ok === undefined ? null
+    : <span className={`badge badge-${p.test_ok ? 'up' : 'down'}`} title={p.detail ?? ''}>{p.test_ok ? 'test ok' : 'test failed'}</span>
+  const collBadge = p.collection_ok === undefined ? null
+    : <span className={`badge badge-${p.collection_ok ? 'up' : 'down'}`} title={p.detail ?? ''}>{p.collection_ok ? 'collected' : 'collect failed'}</span>
+  return (
+    <div>
+      <div><Link to="/vendor-profiles" title={p.detail ?? ''}>{p.name || p.vendor_type || 'profile'}</Link></div>
+      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 2 }}>{testBadge}{collBadge}</div>
+    </div>
+  )
+}
 
 function duration(a?: string | null, b?: string | null): string {
   if (!a) return '—'
@@ -410,7 +430,7 @@ function JobsTab({ jobs, jobID, setJobID, detail, setMsg, qc }: { jobs: Discover
             <table>
               <thead><tr>
                 <th>IP</th><th>Outcome</th><th>Classification</th><th>Ports</th>
-                <th>Credentials tried</th><th>Bound</th><th>Enrichment</th><th>Next action</th>
+                <th>Credentials tried</th><th>Bound</th><th>Vendor profile</th><th>Enrichment</th><th>Next action</th>
               </tr></thead>
               <tbody>
                 {detail.results.map((r) => {
@@ -434,6 +454,7 @@ function JobsTab({ jobs, jobID, setJobID, detail, setMsg, qc }: { jobs: Discover
                         ))}
                       </td>
                       <td>{d.bound_cred ? <span className="badge badge-up">{d.bound_cred}</span> : <span className="muted">—</span>}</td>
+                      <td style={{ fontSize: 11 }}><ProfileCell p={d.profile} /></td>
                       <td className="muted" style={{ fontSize: 11 }}>{d.enrichment || '—'}</td>
                       <td style={{ fontSize: 12 }}>{r.error ? <span className="error-msg">{r.error}</span> : (d.next_action ?? '—')}</td>
                     </tr>

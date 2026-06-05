@@ -490,6 +490,16 @@ export interface DiscoveryJob {
 }
 
 export interface ScanCredAttempt { kind: string; protocol: string; category: string; detail: string; success: boolean }
+// How a Vendor Connection Profile (VMware / CCTV / wireless / voice) was used
+// during the scan for this host: resolved? test/login ok? collection ok?
+export interface ScanProfileResult {
+  resolved: boolean
+  name?: string
+  vendor_type?: string
+  test_ok?: boolean
+  collection_ok?: boolean
+  detail?: string
+}
 export interface ScanDetail {
   open_ports?: number[]
   classification?: string
@@ -498,6 +508,7 @@ export interface ScanDetail {
   cred_attempts?: ScanCredAttempt[]
   bound_cred?: string
   enrichment?: string
+  profile?: ScanProfileResult | null
   next_action?: string
 }
 export interface DiscoveryResult {

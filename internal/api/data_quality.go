@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
+	"github.com/google/uuid"
 )
 
 // Data Quality Center — surfaces inventory hygiene issues an operator should fix
@@ -210,6 +211,78 @@ func (s *Server) dataQuality(w http.ResponseWriter, r *http.Request) {
 		addIssue("linux_no_ssh", "Linux without working SSH", "Linux hosts with no successful SSH access. SSH is needed for deep OS inventory.", "warning", linNoSSH)
 		addIssue("camera_no_onvif", "Cameras/NVRs without ONVIF", "Cameras/NVRs with no successful ONVIF access. ONVIF is needed for device-info and stream inventory.", "warning", camNoONVIF)
 		addIssue("switch_no_ssh", "Switches/firewalls without SSH", "Network devices with no successful SSH access. SSH enables CLI collection and config backup beyond SNMP.", "info", swNoSSH)
+
+		// Vendor Connection Profile issues — VMware / CCTV onboarding gaps. These
+		// reuse the same scan resolution (device > site > global) in-memory so the
+		// report matches what a scan would actually do. Counts are real.
+		profs, perr := s.queries.ListVendorProfiles(ctx)
+		if perr == nil {
+			resolveProf := func(vendorTypes []string, devID uuid.UUID, locID *uuid.UUID) (db.VendorConnectionProfile, bool) {
+				inTypes := func(t string) bool {
+					for _, v := range vendorTypes {
+						if v == t {
+							return true
+						}
+					}
+					return false
+				}
+				// device-bound first, then site, then global.
+				for stage := 0; stage < 3; stage++ {
+					for _, p := range profs {
+						if !p.Enabled || !inTypes(p.VendorType) {
+							continue
+						}
+						match := false
+						switch stage {
+						case 0:
+							match = p.DeviceID != nil && *p.DeviceID == devID
+						case 1:
+							match = p.LocationID != nil && locID != nil && *p.LocationID == *locID
+						case 2:
+							match = p.DeviceID == nil && p.LocationID == nil
+						}
+						if match {
+							return p, true
+						}
+					}
+				}
+				return db.VendorConnectionProfile{}, false
+			}
+			profFailed := func(p db.VendorConnectionProfile) bool {
+				return p.LastTestOk != nil && !*p.LastTestOk
+			}
+			var vhNoProfile, vmwareProfileFailed, cctvNoProfile, nvrNotAuth, profFailedDevs []db.Device
+			for _, d := range devs {
+				da := am[d.ID]
+				switch {
+				case d.Category == "virtual_host":
+					prof, found := resolveProf([]string{"vmware"}, d.ID, d.LocationID)
+					if !found {
+						if !accessSatisfies(da, "vmware") {
+							vhNoProfile = append(vhNoProfile, d)
+						}
+					} else if profFailed(prof) && !accessSatisfies(da, "vmware") {
+						vmwareProfileFailed = append(vmwareProfileFailed, d)
+					}
+				case d.Category == "camera" || d.Category == "nvr":
+					prof, found := resolveProf([]string{"cctv"}, d.ID, d.LocationID)
+					if !found && !accessSatisfies(da, "onvif") {
+						cctvNoProfile = append(cctvNoProfile, d)
+					}
+					if found && profFailed(prof) && !accessSatisfies(da, "onvif") {
+						profFailedDevs = append(profFailedDevs, d)
+					}
+					if d.Category == "nvr" && !accessSatisfies(da, "onvif") {
+						nvrNotAuth = append(nvrNotAuth, d)
+					}
+				}
+			}
+			addIssue("virtual_host_no_vmware_profile", "Virtual hosts without a VMware profile", "ESXi/vCenter candidates with no VMware Vendor Connection Profile and no successful vSphere collection. Create a VMware profile (Discovery → Vendor Profiles) so the scan can collect host + VM facts.", "warning", vhNoProfile)
+			addIssue("vmware_profile_failed", "VMware profile failed", "ESXi/vCenter candidates whose VMware Vendor Connection Profile test/collection failed. Fix the credential or vCenter/ESXi URL in Vendor Profiles.", "warning", vmwareProfileFailed)
+			addIssue("cctv_no_profile", "Cameras/NVRs without a CCTV profile", "Camera/NVR/DVR candidates with no CCTV / ONVIF Vendor Connection Profile and no successful ONVIF access. Create a CCTV profile to authenticate and confirm camera vs NVR/DVR.", "warning", cctvNoProfile)
+			addIssue("nvr_not_authenticated", "NVR/DVR not authenticated", "NVR/DVR candidates with no successful ONVIF authentication yet. Bind a working ONVIF/HTTP credential or create a CCTV Vendor Connection Profile.", "warning", nvrNotAuth)
+			addIssue("vendor_profile_failed", "Vendor profile connection failed", "Devices whose matching Vendor Connection Profile failed its last connection test. Fix the credential/URL in Vendor Profiles.", "warning", profFailedDevs)
+		}
 	}
 
 	// Stable order: critical first, then warning, then info; ties by count desc.

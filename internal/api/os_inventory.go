@@ -112,13 +112,23 @@ func categorizeCollectErr(method, errStr string) (reason, detail string) {
 		strings.Contains(e, "401") || strings.Contains(e, "403") || strings.Contains(e, "logon"):
 		return "auth_failed", "authentication rejected — check the bound credential"
 	case strings.Contains(e, "refused") || strings.Contains(e, "actively refused") || strings.Contains(e, "reset"):
-		if method == "winrm" {
+		switch method {
+		case "winrm":
 			return "winrm_disabled", "WinRM not responding on 5985 — enable PowerShell Remoting / open the port"
+		case "vsphere", "vmware":
+			return "connection_refused", "vSphere connection refused — check the vCenter/ESXi URL and that 443 is open"
+		case "onvif":
+			return "connection_refused", "ONVIF/HTTP connection refused — check the device address and that the HTTP port is open"
 		}
 		return "ssh_unreachable", "SSH connection refused on 22 — enable sshd / open the port"
 	case strings.Contains(e, "timeout") || strings.Contains(e, "deadline") || strings.Contains(e, "i/o timeout"):
-		if method == "winrm" {
+		switch method {
+		case "winrm":
 			return "winrm_timeout", "WinRM timed out (host slow, firewalled, or 5985 filtered)"
+		case "vsphere", "vmware":
+			return "vsphere_timeout", "vSphere timed out (host slow, firewalled, or 443 filtered)"
+		case "onvif":
+			return "onvif_timeout", "ONVIF timed out (host slow, firewalled, or HTTP port filtered)"
 		}
 		return "ssh_timeout", "SSH timed out (host slow, firewalled, or 22 filtered)"
 	case strings.Contains(e, "no route") || strings.Contains(e, "no such host") || strings.Contains(e, "unreachable"):

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -140,6 +141,78 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device) cctvResult 
 	s.persistScanCredAttempts(ctx, d, attempts)
 	res.Reason, res.Detail = lastReason, lastDetail
 	return res
+}
+
+// collectCCTVProfile onboards a camera/NVR/DVR using a Vendor Connection Profile:
+// authenticate to the PROFILE's target URL/IP with the profile's bound ONVIF/HTTP
+// credential, collect manufacturer/model/firmware/serial, classify camera vs NVR
+// vs DVR from authenticated device evidence, bind on success, and record the
+// attempt to Credential Test History. No secrets logged; binds only on success.
+func (s *Server) collectCCTVProfile(ctx context.Context, p db.VendorConnectionProfile, d db.Device) profileCollect {
+	out := profileCollect{Category: string(domain.CatCamera)}
+	user, pass, credID, kind, ok := s.vendorProfileCred(ctx, p)
+	if !ok {
+		out.Detail = "no usable credential bound to this profile (or encryption key not loaded)"
+		return out
+	}
+	host := stripScheme(strings.TrimRight(p.TargetUrl, "/"))
+	if host == "" && d.PrimaryIp != nil && d.PrimaryIp.IsValid() {
+		host = d.PrimaryIp.String()
+	}
+	doer := &http.Client{
+		Timeout:   15 * time.Second,
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS10}},
+	}
+	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	info, err := onvif.Collect(cctx, onvif.NewClient("http://"+host, user, pass, doer))
+	cancel()
+	category, detail := "success", "ONVIF authenticated"
+	if err != nil {
+		category, detail = categorizeCollectErr("onvif", err.Error())
+	}
+	s.persistScanCredAttempts(ctx, d, []discovery.CredAttempt{{
+		CredentialID: credID, Kind: kind, Protocol: "onvif",
+		Success: err == nil, Category: category, Detail: detail,
+	}})
+	if err != nil {
+		out.Detail = "ONVIF failed: " + detail
+		return out
+	}
+	out.AuthOK = true
+
+	// Classify camera vs NVR/DVR from the authenticated model (recorder families).
+	cat := domain.CatCamera
+	dc := "ip_camera"
+	for _, e := range classify.ISAPIDeviceInfo("", info.Model) {
+		if e.Category == string(domain.CatNVR) {
+			cat, dc = domain.CatNVR, "nvr"
+		}
+	}
+	if blob, merr := domain.MarshalEvidence(nil); merr == nil {
+		conf := int16(90)
+		_, _ = s.queries.UpdateDeviceClassification(ctx, db.UpdateDeviceClassificationParams{
+			ID: d.ID, Category: string(cat), OsFamily: domain.OSFamilyEmbedded,
+			DeviceClass: &dc, ConfidenceScore: &conf, ClassificationEvidence: blob,
+		})
+	}
+	_ = s.queries.UpdateDeviceHardwareInfo(ctx, db.UpdateDeviceHardwareInfoParams{
+		ID: d.ID, Vendor: info.Manufacturer, Model: info.Model, Serial: info.Serial,
+	})
+	onvifURL := "http://" + host + "/onvif/device_service"
+	_, _ = s.queries.UpsertCameraInfo(ctx, db.UpsertCameraInfoParams{
+		DeviceID: d.ID, Manufacturer: strPtrOrNil(info.Manufacturer), Model: strPtrOrNil(info.Model),
+		Resolution: strPtrOrNil(info.Resolution()), OnvifUrl: &onvifURL,
+	})
+	if p.CredentialID != nil {
+		_ = s.queries.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: d.ID, CredentialID: p.CredentialID})
+	}
+	_ = s.queries.UpdateDeviceMonitoringStatus(ctx, db.UpdateDeviceMonitoringStatusParams{ID: d.ID, Status: "up"})
+
+	out.CollectionOK = true
+	out.Category = string(cat)
+	out.Detail = string(cat) + " collected via profile " + p.Name + " — " +
+		nz(info.Manufacturer, "?") + " " + nz(info.Model, "")
+	return out
 }
 
 func strPtrOrNil(s string) *string {
