@@ -87,6 +87,8 @@ type Querier interface {
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
 	CreateVendorFingerprint(ctx context.Context, arg CreateVendorFingerprintParams) (VendorFingerprint, error)
 	CreateWorkOrder(ctx context.Context, arg CreateWorkOrderParams) (WorkOrder, error)
+	// Whether a group is already bound to a location (guards duplicate binds).
+	CredentialGroupLocationBound(ctx context.Context, arg CredentialGroupLocationBoundParams) (bool, error)
 	DeleteAlertRule(ctx context.Context, id uuid.UUID) error
 	// Removing a credential un-binds it from devices (FK ON DELETE SET NULL) and
 	// drops its group memberships (FK ON DELETE CASCADE).

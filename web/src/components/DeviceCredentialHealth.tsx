@@ -1,7 +1,7 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { KeyRound, RefreshCw, Link2 } from 'lucide-react'
-import { api, type CredTestHistory, type AuthMe } from '../api'
+import { KeyRound, RefreshCw, Link2, Globe } from 'lucide-react'
+import { api, type CredTestHistory, type AuthMe, type CredentialGroup, type Device, type Location, locationPaths } from '../api'
 import { Panel, EmptyState, timeAgo } from './ui'
 
 const PROTO_LABEL: Record<string, string> = {
@@ -23,7 +23,10 @@ export function DeviceCredentialHealth({ deviceId }: { deviceId: string }) {
     queryFn: () => api.get<CredTestHistory[]>(`/devices/${deviceId}/credential-tests?limit=100`),
   })
   const canWrite = !!(me.data?.admin || me.data?.permissions?.includes('devices.write'))
+  const canManageCreds = !!(me.data?.admin || me.data?.permissions?.includes('credentials.manage'))
   const history = useMemo(() => q.data ?? [], [q.data])
+  // Which successful credential the operator is applying to a scope (group/site).
+  const [scope, setScope] = useState<{ credentialId: string; credentialName: string } | null>(null)
 
   // Latest result per credential-kind = the current credential health per protocol.
   const latestByKind = useMemo(() => {
@@ -70,6 +73,11 @@ export function DeviceCredentialHealth({ deviceId }: { deviceId: string }) {
                       <Link2 size={12} /> Apply
                     </button>
                   )}
+                  {canManageCreds && h.success && h.credential_id && (
+                    <button className="btn btn-ghost btn-xs" title="Apply this working credential to a credential group / site" onClick={() => setScope({ credentialId: h.credential_id!, credentialName: h.credential_name })}>
+                      <Globe size={12} /> Apply to scope
+                    </button>
+                  )}
                   {canWrite && !h.success && h.credential_id && (
                     <button className="btn btn-ghost btn-xs" disabled={retry.isPending} title="Re-run this credential test" onClick={() => retry.mutate({ credentialId: h.credential_id! })}>
                       <RefreshCw size={12} /> Retry
@@ -84,6 +92,10 @@ export function DeviceCredentialHealth({ deviceId }: { deviceId: string }) {
 
       {bind.isSuccess && <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>Credential bound ✓</p>}
       {(bind.error || retry.error) && <p className="error-msg" style={{ marginTop: 8 }}>{((bind.error || retry.error) as Error).message}</p>}
+
+      {scope && (
+        <ApplyScopeForm deviceId={deviceId} credentialId={scope.credentialId} credentialName={scope.credentialName} onClose={() => setScope(null)} />
+      )}
 
       {history.length > 0 && (
         <details style={{ marginTop: 12 }}>
@@ -106,5 +118,72 @@ export function DeviceCredentialHealth({ deviceId }: { deviceId: string }) {
         </details>
       )}
     </Panel>
+  )
+}
+
+// ApplyScopeForm promotes a verified-working credential from one device to a
+// reusable credential group, and optionally binds that group to the device's
+// site/location so future discovery + collection across that scope use it.
+function ApplyScopeForm({ deviceId, credentialId, credentialName, onClose }: {
+  deviceId: string; credentialId: string; credentialName: string; onClose: () => void
+}) {
+  const qc = useQueryClient()
+  const groups = useQuery({ queryKey: ['credential-groups'], queryFn: () => api.get<CredentialGroup[]>('/credential-groups') })
+  const devices = useQuery({ queryKey: ['devices', 'all'], queryFn: () => api.get<Device[]>('/devices?category=all') })
+  const locs = useQuery({ queryKey: ['locations-all'], queryFn: () => api.get<Location[]>('/locations/all') })
+  const dev = (devices.data ?? []).find((d) => d.id === deviceId)
+  const locPath = useMemo(() => locationPaths(locs.data ?? []), [locs.data])
+
+  const [groupSel, setGroupSel] = useState('') // group id, or '' = none chosen, or '__new__'
+  const [newName, setNewName] = useState('')
+  const [bindSite, setBindSite] = useState(true)
+
+  const apply = useMutation({
+    mutationFn: () => api.post<{ group_name: string; location_bound: boolean }>(`/credentials/${credentialId}/apply-to-scope`, {
+      group_id: groupSel && groupSel !== '__new__' ? groupSel : undefined,
+      new_group_name: groupSel === '__new__' ? newName.trim() : undefined,
+      location_id: bindSite && dev?.location_id ? dev.location_id : undefined,
+    }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['credential-groups'] }),
+  })
+
+  const ready = (groupSel && groupSel !== '__new__') || (groupSel === '__new__' && newName.trim() !== '')
+
+  return (
+    <div className="card" style={{ marginTop: 12, background: 'var(--surface-2)' }}>
+      <h3 style={{ marginTop: 0, display: 'inline-flex', gap: 8, alignItems: 'center' }}><Globe size={15} /> Apply “{credentialName}” to a credential group / site</h3>
+      <p className="muted" style={{ fontSize: 12 }}>
+        Adds this working credential to a credential group so HIMS can reuse it. Optionally bind the group to this device's
+        site so future discovery + collection across the site try it automatically.
+      </p>
+      <div className="row" style={{ flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+        <select className="field" value={groupSel} onChange={(e) => setGroupSel(e.target.value)}>
+          <option value="">— choose group —</option>
+          {(groups.data ?? []).map((g) => <option key={g.id} value={g.id}>{g.name} ({g.member_count} cred · {g.binding_count} site)</option>)}
+          <option value="__new__">+ New group…</option>
+        </select>
+        {groupSel === '__new__' && (
+          <input className="field" placeholder="new group name" value={newName} onChange={(e) => setNewName(e.target.value)} style={{ minWidth: 200 }} />
+        )}
+      </div>
+      <label className="row" style={{ gap: 8, alignItems: 'center', marginTop: 10, fontSize: 13 }}>
+        <input type="checkbox" checked={bindSite} disabled={!dev?.location_id} onChange={(e) => setBindSite(e.target.checked)} />
+        {dev?.location_id
+          ? <>Also bind this group to the device's site: <strong>{locPath[dev.location_id] ?? '—'}</strong></>
+          : <span className="muted">Device has no site assigned — group will be created/updated without a site binding.</span>}
+      </label>
+      <div className="row" style={{ gap: 8, marginTop: 12 }}>
+        <button className="btn btn-primary btn-sm" disabled={!ready || apply.isPending} onClick={() => apply.mutate()}>
+          {apply.isPending ? 'Applying…' : 'Apply to scope'}
+        </button>
+        <button className="btn btn-ghost btn-sm" onClick={onClose}>{apply.isSuccess ? 'Close' : 'Cancel'}</button>
+      </div>
+      {apply.isSuccess && (
+        <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+          Added to group <strong>{apply.data.group_name}</strong>{apply.data.location_bound ? ' and bound to the site ✓' : ' ✓'}
+        </p>
+      )}
+      {apply.error && <p className="error-msg" style={{ marginTop: 8 }}>{(apply.error as Error).message}</p>}
+    </div>
   )
 }

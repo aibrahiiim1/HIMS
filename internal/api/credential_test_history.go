@@ -1,8 +1,10 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
@@ -120,6 +122,100 @@ func (s *Server) deviceCredentialTests(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+type applyScopeReq struct {
+	GroupID      string `json:"group_id"`       // existing group, OR
+	NewGroupName string `json:"new_group_name"` // create a new group
+	LocationID   string `json:"location_id"`    // optional: also bind the group to this site/location
+}
+
+// applyCredentialToScope — POST /credentials/{id}/apply-to-scope.
+// Promotes a (verified-working) credential from a single device to a reusable
+// credential group, and optionally binds that group to a site/location so
+// future discovery + collection across that scope use it. RBAC: credentials.manage
+// (enforced centrally). Never touches the secret.
+func (s *Server) applyCredentialToScope(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	credID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid credential id", http.StatusBadRequest)
+		return
+	}
+	cred, err := s.queries.GetCredential(ctx, credID) // 404 if missing
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	var req applyScopeReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Resolve or create the target group.
+	var groupID uuid.UUID
+	var groupName string
+	switch {
+	case strings.TrimSpace(req.GroupID) != "":
+		groupID, err = uuid.Parse(req.GroupID)
+		if err != nil {
+			http.Error(w, "invalid group id", http.StatusBadRequest)
+			return
+		}
+		// Resolve a display name from the listing (no single-group getter).
+		if groups, gerr := s.queries.ListCredentialGroups(ctx); gerr == nil {
+			for _, g := range groups {
+				if g.ID == groupID {
+					groupName = g.Name
+				}
+			}
+		}
+	case strings.TrimSpace(req.NewGroupName) != "":
+		desc := "Created from a successful credential test"
+		g, cerr := s.queries.CreateCredentialGroup(ctx, db.CreateCredentialGroupParams{Name: strings.TrimSpace(req.NewGroupName), Description: &desc})
+		if cerr != nil {
+			writeErr(w, cerr)
+			return
+		}
+		groupID, groupName = g.ID, g.Name
+	default:
+		http.Error(w, "provide group_id or new_group_name", http.StatusBadRequest)
+		return
+	}
+
+	// Add the credential to the group (idempotent upsert).
+	if err := s.queries.AddCredentialGroupMember(ctx, db.AddCredentialGroupMemberParams{GroupID: groupID, CredentialID: credID, Priority: 0}); err != nil {
+		writeErr(w, err)
+		return
+	}
+
+	// Optionally bind the group to a site/location (skip if already bound).
+	locationBound := false
+	if strings.TrimSpace(req.LocationID) != "" {
+		locID, lerr := uuid.Parse(req.LocationID)
+		if lerr != nil {
+			http.Error(w, "invalid location id", http.StatusBadRequest)
+			return
+		}
+		bound, _ := s.queries.CredentialGroupLocationBound(ctx, db.CredentialGroupLocationBoundParams{GroupID: groupID, LocationID: &locID})
+		if !bound {
+			if _, berr := s.queries.BindCredentialGroup(ctx, db.BindCredentialGroupParams{GroupID: groupID, LocationID: &locID}); berr != nil {
+				writeErr(w, berr)
+				return
+			}
+			locationBound = true
+		}
+	}
+
+	s.audit(r, "credential", "credential.apply_to_scope", "credential", credID.String(),
+		"Applied credential "+cred.Name+" to group "+groupName,
+		map[string]any{"group_id": groupID.String(), "group": groupName, "location_bound": locationBound})
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"group_id": groupID.String(), "group_name": groupName,
+		"member_added": true, "location_bound": locationBound,
+	})
 }
 
 // credentialCredentialTests — GET /credentials/{id}/credential-tests

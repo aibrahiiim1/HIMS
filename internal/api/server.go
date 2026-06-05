@@ -316,6 +316,7 @@ func (s *Server) routes() {
 		r.Post("/credentials", s.createCredential)
 		r.Post("/credentials/test", s.testCredentials)
 		r.Get("/credentials/{id}/credential-tests", s.credentialCredentialTests)
+		r.Post("/credentials/{id}/apply-to-scope", s.applyCredentialToScope)
 		r.Get("/credential-tests/runs", s.listCredentialTestRuns)
 		r.Get("/credential-tests/runs/{id}/results", s.listCredentialTestRunResults)
 		r.Patch("/credentials/{id}", s.updateCredential)

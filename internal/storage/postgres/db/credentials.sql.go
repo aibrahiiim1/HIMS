@@ -118,6 +118,25 @@ func (q *Queries) CreateCredentialGroup(ctx context.Context, arg CreateCredentia
 	return i, err
 }
 
+const credentialGroupLocationBound = `-- name: CredentialGroupLocationBound :one
+SELECT EXISTS(
+  SELECT 1 FROM credential_bindings WHERE group_id = $1 AND location_id = $2
+) AS bound
+`
+
+type CredentialGroupLocationBoundParams struct {
+	GroupID    uuid.UUID  `json:"group_id"`
+	LocationID *uuid.UUID `json:"location_id"`
+}
+
+// Whether a group is already bound to a location (guards duplicate binds).
+func (q *Queries) CredentialGroupLocationBound(ctx context.Context, arg CredentialGroupLocationBoundParams) (bool, error) {
+	row := q.db.QueryRow(ctx, credentialGroupLocationBound, arg.GroupID, arg.LocationID)
+	var bound bool
+	err := row.Scan(&bound)
+	return bound, err
+}
+
 const deleteCredential = `-- name: DeleteCredential :exec
 DELETE FROM credentials WHERE id = $1
 `

@@ -40,6 +40,12 @@ INSERT INTO credential_bindings (group_id, location_id, subnet_id)
 VALUES ($1, $2, $3)
 RETURNING *;
 
+-- name: CredentialGroupLocationBound :one
+-- Whether a group is already bound to a location (guards duplicate binds).
+SELECT EXISTS(
+  SELECT 1 FROM credential_bindings WHERE group_id = $1 AND location_id = $2
+) AS bound;
+
 -- name: ListCredentialCandidates :many
 -- All credentials as resolver candidates (the "try everything" default for a
 -- scan when the operator selects none). Metadata only — no secret.
