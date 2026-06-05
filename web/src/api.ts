@@ -1177,3 +1177,23 @@ export interface BackupRun {
   actor: string
   detail: string
 }
+
+// Management Access Coverage (GET /dashboard/access-coverage) — how many devices
+// HIMS can manage and by which protocol, from real bindings + collection evidence.
+export interface AccessProtocol {
+  protocol: string
+  label: string
+  device_count: number
+  success_count: number
+  failed_count: number
+  source: string // bound_credential | evidence | mixed
+}
+export interface AccessReason { reason: string; count: number }
+export interface AccessCoverage {
+  total_devices: number
+  managed_devices: number
+  unmanaged_devices: number
+  coverage_percent: number
+  by_protocol: AccessProtocol[]
+  unmanaged: { device_count: number; reasons: AccessReason[] }
+}

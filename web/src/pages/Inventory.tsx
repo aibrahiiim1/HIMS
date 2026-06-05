@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { Boxes, RefreshCw, Trash2, Search, Wifi, WifiOff, Server, TriangleAlert, Package } from 'lucide-react'
 import { api, type Device, type Lookup, type Location, locationPaths } from '../api'
 import { PageHeader, Panel, Kpi, BarList, EmptyState, StatusPill, colorFor, usePaged, Pager } from '../components/ui'
@@ -18,8 +18,40 @@ const CATEGORIES = [
 ]
 const isOffline = (s: string) => ['down', 'offline', 'needs_attention'].includes((s || '').toLowerCase())
 
+// Display labels for the Management Access Coverage drill-down filters.
+const ACCESS_PROTOCOL_LABEL: Record<string, string> = {
+  snmp_v2c: 'SNMP v2c', snmp_v3: 'SNMP v3', ssh: 'SSH', winrm: 'WinRM', wmi: 'WMI / CIM',
+  smb: 'SMB', http_basic: 'HTTP Basic', api_token: 'API Token', onvif: 'ONVIF', rtsp: 'RTSP',
+  vendor_api: 'Vendor API', vmware: 'VMware', fortigate_api: 'FortiGate API', cucm_axl: 'CUCM AXL', ldap: 'LDAP',
+}
+const ACCESS_ISSUE_LABEL: Record<string, string> = {
+  no_credential_bound: 'No credential bound', credential_failed: 'Credential failed', not_tested: 'Not tested',
+}
+
 export function Inventory() {
   const qc = useQueryClient()
+  const [sp, setSp] = useSearchParams()
+  // Management-access drill-down filters (from the Dashboard card). Applied
+  // server-side so the filtered URL is shareable/bookmarkable.
+  const access = sp.get('access') ?? ''
+  const accessProtocol = sp.get('accessProtocol') ?? ''
+  const accessIssue = sp.get('accessIssue') ?? ''
+  const accessQS = [
+    access && `access=${encodeURIComponent(access)}`,
+    accessProtocol && `accessProtocol=${encodeURIComponent(accessProtocol)}`,
+    accessIssue && `accessIssue=${encodeURIComponent(accessIssue)}`,
+  ].filter(Boolean).join('&')
+  const accessActive = !!accessQS
+  const accessChip = access === 'managed' ? 'Managed (any working access)'
+    : access === 'unmanaged' ? 'Unmanaged (no usable credential)'
+    : accessProtocol ? `Access: ${ACCESS_PROTOCOL_LABEL[accessProtocol] ?? accessProtocol}`
+    : accessIssue ? `Issue: ${ACCESS_ISSUE_LABEL[accessIssue] ?? accessIssue}`
+    : ''
+  const clearAccess = () => {
+    const next = new URLSearchParams(sp)
+    next.delete('access'); next.delete('accessProtocol'); next.delete('accessIssue')
+    setSp(next, { replace: true })
+  }
   const [cat, setCat] = useState('all')
   const [classF, setClassF] = useState('all')
   const [locF, setLocF] = useState('all')
@@ -30,8 +62,8 @@ export function Inventory() {
   const [asg, setAsg] = useState({ vlan: '', class: '', location_id: '' })
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['devices', 'all'],
-    queryFn: () => api.get<Device[]>('/devices?category=all'),
+    queryKey: ['devices', 'all', accessQS],
+    queryFn: () => api.get<Device[]>(`/devices?category=all${accessQS ? '&' + accessQS : ''}`),
   })
   const classOpts = useQuery({ queryKey: ['lookups', 'class'], queryFn: () => api.get<Lookup[]>('/lookups?kind=class') })
   const vlanOpts = useQuery({ queryKey: ['lookups', 'vlan'], queryFn: () => api.get<Lookup[]>('/lookups?kind=vlan') })
@@ -169,6 +201,15 @@ export function Inventory() {
       <Panel title="Devices" icon={Package} subtitle={`${rows.length} shown`} pad={false}>
         {/* Toolbar */}
         <div style={{ padding: 'var(--space-4) var(--space-5)', borderBottom: '1px solid var(--border)' }}>
+          {accessActive && (
+            <div className="row" style={{ alignItems: 'center', gap: 8, marginBottom: 12 }}>
+              <span className="badge badge-info" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                {accessChip}
+              </span>
+              <button className="btn btn-ghost btn-xs" onClick={clearAccess}>✕ Clear access filter</button>
+              <span className="muted" style={{ fontSize: 12 }}>from Management Access Coverage</span>
+            </div>
+          )}
           <div className="seg" style={{ marginBottom: 12 }}>
             <button className={'seg-chip' + (cat === 'all' ? ' active' : '')} onClick={() => setCat('all')}>All <span className="seg-count">{all.length}</span></button>
             {chipCats.map((c) => (

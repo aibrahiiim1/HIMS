@@ -9,6 +9,7 @@ import {
   PageHeader, Panel, Kpi, HealthRing, Donut, Legend, BarList, Sparkline,
   ActivityFeed, EmptyState, StatusPill, OperationalHealthPanel, colorFor, timeAgo,
 } from '../components/ui'
+import { ManagementAccessCoverage } from '../components/AccessCoverageCard'
 
 // timeAgo for an ISO string, with "Never" for null.
 const ago = (iso?: string | null) => (iso ? timeAgo(iso) : 'Never')
@@ -194,6 +195,8 @@ export function Dashboard() {
               )}
             </div>
           </Panel>
+
+          <ManagementAccessCoverage />
 
           <div className="grid-2">
             <Panel title="Devices by Type" icon={Boxes}>
