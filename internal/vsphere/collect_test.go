@@ -23,6 +23,18 @@ func TestCollect_AgainstSimulator(t *testing.T) {
 		if len(inv.Datastores) == 0 {
 			t.Fatal("expected the vcsim default model to have datastores")
 		}
+		// Stage B: host facts (name + product version) must be collected.
+		if len(inv.Hosts) == 0 {
+			t.Fatal("expected the vcsim default model to have host systems")
+		}
+		for _, h := range inv.Hosts {
+			if h.Name == "" {
+				t.Errorf("host with empty name: %+v", h)
+			}
+			if h.Version == "" && h.FullName == "" {
+				t.Errorf("host %s has no product version/full name", h.Name)
+			}
+		}
 		for _, vm := range inv.VMs {
 			if vm.Name == "" {
 				t.Errorf("VM with empty name: %+v", vm)

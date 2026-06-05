@@ -145,8 +145,23 @@ func (s *Server) runOSCollection(ctx context.Context, d db.Device) osCollectResu
 	case domain.OSFamilyLinux:
 		res.Method = "ssh"
 	default:
-		res.Reason, res.Detail = "unsupported_os", "OS family is not windows/linux — classify the device first"
-		return res
+		// os_family not set yet (e.g. immediately after a discovery scan bound a
+		// credential but hasn't classified the OS). Fall back to the bound
+		// credential's kind so a WinRM/SSH bind still collects + then classifies.
+		if d.CredentialID != nil {
+			if c, err := s.queries.GetCredential(ctx, *d.CredentialID); err == nil {
+				switch c.Kind {
+				case string(domain.CredWinRM):
+					res.Method = "winrm"
+				case string(domain.CredSSH):
+					res.Method = "ssh"
+				}
+			}
+		}
+		if res.Method == "" {
+			res.Reason, res.Detail = "unsupported_os", "OS family is not windows/linux — classify the device or bind a WinRM/SSH credential first"
+			return res
+		}
 	}
 	if res.IP == "" {
 		res.Reason, res.Detail = "no_ip", "device has no IP to collect from"

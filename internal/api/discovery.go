@@ -274,6 +274,19 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 					} else {
 						enrichment = "OS collection incomplete: " + oc.Reason
 					}
+				} else if string(r.Match.Category) == string(domain.CatVirtualHost) && s.cipher() != nil {
+					// ESXi candidate from evidence — try VMware credentials and, on
+					// success, collect host + VM facts and bind (Stage B).
+					cctx, ccancel := context.WithTimeout(ctx, 2*time.Minute)
+					vc := s.runVSphereCollection(cctx, dev)
+					ccancel()
+					if vc.ok() {
+						enrichment = "VMware host + VM facts collected"
+					} else if vc.Reason == "no_credential" {
+						enrichment = "VMware candidate — needs VMware credential"
+					} else {
+						enrichment = "VMware collection incomplete: " + vc.Reason
+					}
 				}
 			}
 		}

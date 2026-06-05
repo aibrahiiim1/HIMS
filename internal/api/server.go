@@ -27,18 +27,18 @@ import (
 
 // Server holds the dependencies for the API.
 type Server struct {
-	router  chi.Router
-	topo    *topology.Engine
-	mon     *monitoring.Engine
-	alerts  *alerting.Engine
-	enc     atomic.Pointer[secret.Cipher] // nil when no encryption key is loaded; swappable at runtime via /security/encryption/unlock
-	reg     *driver.Registry              // nil disables operator-launched scans
-	fetcher discovery.CandidateFetcher    // credential scope resolver for scans
-	queries *db.Queries
-	rt      RuntimeInfo                   // process identity captured at startup (no secrets)
-	flow     *flowCollector // nil until StartFlowCollector binds the UDP listener
-	flowAddr string         // NetFlow collector listen address ("" = disabled)
-	authActive atomic.Bool  // true once any user has a password (enforce auth); false = open bootstrap mode
+	router     chi.Router
+	topo       *topology.Engine
+	mon        *monitoring.Engine
+	alerts     *alerting.Engine
+	enc        atomic.Pointer[secret.Cipher] // nil when no encryption key is loaded; swappable at runtime via /security/encryption/unlock
+	reg        *driver.Registry              // nil disables operator-launched scans
+	fetcher    discovery.CandidateFetcher    // credential scope resolver for scans
+	queries    *db.Queries
+	rt         RuntimeInfo    // process identity captured at startup (no secrets)
+	flow       *flowCollector // nil until StartFlowCollector binds the UDP listener
+	flowAddr   string         // NetFlow collector listen address ("" = disabled)
+	authActive atomic.Bool    // true once any user has a password (enforce auth); false = open bootstrap mode
 }
 
 // cipher returns the active credential cipher, or nil when no key is loaded.
@@ -164,6 +164,7 @@ func (s *Server) routes() {
 		r.Post("/devices/{id}/reclassify", s.reclassifyDevice)
 		r.Get("/devices/{id}/os-inventory", s.getOSInventory)
 		r.Post("/devices/{id}/collect-os", s.collectOSInventory)
+		r.Post("/devices/{id}/collect-vsphere", s.collectVSphere)
 		r.Post("/devices/{id}/classification-lock", s.setClassificationLock)
 		r.Get("/devices/{id}/interfaces", s.deviceInterfaces)
 		r.Get("/devices/{id}/vlans", s.deviceVLANs)

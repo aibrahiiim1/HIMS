@@ -34,16 +34,51 @@ type Datastore struct {
 	FreeBytes     int64
 }
 
+// Host is one ESXi host's hardware/OS summary (the host the operator manages).
+type Host struct {
+	Name        string
+	Version     string // ESXi version, e.g. "7.0.3"
+	Build       string
+	FullName    string // e.g. "VMware ESXi 7.0.3 build-19193900"
+	Vendor      string // hardware vendor, e.g. "Dell Inc."
+	Model       string // hardware model, e.g. "PowerEdge R740"
+	CPUCores    int32
+	MemoryBytes int64
+}
+
 // Inventory is what one Collect run gathered.
 type Inventory struct {
+	Hosts      []Host
 	VMs        []VM
 	Datastores []Datastore
 }
 
-// Collect retrieves VMs + datastores via a ContainerView over the root folder.
+// Collect retrieves host facts, VMs + datastores via ContainerViews over the
+// root folder.
 func Collect(ctx context.Context, c *vim25.Client) (Inventory, error) {
 	var inv Inventory
 	m := view.NewManager(c)
+
+	// Host systems (ESXi host hardware/OS facts).
+	hostView, herr := m.CreateContainerView(ctx, c.ServiceContent.RootFolder, []string{"HostSystem"}, true)
+	if herr == nil {
+		defer func() { _ = hostView.Destroy(ctx) }()
+		var hosts []mo.HostSystem
+		if err := hostView.Retrieve(ctx, []string{"HostSystem"}, []string{"summary"}, &hosts); err == nil {
+			for _, h := range hosts {
+				host := Host{Name: h.Summary.Config.Name}
+				if p := h.Summary.Config.Product; p != nil {
+					host.Version, host.Build, host.FullName = p.Version, p.Build, p.FullName
+				}
+				if hw := h.Summary.Hardware; hw != nil {
+					host.Vendor, host.Model = hw.Vendor, hw.Model
+					host.CPUCores = int32(hw.NumCpuCores)
+					host.MemoryBytes = hw.MemorySize
+				}
+				inv.Hosts = append(inv.Hosts, host)
+			}
+		}
+	}
 
 	vmView, err := m.CreateContainerView(ctx, c.ServiceContent.RootFolder, []string{"VirtualMachine"}, true)
 	if err != nil {
