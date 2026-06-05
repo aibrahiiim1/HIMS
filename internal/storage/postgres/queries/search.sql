@@ -53,7 +53,7 @@ RETURNING *;
 
 -- name: UpdateDiscoveryResult :exec
 UPDATE discovery_results
-SET outcome = $2, device_id = $3, driver = $4, category = $5, error = $6
+SET outcome = $2, device_id = $3, driver = $4, category = $5, error = $6, probe_data = $7
 WHERE id = $1;
 
 -- name: ListDiscoveryResults :many

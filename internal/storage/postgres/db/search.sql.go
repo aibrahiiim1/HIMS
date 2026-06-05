@@ -375,17 +375,18 @@ func (q *Queries) UpdateDiscoveryJobStatus(ctx context.Context, arg UpdateDiscov
 
 const updateDiscoveryResult = `-- name: UpdateDiscoveryResult :exec
 UPDATE discovery_results
-SET outcome = $2, device_id = $3, driver = $4, category = $5, error = $6
+SET outcome = $2, device_id = $3, driver = $4, category = $5, error = $6, probe_data = $7
 WHERE id = $1
 `
 
 type UpdateDiscoveryResultParams struct {
-	ID       uuid.UUID  `json:"id"`
-	Outcome  string     `json:"outcome"`
-	DeviceID *uuid.UUID `json:"device_id"`
-	Driver   *string    `json:"driver"`
-	Category *string    `json:"category"`
-	Error    *string    `json:"error"`
+	ID        uuid.UUID  `json:"id"`
+	Outcome   string     `json:"outcome"`
+	DeviceID  *uuid.UUID `json:"device_id"`
+	Driver    *string    `json:"driver"`
+	Category  *string    `json:"category"`
+	Error     *string    `json:"error"`
+	ProbeData []byte     `json:"probe_data"`
 }
 
 func (q *Queries) UpdateDiscoveryResult(ctx context.Context, arg UpdateDiscoveryResultParams) error {
@@ -396,6 +397,7 @@ func (q *Queries) UpdateDiscoveryResult(ctx context.Context, arg UpdateDiscovery
 		arg.Driver,
 		arg.Category,
 		arg.Error,
+		arg.ProbeData,
 	)
 	return err
 }

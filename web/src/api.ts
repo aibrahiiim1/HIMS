@@ -489,6 +489,17 @@ export interface DiscoveryJob {
   created_at: string
 }
 
+export interface ScanCredAttempt { kind: string; protocol: string; category: string; detail: string; success: boolean }
+export interface ScanDetail {
+  open_ports?: number[]
+  classification?: string
+  confidence?: number
+  evidence?: string[]
+  cred_attempts?: ScanCredAttempt[]
+  bound_cred?: string
+  enrichment?: string
+  next_action?: string
+}
 export interface DiscoveryResult {
   id: string
   job_id: string
@@ -499,6 +510,7 @@ export interface DiscoveryResult {
   category?: string | null
   error?: string | null
   probed_at: string
+  probe_data?: ScanDetail | null
 }
 
 export interface MibFile {

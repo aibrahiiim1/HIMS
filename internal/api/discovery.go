@@ -251,10 +251,11 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 		defer hcancel()
 		r := discovery.Run(hctx, ip, locID, cfg)
 		id, err := applier.Apply(hctx, r, locID)
-		if r.Alive {
-			s.recordResult(hctx, jobID, ip, r, id, err)
-		}
 		// Post-onboarding follow-ups for an enrolled host (best-effort).
+		enrichment := ""
+		if r.Facts != nil {
+			enrichment = "SNMP facts collected"
+		}
 		if err == nil && id != uuid.Nil {
 			if dev, derr := s.queries.GetDevice(ctx, id); derr == nil {
 				// Persist every credential auth attempt (success + failure + reason)
@@ -266,10 +267,18 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 				if r.BoundCred != nil && s.cipher() != nil &&
 					(r.BoundCred.Kind == domain.CredWinRM || r.BoundCred.Kind == domain.CredSSH) {
 					cctx, ccancel := context.WithTimeout(ctx, 2*time.Minute)
-					_ = s.runOSCollection(cctx, dev)
+					oc := s.runOSCollection(cctx, dev)
 					ccancel()
+					if oc.Status == "collected" {
+						enrichment = "Deep OS inventory collected"
+					} else {
+						enrichment = "OS collection incomplete: " + oc.Reason
+					}
 				}
 			}
+		}
+		if r.Alive {
+			s.recordResult(hctx, jobID, ip, r, id, err, enrichment)
 		}
 		return id, err
 	})
@@ -285,8 +294,65 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 	})
 }
 
-// recordResult writes one discovery_results row for an alive host.
-func (s *Server) recordResult(ctx context.Context, jobID uuid.UUID, ip netip.Addr, r discovery.HostResult, id uuid.UUID, applyErr error) {
+// scanCredAttemptDTO / scanDetail are the actionable per-device scan record
+// stored in discovery_results.probe_data — what was detected, how it was
+// classified, which credentials were tried (success/failure + reason), what was
+// bound, what enrichment ran, and the next action. No secrets.
+type scanCredAttemptDTO struct {
+	Kind     string `json:"kind"`
+	Protocol string `json:"protocol"`
+	Category string `json:"category"`
+	Detail   string `json:"detail"`
+	Success  bool   `json:"success"`
+}
+
+type scanDetail struct {
+	OpenPorts      []int                `json:"open_ports,omitempty"`
+	Classification string               `json:"classification"`
+	Confidence     int                  `json:"confidence"`
+	Evidence       []string             `json:"evidence,omitempty"`
+	CredAttempts   []scanCredAttemptDTO `json:"cred_attempts,omitempty"`
+	BoundCred      string               `json:"bound_cred,omitempty"`
+	Enrichment     string               `json:"enrichment,omitempty"`
+	NextAction     string               `json:"next_action"`
+}
+
+func truncate(s string, n int) string {
+	if len(s) > n {
+		return s[:n] + "…"
+	}
+	return s
+}
+
+// scanNextAction explains, for a scanned host, what the operator should do next
+// — the honest gate when a category needs a credential HIMS doesn't yet have.
+func scanNextAction(category string, bound bool, boundKind string) string {
+	if bound {
+		return "Managed via " + boundKind
+	}
+	switch category {
+	case "camera", "nvr":
+		return "Needs ONVIF/HTTP credential to confirm camera vs NVR/DVR and enrich (model/firmware/channels)"
+	case "virtual_host":
+		return "Needs VMware/vSphere credential to collect host + VM facts"
+	case "endpoint":
+		return "Needs WinRM credential for deep OS inventory"
+	case "server":
+		return "Needs WinRM/SSH credential for deep OS inventory"
+	case "pbx", "voice_gateway", "ip_phone":
+		return "Needs CUCM AXL / vendor credential to collect call-manager facts"
+	case "wireless_controller", "access_point":
+		return "Needs vendor API/HTTP credential for controller/AP inventory"
+	case "switch", "router", "firewall", "printer", "ups":
+		return "Needs SNMP/SSH credential to manage + enrich"
+	case "unknown", "":
+		return "Insufficient evidence — add a matching credential or re-scan"
+	}
+	return "Add a matching credential to onboard"
+}
+
+// recordResult writes one actionable discovery_results row for an alive host.
+func (s *Server) recordResult(ctx context.Context, jobID uuid.UUID, ip netip.Addr, r discovery.HostResult, id uuid.UUID, applyErr error, enrichment string) {
 	outcome := "alive"
 	switch {
 	case applyErr != nil:
@@ -302,11 +368,54 @@ func (s *Server) recordResult(ctx context.Context, jobID uuid.UUID, ip netip.Add
 	if err != nil {
 		return
 	}
+
+	category := string(r.Match.Category)
+	bound := r.BoundCred != nil
+	boundKind := ""
+	if bound {
+		boundKind = string(r.BoundCred.Kind)
+	}
+
+	// Human-readable evidence trail (safe, non-secret).
+	var evidence []string
+	if len(r.OpenPorts) > 0 {
+		evidence = append(evidence, "open ports detected")
+	}
+	if r.Probe.SNMPSysDescr != "" {
+		evidence = append(evidence, "SNMP sysDescr: "+truncate(r.Probe.SNMPSysDescr, 80))
+	}
+	if r.Probe.HTTPServer != "" {
+		evidence = append(evidence, "HTTP Server: "+truncate(r.Probe.HTTPServer, 60))
+	}
+	if t := r.Probe.Hints["http_title"]; t != "" {
+		evidence = append(evidence, "HTTP title: "+truncate(t, 60))
+	}
+
+	attempts := make([]scanCredAttemptDTO, 0, len(r.CredAttempts))
+	for _, a := range r.CredAttempts {
+		attempts = append(attempts, scanCredAttemptDTO{
+			Kind: string(a.Kind), Protocol: a.Protocol, Category: a.Category, Detail: a.Detail, Success: a.Success,
+		})
+	}
+
+	detail := scanDetail{
+		OpenPorts: r.OpenPorts, Classification: category, Confidence: r.Match.Confidence,
+		Evidence: evidence, CredAttempts: attempts, BoundCred: boundKind,
+		Enrichment: enrichment, NextAction: scanNextAction(category, bound, boundKind),
+	}
+	blob, merr := json.Marshal(detail)
+	if merr != nil {
+		blob = []byte("{}")
+	}
+
 	var drv, cat, errStr *string
 	if r.MatchedDrv != nil {
 		n := r.MatchedDrv.Name()
-		c := string(r.Match.Category)
-		drv, cat = &n, &c
+		drv = &n
+	}
+	if category != "" {
+		c := category
+		cat = &c
 	}
 	if applyErr != nil {
 		m := applyErr.Error()
@@ -317,7 +426,7 @@ func (s *Server) recordResult(ctx context.Context, jobID uuid.UUID, ip netip.Add
 		devID = &id
 	}
 	_ = s.queries.UpdateDiscoveryResult(ctx, db.UpdateDiscoveryResultParams{
-		ID: row.ID, Outcome: outcome, DeviceID: devID, Driver: drv, Category: cat, Error: errStr,
+		ID: row.ID, Outcome: outcome, DeviceID: devID, Driver: drv, Category: cat, Error: errStr, ProbeData: blob,
 	})
 }
 
@@ -438,5 +547,18 @@ func (s *Server) getDiscoveryJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	results, _ := s.queries.ListDiscoveryResults(ctx, id)
-	writeJSON(w, http.StatusOK, map[string]any{"job": job, "results": results})
+	// probe_data is a JSONB column stored as []byte; emit it as raw JSON (not the
+	// base64 Go would produce for a byte slice) so the UI gets the actionable
+	// per-device scan detail object.
+	out := make([]map[string]any, 0, len(results))
+	for _, x := range results {
+		row := map[string]any{
+			"id": x.ID, "job_id": x.JobID, "ip": x.Ip, "outcome": x.Outcome,
+			"device_id": x.DeviceID, "driver": x.Driver, "category": x.Category,
+			"error": x.Error, "probed_at": x.ProbedAt,
+			"probe_data": json.RawMessage(x.ProbeData),
+		}
+		out = append(out, row)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"job": job, "results": out})
 }

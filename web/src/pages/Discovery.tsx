@@ -408,17 +408,37 @@ function JobsTab({ jobs, jobID, setJobID, detail, setMsg, qc }: { jobs: Discover
           {detail.results.length === 0 && <div className="muted">No host results recorded{detail.job.status === 'running' ? ' yet (scanning…)' : ''}.</div>}
           {detail.results.length > 0 && (
             <table>
-              <thead><tr><th>IP</th><th>Outcome</th><th>Driver</th><th>Category</th><th>Error</th></tr></thead>
+              <thead><tr>
+                <th>IP</th><th>Outcome</th><th>Classification</th><th>Ports</th>
+                <th>Credentials tried</th><th>Bound</th><th>Enrichment</th><th>Next action</th>
+              </tr></thead>
               <tbody>
-                {detail.results.map((r) => (
-                  <tr key={r.id}>
-                    <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{r.ip}</td>
-                    <td><span className={`badge badge-${outcomeBadge(r.outcome)}`}>{r.outcome}</span></td>
-                    <td>{r.driver ?? '—'}</td>
-                    <td>{r.category ?? '—'}</td>
-                    <td className="muted" style={{ fontSize: 12 }}>{r.error ?? ''}</td>
-                  </tr>
-                ))}
+                {detail.results.map((r) => {
+                  const d = r.probe_data ?? {}
+                  return (
+                    <tr key={r.id}>
+                      <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{r.ip}</td>
+                      <td><span className={`badge badge-${outcomeBadge(r.outcome)}`}>{r.outcome}</span></td>
+                      <td>
+                        {(r.category ?? d.classification ?? 'unknown')}
+                        {typeof d.confidence === 'number' && d.confidence > 0 && <span className="muted" style={{ fontSize: 11 }}> · {d.confidence}%</span>}
+                        {(d.evidence ?? []).length > 0 && <div className="muted" style={{ fontSize: 11 }}>{(d.evidence ?? []).join(' · ')}</div>}
+                      </td>
+                      <td className="muted" style={{ fontSize: 11 }}>{(d.open_ports ?? []).join(', ') || '—'}</td>
+                      <td style={{ fontSize: 11 }}>
+                        {(d.cred_attempts ?? []).length === 0 ? <span className="muted">none</span> : (d.cred_attempts ?? []).map((a, i) => (
+                          <div key={i}>
+                            <span className={`badge badge-${a.success ? 'up' : a.category === 'auth_failed' ? 'down' : 'unknown'}`}>{a.kind}</span>
+                            <span className="muted"> {a.success ? 'ok' : a.category}</span>
+                          </div>
+                        ))}
+                      </td>
+                      <td>{d.bound_cred ? <span className="badge badge-up">{d.bound_cred}</span> : <span className="muted">—</span>}</td>
+                      <td className="muted" style={{ fontSize: 11 }}>{d.enrichment || '—'}</td>
+                      <td style={{ fontSize: 12 }}>{r.error ? <span className="error-msg">{r.error}</span> : (d.next_action ?? '—')}</td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           )}

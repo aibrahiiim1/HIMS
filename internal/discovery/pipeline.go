@@ -318,6 +318,8 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 		}
 		if r.Probe.HTTPServer != "" || r.Probe.Hints["http_title"] != "" {
 			ev = append(ev, classify.HTTPServer(r.Probe.HTTPServer, r.Probe.Hints["http_title"])...)
+			// VMware/ESXi, wireless controllers, CUCM/Alcatel voice — vendor web markers.
+			ev = append(ev, classify.WebVendorMarkers(r.Probe.HTTPServer, r.Probe.Hints["http_title"], r.Probe.Hints["http_body"])...)
 		}
 		if hasPortN(r.OpenPorts, 22) {
 			if banner := grabSSHBanner(ctx, ip, cfg.PortTimeout); banner != "" {

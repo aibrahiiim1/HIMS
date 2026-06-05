@@ -99,6 +99,27 @@ func HTTPServer(server, title string) []domain.ClassificationEvidence {
 	return nil
 }
 
+// WebVendorMarkers classifies from vendor fingerprints in the HTTP Server
+// header, page <title>, or a small body snippet — the safe, unauthenticated way
+// to spot VMware ESXi, wireless controllers, and voice/PBX systems that don't
+// answer SNMP. Confidence is moderate (a banner is suggestive, not definitive);
+// authenticated collection later confirms + enriches.
+func WebVendorMarkers(server, title, body string) []domain.ClassificationEvidence {
+	s := strings.ToLower(server + " " + title + " " + body)
+	switch {
+	case strings.Contains(s, "vmware") || strings.Contains(s, "esxi") || strings.Contains(s, "vsphere") || strings.Contains(s, "id_eesx"):
+		return []domain.ClassificationEvidence{ev(domain.EvidenceSourceHTTP, "VMware/ESXi web marker", string(domain.CatVirtualHost), "", "esxi", 55)}
+	case strings.Contains(s, "unifi") || strings.Contains(s, "aruba") || strings.Contains(s, "ruckus") ||
+		strings.Contains(s, "extremecloud") || strings.Contains(s, "wireless controller") || strings.Contains(s, "omada"):
+		return []domain.ClassificationEvidence{ev(domain.EvidenceSourceHTTP, "wireless-controller web marker", string(domain.CatWirelessController), domain.OSFamilyNetwork, "", 55)}
+	case strings.Contains(s, "cisco unified") || strings.Contains(s, "cucm") || strings.Contains(s, "callmanager"):
+		return []domain.ClassificationEvidence{ev(domain.EvidenceSourceHTTP, "Cisco CUCM web marker", string(domain.CatPBX), "", "cucm", 55)}
+	case strings.Contains(s, "omnivista") || strings.Contains(s, "omnipcx") || strings.Contains(s, "alcatel"):
+		return []domain.ClassificationEvidence{ev(domain.EvidenceSourceHTTP, "Alcatel OmniPCX/OmniVista web marker", string(domain.CatPBX), "", "alcatel", 50)}
+	}
+	return nil
+}
+
 // OpenPorts emits weak OS/category hints from the open-TCP-port profile. These
 // are corroborating signals only — never decisive on their own.
 func OpenPorts(tcp []int) []domain.ClassificationEvidence {
