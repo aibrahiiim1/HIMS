@@ -203,6 +203,7 @@ type CredentialTestResult struct {
 	LatencyMs      int64      `json:"latency_ms"`
 	TestedAt       time.Time  `json:"tested_at"`
 	Actor          string     `json:"actor"`
+	Relevant       bool       `json:"relevant"`
 }
 
 type CredentialTestRun struct {

@@ -253,7 +253,7 @@ type Querier interface {
 	ListCredentialGroupMembers(ctx context.Context, dollar_1 []uuid.UUID) ([]ListCredentialGroupMembersRow, error)
 	// Groups with member + binding counts for the scan-time group multi-select.
 	ListCredentialGroups(ctx context.Context) ([]ListCredentialGroupsRow, error)
-	ListCredentialTestResultsByRun(ctx context.Context, runID uuid.UUID) ([]CredentialTestResult, error)
+	ListCredentialTestResultsByRun(ctx context.Context, runID uuid.UUID) ([]ListCredentialTestResultsByRunRow, error)
 	ListCredentialTestRuns(ctx context.Context, limit int32) ([]CredentialTestRun, error)
 	ListCredentials(ctx context.Context) ([]Credential, error)
 	ListCredentialsNeedingReentry(ctx context.Context) ([]ListCredentialsNeedingReentryRow, error)
