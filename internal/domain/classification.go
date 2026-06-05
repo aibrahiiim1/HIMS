@@ -17,17 +17,18 @@ const (
 // array of these; each names HOW a signal was observed so an operator can audit
 // the decision and so auto-classification can be re-derived or overridden.
 const (
-	EvidenceSourceISAPI         = "isapi"             // Hikvision /ISAPI/System/deviceInfo
-	EvidenceSourceONVIF         = "onvif"             // ONVIF device-info
-	EvidenceSourceSNMPSysDescr  = "snmp_sysdescr"     // SNMP sysDescr.0
-	EvidenceSourceSNMPSysObject = "snmp_sysobjectid"  // SNMP sysObjectID.0
-	EvidenceSourceSMB           = "smb"               // SMB / port 445 negotiation
-	EvidenceSourceRDP           = "rdp"               // RDP / port 3389
-	EvidenceSourceWinRM         = "winrm"             // WinRM / port 5985-5986
-	EvidenceSourceSSHBanner     = "ssh_banner"        // SSH server banner
-	EvidenceSourceHTTP          = "http"              // HTTP Server header / title
-	EvidenceSourcePort          = "port"              // open-port heuristic
-	EvidenceSourceAD            = "ad"                // Active Directory computer object
+	EvidenceSourceISAPI         = "isapi"            // Hikvision /ISAPI/System/deviceInfo
+	EvidenceSourceONVIF         = "onvif"            // ONVIF device-info
+	EvidenceSourceSNMPSysDescr  = "snmp_sysdescr"    // SNMP sysDescr.0
+	EvidenceSourceSNMPSysObject = "snmp_sysobjectid" // SNMP sysObjectID.0
+	EvidenceSourceSMB           = "smb"              // SMB / port 445 negotiation
+	EvidenceSourceRDP           = "rdp"              // RDP / port 3389
+	EvidenceSourceWinRM         = "winrm"            // WinRM / port 5985-5986
+	EvidenceSourceSSHBanner     = "ssh_banner"       // SSH server banner
+	EvidenceSourceHTTP          = "http"             // HTTP Server header / title
+	EvidenceSourcePort          = "port"             // open-port heuristic
+	EvidenceSourceAD            = "ad"               // Active Directory computer object
+	EvidenceSourceOSInventory   = "os_inventory"     // authenticated deep OS inventory (WinRM/SSH) OS caption
 )
 
 // ClassificationEvidence is one observed signal supporting a device's
@@ -35,12 +36,12 @@ const (
 // classification_evidence JSONB array. Plain data so it is trivially
 // (de)serialised and unit-tested without a transport.
 type ClassificationEvidence struct {
-	Source     string `json:"source"`               // one of EvidenceSource* — how it was observed
-	Signal     string `json:"signal"`               // the observed value, e.g. "deviceType=DVR", "Server: cisco-IOS"
-	Category   string `json:"category,omitempty"`   // category this signal points to (DeviceCategory)
-	OSFamily   string `json:"os_family,omitempty"`  // OS family this signal points to
-	Subtype    string `json:"subtype,omitempty"`    // device_class subtype this signal points to
-	Confidence int    `json:"confidence"`           // 0..100 weight of THIS signal alone
+	Source     string `json:"source"`                // one of EvidenceSource* — how it was observed
+	Signal     string `json:"signal"`                // the observed value, e.g. "deviceType=DVR", "Server: cisco-IOS"
+	Category   string `json:"category,omitempty"`    // category this signal points to (DeviceCategory)
+	OSFamily   string `json:"os_family,omitempty"`   // OS family this signal points to
+	Subtype    string `json:"subtype,omitempty"`     // device_class subtype this signal points to
+	Confidence int    `json:"confidence"`            // 0..100 weight of THIS signal alone
 	ObservedAt string `json:"observed_at,omitempty"` // RFC3339, set by the caller
 }
 

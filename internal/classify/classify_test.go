@@ -37,6 +37,50 @@ func TestISAPI_NVRvsCamera(t *testing.T) {
 	}
 }
 
+// TestWindowsWorkstation_NotMislabeledServer is the regression for the bug where
+// re-classifying a Windows 11 workstation (172.21.60.20) relabelled it a server.
+// The open-port profile alone (RDP+WinRM+SMB) must NOT win "server": WinRM/SMB
+// are category-neutral and RDP nudges toward endpoint, so a port-only probe of a
+// managed Windows box lands on endpoint, never server.
+func TestWindowsWorkstation_NotMislabeledServer(t *testing.T) {
+	r := FromEvidence(OpenPorts([]int{3389, 5985, 445}))
+	if r.Category == string(domain.CatServer) {
+		t.Fatalf("RDP+WinRM+SMB classified as server (the regression); got %+v", r)
+	}
+	if r.Category != string(domain.CatEndpoint) {
+		t.Errorf("RDP+WinRM+SMB → %q, want endpoint", r.Category)
+	}
+	if r.OSFamily != domain.OSFamilyWindows {
+		t.Errorf("os_family = %q, want windows", r.OSFamily)
+	}
+}
+
+// TestOSCaption_ClientVsServer verifies the authoritative deep-inventory caption
+// distinguishes Windows client (workstation) from Windows Server, and that it
+// dominates the weak open-port heuristic when both are present.
+func TestOSCaption_ClientVsServer(t *testing.T) {
+	ws := FromEvidence(OSCaption("Microsoft Windows 11 Pro for Workstations"))
+	if ws.Category != string(domain.CatEndpoint) || ws.Subtype != "windows_workstation" {
+		t.Errorf("Win11 caption → %q/%q, want endpoint/windows_workstation", ws.Category, ws.Subtype)
+	}
+	srv := FromEvidence(OSCaption("Microsoft Windows Server 2019 Standard"))
+	if srv.Category != string(domain.CatServer) || srv.Subtype != "windows_server" {
+		t.Errorf("Server caption → %q/%q, want server/windows_server", srv.Category, srv.Subtype)
+	}
+
+	// Caption must beat the open-port probe: a Win11 box exposing WinRM/RDP stays a workstation.
+	ev := append(OpenPorts([]int{3389, 5985, 445}), OSCaption("Microsoft Windows 11 Pro for Workstations")...)
+	mixed := FromEvidence(ev)
+	if mixed.Category != string(domain.CatEndpoint) {
+		t.Errorf("caption+ports → %q, want endpoint (caption is authoritative)", mixed.Category)
+	}
+
+	// Linux caption → server by default; macOS → workstation.
+	if lin := FromEvidence(OSCaption("Ubuntu 22.04.4 LTS")); lin.Category != string(domain.CatServer) || lin.OSFamily != domain.OSFamilyLinux {
+		t.Errorf("Ubuntu caption → %q/%q, want server/linux", lin.Category, lin.OSFamily)
+	}
+}
+
 func TestOSFamily_FromSignals(t *testing.T) {
 	cases := []struct {
 		name string

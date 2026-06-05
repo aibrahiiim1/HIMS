@@ -37,6 +37,24 @@ func DefaultPort(category string) int {
 	return 443
 }
 
+// WindowsLivenessPorts are the management ports a Windows host (server OR
+// workstation) is expected to answer on. Windows boxes typically run none of
+// SSH/22 or 443, so the category default ports are the wrong liveness signal
+// for them — a Win11 workstation collected over WinRM would otherwise be marked
+// permanently "down". RDP/WinRM/SMB are the real always-on Windows surfaces.
+var WindowsLivenessPorts = []int{3389, 5985, 445, 135}
+
+// DefaultPortForDevice picks the reachability port for a (category, os_family).
+// Windows hosts use a Windows management port (RDP) regardless of category, so
+// servers and workstations alike get a port they actually serve; everything
+// else uses the category default.
+func DefaultPortForDevice(category, osFamily string) int {
+	if osFamily == "windows" {
+		return 3389 // RDP — the most universally enabled Windows mgmt port
+	}
+	return DefaultPort(category)
+}
+
 // DialFunc dials a network address with a context. Production uses
 // net.Dialer.DialContext; tests substitute a fake so the poller is exercised
 // without real sockets.
@@ -93,6 +111,28 @@ func (p *Poller) ProbeTCP(ctx context.Context, addr netip.Addr, port int) Result
 	}
 	_ = conn.Close()
 	return Result{OK: true, Latency: latency}
+}
+
+// ProbeTCPAny dials each port in turn and returns OK on the first that opens —
+// a host is "up" if ANY of its expected management ports answers. Used for
+// Windows hosts, which may expose RDP or WinRM or SMB depending on policy, so no
+// single fixed port is a reliable liveness signal. Returns the failure of the
+// last attempted port when none open.
+func (p *Poller) ProbeTCPAny(ctx context.Context, addr netip.Addr, ports []int) Result {
+	if !addr.IsValid() {
+		return Result{OK: false, Err: fmt.Errorf("invalid address")}
+	}
+	var last Result
+	for _, port := range ports {
+		if ctx.Err() != nil {
+			return Result{OK: false, Err: ctx.Err()}
+		}
+		last = p.ProbeTCP(ctx, addr, port)
+		if last.OK {
+			return last
+		}
+	}
+	return last
 }
 
 // ProbeSNMP does an SNMP GET of one OID using the supplied community. Success

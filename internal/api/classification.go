@@ -79,11 +79,25 @@ func (s *Server) reclassifyDevice(w http.ResponseWriter, r *http.Request) {
 	}
 
 	obs := osdiscovery.Probe(ctx, *d.PrimaryIp, osdiscovery.Options{})
-	// Fold in any SNMP sysDescr we already have stored (os_version often carries it).
-	if d.OsVersion != nil && *d.OsVersion != "" {
-		obs.SNMPSysDescr = *d.OsVersion
+	evidence := obs.Evidence()
+
+	// Authoritative override: if we have a deep OS inventory (a successful
+	// authenticated WinRM/SSH collection), its OS caption is the strongest OS
+	// signal we have — it distinguishes a Windows *client* edition (workstation)
+	// from a *Server* edition, which a network port probe cannot. Without this a
+	// Win11 workstation that exposes WinRM/RDP would be relabelled a "server" off
+	// the open-port heuristic alone. Fold the caption in at high confidence.
+	hasCaption := false
+	if oi, err := s.queries.GetOSInventory(ctx, id); err == nil && oi.OsCaption != nil && *oi.OsCaption != "" {
+		evidence = append(evidence, classify.OSCaption(*oi.OsCaption)...)
+		hasCaption = true
 	}
-	res := classify.FromEvidence(obs.Evidence())
+	// Fall back to any stored SNMP sysDescr only when we have no authenticated
+	// caption (os_version often carries the SNMP sysDescr for SNMP-only devices).
+	if !hasCaption && d.OsVersion != nil && *d.OsVersion != "" {
+		evidence = append(evidence, classify.SNMPSysDescr(*d.OsVersion)...)
+	}
+	res := classify.FromEvidence(evidence)
 
 	if res.Confidence == 0 || res.Category == string(domain.CatUnknown) {
 		// No classifying signal — do NOT downgrade an existing category.

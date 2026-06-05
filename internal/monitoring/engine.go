@@ -138,7 +138,14 @@ func (e *Engine) runOne(ctx context.Context, c db.MonitoringCheck) {
 		if c.TargetPort != nil {
 			port = int(*c.TargetPort)
 		}
-		res = e.poller.ProbeTCP(ctx, *dev.PrimaryIp, port)
+		if dev.OsFamily == "windows" {
+			// Windows hosts rarely serve SSH/22 or 443; probe the real Windows
+			// management surface (RDP/WinRM/SMB) plus the stored port so a box
+			// collected over WinRM isn't marked "down" by a port it never serves.
+			res = e.poller.ProbeTCPAny(ctx, *dev.PrimaryIp, append([]int{port}, WindowsLivenessPorts...))
+		} else {
+			res = e.poller.ProbeTCP(ctx, *dev.PrimaryIp, port)
+		}
 	}
 
 	status, failures := Evaluate(res.OK, int(c.ConsecutiveFailures), int(c.DownThreshold))

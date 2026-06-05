@@ -154,6 +154,44 @@ func TestRunDue_UpOnSuccess(t *testing.T) {
 	}
 }
 
+// TestRunDue_WindowsLivenessFallback is the regression for the Win11 workstation
+// (172.21.60.20) stuck "down": its seeded check targets a port the box doesn't
+// serve (443), but RDP (3389) is open. A Windows host must probe its real mgmt
+// surface and come up, not stay down on the wrong port.
+func TestRunDue_WindowsLivenessFallback(t *testing.T) {
+	devID := uuid.New()
+	chkID := uuid.New()
+	ip := netip.MustParseAddr("172.21.60.20")
+	port := int32(443) // wrong port for a Windows box — closed
+	chk := db.MonitoringCheck{
+		ID: chkID, DeviceID: devID, Kind: "tcp", TargetPort: &port,
+		DownThreshold: 2, ConsecutiveFailures: 5, LastStatus: "down",
+	}
+	f := &fakeRepo{
+		due:      []db.MonitoringCheck{chk},
+		devices:  map[uuid.UUID]db.Device{devID: {ID: devID, PrimaryIp: &ip, Category: "endpoint", OsFamily: "windows"}},
+		byDevice: map[uuid.UUID][]db.MonitoringCheck{devID: {chk}},
+	}
+	// Only RDP/3389 accepts; 443 and everything else refuse.
+	poller := NewPoller(func(_ context.Context, _, addr string) (net.Conn, error) {
+		if _, p, _ := net.SplitHostPort(addr); p == "3389" {
+			return fakeConn{}, nil
+		}
+		return nil, errors.New("refused")
+	}, time.Second)
+	e := NewEngine(f, poller, nil)
+
+	if _, err := e.RunDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if f.recorded[0].LastStatus != string(StatusUp) {
+		t.Fatalf("windows host with open RDP recorded %q; want up", f.recorded[0].LastStatus)
+	}
+	if f.devStatus[devID] != string(StatusUp) {
+		t.Fatalf("device status = %q; want up", f.devStatus[devID])
+	}
+}
+
 func TestRunDue_SkipsNonTCP(t *testing.T) {
 	chk := db.MonitoringCheck{ID: uuid.New(), DeviceID: uuid.New(), Kind: "snmp"}
 	f := &fakeRepo{due: []db.MonitoringCheck{chk}}

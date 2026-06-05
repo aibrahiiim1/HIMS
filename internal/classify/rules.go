@@ -107,12 +107,18 @@ func OpenPorts(tcp []int) []domain.ClassificationEvidence {
 		has[p] = true
 	}
 	var out []domain.ClassificationEvidence
-	// Windows management surface.
+	// Windows management surface. RDP/WinRM/SMB are all enabled on *managed
+	// workstations* as well as servers, so on their own they are only an
+	// os_family=windows hint — never a server-vs-workstation signal. (A device's
+	// server-vs-workstation role comes from the authenticated OS caption
+	// (OSCaption) or AD operatingSystem (ADComputer), not from which mgmt port is
+	// open.) RDP nudges weakly toward endpoint since it's the most workstation-y
+	// of the three; WinRM/SMB stay category-neutral.
 	if has[3389] {
 		out = append(out, ev(domain.EvidenceSourceRDP, "tcp/3389 (RDP)", string(domain.CatEndpoint), domain.OSFamilyWindows, "", 45))
 	}
 	if has[5985] || has[5986] {
-		out = append(out, ev(domain.EvidenceSourceWinRM, "tcp/5985-5986 (WinRM)", string(domain.CatServer), domain.OSFamilyWindows, "", 50))
+		out = append(out, ev(domain.EvidenceSourceWinRM, "tcp/5985-5986 (WinRM)", "", domain.OSFamilyWindows, "", 45))
 	}
 	if has[445] {
 		out = append(out, ev(domain.EvidenceSourceSMB, "tcp/445 (SMB)", "", domain.OSFamilyWindows, "", 40))
@@ -144,6 +150,43 @@ func ADComputer(operatingSystem string) []domain.ClassificationEvidence {
 	}
 	if strings.Contains(os, "windows") {
 		return []domain.ClassificationEvidence{ev(domain.EvidenceSourceAD, operatingSystem, string(domain.CatEndpoint), domain.OSFamilyWindows, "windows_workstation", 80)}
+	}
+	return nil
+}
+
+// OSCaption classifies from the authenticated deep-inventory OS caption
+// (WinRM Win32_OperatingSystem.Caption / SSH /etc/os-release PRETTY_NAME), e.g.
+// "Microsoft Windows 11 Pro for Workstations" or "Microsoft Windows Server 2019
+// Standard". Because this comes from a *successful authenticated collection* it
+// is the most authoritative OS signal HIMS has — far stronger than a network
+// port guess — so it carries high confidence and, crucially, distinguishes a
+// Windows **client** edition (→ endpoint/workstation) from a Windows **Server**
+// edition (→ server). This is what prevents a Win11 workstation that happens to
+// expose WinRM/RDP from being relabelled a server on re-classify.
+func OSCaption(caption string) []domain.ClassificationEvidence {
+	c := strings.ToLower(strings.TrimSpace(caption))
+	if c == "" {
+		return nil
+	}
+	switch {
+	case strings.Contains(c, "windows server") || (strings.Contains(c, "windows") && strings.Contains(c, "server")):
+		return []domain.ClassificationEvidence{ev(domain.EvidenceSourceOSInventory, caption, string(domain.CatServer), domain.OSFamilyWindows, "windows_server", 92)}
+	case strings.Contains(c, "windows"):
+		// Any non-Server Windows edition (11/10/8/7/Vista/XP, Pro/Home/Enterprise) is a workstation.
+		return []domain.ClassificationEvidence{ev(domain.EvidenceSourceOSInventory, caption, string(domain.CatEndpoint), domain.OSFamilyWindows, "windows_workstation", 90)}
+	case strings.Contains(c, "mac os") || strings.Contains(c, "macos") || strings.Contains(c, "darwin") || strings.Contains(c, "os x"):
+		return []domain.ClassificationEvidence{ev(domain.EvidenceSourceOSInventory, caption, string(domain.CatEndpoint), domain.OSFamilyMacOS, "mac_workstation", 90)}
+	case strings.Contains(c, "linux") || strings.Contains(c, "ubuntu") || strings.Contains(c, "debian") ||
+		strings.Contains(c, "centos") || strings.Contains(c, "red hat") || strings.Contains(c, "rhel") ||
+		strings.Contains(c, "rocky") || strings.Contains(c, "almalinux") || strings.Contains(c, "suse") ||
+		strings.Contains(c, "fedora") || strings.Contains(c, "oracle linux"):
+		// Linux desktop vs server is rarely distinguishable from the caption and
+		// in this fleet Linux hosts are servers — default to server. A "desktop"
+		// token downgrades to workstation.
+		if strings.Contains(c, "desktop") {
+			return []domain.ClassificationEvidence{ev(domain.EvidenceSourceOSInventory, caption, string(domain.CatEndpoint), domain.OSFamilyLinux, "linux_workstation", 88)}
+		}
+		return []domain.ClassificationEvidence{ev(domain.EvidenceSourceOSInventory, caption, string(domain.CatServer), domain.OSFamilyLinux, "linux_server", 88)}
 	}
 	return nil
 }
