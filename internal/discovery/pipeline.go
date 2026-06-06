@@ -220,12 +220,12 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 	plan := planProtocols(r.OpenPorts, sshBanner, r.Probe.HTTPServer, r.Probe.Hints["http_title"], r.Probe.Hints["http_body"])
 	r.Plan = plan
 
-	// Step 3: SNMP probe for sysDescr + sysObjectID — ONLY when SNMP is relevant
-	// to this candidate (network/printer/unknown). Try the resolved/selected SNMP
-	// credentials FIRST — a switch using a real community must classify, so
-	// classification cannot rely on public/private alone — then fall back to the
-	// default communities. The first that answers gives the probe data, a live
-	// session for deep collection, and (for a stored credential) the bind.
+	// Step 3: SNMP probe for sysDescr + sysObjectID. Tried OPPORTUNISTICALLY on
+	// every alive host (SNMP is UDP/161 — invisible to a TCP port scan, so we
+	// can't infer it from open ports). The resolved/selected SNMP communities are
+	// tried first; default communities are a relevant-only fallback. The first that
+	// answers gives the probe data, a live session for deep collection, and the
+	// bind. Failures are only surfaced when SNMP was expected (see below).
 	var authCli snmp.Client
 	probe := func(tgt snmp.Target) bool {
 		cli, err := snmp.NewClient(tgt)
@@ -249,32 +249,43 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 		return true
 	}
 
-	if plan.SNMPRelevant() {
-		for _, cand := range candidates {
-			if cand.Kind != domain.CredSNMPv2c && cand.Kind != domain.CredSNMPv3 {
-				continue
-			}
-			dec, err := cfg.Decrypt(ctx, cand.ID)
-			if err != nil {
-				continue
-			}
-			tgt := snmp.Target{Addr: ip, Version: snmp.V2c, Community: dec.Community, Timeout: cfg.SNMPTimeout}
-			if cand.Kind == domain.CredSNMPv3 && dec.V3 != nil {
-				tgt = snmp.Target{Addr: ip, Version: snmp.V3, V3: dec.V3, Timeout: cfg.SNMPTimeout}
-			}
-			ok := probe(tgt)
-			r.CredAttempts = append(r.CredAttempts, snmpAttempt(cand, ok))
-			if ok {
-				c := cand
-				r.BoundCred = &c // bind-on-success (only for stored credentials)
-				break
-			}
+	// SNMP is UDP/161 and invisible to a TCP port scan, so open ports can't tell us
+	// whether a host speaks SNMP. ALWAYS try the resolved SNMP communities on every
+	// alive host (opportunistic probe). Behaviour split:
+	//   - success → record it (Managed via SNMP), bind, classify from sysDescr, and
+	//     SHORT-CIRCUIT remaining communities.
+	//   - failure → recorded as a visible auth_failed attempt ONLY when SNMP was
+	//     EXPECTED for this candidate (network/printer/unknown). An opportunistic
+	//     no-response on a Linux/Windows host stays SILENT — it never pollutes
+	//     Credential Health.
+	snmpRelevant := plan.SNMPRelevant()
+	for _, cand := range candidates {
+		if cand.Kind != domain.CredSNMPv2c && cand.Kind != domain.CredSNMPv3 {
+			continue
 		}
-		if authCli == nil { // fallback: default communities, no bind
-			for _, comm := range []string{"public", "private"} {
-				if probe(snmp.Target{Addr: ip, Version: snmp.V2c, Community: comm, Timeout: cfg.SNMPTimeout}) {
-					break
-				}
+		dec, err := cfg.Decrypt(ctx, cand.ID)
+		if err != nil {
+			continue
+		}
+		tgt := snmp.Target{Addr: ip, Version: snmp.V2c, Community: dec.Community, Timeout: cfg.SNMPTimeout}
+		if cand.Kind == domain.CredSNMPv3 && dec.V3 != nil {
+			tgt = snmp.Target{Addr: ip, Version: snmp.V3, V3: dec.V3, Timeout: cfg.SNMPTimeout}
+		}
+		if probe(tgt) {
+			r.CredAttempts = append(r.CredAttempts, snmpAttempt(cand, true)) // success always recorded → proven
+			c := cand
+			r.BoundCred = &c // bind-on-success, then stop trying further communities
+			break
+		}
+		if snmpRelevant {
+			// Surface the SNMP failure only when SNMP was expected for this candidate.
+			r.CredAttempts = append(r.CredAttempts, snmpAttempt(cand, false))
+		}
+	}
+	if authCli == nil && snmpRelevant { // default-community fallback only when SNMP is expected
+		for _, comm := range []string{"public", "private"} {
+			if probe(snmp.Target{Addr: ip, Version: snmp.V2c, Community: comm, Timeout: cfg.SNMPTimeout}) {
+				break
 			}
 		}
 	}

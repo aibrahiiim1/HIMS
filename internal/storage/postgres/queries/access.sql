@@ -62,15 +62,13 @@ SELECT device_id, protocol::text AS protocol, source::text AS source FROM (
                   'evidence' AS source
     FROM interfaces
 
-  -- 11) A saved credential-test whose LATEST result for that (device, kind)
-  --     succeeded — durable proof a credential works, even before/without a bind.
+  -- 11) A saved credential-test for that (device, kind) that EVER succeeded —
+  --     durable proof the protocol works, even before/without a bind. ANY success
+  --     counts: a later FAILED attempt with a different credential (e.g. a wrong
+  --     SNMP community tried after the right one) must NOT un-prove an earlier
+  --     success. Protocol-level management prefers proven success over later fails.
   UNION ALL
-  SELECT device_id, kind AS protocol, 'test_result' AS source
-    FROM (
-      SELECT DISTINCT ON (device_id, kind) device_id, kind, success
-        FROM credential_test_results
-        WHERE kind <> ''
-        ORDER BY device_id, kind, tested_at DESC
-    ) latest
-    WHERE success
+  SELECT DISTINCT device_id, kind AS protocol, 'test_result' AS source
+    FROM credential_test_results
+    WHERE kind <> '' AND success
 ) sig;
