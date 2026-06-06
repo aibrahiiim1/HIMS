@@ -128,12 +128,17 @@ export function Inventory() {
   const refresh = () => qc.invalidateQueries({ queryKey: ['devices'] })
   const toggle = (id: string) => setSel((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n })
   const allShownSelected = pageRows.length > 0 && pageRows.every((d) => sel.has(d.id))
+  // True when every device in the FULL filtered set (across all pages) is selected.
+  const allMatchingSelected = rows.length > 0 && rows.every((d) => sel.has(d.id))
   const toggleAll = () => setSel((s) => {
     const n = new Set(s)
     if (allShownSelected) pageRows.forEach((d) => n.delete(d.id))
     else pageRows.forEach((d) => n.add(d.id))
     return n
   })
+  // Select / clear the entire filtered result set (all pages), for "delete all".
+  const selectAllMatching = () => setSel(new Set(rows.map((d) => d.id)))
+  const clearSelection = () => setSel(new Set())
   const selRows = useMemo(() => all.filter((d) => sel.has(d.id)), [data, sel])
 
   const del = useMutation({
@@ -169,6 +174,21 @@ export function Inventory() {
     if (sel.size === 0) return
     if (confirm(`Delete ${sel.size} device(s)? This also removes their collected inventory and cannot be undone.`)) del.mutate([...sel])
   }
+  // Delete the entire filtered result set (every page, not just the visible 10).
+  // Wiping the whole unfiltered inventory requires typing DELETE as a backstop.
+  const doDeleteAllMatching = () => {
+    const ids = rows.map((d) => d.id)
+    if (ids.length === 0) return
+    const filtered = cat !== 'all' || !!classF || !!locF || !!q || !!access || !!accessProtocol || !!accessIssue || !!reachF || !!mgmtF
+    const scope = filtered ? `all ${ids.length} device(s) matching the current filter` : `ALL ${ids.length} device(s) in the entire inventory`
+    if (!filtered) {
+      const typed = prompt(`This will permanently delete ${scope}, including all collected inventory. This cannot be undone.\n\nType DELETE to confirm:`)
+      if (typed !== 'DELETE') { if (typed !== null) setMsg('Delete cancelled — confirmation text did not match.'); return }
+    } else if (!confirm(`Delete ${scope}? This also removes their collected inventory and cannot be undone.`)) {
+      return
+    }
+    del.mutate(ids)
+  }
   const doRescanSelected = () => {
     const ips = selRows.map((d) => d.primary_ip).filter(Boolean) as string[]
     if (ips.length === 0) { setMsg('None of the selected devices have an IP to re-scan.'); return }
@@ -191,6 +211,10 @@ export function Inventory() {
             </button>
             <button className="btn btn-danger btn-sm" disabled={sel.size === 0 || del.isPending} onClick={doDeleteSelected}>
               <Trash2 size={14} /> Delete{sel.size > 0 ? ` (${sel.size})` : ''}
+            </button>
+            <button className="btn btn-danger btn-sm" disabled={rows.length === 0 || del.isPending} onClick={doDeleteAllMatching}
+              title={`Delete every device in the current view (all ${rows.length} across all pages), not just the selected ones`}>
+              <Trash2 size={14} /> Delete all{rows.length > 0 ? ` (${rows.length})` : ''}
             </button>
           </>
         }
@@ -272,6 +296,24 @@ export function Inventory() {
         {error && <div style={{ padding: 'var(--space-5)' }}><div className="error-msg">Failed to load: {(error as Error).message}</div></div>}
         {data && rows.length === 0 && (
           <EmptyState icon={TriangleAlert} title="No devices match" message="Try clearing the category, class, location, or search filters." />
+        )}
+        {/* Select-all-across-pages banner: the header checkbox only covers the
+            visible page, so offer to extend the selection to the whole filtered
+            set (this is what makes "delete all" possible, not just the page). */}
+        {rows.length > paged.pageSize && (allShownSelected || allMatchingSelected) && (
+          <div className="select-all-banner" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', background: 'var(--surface-2)', borderRadius: 6, margin: '0 0 10px', fontSize: 13 }}>
+            {allMatchingSelected ? (
+              <>
+                <span>All <strong>{rows.length}</strong> matching device(s) are selected.</span>
+                <button className="btn btn-ghost btn-xs" onClick={clearSelection}>Clear selection</button>
+              </>
+            ) : (
+              <>
+                <span>All <strong>{pageRows.length}</strong> on this page selected.</span>
+                <button className="btn btn-ghost btn-xs" onClick={selectAllMatching}>Select all {rows.length} matching</button>
+              </>
+            )}
+          </div>
         )}
         {rows.length > 0 && (
           <table className="data-table">
