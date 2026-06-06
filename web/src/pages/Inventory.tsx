@@ -1,11 +1,12 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
-import { Boxes, RefreshCw, Trash2, Search, Wifi, WifiOff, Server, TriangleAlert, Package } from 'lucide-react'
+import { Boxes, Trash2, Search, Wifi, WifiOff, Server, TriangleAlert, Package } from 'lucide-react'
 import { api, type Device, type Lookup, type Location, locationPaths } from '../api'
 import { PageHeader, Panel, Kpi, BarList, EmptyState, colorFor, usePaged, Pager } from '../components/ui'
 import { ReachabilityBadge, ManagementBadge } from '../components/StatusBadges'
 import { DeleteAllToggle } from '../components/DeleteAllToggle'
+import { RescanSplit } from '../components/RescanSplit'
 
 const DETAIL_BASE: Record<string, string> = {
   switch: '/devices', server: '/servers', virtual_host: '/virtual-hosts', firewall: '/firewalls',
@@ -147,11 +148,6 @@ export function Inventory() {
     onSuccess: (r) => { setMsg(`Deleted ${(r as { deleted: number }).deleted} device(s).`); setSel(new Set()); refresh() },
     onError: (e) => setMsg((e as Error).message),
   })
-  const rescan = useMutation({
-    mutationFn: (targets: string) => api.post('/discovery/scan', { mode: 'targets', targets }),
-    onSuccess: () => setMsg('Re-scan launched for selected targets — watch Discovery → Scan jobs.'),
-    onError: (e) => setMsg((e as Error).message),
-  })
   const save = useMutation({
     mutationFn: (d: Device) => api.patch(`/devices/${d.id}`, {
       name: d.name, category: d.category, vendor: d.vendor ?? '', model: d.model ?? '',
@@ -178,11 +174,6 @@ export function Inventory() {
   // Is the current view the whole, unfiltered inventory? (Drives the stricter
   // typed-DELETE confirmation in the shared Delete-all control.)
   const isFullInventory = cat === 'all' && !classF && !locF && !q && !access && !accessProtocol && !accessIssue && !reachF && !mgmtF
-  const doRescanSelected = () => {
-    const ips = selRows.map((d) => d.primary_ip).filter(Boolean) as string[]
-    if (ips.length === 0) { setMsg('None of the selected devices have an IP to re-scan.'); return }
-    rescan.mutate(ips.join(','))
-  }
 
   // category filter chips: All + present categories (capped) with counts
   const chipCats = cats.slice(0, 10)
@@ -195,9 +186,9 @@ export function Inventory() {
         icon={Boxes}
         actions={
           <>
-            <button className="btn btn-sm" disabled={sel.size === 0 || rescan.isPending} onClick={doRescanSelected}>
-              <RefreshCw size={14} /> Re-scan{sel.size > 0 ? ` (${sel.size})` : ''}
-            </button>
+            <RescanSplit
+              targets={(selRows.map((d) => d.primary_ip).filter(Boolean) as string[]).join(',')}
+              label={`Re-scan${sel.size > 0 ? ` (${sel.size})` : ''}`} size="sm" onMsg={setMsg} />
             <button className="btn btn-danger btn-sm" disabled={sel.size === 0 || del.isPending} onClick={doDeleteSelected}>
               <Trash2 size={14} /> Delete{sel.size > 0 ? ` (${sel.size})` : ''}
             </button>
@@ -381,6 +372,7 @@ export function Inventory() {
                     <td><ManagementBadge value={d.management} managedBy={d.managed_by} /></td>
                     <td className="cell-actions">
                       <button className="btn btn-ghost btn-xs" onClick={() => setEditing(d)}>Edit</button>
+                      <RescanSplit targets={d.primary_ip ?? ''} onMsg={setMsg} />
                       <button className="btn btn-ghost btn-xs" style={{ color: 'var(--crit)' }} onClick={() => { if (confirm(`Delete ${d.name}?`)) del.mutate([d.id]) }}>Delete</button>
                     </td>
                   </tr>
