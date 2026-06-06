@@ -115,6 +115,20 @@ func (q *Queries) GetDiscoveryJob(ctx context.Context, id uuid.UUID) (DiscoveryJ
 	return i, err
 }
 
+const latestDeviceProbeData = `-- name: LatestDeviceProbeData :one
+SELECT probe_data FROM discovery_results
+WHERE device_id = $1 ORDER BY probed_at DESC LIMIT 1
+`
+
+// The most recent scan probe_data for a device (open ports, evidence, etc.) —
+// used to repair its reachability check from the ports it actually answered on.
+func (q *Queries) LatestDeviceProbeData(ctx context.Context, deviceID *uuid.UUID) ([]byte, error) {
+	row := q.db.QueryRow(ctx, latestDeviceProbeData, deviceID)
+	var probe_data []byte
+	err := row.Scan(&probe_data)
+	return probe_data, err
+}
+
 const listDiscoveryJobs = `-- name: ListDiscoveryJobs :many
 SELECT id, location_id, subnet_id, scope_cidr, status, started_at, finished_at, host_count, found_count, error, metadata, created_at FROM discovery_jobs ORDER BY created_at DESC LIMIT 50
 `

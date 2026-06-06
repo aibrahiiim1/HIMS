@@ -233,6 +233,9 @@ type Querier interface {
 	// (failed / not-tested / stale), and the Inventory access filters. One row per
 	// (device, kind) — the latest outcome for that protocol on that device.
 	LatestDeviceKindResults(ctx context.Context) ([]LatestDeviceKindResultsRow, error)
+	// The most recent scan probe_data for a device (open ports, evidence, etc.) —
+	// used to repair its reachability check from the ports it actually answered on.
+	LatestDeviceProbeData(ctx context.Context, deviceID *uuid.UUID) ([]byte, error)
 	ListARPForDevice(ctx context.Context, deviceID uuid.UUID) ([]ListARPForDeviceRow, error)
 	ListAccessPoints(ctx context.Context, controllerDeviceID uuid.UUID) ([]AccessPoint, error)
 	ListActiveMaintenanceWindows(ctx context.Context) ([]MaintenanceWindow, error)

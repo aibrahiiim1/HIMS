@@ -59,6 +59,12 @@ WHERE id = $1;
 -- name: ListDiscoveryResults :many
 SELECT * FROM discovery_results WHERE job_id = $1 ORDER BY probed_at DESC;
 
+-- name: LatestDeviceProbeData :one
+-- The most recent scan probe_data for a device (open ports, evidence, etc.) —
+-- used to repair its reachability check from the ports it actually answered on.
+SELECT probe_data FROM discovery_results
+WHERE device_id = $1 ORDER BY probed_at DESC LIMIT 1;
+
 -- name: GetDiscoveryJob :one
 SELECT * FROM discovery_jobs WHERE id = $1;
 

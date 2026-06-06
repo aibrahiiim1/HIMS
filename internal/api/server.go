@@ -176,6 +176,9 @@ func (s *Server) routes() {
 
 		// --- Devices --------------------------------------------------
 		r.Get("/devices", s.listDevices)
+		r.Get("/devices/status-summary", s.deviceStatusSummary)
+		r.Post("/devices/repair-reachability", s.repairManyReachability)
+		r.Post("/devices/{id}/repair-reachability", s.repairOneReachability)
 		r.Post("/devices", s.createManualDevice)
 		r.Post("/devices/import-csv", s.importDevicesCSV)
 		r.Post("/devices/import-file", s.importDevicesFile)
@@ -431,10 +434,11 @@ func (s *Server) listDevices(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	cat := q.Get("category")
 	access, proto, issue := q.Get("access"), q.Get("accessProtocol"), q.Get("accessIssue")
+	reachFilter, mgmtFilter := q.Get("reachability"), q.Get("management")
 
 	var rows []db.Device
 	var err error
-	if cat == "all" {
+	if cat == "all" || cat == "" && (reachFilter != "" || mgmtFilter != "") {
 		rows, err = s.queries.ListAllDevices(ctx)
 	} else {
 		if cat == "" {
@@ -463,7 +467,29 @@ func (s *Server) listDevices(w http.ResponseWriter, r *http.Request) {
 		}
 		rows = filterDevicesByAccess(rows, am, tm, time.Now(), access, proto, issue)
 	}
-	writeJSON(w, http.StatusOK, rows)
+
+	// Enrich every row with the two-axis Reachability + Management status, and
+	// apply the bookmarkable server-side reachability/management filters.
+	maps, merr := s.buildStatusMaps(ctx)
+	if merr != nil {
+		writeErr(w, merr)
+		return
+	}
+	enriched := maps.enrich(rows)
+	if reachFilter != "" || mgmtFilter != "" {
+		filtered := enriched[:0]
+		for _, d := range enriched {
+			if reachFilter != "" && d.Reachability != reachFilter {
+				continue
+			}
+			if mgmtFilter != "" && d.Management != mgmtFilter {
+				continue
+			}
+			filtered = append(filtered, d)
+		}
+		enriched = filtered
+	}
+	writeJSON(w, http.StatusOK, enriched)
 }
 
 // scopeDevices filters a device list to the requester's site scope (global
