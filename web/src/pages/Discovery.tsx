@@ -527,11 +527,20 @@ function OnboardingActions({ results, qc, setMsg, onRescan, rescanning }: {
   const ips = (rs: DiscoveryResult[], n = 6) => rs.slice(0, n).map((r) => r.ip).join(', ') + (rs.length > n ? ` … (+${rs.length - n})` : '')
   const devIds = (rs: DiscoveryResult[]) => rs.map((r) => r.device_id).filter((x): x is string => !!x)
 
+  const collector = useQuery({
+    queryKey: ['native-collector-status'],
+    queryFn: () => api.get<{ url_configured: boolean; token_configured: boolean }>('/discovery/native-collector-status'),
+  })
+
   const win = results.filter((r) => r.probe_data?.candidate === 'windows')
-  const winOk = win.filter((r) => ok(r, 'winrm'))
-  const winAuth = win.filter((r) => !ok(r, 'winrm') && cat(r, 'winrm', 'auth_failed'))
-  const winUnreach = win.filter((r) => !ok(r, 'winrm') && cat(r, 'winrm', 'unreachable'))
-  const winClosed = win.filter((r) => !ok(r, 'winrm') && !cat(r, 'winrm', 'auth_failed') && !cat(r, 'winrm', 'unreachable') && !portOpen(r, 5985, 5986))
+  // Legacy WSMan 2.0: authentication succeeded but the WSMan operation faulted —
+  // its OWN bucket, kept distinct from auth_failed / unreachable / disabled.
+  const isLegacy = (r: DiscoveryResult) => cat(r, 'winrm', 'auth_ok_operation_fault')
+  const winLegacy = win.filter(isLegacy)
+  const winOk = win.filter((r) => !isLegacy(r) && ok(r, 'winrm'))
+  const winAuth = win.filter((r) => !isLegacy(r) && !ok(r, 'winrm') && cat(r, 'winrm', 'auth_failed'))
+  const winUnreach = win.filter((r) => !isLegacy(r) && !ok(r, 'winrm') && cat(r, 'winrm', 'unreachable'))
+  const winClosed = win.filter((r) => !isLegacy(r) && !ok(r, 'winrm') && !cat(r, 'winrm', 'auth_failed') && !cat(r, 'winrm', 'unreachable') && !portOpen(r, 5985, 5986))
 
   const lin = results.filter((r) => r.probe_data?.candidate === 'linux')
   const linOk = lin.filter((r) => ok(r, 'ssh'))
@@ -592,13 +601,20 @@ function OnboardingActions({ results, qc, setMsg, onRescan, rescanning }: {
 
   if (netOk.length) cards.push({ key: 'net-ok', title: 'Network · SNMP working', tone: 'ok', count: netOk.length, sample: ips(netOk), cause: 'Switches/firewalls authenticated via SNMP; interfaces/topology collected.', action: 'Completed — no action.' })
 
-  if (cards.length === 0) return null
+  if (cards.length === 0 && winLegacy.length === 0) return null
   const toneColor = { ok: '#2e7d32', warn: '#8a6d00', crit: '#b71c1c' }
 
   return (
     <div className="card">
       <h3>Onboarding actions <span className="muted" style={{ fontSize: 12, fontWeight: 400 }}>— what's blocking the rest of this scan, and how to fix it</span></h3>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 12 }}>
+        {winLegacy.length > 0 && (
+          <LegacyWindowsCard
+            devs={winLegacy} sampleIPs={ips(winLegacy)} devIds={devIds(winLegacy)} firstIP={winLegacy[0]?.ip ?? ''}
+            collectorConfigured={!!collector.data?.url_configured} tokenConfigured={!!collector.data?.token_configured}
+            winrmCredIds={winrmCredIds} qc={qc} setMsg={setMsg} onRescan={onRescan} rescanning={rescanning}
+          />
+        )}
         {cards.map((c) => (
           <div key={c.key} style={{ border: `1px solid ${toneColor[c.tone]}44`, borderLeft: `4px solid ${toneColor[c.tone]}`, borderRadius: 8, padding: 12, background: 'var(--surface-2, #f7f9fc)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
@@ -617,7 +633,109 @@ function OnboardingActions({ results, qc, setMsg, onRescan, rescanning }: {
   )
 }
 
-const codeBox: React.CSSProperties = { display: 'block', background: '#0d1b2a', color: '#9be7a0', padding: '4px 8px', borderRadius: 4, fontSize: 11, margin: '2px 0', overflowX: 'auto' }
+const codeBox: React.CSSProperties = { display: 'block', background: '#0d1b2a', color: '#9be7a0', padding: '4px 8px', borderRadius: 4, fontSize: 11, margin: '2px 0', overflowX: 'auto', whiteSpace: 'pre-wrap' }
+
+// LegacyWindowsCard — the dedicated Onboarding bucket for Windows 7 / Server
+// 2008 R2 hosts where WinRM AUTHENTICATED but the WSMan operation faulted
+// (w:InvalidSelectors). Distinct from auth_failed / disabled / unreachable: the
+// credential is valid and must NOT be reset. Routes to the Windows Native
+// Collector / WMI fallback.
+function LegacyWindowsCard({ devs, sampleIPs, devIds, firstIP, collectorConfigured, tokenConfigured, winrmCredIds, qc, setMsg, onRescan, rescanning }: {
+  devs: DiscoveryResult[]; sampleIPs: string; devIds: string[]; firstIP: string
+  collectorConfigured: boolean; tokenConfigured: boolean; winrmCredIds: string[]
+  qc: ReturnType<typeof useQueryClient>; setMsg: (s: string) => void; onRescan: () => void; rescanning: boolean
+}) {
+  const [showGuide, setShowGuide] = useState(false)
+  const tone = '#6a1b9a' // distinct purple — not a credential failure
+  const firstDevId = devIds[0]
+
+  const deployCmds = [
+    '# 1) On a trusted Windows / domain box (elevated PowerShell):',
+    "$env:HIMS_NATIVE_COLLECTOR_TOKEN = '<shared-secret>'",
+    ".\\windows-native-collector.ps1 -Prefix 'http://+:8092/'",
+    '',
+    '# 2) On the HIMS host (then restart hims-api):',
+    'HIMS_WINDOWS_NATIVE_COLLECTOR_URL=http://<collector-host>:8092/',
+    'HIMS_WINDOWS_NATIVE_COLLECTOR_TOKEN=<shared-secret>',
+  ].join('\n')
+
+  const diagnose = useMutation({
+    mutationFn: () => {
+      if (!winrmCredIds.length) throw new Error('No WinRM credential configured.')
+      if (!firstIP) throw new Error('No affected device IP.')
+      return api.post<{ www_authenticate: string[]; modes: { mode: string; result: string; fault_code?: string }[] }>('/credentials/winrm-diagnose', { host: firstIP, credential_id: winrmCredIds[0] })
+    },
+    onSuccess: (d) => {
+      const enc = d.modes.find((m) => m.mode === 'ntlm-encrypted')
+      setMsg(`Diagnose ${firstIP}: schemes [${d.www_authenticate.join(', ')}] · ntlm-encrypted=${enc?.result}${enc?.fault_code ? ' (' + enc.fault_code + ')' : ''}`)
+    },
+    onError: (e) => setMsg((e as Error).message),
+  })
+  const testCollector = useMutation({
+    mutationFn: () => api.post<{ configured: boolean; reachable: boolean; detail: string }>('/discovery/native-collector-test', {}),
+    onSuccess: (r) => setMsg(`Windows Native Collector: ${r.reachable ? 'reachable' : 'NOT reachable'} — ${r.detail}`),
+    onError: (e) => setMsg((e as Error).message),
+  })
+  const retryCollect = useMutation({
+    mutationFn: async () => {
+      let ok = 0, fail = 0
+      for (const id of devIds) {
+        try { const r = await api.post<{ status: string }>(`/devices/${id}/collect-os`, {}); if (r.status === 'collected') ok++; else fail++ } catch { fail++ }
+      }
+      return { ok, fail }
+    },
+    onSuccess: (r) => { setMsg(`Legacy re-collection: ${r.ok} collected, ${r.fail} still blocked.`); qc.invalidateQueries({ queryKey: ['access-coverage'] }) },
+    onError: (e) => setMsg((e as Error).message),
+  })
+
+  return (
+    <div style={{ border: `1px solid ${tone}55`, borderLeft: `4px solid ${tone}`, borderRadius: 8, padding: 12, background: 'var(--surface-2, #f7f9fc)', gridColumn: '1 / -1' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+        <strong style={{ fontSize: 13 }}>Legacy Windows / WSMan 2.0 incompatible</strong>
+        <span className="badge" style={{ background: tone, color: '#fff' }}>{devs.length}</span>
+      </div>
+      <div className="mono muted" style={{ fontSize: 11, marginTop: 4 }}>{sampleIPs}</div>
+      <div style={{ fontSize: 12, marginTop: 6 }}><span className="muted">Cause: </span>Authentication succeeded, but the host uses an older WSMan stack (Windows 7 / Server 2008 R2) that the Go WinRM collector cannot execute against (w:InvalidSelectors).</div>
+      <div style={{ fontSize: 12, marginTop: 4 }}><span className="muted">Next: </span>Deploy the Windows Native Collector or configure a WMI/DCOM fallback.</div>
+      <div style={{ fontSize: 12, marginTop: 4, color: tone }}><strong>Credential is probably valid — do not reset the password.</strong></div>
+
+      {/* collector configured vs not */}
+      <div style={{ marginTop: 8, fontSize: 12 }}>
+        {collectorConfigured ? (
+          <span className="badge badge-up">Collector configured</span>
+        ) : (
+          <div>
+            <span className="badge badge-warning">Collector not configured</span>
+            <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+              Missing environment {tokenConfigured ? 'variable' : 'variables'}:
+              {!collectorConfigured && <code style={{ ...codeBox, display: 'inline-block', margin: '0 4px' }}>HIMS_WINDOWS_NATIVE_COLLECTOR_URL</code>}
+              {!tokenConfigured && <code style={{ ...codeBox, display: 'inline-block', margin: '0 4px' }}>HIMS_WINDOWS_NATIVE_COLLECTOR_TOKEN</code>}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* action buttons */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
+        <button style={ghost} onClick={() => setShowGuide((v) => !v)}>{showGuide ? 'Hide guide' : 'Open Windows Native Collector guide'}</button>
+        <button style={ghost} onClick={() => { navigator.clipboard?.writeText(deployCmds); setMsg('Deployment commands copied to clipboard.') }}>Copy deployment commands</button>
+        {firstDevId && <Link to={`/devices/${firstDevId}`} style={{ ...ghost, textDecoration: 'none' }}>Open affected devices</Link>}
+        <button style={ghost} disabled={diagnose.isPending} onClick={() => diagnose.mutate()}>{diagnose.isPending ? 'Diagnosing…' : 'Retry Diagnose WinRM'}</button>
+        <button style={ghost} disabled={rescanning} onClick={onRescan}>{rescanning ? 'Re-scanning…' : 'Re-scan after collector deployment'}</button>
+        {collectorConfigured && <button style={ghost} disabled={testCollector.isPending} onClick={() => testCollector.mutate()}>{testCollector.isPending ? 'Testing…' : 'Test collector'}</button>}
+        {collectorConfigured && <button style={ghost} disabled={retryCollect.isPending || !devIds.length} onClick={() => retryCollect.mutate()}>{retryCollect.isPending ? 'Collecting…' : 'Retry collection for affected devices'}</button>}
+      </div>
+
+      {showGuide && (
+        <div style={{ fontSize: 11, marginTop: 8 }}>
+          <div className="muted">Deploy the read-only PowerShell helper (<code>deploy/windows-native-collector.ps1</code>) on a Windows/domain box, then point HIMS at it. It runs native Invoke-Command (which already works on these hosts) and returns inventory to HIMS.</div>
+          <code style={codeBox}>{deployCmds}</code>
+          <div className="muted">Alternative: a WMI/DCOM fallback collector for the legacy fleet (the classic management path for Windows 7 / 2008 R2).</div>
+        </div>
+      )}
+    </div>
+  )
+}
 
 // ---------- Jobs ----------
 function JobsTab({ jobs, jobID, setJobID, detail, setMsg, qc }: { jobs: DiscoveryJob[]; jobID: string | null; setJobID: (s: string | null) => void; detail?: { job: DiscoveryJob; results: DiscoveryResult[] }; setMsg: (s: string) => void; qc: ReturnType<typeof useQueryClient> }) {

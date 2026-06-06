@@ -228,6 +228,10 @@ func (s *Server) dataQuality(w http.ResponseWriter, r *http.Request) {
 		addIssue("credential_failed", "Failed credentials", "The latest credential test for these devices was rejected (authentication failed) and no other working method is bound. Fix the credential or bind a working one.", "warning", credFailed)
 		addIssue("never_tested", "Never credential-tested", "These devices (servers, network gear, cameras, Windows/Linux hosts) have no saved credential-test result yet. Run a credential test so HIMS knows what works.", "info", neverTested)
 		addIssue("legacy_windows_wsman2", "Legacy Windows — needs fallback collector", "Windows hosts where WinRM AUTHENTICATION SUCCEEDED but the WSMan operation faulted (legacy WSMan 2.0 — Windows 7 / Server 2008 R2). The credential is valid; native PowerShell works but the Go WinRM library cannot run commands. Configure the Windows Native Collector or WMI/DCOM fallback.", "warning", legacyWin)
+		// Surface the collector-config gap tied to the affected legacy hosts.
+		if url, _ := nativeCollectorConfig(); url == "" && len(legacyWin) > 0 {
+			addIssue("windows_native_collector_not_configured", "Windows Native Collector not configured", "Legacy Windows hosts were detected but the Windows Native Collector is not configured. Set HIMS_WINDOWS_NATIVE_COLLECTOR_URL and HIMS_WINDOWS_NATIVE_COLLECTOR_TOKEN and deploy deploy/windows-native-collector.ps1 to collect these hosts (or configure a WMI/DCOM fallback).", "warning", legacyWin)
+		}
 		addIssue("windows_winrm_auth_failed", "Windows with WinRM auth failed", "Windows hosts where WinRM is reachable but the credential was rejected. Fix the credential (DOMAIN\\user vs UPN, password).", "warning", winAuthFailed)
 		addIssue("windows_winrm_disabled", "Windows with WinRM disabled / closed", "Windows hosts with no WinRM evidence (5985/5986 closed or not responding). Enable PowerShell Remoting (GPO) and open the firewall, then re-scan.", "warning", winDisabled)
 		addIssue("windows_ready", "Windows ready for collection", "Windows hosts with working WinRM access — deep OS inventory can be collected.", "info", winReady)

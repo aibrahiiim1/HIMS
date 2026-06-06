@@ -215,6 +215,43 @@ func splitCSV(s string) []string {
 	return out
 }
 
+// nativeCollectorStatus handles GET /discovery/native-collector-status. Reports
+// ONLY whether the Windows Native Collector env vars are configured (booleans) —
+// never the URL or token values. Powers the legacy-Windows Onboarding card.
+func (s *Server) nativeCollectorStatus(w http.ResponseWriter, r *http.Request) {
+	url, token := nativeCollectorConfig()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"url_configured":   url != "",
+		"token_configured": token != "",
+	})
+}
+
+// nativeCollectorTest handles POST /discovery/native-collector-test. Confirms the
+// configured Windows Native Collector URL is reachable (any HTTP response counts
+// as reachable). No credential is sent; no secret is returned.
+func (s *Server) nativeCollectorTest(w http.ResponseWriter, r *http.Request) {
+	url, _ := nativeCollectorConfig()
+	if url == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"configured": false, "reachable": false, "detail": "Windows Native Collector not configured (set HIMS_WINDOWS_NATIVE_COLLECTOR_URL)."})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 6*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"configured": true, "reachable": false, "detail": "invalid collector URL"})
+		return
+	}
+	cl := &http.Client{Timeout: 6 * time.Second, Transport: insecureDoer(6 * time.Second).Transport}
+	resp, derr := cl.Do(req)
+	if derr != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"configured": true, "reachable": false, "detail": shortErr(derr)})
+		return
+	}
+	_ = resp.Body.Close()
+	writeJSON(w, http.StatusOK, map[string]any{"configured": true, "reachable": true, "detail": "collector responded (HTTP " + itoaN(resp.StatusCode) + ")"})
+}
+
 // rerunSpec is the scan request persisted in a job's metadata for re-runs.
 type rerunSpec struct {
 	Mode               string   `json:"mode"`
