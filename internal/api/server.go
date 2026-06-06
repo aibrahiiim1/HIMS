@@ -343,6 +343,7 @@ func (s *Server) routes() {
 		r.Get("/credentials", s.listCredentials)
 		r.Post("/credentials", s.createCredential)
 		r.Post("/credentials/test", s.testCredentials)
+		r.Post("/credentials/http-basic/revalidate", s.revalidateHTTPBasic)
 		r.Post("/credentials/winrm-diagnose", s.winrmDiagnose)
 		r.Post("/credentials/wmi-diagnose", s.wmiDiagnose)
 		r.Get("/credentials/{id}/credential-tests", s.credentialCredentialTests)
