@@ -136,6 +136,7 @@ export interface Device {
   category: string
   status: string
   driver?: string | null
+  credential_id?: string | null // bound credential (null = none); see PUT /devices/{id}/credential
   location_id?: string | null
   last_discovery_at?: string | null
   vlan?: string | null

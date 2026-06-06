@@ -1,8 +1,8 @@
 import { useMemo, useState, type ComponentType } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { HardDrive, Radar, ShieldCheck, MapPin, Wifi, Wrench, RefreshCw } from 'lucide-react'
-import { api, type Device, type Location, type MonitoringCheck, type DiscoveryJob, locationPaths } from '../api'
+import { HardDrive, Radar, ShieldCheck, MapPin, Wifi, Wrench, RefreshCw, KeyRound } from 'lucide-react'
+import { api, type Device, type Location, type MonitoringCheck, type DiscoveryJob, type Credential, locationPaths } from '../api'
 import { HealthRing, colorFor, timeAgo } from './ui'
 import { ReachabilityBadge, ManagementBadge } from './StatusBadges'
 
@@ -37,6 +37,9 @@ export function DeviceHeader({ deviceId, icon: Icon = HardDrive }: {
   const checksQ = useQuery({ queryKey: ['dev-checks', deviceId], queryFn: () => api.get<MonitoringCheck[]>(`/devices/${deviceId}/monitoring/checks`) })
   const locs = useQuery({ queryKey: ['locations-all'], queryFn: () => api.get<Location[]>('/locations/all') })
   const locPath = useMemo(() => locationPaths(locs.data ?? []), [locs.data])
+  const creds = useQuery({ queryKey: ['credentials'], queryFn: () => api.get<Credential[]>('/credentials') })
+
+  const [credMsg, setCredMsg] = useState<string | null>(null)
 
   const [repairing, setRepairing] = useState(false)
   const [repairMsg, setRepairMsg] = useState<string | null>(null)
@@ -88,6 +91,20 @@ export function DeviceHeader({ deviceId, icon: Icon = HardDrive }: {
       setScanMsg(`Scan failed to launch: ${(e as Error).message}`)
     } finally {
       setScanning(false)
+    }
+  }
+
+  // Bind/unbind the credential HIMS uses for this device. Picking the wrong kind
+  // (e.g. an iDRAC http_basic cred on a plain web server) is the usual reason a
+  // device shows "managed" but collects nothing — so make it changeable here.
+  async function setCredential(credID: string) {
+    setCredMsg(null)
+    try {
+      await api.put(`/devices/${deviceId}/credential`, { credential_id: credID }) // "" clears the binding
+      setCredMsg(credID ? 'Credential bound. Re-scan to collect with it.' : 'Credential unbound.')
+      qc.invalidateQueries({ queryKey: ['devices'] })
+    } catch (e) {
+      setCredMsg(`Failed: ${(e as Error).message}`)
     }
   }
 
@@ -155,6 +172,16 @@ export function DeviceHeader({ deviceId, icon: Icon = HardDrive }: {
             <div><b>{d.location_id ? (locPath[d.location_id] ?? '—') : '—'}</b><small>location</small></div></div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end' }}>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12 }} title="Bind the credential HIMS uses to collect from this device, or set to none to unbind">
+            <KeyRound size={13} />
+            <select value={d.credential_id ?? ''} onChange={(e) => setCredential(e.target.value)} style={{ fontSize: 12, maxWidth: 220 }}>
+              <option value="">— no credential (unbind) —</option>
+              {(creds.data ?? []).map((c) => (
+                <option key={c.id} value={c.id}>{c.name} · {c.kind}</option>
+              ))}
+            </select>
+          </label>
+          {credMsg && <span className="muted" style={{ fontSize: 11, maxWidth: 240, textAlign: 'right' }}>{credMsg}</span>}
           <button className="btn btn-primary btn-sm" onClick={rescan} disabled={scanning || !d.primary_ip}
             title="Re-run discovery against this device — tries every stored credential and binds on success. Use after adding/fixing a credential.">
             <RefreshCw size={13} /> {scanning ? 'Launching…' : 'Re-scan this device'}
