@@ -36,6 +36,11 @@ WHERE id = $1;
 -- name: SetRelayAgentLocation :exec
 UPDATE relay_agents SET location_id = $2, updated_at = now() WHERE id = $1;
 
+-- name: SetRelayAgentToken :exec
+-- Rotate an agent's enrollment token (only the new hash is stored). The previous
+-- token stops working immediately; the operator re-downloads a fresh installer.
+UPDATE relay_agents SET token_hash = $2, updated_at = now() WHERE id = $1;
+
 -- name: DeleteRelayAgent :exec
 DELETE FROM relay_agents WHERE id = $1;
 

@@ -23,6 +23,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"net"
@@ -38,6 +39,10 @@ import (
 
 const agentVersion = "1.0.0"
 
+// serviceName is the Windows Service name the installer registers under and the
+// agent answers to when launched by the Service Control Manager.
+const serviceName = "HIMSRelayAgent"
+
 type agent struct {
 	base   string
 	token  string
@@ -46,7 +51,38 @@ type agent struct {
 	client *http.Client
 }
 
+// out is where the agent writes its log lines. Console mode → stdout; Windows
+// service mode → a log file under ProgramData (set in service_windows.go).
+var out io.Writer = os.Stdout
+
+func logf(format string, args ...any) { fmt.Fprintf(out, ts()+format+"\n", args...) }
+func logln(args ...any)               { fmt.Fprint(out, ts()+fmt.Sprintln(args...)) }
+func ts() string                      { return time.Now().Format("2006-01-02 15:04:05 ") }
+
 func main() {
+	showVersion := flag.Bool("version", false, "print the agent version and exit")
+	runConsole := flag.Bool("console", false, "force interactive console mode (do not run as a Windows service)")
+	flag.Parse()
+	if *showVersion {
+		fmt.Printf("HIMS Relay Agent %s (%s)\n", agentVersion, osLabel())
+		return
+	}
+	// On Windows, when launched by the Service Control Manager, run as a service;
+	// otherwise (and everywhere else) run in the foreground/console.
+	if !*runConsole && runUnderServiceManager() {
+		runAsService()
+		return
+	}
+	if err := newAgentFromEnv().run(context.Background()); err != nil {
+		logln("agent exited:", err)
+		os.Exit(1)
+	}
+}
+
+// newAgentFromEnv builds the agent from its environment (HIMS_URL,
+// HIMS_AGENT_TOKEN, …). It exits early with a clear message if the token is
+// missing — the one piece of config the operator must supply.
+func newAgentFromEnv() *agent {
 	a := &agent{
 		base:  strings.TrimRight(getenv("HIMS_URL", "http://localhost:8090"), "/"),
 		token: os.Getenv("HIMS_AGENT_TOKEN"),
@@ -54,7 +90,7 @@ func main() {
 		caps:  []string{"winrm", "wmi"},
 	}
 	if a.token == "" {
-		fmt.Fprintln(os.Stderr, "HIMS_AGENT_TOKEN is required (create an agent in HIMS → Agents to get one)")
+		fmt.Fprintln(os.Stderr, "HIMS_AGENT_TOKEN is required (register an agent in HIMS → Relay Agents and use the downloaded installer)")
 		os.Exit(2)
 	}
 	tr := &http.Transport{}
@@ -62,19 +98,35 @@ func main() {
 		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec
 	}
 	a.client = &http.Client{Timeout: 3 * time.Minute, Transport: tr}
+	return a
+}
 
-	if err := a.register(); err != nil {
-		fmt.Fprintln(os.Stderr, "register failed:", err)
-		os.Exit(1)
+// run registers the agent and then polls for jobs + heartbeats until ctx is
+// cancelled (service stop / Ctrl-C). It is the single run loop shared by console
+// and Windows-service modes.
+func (a *agent) run(ctx context.Context) error {
+	registered := a.register() == nil
+	if registered {
+		logf("HIMS Relay Agent %s registered as %q (caps=%v) → %s", agentVersion, a.name, a.caps, a.base)
+	} else {
+		// Don't exit hard (esp. in service mode) — a transient HIMS outage at boot
+		// shouldn't leave the service dead. Polling still authenticates by token;
+		// re-register opportunistically until identity/caps land.
+		logln("register failed (will keep retrying); polling will still work once HIMS is reachable")
 	}
-	fmt.Printf("HIMS Relay Agent %s registered as %q (caps=%v) → %s\n", agentVersion, a.name, a.caps, a.base)
-
 	poll := time.Duration(getenvInt("HIMS_AGENT_POLL_SECONDS", 8)) * time.Second
 	hb := time.NewTicker(30 * time.Second)
 	defer hb.Stop()
 	for {
 		a.pollOnce()
+		if !registered && a.register() == nil {
+			registered = true
+			logf("HIMS Relay Agent %s registered as %q (caps=%v) → %s", agentVersion, a.name, a.caps, a.base)
+		}
 		select {
+		case <-ctx.Done():
+			logln("shutting down")
+			return nil
 		case <-hb.C:
 			a.heartbeat("")
 		case <-time.After(poll):
@@ -133,7 +185,7 @@ type job struct {
 func (a *agent) pollOnce() {
 	var jobs []job
 	if err := a.do(http.MethodGet, "/api/v1/agent/jobs", nil, &jobs); err != nil {
-		fmt.Fprintln(os.Stderr, "poll error:", err)
+		logln("poll error:", err)
 		return
 	}
 	for _, j := range jobs {
@@ -143,7 +195,7 @@ func (a *agent) pollOnce() {
 
 func (a *agent) runJob(j job) {
 	// NEVER log the password. Log only target/protocol.
-	fmt.Printf("job %s: kind=%s protocol=%s target=%s\n", j.ID, j.Kind, j.Protocol, j.Target)
+	logf("job %s: kind=%s protocol=%s target=%s", j.ID, j.Kind, j.Protocol, j.Target)
 	res := map[string]any{}
 	if j.Kind == "test" {
 		res = map[string]any{"success": true, "category": "success"}
@@ -156,7 +208,7 @@ func (a *agent) runJob(j job) {
 		}
 	}
 	if err := a.do(http.MethodPost, "/api/v1/agent/jobs/"+j.ID+"/result", res, nil); err != nil {
-		fmt.Fprintln(os.Stderr, "post result error:", err)
+		logln("post result error:", err)
 	}
 }
 

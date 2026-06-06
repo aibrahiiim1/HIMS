@@ -520,6 +520,22 @@ func (q *Queries) SetRelayAgentLocation(ctx context.Context, arg SetRelayAgentLo
 	return err
 }
 
+const setRelayAgentToken = `-- name: SetRelayAgentToken :exec
+UPDATE relay_agents SET token_hash = $2, updated_at = now() WHERE id = $1
+`
+
+type SetRelayAgentTokenParams struct {
+	ID        uuid.UUID `json:"id"`
+	TokenHash string    `json:"token_hash"`
+}
+
+// Rotate an agent's enrollment token (only the new hash is stored). The previous
+// token stops working immediately; the operator re-downloads a fresh installer.
+func (q *Queries) SetRelayAgentToken(ctx context.Context, arg SetRelayAgentTokenParams) error {
+	_, err := q.db.Exec(ctx, setRelayAgentToken, arg.ID, arg.TokenHash)
+	return err
+}
+
 const updateRelayAgentIdentity = `-- name: UpdateRelayAgentIdentity :exec
 UPDATE relay_agents
 SET hostname = $2, ip = $3, os = $4, version = $5, capabilities = $6,

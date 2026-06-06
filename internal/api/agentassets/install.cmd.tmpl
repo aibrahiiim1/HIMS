@@ -1,0 +1,30 @@
+@echo off
+REM HIMS Relay Agent installer — double-click entry point.
+REM   install.cmd            interactive install (prompts to elevate)
+REM   install.cmd /silent    unattended install (for IT/admin deployment)
+REM   install.cmd /repair    repair / reinstall
+REM   install.cmd /uninstall remove the agent + service
+setlocal
+
+REM Re-launch elevated if not already running as Administrator.
+net session >nul 2>&1
+if %errorlevel% NEQ 0 (
+  echo Requesting administrator privileges...
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -Verb RunAs -FilePath '%comspec%' -ArgumentList '/c','\"%~f0\" %*'"
+  exit /b
+)
+
+set "SCRIPT=%~dp0Install-HIMSRelayAgent.ps1"
+set "ARG=-Interactive"
+if /I "%~1"=="/silent"    set "ARG=-Silent"
+if /I "%~1"=="/uninstall" set "ARG=-Uninstall"
+if /I "%~1"=="/repair"    set "ARG=-Repair"
+
+if "%ARG%"=="-Interactive" (
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT%"
+) else (
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT%" %ARG%
+)
+
+echo.
+pause

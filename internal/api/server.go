@@ -152,12 +152,15 @@ func (s *Server) routes() {
 		r.Post("/agent/jobs/{id}/result", s.agentJobResult)
 		// Management (operator session; credentials.manage via authz "agents" tag).
 		r.Get("/agents", s.listRelayAgents)
+		r.Get("/agents/installer-availability", s.agentInstallerAvailability)
 		r.Post("/agents", s.createRelayAgent)
 		r.Get("/agents/{id}", s.getRelayAgent)
 		r.Patch("/agents/{id}", s.patchRelayAgent)
 		r.Delete("/agents/{id}", s.deleteRelayAgent)
 		r.Post("/agents/{id}/test", s.enqueueAgentTest)
 		r.Get("/agents/{id}/jobs", s.listRelayAgentJobs)
+		r.Post("/agents/{id}/regenerate-token", s.regenerateAgentToken)
+		r.Post("/agents/{id}/installer", s.downloadAgentInstaller)
 
 		r.Get("/discovery/native-collector-status", s.nativeCollectorStatus)
 		r.Post("/discovery/native-collector-test", s.nativeCollectorTest)

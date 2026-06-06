@@ -450,6 +450,9 @@ type Querier interface {
 	SetNotificationChannelEnabled(ctx context.Context, arg SetNotificationChannelEnabledParams) (NotificationChannel, error)
 	SetRelayAgentEnabled(ctx context.Context, arg SetRelayAgentEnabledParams) error
 	SetRelayAgentLocation(ctx context.Context, arg SetRelayAgentLocationParams) error
+	// Rotate an agent's enrollment token (only the new hash is stored). The previous
+	// token stops working immediately; the operator re-downloads a fresh installer.
+	SetRelayAgentToken(ctx context.Context, arg SetRelayAgentTokenParams) error
 	SetReportScheduleEnabled(ctx context.Context, arg SetReportScheduleEnabledParams) (ReportSchedule, error)
 	SetRolePermissionsClear(ctx context.Context, roleID uuid.UUID) error
 	SetUserPassword(ctx context.Context, arg SetUserPasswordParams) error

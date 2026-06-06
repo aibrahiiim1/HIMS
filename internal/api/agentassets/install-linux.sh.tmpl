@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# HIMS Relay Agent — Linux installer (systemd)
+#   Agent: {{.AgentName}}   Site: {{.SiteName}}   HIMS: {{.URL}}   Version: {{.Version}}
+#
+# This package contains a one-time registration TOKEN for this agent. Treat it
+# like a password and delete the package once the agent shows ONLINE in HIMS.
+# It does NOT contain device credentials.
+#
+# Install (recommended):   sudo ./install.sh
+# Foreground test:         ./install.sh --console
+# Uninstall:               sudo ./install.sh --uninstall
+set -euo pipefail
+
+HIMS_URL='{{.URL}}'
+TOKEN='{{.Token}}'
+AGENT_NAME='{{.AgentName}}'
+INSECURE_TLS='{{.InsecureTLS}}'
+SERVICE='hims-relay-agent'
+EXE='{{.ExeName}}'
+INSTALL_DIR='/opt/hims-relay-agent'
+ENV_FILE="/etc/${SERVICE}.env"
+UNIT="/etc/systemd/system/${SERVICE}.service"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [[ "${1:-}" == "--console" ]]; then
+  exec env HIMS_URL="$HIMS_URL" HIMS_AGENT_TOKEN="$TOKEN" HIMS_AGENT_NAME="$AGENT_NAME" \
+       ${INSECURE_TLS:+HIMS_AGENT_INSECURE_TLS="$INSECURE_TLS"} "$HERE/$EXE" -console
+fi
+
+if [[ "$(id -u)" -ne 0 ]]; then echo "Run with sudo (root) to install the service." >&2; exit 1; fi
+
+if [[ "${1:-}" == "--uninstall" ]]; then
+  systemctl disable --now "$SERVICE" 2>/dev/null || true
+  rm -f "$UNIT" "$ENV_FILE"; rm -rf "$INSTALL_DIR"
+  systemctl daemon-reload
+  echo "HIMS Relay Agent removed."
+  exit 0
+fi
+
+echo "Installing HIMS Relay Agent $AGENT_NAME ($HIMS_URL)"
+install -d "$INSTALL_DIR"
+install -m 0755 "$HERE/$EXE" "$INSTALL_DIR/hims-agent"
+
+umask 077
+cat > "$ENV_FILE" <<EOF
+HIMS_URL=$HIMS_URL
+HIMS_AGENT_TOKEN=$TOKEN
+HIMS_AGENT_NAME=$AGENT_NAME
+${INSECURE_TLS:+HIMS_AGENT_INSECURE_TLS=$INSECURE_TLS}
+EOF
+chmod 600 "$ENV_FILE"
+
+cat > "$UNIT" <<EOF
+[Unit]
+Description=HIMS Relay Agent / Site Collector ($AGENT_NAME)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=$ENV_FILE
+ExecStart=$INSTALL_DIR/hims-agent
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now "$SERVICE"
+echo "Done. 'systemctl status $SERVICE' to check; logs via 'journalctl -u $SERVICE -f'."
+echo "The agent should appear ONLINE in HIMS within ~30s."

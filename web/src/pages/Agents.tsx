@@ -2,11 +2,11 @@ import { Fragment, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import {
-  api, type RelayAgent, type RelayAgentCreated, type AgentJob,
-  type Location, type EncryptionStatus,
+  api, saveBlob, type RelayAgent, type RelayAgentCreated, type RelayAgentDetail, type AgentJob,
+  type Location, type EncryptionStatus, type InstallerAvailability,
 } from '../api'
 import { PageHeader, Panel, timeAgo } from '../components/ui'
-import { Radar, Server, KeyRound, Download, BookOpen } from 'lucide-react'
+import { Radar, Server, KeyRound, Download, ChevronRight, CheckCircle2, Circle, ShieldAlert, Terminal } from 'lucide-react'
 
 // HIMS Relay Agent / Site Collector — the operator screen for the single,
 // official, installable collector that replaces the older standalone helper
@@ -66,6 +66,7 @@ export function Agents() {
     refetchInterval: 15_000, // keep online/heartbeat fresh
   })
   const locs = useQuery({ queryKey: ['locations-all'], queryFn: () => api.get<Location[]>('/locations/all') })
+  const availability = useQuery({ queryKey: ['agent-installer-availability'], queryFn: () => api.get<InstallerAvailability>('/agents/installer-availability') })
   const refresh = () => qc.invalidateQueries({ queryKey: ['relay-agents'] })
   const locName = (id?: string) => locs.data?.find((l) => l.id === id)?.name
 
@@ -119,7 +120,15 @@ export function Agents() {
         />
       )}
 
-      {created && <TokenReveal created={created} locName={locName} onDone={() => setCreated(null)} />}
+      {created && (
+        <InstallWizard
+          created={created}
+          locName={locName}
+          availability={availability.data}
+          onTokenRegenerated={(t) => setCreated({ ...created, token: t })}
+          onDone={() => setCreated(null)}
+        />
+      )}
 
       <Panel title="Registered agents" icon={Radar} actions={list.data ? <span className="muted" style={{ fontSize: 12 }}>{list.data.length} total</span> : undefined}>
         {list.isLoading && <div className="loading">Loading…</div>}
@@ -176,7 +185,7 @@ export function Agents() {
         {del.error && <div className="error-msg" style={{ marginTop: 8 }}>{(del.error as Error).message}</div>}
       </Panel>
 
-      <InstallGuide />
+      <AdvancedInstall />
     </div>
   )
 }
@@ -217,33 +226,154 @@ function NewAgentForm({ locations, onCreated, onCancel }: {
   )
 }
 
-function TokenReveal({ created, locName, onDone }: {
-  created: RelayAgentCreated; locName: (id?: string) => string | undefined; onDone: () => void
+// InstallWizard — the operator's Download → Install → Online flow shown right
+// after registering an agent. No build tools: it downloads a ready installer
+// package (binary + service installer + prefilled token/URL/site) and tracks the
+// agent until it reports online. The enrollment token is shown/downloaded once;
+// "Regenerate token" mints a fresh one (and a fresh installer) if it was lost.
+function InstallWizard({ created, locName, availability, onTokenRegenerated, onDone }: {
+  created: RelayAgentCreated
+  locName: (id?: string) => string | undefined
+  availability?: InstallerAvailability
+  onTokenRegenerated: (token: string) => void
+  onDone: () => void
 }) {
-  const [copied, setCopied] = useState(false)
-  const copy = (text: string) => { navigator.clipboard?.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) }) }
-  const psCmd = `.\\install-relay-agent.ps1 -HimsUrl ${window.location.origin} -Token ${created.token}`
+  const agentId = created.agent.id
+  const token = created.token
+  const [copied, setCopied] = useState('')
+  const [dlErr, setDlErr] = useState('')
+  const [dling, setDling] = useState('')
+  const [tested, setTested] = useState(false)
+  const copy = (key: string, text: string) => { navigator.clipboard?.writeText(text).then(() => { setCopied(key); setTimeout(() => setCopied(''), 1500) }) }
+
+  // Live status: poll this agent so the checklist + "Online" step update on their own.
+  const status = useQuery({
+    queryKey: ['relay-agent', agentId],
+    queryFn: () => api.get<RelayAgentDetail>(`/agents/${agentId}`),
+    refetchInterval: 5_000,
+  })
+  const online = !!status.data?.agent.online
+  const heard = !!status.data?.agent.last_heartbeat
+
+  const download = async (os: 'windows' | 'linux') => {
+    setDlErr(''); setDling(os)
+    try {
+      const blob = await api.postBlob(`/agents/${agentId}/installer`, { token, os })
+      saveBlob(blob, `hims-relay-agent-${slug(created.agent.name)}-${os}.zip`)
+    } catch (e) { setDlErr((e as Error).message) } finally { setDling('') }
+  }
+  const regen = useMutation({
+    mutationFn: () => api.post<{ token: string }>(`/agents/${agentId}/regenerate-token`, {}),
+    onSuccess: (d) => onTokenRegenerated(d.token),
+    onError: (e) => setDlErr((e as Error).message),
+  })
+  const test = useMutation({
+    mutationFn: () => api.post(`/agents/${agentId}/test`, {}),
+    onSuccess: () => setTested(true),
+  })
+
+  const winReady = availability ? availability.windows : true
+  const silentCmd = 'install.cmd /silent'
+
+  const steps: { label: string; done: boolean; active: boolean }[] = [
+    { label: 'Register agent', done: true, active: false },
+    { label: 'Download the installer', done: dling === '' && copied !== '' ? false : true, active: !heard },
+    { label: 'Copy to the site machine & run install.cmd as Administrator', done: heard, active: !heard },
+    { label: 'Agent reports a heartbeat', done: heard, active: !heard },
+    { label: 'Test the agent', done: tested, active: heard && !tested },
+    { label: 'Ready — agent is online', done: online, active: online },
+  ]
+
   return (
-    <div className="enc-banner" style={{ marginBottom: 16, background: '#10241a', borderColor: '#1f7a4d', flexDirection: 'column', alignItems: 'stretch' }}>
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-        <span>✅</span>
-        <div style={{ fontWeight: 700 }}>Agent “{created.agent.name}” registered{created.agent.location_id ? ` for ${locName(created.agent.location_id) ?? 'site'}` : ''}</div>
-        <button style={{ ...ghost, marginLeft: 'auto' }} onClick={onDone}>Done</button>
+    <Panel
+      title={`Set up “${created.agent.name}”`} icon={Download} className="mb"
+      subtitle={created.agent.location_id ? `for ${locName(created.agent.location_id) ?? 'site'}` : 'unassigned'}
+      actions={<button style={ghost} onClick={onDone}>Done</button>}
+    >
+      {/* Security: token shown/downloaded once. */}
+      <div className="enc-banner" style={{ background: '#332b1a', borderColor: '#7a5a1a', marginBottom: 14 }}>
+        <ShieldAlert size={18} />
+        <div style={{ fontSize: 12 }}>
+          The installer below embeds this agent's <strong>one-time enrollment token</strong> — the downloaded file is
+          sensitive until installed. Copy it to the target machine over a trusted channel and delete it once the agent
+          is online. It contains <strong>no device credentials</strong>; HIMS sends those to the agent per job only.
+        </div>
       </div>
-      <div style={{ fontSize: 13, marginTop: 8 }}>
-        Copy this enrollment token now — <strong>it will not be shown again</strong>. Store it in a password manager and paste it into the install command on the site machine.
+
+      {/* Step checklist */}
+      <ol className="install-steps" style={{ listStyle: 'none', padding: 0, margin: '0 0 14px' }}>
+        {steps.map((s, i) => (
+          <li key={i} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '3px 0', fontSize: 13 }}>
+            {s.done ? <CheckCircle2 size={16} color="var(--ok)" /> : <Circle size={16} color={s.active ? 'var(--brand)' : 'var(--text-faint)'} />}
+            <span style={{ fontWeight: s.active ? 600 : 400, color: s.done ? 'var(--text)' : undefined }}>{i + 1}. {s.label}</span>
+          </li>
+        ))}
+      </ol>
+
+      {/* Primary action: download the ready installer */}
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+        {winReady ? (
+          <button style={btn} disabled={dling === 'windows'} onClick={() => download('windows')}>
+            {dling === 'windows' ? 'Preparing…' : '⬇ Download Windows Installer'}
+          </button>
+        ) : (
+          <span className="muted" style={{ fontSize: 12, maxWidth: 360 }}>
+            Windows installer not available yet — the agent binary isn't staged on this HIMS server.
+            Ask your administrator to run <code className="mono">deploy/build-agents.ps1</code>.
+          </span>
+        )}
+        {availability?.linux && (
+          <button style={ghost} disabled={dling === 'linux'} onClick={() => download('linux')}>
+            {dling === 'linux' ? 'Preparing…' : '⬇ Download Linux Installer'}
+          </button>
+        )}
+        <button style={ghost} onClick={() => regen.mutate()} disabled={regen.isPending} title="Mint a new token and download a fresh installer (the old one stops working)">
+          {regen.isPending ? 'Regenerating…' : 'Regenerate token'}
+        </button>
       </div>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
-        <code className="mono" style={{ flex: 1, padding: '8px 10px', background: 'var(--surface-3)', borderRadius: 6, wordBreak: 'break-all', fontSize: 12 }}>{created.token}</code>
-        <button style={btn} onClick={() => copy(created.token)}>{copied ? 'Copied!' : 'Copy token'}</button>
+      {dlErr && <div className="error-msg" style={{ marginTop: 8, fontSize: 12 }}>{dlErr}</div>}
+
+      <div style={{ fontSize: 13, marginTop: 12, lineHeight: 1.6 }}>
+        <strong>On the site machine</strong> (a trusted Windows / domain-joined box): unzip, right-click
+        {' '}<code>install.cmd</code> → <strong>Run as administrator</strong>. The agent installs as the Windows service
+        {' '}<em>HIMS Relay Agent</em> (auto-start, restart-on-failure) and appears online here within ~30s.
       </div>
-      <div style={{ fontSize: 12, marginTop: 10 }}>Then, on the site machine (Windows), from the folder containing <code>hims-agent.exe</code> and the install script:</div>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 6 }}>
-        <code className="mono" style={{ flex: 1, padding: '8px 10px', background: 'var(--surface-3)', borderRadius: 6, wordBreak: 'break-all', fontSize: 12 }}>{psCmd}</code>
-        <button style={ghost} onClick={() => copy(psCmd)}>Copy</button>
+
+      {/* Silent install command for IT/admin deployment */}
+      <div style={{ marginTop: 10 }}>
+        <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Silent / unattended deployment (run from the unzipped folder, elevated):</div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <code className="mono" style={{ flex: 1, padding: '8px 10px', background: 'var(--surface-3)', borderRadius: 6, fontSize: 12 }}>{silentCmd}</code>
+          <button style={ghost} onClick={() => copy('silent', silentCmd)}>{copied === 'silent' ? 'Copied!' : 'Copy'}</button>
+        </div>
       </div>
-    </div>
+
+      {/* Live confirmation + test */}
+      <div style={{ marginTop: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <span className={`badge ${online ? 'badge-up' : heard ? 'badge-warning' : 'badge-unknown'}`}>
+          {online ? 'Agent online' : heard ? 'Agent heard, warming up' : 'Waiting for the agent…'}
+        </span>
+        <button style={ghost} disabled={!online || test.isPending} onClick={() => test.mutate()} title={online ? 'Queue a no-op job to confirm round-trip' : 'Available once the agent is online'}>
+          {test.isPending ? 'Testing…' : 'Test agent'}
+        </button>
+        {tested && <span className="muted" style={{ fontSize: 12 }}>Test job queued — watch it complete under the agent's Jobs.</span>}
+        <Link to={`/agents/${agentId}`} style={{ fontSize: 12 }}>Open agent detail →</Link>
+      </div>
+
+      {/* Token, available once for password managers / advanced use */}
+      <details style={{ marginTop: 12 }}>
+        <summary style={{ cursor: 'pointer', fontSize: 12 }} className="muted">Show enrollment token (shown once)</summary>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 6 }}>
+          <code className="mono" style={{ flex: 1, padding: '8px 10px', background: 'var(--surface-3)', borderRadius: 6, wordBreak: 'break-all', fontSize: 12 }}>{token}</code>
+          <button style={ghost} onClick={() => copy('token', token)}>{copied === 'token' ? 'Copied!' : 'Copy token'}</button>
+        </div>
+      </details>
+    </Panel>
   )
+}
+
+function slug(s: string) {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'agent'
 }
 
 function AgentJobs({ agentId }: { agentId: string }) {
@@ -275,29 +405,37 @@ function AgentJobs({ agentId }: { agentId: string }) {
   )
 }
 
-function InstallGuide() {
+// AdvancedInstall — the manual/no-installer path, collapsed by default. The
+// default experience is Register → Download → Install; this is for advanced
+// operators and developers only.
+function AdvancedInstall() {
   return (
-    <Panel title="Install guide" icon={BookOpen}>
-      <ol style={{ fontSize: 13, lineHeight: 1.7, paddingLeft: 20, margin: 0 }}>
-        <li><strong>Register</strong> an agent above and copy its one-time token.</li>
-        <li>
-          <strong>Get the binary.</strong> Build <code>hims-agent.exe</code> with
-          {' '}<code className="mono">go build -o hims-agent.exe ./cmd/hims-agent</code> (Windows), or
-          {' '}<code className="mono">GOOS=linux go build -o hims-agent ./cmd/hims-agent</code> (Linux),
-          and copy it — together with the matching install script from <code>deploy/</code> — to the site machine.
-        </li>
-        <li>
-          <strong>Install / run.</strong> Windows: <code className="mono">.\install-relay-agent.ps1 -HimsUrl {window.location.origin} -Token &lt;token&gt;</code>
-          {' '}(add <code>-AsService</code> for an always-on service). Linux:
-          {' '}<code className="mono">HIMS_URL={window.location.origin} HIMS_AGENT_TOKEN=&lt;token&gt; ./install-relay-agent.sh --service</code>.
-        </li>
-        <li><strong>Verify.</strong> The agent appears <span className="badge badge-up">online</span> here within ~30s. Click <strong>Test</strong> to queue a no-op job and confirm round-trip.</li>
-      </ol>
-      <div className="muted" style={{ fontSize: 12, marginTop: 10, display: 'flex', gap: 6, alignItems: 'center' }}>
-        <Download size={13} /> WMI/DCOM collection requires the agent to run on Windows; WinRM works from either OS.
-        The agent never persists credentials — HIMS hands them per job over the authenticated channel and the agent
-        discards them after each run.
-      </div>
+    <Panel title="Advanced manual installation" icon={Terminal}>
+      <details>
+        <summary style={{ cursor: 'pointer', fontSize: 13 }} className="muted">
+          The recommended path is <strong>Register → Download Installer → Run as administrator</strong>. Expand only if
+          you need to run the agent by hand or build it from source.
+        </summary>
+        <div style={{ fontSize: 13, lineHeight: 1.7, marginTop: 10 }}>
+          <p className="muted" style={{ margin: '0 0 8px' }}>
+            <ChevronRight size={12} style={{ verticalAlign: '-1px' }} /> The downloaded installer already contains the
+            agent binary and prefilled config — no build step is required for normal use.
+          </p>
+          <strong>Run by hand (no service):</strong> from the unzipped package on the target machine:
+          <pre className="mono" style={{ background: 'var(--surface-3)', padding: 10, borderRadius: 6, fontSize: 12, overflowX: 'auto' }}>{`set HIMS_URL=${window.location.origin}
+set HIMS_AGENT_TOKEN=<token from this agent>
+set HIMS_AGENT_NAME=<agent name>
+hims-agent.exe -console`}</pre>
+          <strong>Build from source (developers / to stage server binaries):</strong>
+          <pre className="mono" style={{ background: 'var(--surface-3)', padding: 10, borderRadius: 6, fontSize: 12, overflowX: 'auto' }}>{`# stage both OS binaries into the HIMS dist dir so the UI can serve installers
+deploy/build-agents.ps1            # Windows (PowerShell)
+deploy/build-agents.sh             # Linux/macOS`}</pre>
+          <div className="muted" style={{ fontSize: 12, display: 'flex', gap: 6, alignItems: 'center' }}>
+            <Download size={13} /> WMI/DCOM collection requires the agent on Windows; WinRM works from either OS. The
+            agent never persists credentials — HIMS sends them per job and the agent discards them after each run.
+          </div>
+        </div>
+      </details>
     </Panel>
   )
 }

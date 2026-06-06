@@ -1,0 +1,85 @@
+HIMS Relay Agent — Site Collector
+==================================
+Agent name : {{.AgentName}}
+Site       : {{.SiteName}}
+HIMS server: {{.URL}}
+Version    : {{.Version}}
+Package OS : {{.OSLabel}}
+
+WHAT THIS IS
+------------
+The HIMS Relay Agent is a small service that runs on ONE trusted machine inside
+this site. HIMS hands it collection jobs (it polls outward — no inbound firewall
+rule is needed), it collects locally (modern Windows over WinRM and legacy
+Windows over WMI/DCOM), and posts the results back. It is the official, supported
+way to collect site-local and legacy hosts.
+
+>> SECURITY — THIS PACKAGE IS SENSITIVE <<
+This .zip contains a one-time registration TOKEN for this agent. Treat the file
+like a password:
+  * Copy it to the target machine over a trusted channel only.
+  * Do NOT email it or leave it on shared drives.
+  * Delete the package once the agent shows ONLINE in HIMS.
+The package does NOT contain any device credentials. The agent never stores
+credentials; HIMS sends the right credential to the agent per job, over the
+authenticated channel, and the agent discards it after each job.
+
+INSTALL (recommended — no build tools required)
+-----------------------------------------------
+1. Copy this whole folder to the target Windows / domain-joined machine.
+2. Right-click  install.cmd  ->  "Run as administrator".
+3. Confirm the prompt. The installer will:
+      - copy hims-agent.exe to "Program Files\HIMS Relay Agent"
+      - register a Windows service named "{{.DisplayName}}"
+      - start it (Automatic start, restart-on-failure)
+      - validate connectivity + registration
+4. In HIMS -> Discovery -> Relay Agents, this agent appears ONLINE within ~30s.
+
+SILENT / UNATTENDED (for IT deployment)
+---------------------------------------
+   install.cmd /silent
+or directly:
+   powershell -ExecutionPolicy Bypass -File .\Install-HIMSRelayAgent.ps1 -Silent
+
+REPAIR / REINSTALL
+------------------
+   install.cmd /repair
+
+UNINSTALL
+---------
+   install.cmd /uninstall
+This stops + removes the service, clears the machine configuration, and deletes
+the installed files. The agent then shows offline in HIMS.
+
+THE WINDOWS SERVICE
+-------------------
+  Name        : {{.ServiceName}}  (display: "{{.DisplayName}}")
+  Startup     : Automatic
+  Recovery    : restart on failure (5s, 5s, then every 30s)
+  Runs as     : LocalSystem
+  Manage      : services.msc  (Start / Stop / Restart), or
+                  sc start {{.ServiceName}}   /   sc stop {{.ServiceName}}
+  Version     : run  "C:\Program Files\HIMS Relay Agent\hims-agent.exe" -version
+  Logs        : C:\ProgramData\HIMS\RelayAgent\logs\agent.log
+
+TROUBLESHOOTING
+---------------
+  * "token was rejected (HTTP 401)" — the token is wrong or was regenerated.
+    In HIMS open this agent, click "Regenerate token", download a fresh
+    installer, and re-run it.
+  * Agent stays offline — confirm the service is Running (services.msc) and that
+    this machine can reach {{.URL}} ; check the log file above.
+  * Legacy Windows targets (Win7 / 2008 R2) are collected via WMI/DCOM from this
+    agent; make sure the agent host can reach the target's RPC (TCP 135 + the
+    DCOM dynamic range).
+
+ADVANCED / MANUAL (not required)
+--------------------------------
+The agent is a single self-contained executable. Advanced operators can run it
+directly without the service by setting environment variables and launching it:
+   set HIMS_URL={{.URL}}
+   set HIMS_AGENT_TOKEN=<token>
+   set HIMS_AGENT_NAME={{.AgentName}}
+   hims-agent.exe -console
+Building from source is only for developers and is documented in the HIMS repo
+(deploy/build-agents.ps1). Operators should use this installer.

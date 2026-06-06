@@ -80,7 +80,36 @@ async function postForm<T>(path: string, body: FormData): Promise<T> {
   return r.json()
 }
 
-export const api = { get, post, patch, put, del, postText, postForm }
+// postBlob POSTs JSON and returns the response as a Blob (file downloads, e.g.
+// the agent installer package). On error it surfaces the server's text reason.
+async function postBlob(path: string, body: unknown): Promise<Blob> {
+  const r = await fetch(`${BASE}${path}`, {
+    ...withCreds,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!r.ok) {
+    check401(r, path)
+    const detail = (await r.text().catch(() => '')).trim()
+    throw new Error(detail || `${r.status} ${r.statusText}: ${path}`)
+  }
+  return r.blob()
+}
+
+// saveBlob triggers a browser download of a Blob under the given filename.
+export function saveBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+export const api = { get, post, patch, put, del, postText, postForm, postBlob }
 
 // #P1 Auth — current principal.
 export interface AuthMe {
@@ -1350,6 +1379,14 @@ export interface RelayAgentDetail {
   agent: RelayAgent
   failed_jobs: number
   running_jobs: number
+}
+// GET /agents/installer-availability — which OS installer packages the server
+// can produce (i.e. which agent binaries the deployer has staged).
+export interface InstallerAvailability {
+  windows: boolean
+  linux: boolean
+  dist_dir: string
+  hint: string
 }
 // Returned exactly once by POST /agents — the token is never shown again.
 export interface RelayAgentCreated { agent: RelayAgent; token: string }
