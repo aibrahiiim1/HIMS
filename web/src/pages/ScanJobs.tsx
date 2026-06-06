@@ -66,6 +66,7 @@ export function ScanJobs() {
                   <td>{j.found_count}</td>
                   <td style={{ whiteSpace: 'nowrap' }}>
                     <Link className="btn btn-ghost btn-xs" to={`/discovery/jobs/${j.id}/results`}>Open Results</Link>{' '}
+                    <Link className="btn btn-ghost btn-xs" to={`/discovery/jobs/${j.id}/live`} title="Live visual board">Live</Link>{' '}
                     {j.scope_cidr && <button className="btn btn-ghost btn-xs" disabled={rerun.isPending} onClick={() => rerun.mutate(j.id)} title="Re-run this scan"><RefreshCw size={12} /></button>}{' '}
                     <button className="btn btn-ghost btn-xs" style={{ color: 'var(--crit)' }} onClick={() => { if (confirm('Delete this job and its results?')) del.mutate(j.id) }} title="Delete job"><Trash2 size={12} /></button>
                   </td>

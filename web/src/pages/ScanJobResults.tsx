@@ -147,6 +147,7 @@ export function ScanJobResults() {
         subtitle={job ? `${job.scope_cidr ?? 'import'} · ${job.status}${job.location_id ? ' · ' + (locPath[job.location_id] ?? '') : ''}` : 'Loading…'}
         actions={<>
           <Link className="btn btn-ghost btn-sm" to="/discovery/jobs"><ArrowLeft size={14} /> All jobs</Link>
+          <Link className="btn btn-ghost btn-sm" to={`/discovery/jobs/${jobId}/live`}><Radar size={14} /> Visual View</Link>
           {job?.scope_cidr && <button className="btn btn-sm" disabled={rerun.isPending} onClick={() => rerun.mutate()}><RefreshCw size={14} /> Re-run scan</button>}
         </>} />
 

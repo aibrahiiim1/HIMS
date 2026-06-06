@@ -152,7 +152,7 @@ export function Discovery() {
 
   const jobs = useQuery({ queryKey: ['discovery-jobs'], queryFn: () => api.get<DiscoveryJob[]>('/discovery/jobs'), refetchInterval: 5000 })
   // Launching a scan now jumps straight to the standalone Job Results page.
-  const afterLaunch = (j: DiscoveryJob) => { qc.invalidateQueries({ queryKey: ['discovery-jobs'] }); navigate(`/discovery/jobs/${j.id}/results`) }
+  const afterLaunch = (j: DiscoveryJob) => { qc.invalidateQueries({ queryKey: ['discovery-jobs'] }); navigate(`/discovery/jobs/${j.id}/live`) }
 
   const cov = useQuery({ queryKey: ['access-coverage'], queryFn: () => api.get<AccessCoverage>('/dashboard/access-coverage'), retry: 0 })
 

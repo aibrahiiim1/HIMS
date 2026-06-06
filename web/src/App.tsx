@@ -8,6 +8,7 @@ import { Dashboard } from './pages/Dashboard'
 import { Discovery } from './pages/Discovery'
 import { ScanJobs, ScanResultsRedirect } from './pages/ScanJobs'
 import { ScanJobResults } from './pages/ScanJobResults'
+import { LiveDiscovery } from './pages/LiveDiscovery'
 import { ServerDetail } from './pages/ServerDetail'
 import { EndpointDetail } from './pages/EndpointDetail'
 import { FirewallDetail } from './pages/FirewallDetail'
@@ -108,6 +109,7 @@ function Shell({ me, onLogout }: { me?: AuthMe; onLogout: () => void }) {
             <Route path="/discovery/jobs" element={<ScanJobs />} />
             <Route path="/discovery/jobs/:jobId" element={<ScanJobResults />} />
             <Route path="/discovery/jobs/:jobId/results" element={<ScanJobResults />} />
+            <Route path="/discovery/jobs/:jobId/live" element={<LiveDiscovery />} />
             <Route path="/discovery/results" element={<ScanResultsRedirect />} />
             <Route path="/" element={<DeviceList category="switch" title="Switches" detailBase="/devices" />} />
             <Route path="/servers" element={<DeviceList category="server" title="Servers" detailBase="/servers" />} />
