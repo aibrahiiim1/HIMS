@@ -33,6 +33,10 @@ function issueDeepLink(key: string): { to: string; label: string } | null {
     offline_but_previously_managed: '/inventory/unmanaged',
   }
   if (mgmt[key]) return { to: mgmt[key], label: 'Open Unmanaged Devices →' }
+  // Scan-stability issues (Known-Device Retry) → the latest scan job's results,
+  // where the miss/recovery is shown per device.
+  const scan = ['known_device_missed_last_scan', 'known_device_flapping_in_scan', 'frequently_missed_known_device']
+  if (scan.includes(key)) return { to: '/discovery/results', label: 'Open latest Scan Results →' }
   return null
 }
 

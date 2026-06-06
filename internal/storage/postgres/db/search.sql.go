@@ -48,7 +48,7 @@ func (q *Queries) CreateDiscoveryJob(ctx context.Context, arg CreateDiscoveryJob
 const createDiscoveryResult = `-- name: CreateDiscoveryResult :one
 INSERT INTO discovery_results (job_id, ip, outcome, probe_data)
 VALUES ($1, $2, $3, $4)
-RETURNING id, job_id, ip, outcome, device_id, driver, category, probe_data, error, probed_at
+RETURNING id, job_id, ip, outcome, device_id, driver, category, probe_data, error, probed_at, disposition, retry_count
 `
 
 type CreateDiscoveryResultParams struct {
@@ -77,6 +77,8 @@ func (q *Queries) CreateDiscoveryResult(ctx context.Context, arg CreateDiscovery
 		&i.ProbeData,
 		&i.Error,
 		&i.ProbedAt,
+		&i.Disposition,
+		&i.RetryCount,
 	)
 	return i, err
 }
@@ -167,7 +169,7 @@ func (q *Queries) ListDiscoveryJobs(ctx context.Context) ([]DiscoveryJob, error)
 }
 
 const listDiscoveryResults = `-- name: ListDiscoveryResults :many
-SELECT id, job_id, ip, outcome, device_id, driver, category, probe_data, error, probed_at FROM discovery_results WHERE job_id = $1 ORDER BY probed_at DESC
+SELECT id, job_id, ip, outcome, device_id, driver, category, probe_data, error, probed_at, disposition, retry_count FROM discovery_results WHERE job_id = $1 ORDER BY probed_at DESC
 `
 
 func (q *Queries) ListDiscoveryResults(ctx context.Context, jobID uuid.UUID) ([]DiscoveryResult, error) {
@@ -189,6 +191,53 @@ func (q *Queries) ListDiscoveryResults(ctx context.Context, jobID uuid.UUID) ([]
 			&i.Category,
 			&i.ProbeData,
 			&i.Error,
+			&i.ProbedAt,
+			&i.Disposition,
+			&i.RetryCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listKnownDeviceScanDispositions = `-- name: ListKnownDeviceScanDispositions :many
+SELECT device_id, disposition, job_id, probed_at
+FROM discovery_results
+WHERE device_id IS NOT NULL
+  AND disposition IN ('known_seen','known_recovered','known_missed','known_unreachable')
+ORDER BY probed_at DESC
+LIMIT 5000
+`
+
+type ListKnownDeviceScanDispositionsRow struct {
+	DeviceID    *uuid.UUID `json:"device_id"`
+	Disposition string     `json:"disposition"`
+	JobID       uuid.UUID  `json:"job_id"`
+	ProbedAt    time.Time  `json:"probed_at"`
+}
+
+// Per-device scan dispositions across recent jobs (newest first). Powers the
+// scan-stability Data Quality issues: missed-last-scan, flapping (recovered by
+// retry), and frequently-missed-known-device. Bounded so the scan history of a
+// long-lived deployment cannot blow up the query.
+func (q *Queries) ListKnownDeviceScanDispositions(ctx context.Context) ([]ListKnownDeviceScanDispositionsRow, error) {
+	rows, err := q.db.Query(ctx, listKnownDeviceScanDispositions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListKnownDeviceScanDispositionsRow{}
+	for rows.Next() {
+		var i ListKnownDeviceScanDispositionsRow
+		if err := rows.Scan(
+			&i.DeviceID,
+			&i.Disposition,
+			&i.JobID,
 			&i.ProbedAt,
 		); err != nil {
 			return nil, err
@@ -389,18 +438,21 @@ func (q *Queries) UpdateDiscoveryJobStatus(ctx context.Context, arg UpdateDiscov
 
 const updateDiscoveryResult = `-- name: UpdateDiscoveryResult :exec
 UPDATE discovery_results
-SET outcome = $2, device_id = $3, driver = $4, category = $5, error = $6, probe_data = $7
+SET outcome = $2, device_id = $3, driver = $4, category = $5, error = $6, probe_data = $7,
+    disposition = $8, retry_count = $9
 WHERE id = $1
 `
 
 type UpdateDiscoveryResultParams struct {
-	ID        uuid.UUID  `json:"id"`
-	Outcome   string     `json:"outcome"`
-	DeviceID  *uuid.UUID `json:"device_id"`
-	Driver    *string    `json:"driver"`
-	Category  *string    `json:"category"`
-	Error     *string    `json:"error"`
-	ProbeData []byte     `json:"probe_data"`
+	ID          uuid.UUID  `json:"id"`
+	Outcome     string     `json:"outcome"`
+	DeviceID    *uuid.UUID `json:"device_id"`
+	Driver      *string    `json:"driver"`
+	Category    *string    `json:"category"`
+	Error       *string    `json:"error"`
+	ProbeData   []byte     `json:"probe_data"`
+	Disposition string     `json:"disposition"`
+	RetryCount  int32      `json:"retry_count"`
 }
 
 func (q *Queries) UpdateDiscoveryResult(ctx context.Context, arg UpdateDiscoveryResultParams) error {
@@ -412,6 +464,8 @@ func (q *Queries) UpdateDiscoveryResult(ctx context.Context, arg UpdateDiscovery
 		arg.Category,
 		arg.Error,
 		arg.ProbeData,
+		arg.Disposition,
+		arg.RetryCount,
 	)
 	return err
 }

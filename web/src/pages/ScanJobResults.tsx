@@ -1,27 +1,37 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
-import { Radar, Boxes, Wifi, ShieldCheck, ShieldOff, HelpCircle, KeyRound, Bot, CircleX, RefreshCw, ArrowLeft } from 'lucide-react'
+import { Radar, Boxes, Wifi, ShieldCheck, ShieldOff, HelpCircle, KeyRound, Bot, CircleX, RefreshCw, ArrowLeft, Sparkles, History, LifeBuoy, EyeOff } from 'lucide-react'
 import { Pencil } from 'lucide-react'
-import { api, locationPaths, type Device, type DiscoveryJob, type DiscoveryResult, type Location } from '../api'
+import { api, locationPaths, type Device, type DiscoveryJob, type DiscoveryResult, type Location, type ScanJobCounts } from '../api'
 import { PageHeader, Panel, Kpi, EmptyState, timeAgo } from '../components/ui'
 import { ReachabilityBadge, ManagementBadge } from '../components/StatusBadges'
 import { EditDevice } from '../components/EditDevice'
 import { OnboardingActions, CollectedViaCell, outcomeBadge, duration } from './Discovery'
 
-type JobDetail = { job: DiscoveryJob; results: DiscoveryResult[] }
+type JobDetail = { job: DiscoveryJob; results: DiscoveryResult[]; counts?: ScanJobCounts }
 
-// A result is "newly discovered" if there was no prior device (we approximate via
-// outcome) and "changed category" if the result's classification differs from the
-// device's stored category.
+// Known-Device-Retry disposition → short badge label + tone. A known device that
+// the sweep missed never disappears: it shows as "Missed this run".
+const DISPOSITION: Record<string, { label: string; tone: string }> = {
+  newly_discovered: { label: 'New', tone: 'info' },
+  known_seen: { label: 'Known — seen again', tone: 'up' },
+  known_recovered: { label: 'Recovered by retry', tone: 'warning' },
+  known_missed: { label: 'Missed this run', tone: 'down' },
+  known_unreachable: { label: 'Missed this run', tone: 'down' },
+}
+
 const FILTERS = [
-  'all', 'managed', 'unmanaged', 'online_unmanaged', 'missing_classification',
+  'all', 'newly_discovered', 'known_seen', 'known_recovered', 'known_missed',
+  'managed', 'unmanaged', 'online_unmanaged', 'missing_classification',
   'credential_failed', 'needs_agent', 'agent_offline', 'collection_failed',
   'collected_relay', 'collected_direct',
 ] as const
 type Filter = typeof FILTERS[number]
 const FILTER_LABEL: Record<Filter, string> = {
-  all: 'All', managed: 'Managed', unmanaged: 'Unmanaged', online_unmanaged: 'Online but unmanaged',
+  all: 'All', newly_discovered: 'Newly discovered', known_seen: 'Known — seen again',
+  known_recovered: 'Recovered by retry', known_missed: 'Known missed this run',
+  managed: 'Managed', unmanaged: 'Unmanaged', online_unmanaged: 'Online but unmanaged',
   missing_classification: 'Missing classification', credential_failed: 'Credential failed',
   needs_agent: 'Needs agent', agent_offline: 'Agent offline', collection_failed: 'Collection failed',
   collected_relay: 'Via relay agent', collected_direct: 'Direct collection',
@@ -87,6 +97,7 @@ export function ScanJobResults() {
 
   const job = detail.data?.job
   const results = detail.data?.results ?? []
+  const counts = detail.data?.counts
   const dev = (r: DiscoveryResult) => (r.device_id ? devMap.get(r.device_id) : undefined)
 
   // KPI rollup (joined to the live device for reachability/management).
@@ -110,6 +121,10 @@ export function ScanJobResults() {
     const d = dev(r)
     switch (filter) {
       case 'all': return true
+      case 'newly_discovered': return r.disposition === 'newly_discovered'
+      case 'known_seen': return r.disposition === 'known_seen'
+      case 'known_recovered': return r.disposition === 'known_recovered'
+      case 'known_missed': return r.disposition === 'known_missed' || r.disposition === 'known_unreachable'
       case 'managed': return d?.management === 'managed'
       case 'unmanaged': return d ? d.management !== 'managed' : false
       case 'online_unmanaged': return d?.reachability === 'online' && d?.management !== 'managed'
@@ -138,10 +153,17 @@ export function ScanJobResults() {
       {detail.isLoading && <div className="loading">Loading…</div>}
       {job && (
         <>
-          {/* A. Job Summary KPIs */}
+          {/* A. Scan stability — separated, honest counts (NOT a stable inventory total). */}
           <div className="kpi-grid">
-            <Kpi label="Total targets" value={job.host_count} icon={Boxes} tone="info" sub={`duration ${duration(job.started_at, job.finished_at)}`} />
-            <Kpi label="Enrolled" value={job.found_count} icon={Radar} tone="default" />
+            <Kpi label="Targets probed" value={counts?.targets_probed ?? job.host_count} icon={Boxes} tone="info" sub={`duration ${duration(job.started_at, job.finished_at)}`} />
+            <Kpi label="Newly discovered" value={counts?.newly_discovered ?? 0} icon={Sparkles} tone="info" />
+            <Kpi label="Known — seen again" value={counts?.known_seen_again ?? 0} icon={History} tone="ok" />
+            <Kpi label="Recovered by retry" value={counts?.known_recovered_by_retry ?? 0} icon={LifeBuoy} tone={(counts?.known_recovered_by_retry ?? 0) > 0 ? 'warn' : 'default'} sub="missed sweep, found on retry" />
+            <Kpi label="Known missed this run" value={counts?.known_missed_this_run ?? 0} icon={EyeOff} tone={(counts?.known_missed_this_run ?? 0) > 0 ? 'crit' : 'default'} sub="still in inventory" />
+            <Kpi label="Enrolled / updated" value={counts?.enrolled_updated ?? job.found_count} icon={Radar} tone="default" />
+          </div>
+          {/* Live device state across this job's results. */}
+          <div className="kpi-grid">
             <Kpi label="Online" value={k.online} icon={Wifi} tone="ok" />
             <Kpi label="Managed" value={k.managed} icon={ShieldCheck} tone="ok" />
             <Kpi label="Unmanaged" value={k.unmanaged} icon={ShieldOff} tone={k.unmanaged > 0 ? 'warn' : 'default'} />
@@ -181,7 +203,13 @@ export function ScanJobResults() {
                     return (
                       <tr key={r.id}>
                         <td className="mono" style={{ fontSize: 12 }}>{r.ip} <span className={`badge badge-${outcomeBadge(r.outcome)}`}>{r.outcome}</span></td>
-                        <td>{d ? <Link className="cell-name" to={`/devices/${d.id}`}>{d.name}</Link> : <span className="muted">not enrolled</span>}{d?.hostname && <small style={{ display: 'block' }}>{d.hostname}</small>}</td>
+                        <td>{d ? <Link className="cell-name" to={`/devices/${d.id}`}>{d.name}</Link> : <span className="muted">not enrolled</span>}{d?.hostname && <small style={{ display: 'block' }}>{d.hostname}</small>}
+                          {r.disposition && DISPOSITION[r.disposition] && (
+                            <span className={`badge badge-${DISPOSITION[r.disposition].tone}`} style={{ fontSize: 10, marginTop: 2, display: 'inline-block' }}>
+                              {DISPOSITION[r.disposition].label}{(r.retry_count ?? 0) > 0 ? ` ·${r.retry_count}×` : ''}
+                            </span>
+                          )}
+                        </td>
                         <td>{d ? <ReachabilityBadge value={d.reachability} /> : '—'}</td>
                         <td>{d ? <ManagementBadge value={d.management} managedBy={d.managed_by} /> : '—'}</td>
                         <td style={{ textTransform: 'capitalize' }}>{(r.category ?? p.classification ?? d?.category ?? 'unknown').replace(/_/g, ' ')}{typeof p.confidence === 'number' && p.confidence > 0 ? <span className="muted" style={{ fontSize: 11 }}> · {p.confidence}%</span> : null}</td>

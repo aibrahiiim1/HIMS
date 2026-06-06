@@ -430,6 +430,75 @@ func (s *Server) dataQuality(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// --- Scan stability: Known-Device Retry signals from scan-result history -----
+	// Derived purely from real discovery_results dispositions (newest-first). A
+	// "known device missed last scan" is one whose most recent scan disposition was
+	// unreachable-after-retry; "flapping" recovered by retry in the latest scan;
+	// "frequently missed" was missed by the first sweep in >=3 of the last 5 scans.
+	if disp, derr := s.queries.ListKnownDeviceScanDispositions(ctx); derr == nil && len(disp) > 0 {
+		byID := make(map[uuid.UUID]db.Device, len(devs))
+		for _, d := range devs {
+			byID[d.ID] = d
+		}
+		perDev := map[uuid.UUID][]string{} // dispositions newest-first, one per (device,job)
+		order := []uuid.UUID{}
+		for _, r := range disp {
+			if r.DeviceID == nil {
+				continue
+			}
+			id := *r.DeviceID
+			if _, ok := perDev[id]; !ok {
+				order = append(order, id)
+			}
+			perDev[id] = append(perDev[id], r.Disposition)
+		}
+		stillMissed := map[string]bool{"known_missed": true, "known_unreachable": true}
+		firstSweepMissed := map[string]bool{"known_missed": true, "known_unreachable": true, "known_recovered": true}
+		const freqWindow, freqThreshold = 5, 3
+		var missedLast, flapping, frequent []dqDevice
+		for _, id := range order {
+			evs := perDev[id]
+			d, ok := byID[id]
+			if !ok || len(evs) == 0 { // device deleted since the scan — skip
+				continue
+			}
+			switch {
+			case stillMissed[evs[0]]:
+				dd := toDQ(d)
+				dd.Note = "missed in the latest scan (unreachable after retry)"
+				missedLast = append(missedLast, dd)
+			case evs[0] == "known_recovered":
+				dd := toDQ(d)
+				dd.Note = "missed the first sweep but recovered by retry in the latest scan"
+				flapping = append(flapping, dd)
+			}
+			n, seen := 0, 0
+			for _, e := range evs {
+				if seen >= freqWindow {
+					break
+				}
+				seen++
+				if firstSweepMissed[e] {
+					n++
+				}
+			}
+			if n >= freqThreshold {
+				dd := toDQ(d)
+				dd.Note = "missed the first sweep in " + strconv.Itoa(n) + " of the last " + strconv.Itoa(seen) + " scans"
+				frequent = append(frequent, dd)
+			}
+		}
+		capDQ := func(x []dqDevice) []dqDevice {
+			if len(x) > dqSampleCap {
+				return x[:dqSampleCap]
+			}
+			return x
+		}
+		addDQ("known_device_missed_last_scan", "Known device missed last scan", "Managed devices NOT found in the most recent scan of their subnet, even after targeted retries. They were not removed from inventory — verify power/reachability and re-scan. Open the scan job to see the miss.", "warning", capDQ(missedLast), len(missedLast))
+		addDQ("known_device_flapping_in_scan", "Known device flapping in scan", "Managed devices the main sweep missed but a targeted retry recovered in the latest scan. Intermittent reachability under scan load — consider lowering scan concurrency or raising timeouts for this site.", "info", capDQ(flapping), len(flapping))
+		addDQ("frequently_missed_known_device", "Frequently missed known device", "Managed devices missed by the first sweep in at least "+strconv.Itoa(freqThreshold)+" of the last "+strconv.Itoa(freqWindow)+" scans. Chronically flaky discovery — investigate the host, its switch port, or the scan profile.", "warning", capDQ(frequent), len(frequent))
+	}
+
 	// Reachability-vs-Management hygiene issues — the cases that prove Online and
 	// Managed are distinct (online-but-unmanaged, offline-but-previously-managed,
 	// credential-bound-but-not-working, …). Derived from the shared status model.

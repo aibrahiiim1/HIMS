@@ -326,16 +326,18 @@ type DiscoveryJob struct {
 }
 
 type DiscoveryResult struct {
-	ID        uuid.UUID  `json:"id"`
-	JobID     uuid.UUID  `json:"job_id"`
-	Ip        netip.Addr `json:"ip"`
-	Outcome   string     `json:"outcome"`
-	DeviceID  *uuid.UUID `json:"device_id"`
-	Driver    *string    `json:"driver"`
-	Category  *string    `json:"category"`
-	ProbeData []byte     `json:"probe_data"`
-	Error     *string    `json:"error"`
-	ProbedAt  time.Time  `json:"probed_at"`
+	ID          uuid.UUID  `json:"id"`
+	JobID       uuid.UUID  `json:"job_id"`
+	Ip          netip.Addr `json:"ip"`
+	Outcome     string     `json:"outcome"`
+	DeviceID    *uuid.UUID `json:"device_id"`
+	Driver      *string    `json:"driver"`
+	Category    *string    `json:"category"`
+	ProbeData   []byte     `json:"probe_data"`
+	Error       *string    `json:"error"`
+	ProbedAt    time.Time  `json:"probed_at"`
+	Disposition string     `json:"disposition"`
+	RetryCount  int32      `json:"retry_count"`
 }
 
 type EncryptionMetadatum struct {

@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/netip"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -419,6 +421,26 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 	}
 	applier := apply.New(s.queries)
 
+	// --- Known-Device Retry: load the devices already in inventory for the IPs in
+	// this scan's scope. A known device that the main sweep misses (transient
+	// timeout under load) is retried separately and, if still gone, recorded as
+	// "missed" — never silently dropped from the job. ---
+	knownByIP := map[netip.Addr]db.Device{}
+	if devs, derr := s.queries.ListAllDevices(ctx); derr == nil {
+		scopeSet := make(map[netip.Addr]bool, len(hosts))
+		for _, ip := range hosts {
+			scopeSet[ip] = true
+		}
+		for _, d := range devs {
+			if d.PrimaryIp != nil && scopeSet[*d.PrimaryIp] {
+				knownByIP[*d.PrimaryIp] = d
+			}
+		}
+	}
+	var seenMu sync.Mutex
+	seenAlive := make(map[netip.Addr]bool)
+	var newCount, knownSeenCount, recoveredCount, missedCount int
+
 	res := scan.Scope(ctx, hosts, concurrency, func(ctx context.Context, ip netip.Addr) (uuid.UUID, error) {
 		hctx, hcancel := context.WithTimeout(ctx, 45*time.Second)
 		defer hcancel()
@@ -578,10 +600,26 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 			}
 		}
 		if r.Alive {
-			s.recordResult(hctx, jobID, ip, r, id, err, enrichment, profRes, collectedVia, agentName)
+			disp := "newly_discovered"
+			seenMu.Lock()
+			if _, known := knownByIP[ip]; known {
+				disp = "known_seen"
+				knownSeenCount++
+			} else {
+				newCount++
+			}
+			seenAlive[ip] = true
+			seenMu.Unlock()
+			s.recordResult(hctx, jobID, ip, r, id, err, enrichment, profRes, collectedVia, agentName, disp, 0)
 		}
 		return id, err
 	})
+
+	// --- Known-Device Retry pass: any known device NOT seen alive in the main
+	// sweep is retried separately with slower, contention-free targeted probes
+	// (longer timeouts + its last-known open ports), up to 3 attempts. Recovered →
+	// "known_recovered"; still gone → a "missed" row so it never disappears. ---
+	s.retryMissedKnown(ctx, jobID, locID, cfg, applier, knownByIP, seenAlive, &recoveredCount, &missedCount)
 
 	status, errMsg := "completed", (*string)(nil)
 	if ctx.Err() != nil {
@@ -589,9 +627,83 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 		m := ctx.Err().Error()
 		errMsg = &m
 	}
+	// found_count = devices present this run (new + known-seen + recovered). It is
+	// NOT the stable inventory count — the Job Results API splits the dispositions.
+	found := newCount + knownSeenCount + recoveredCount
 	_ = s.queries.UpdateDiscoveryJobStatus(context.Background(), db.UpdateDiscoveryJobStatusParams{
-		ID: jobID, Status: status, HostCount: int32(len(hosts)), FoundCount: int32(res.Persisted), Error: errMsg,
+		ID: jobID, Status: status, HostCount: int32(len(hosts)), FoundCount: int32(found), Error: errMsg,
 	})
+	_ = res // per-IP aggregate retained for potential future telemetry
+}
+
+// retryMissedKnown runs the targeted Known-Device Retry pass. For each known
+// device missed by the main sweep it re-probes the IP alone — generous timeouts,
+// no concurrency contention, its last-known open ports added — up to 3 attempts.
+// Recovered devices are applied + recorded "known_recovered"; the rest get a
+// "missed" row (recordMissed) so a known managed device is never silently absent.
+func (s *Server) retryMissedKnown(ctx context.Context, jobID uuid.UUID, locID *uuid.UUID, base discovery.PipelineConfig, applier *apply.Applier, knownByIP map[netip.Addr]db.Device, seenAlive map[netip.Addr]bool, recoveredCount, missedCount *int) {
+	var missed []netip.Addr
+	for ip := range knownByIP {
+		if !seenAlive[ip] {
+			missed = append(missed, ip)
+		}
+	}
+	if len(missed) == 0 {
+		return
+	}
+	// Slower, more forgiving than the balanced sweep — completeness over speed for
+	// the FEW missed hosts (not the whole subnet).
+	retryCfg := base
+	retryCfg.PortTimeout = maxDur(base.PortTimeout*2, 1500*time.Millisecond)
+	retryCfg.SNMPTimeout = maxDur(base.SNMPTimeout*2, 4000*time.Millisecond)
+	const maxAttempts = 3
+
+	for _, ip := range missed {
+		if ctx.Err() != nil {
+			return
+		}
+		dev := knownByIP[ip]
+		rcfg := retryCfg
+		rcfg.ExtraPorts = s.lastKnownOpenPorts(ctx, dev.ID) // last successful open ports
+		recovered := false
+		attempt := 0
+		for attempt = 1; attempt <= maxAttempts; attempt++ {
+			if ctx.Err() != nil {
+				return
+			}
+			actx, acancel := context.WithTimeout(ctx, 40*time.Second)
+			rr := discovery.Run(actx, ip, locID, rcfg)
+			if rr.Alive {
+				id, aerr := applier.Apply(actx, rr, locID)
+				if aerr == nil && id != uuid.Nil {
+					if d2, e := s.queries.GetDevice(actx, id); e == nil {
+						s.persistScanCredAttempts(actx, d2, rr.CredAttempts)
+						s.seedReachabilityCheck(actx, d2, rr.OpenPorts, rr.Probe.SNMPSysDescr != "")
+					}
+				}
+				acancel()
+				s.recordResult(ctx, jobID, ip, rr, id, aerr,
+					"Recovered by Known-Device Retry (attempt "+strconv.Itoa(attempt)+" of "+strconv.Itoa(maxAttempts)+", slower targeted probe)",
+					nil, "", "", "known_recovered", attempt)
+				*recoveredCount++
+				recovered = true
+				break
+			}
+			acancel()
+		}
+		if !recovered {
+			s.recordMissed(ctx, jobID, ip, dev, discovery.HostResult{}, maxAttempts)
+			*missedCount++
+		}
+	}
+}
+
+// maxDur returns the larger of two durations.
+func maxDur(a, b time.Duration) time.Duration {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // scanCredAttemptDTO / scanDetail are the actionable per-device scan record
@@ -843,7 +955,10 @@ func scanNextActionWithPlan(category string, bound bool, boundKind string, pr *s
 }
 
 // recordResult writes one actionable discovery_results row for an alive host.
-func (s *Server) recordResult(ctx context.Context, jobID uuid.UUID, ip netip.Addr, r discovery.HostResult, id uuid.UUID, applyErr error, enrichment string, profRes *scanProfileResult, collectedVia, agentName string) {
+// disposition tags the row for the Known-Device-Retry / scan-stability counts
+// (newly_discovered | known_seen | known_recovered); retryCount is how many
+// targeted retries were spent (0 for the main sweep).
+func (s *Server) recordResult(ctx context.Context, jobID uuid.UUID, ip netip.Addr, r discovery.HostResult, id uuid.UUID, applyErr error, enrichment string, profRes *scanProfileResult, collectedVia, agentName, disposition string, retryCount int) {
 	outcome := "alive"
 	switch {
 	case applyErr != nil:
@@ -932,7 +1047,59 @@ func (s *Server) recordResult(ctx context.Context, jobID uuid.UUID, ip netip.Add
 	}
 	_ = s.queries.UpdateDiscoveryResult(ctx, db.UpdateDiscoveryResultParams{
 		ID: row.ID, Outcome: outcome, DeviceID: devID, Driver: drv, Category: cat, Error: errStr, ProbeData: blob,
+		Disposition: disposition, RetryCount: int32(retryCount),
 	})
+}
+
+// recordMissed writes a discovery_results row for a KNOWN device that was not
+// seen in the main sweep AND could not be recovered by targeted retries. The row
+// keeps the device's identity (device_id + category) so it appears in the job —
+// a known managed device must never silently vanish from a scan result. outcome
+// is 'missed', disposition 'known_unreachable'.
+func (s *Server) recordMissed(ctx context.Context, jobID uuid.UUID, ip netip.Addr, dev db.Device, last discovery.HostResult, retryCount int) {
+	row, err := s.queries.CreateDiscoveryResult(ctx, db.CreateDiscoveryResultParams{
+		JobID: jobID, Ip: ip, Outcome: "missed", ProbeData: []byte("{}"),
+	})
+	if err != nil {
+		return
+	}
+	lastPorts := s.lastKnownOpenPorts(ctx, dev.ID)
+	detail := scanDetail{
+		OpenPorts:      lastPorts,
+		Classification: dev.Category,
+		Evidence:       []string{"known device — not seen in main sweep; targeted retry also failed"},
+		NextAction:     "Known device missed this run (unreachable after " + strconv.Itoa(retryCount) + " targeted retries). It was NOT removed from inventory — verify the host is powered on / reachable, then re-scan.",
+	}
+	if len(last.OpenPorts) > 0 {
+		detail.OpenPorts = last.OpenPorts
+	}
+	blob, merr := json.Marshal(detail)
+	if merr != nil {
+		blob = []byte("{}")
+	}
+	devID := dev.ID
+	cat := dev.Category
+	_ = s.queries.UpdateDiscoveryResult(ctx, db.UpdateDiscoveryResultParams{
+		ID: row.ID, Outcome: "missed", DeviceID: &devID, Category: &cat, ProbeData: blob,
+		Disposition: "known_unreachable", RetryCount: int32(retryCount),
+	})
+}
+
+// lastKnownOpenPorts returns the open ports from a device's most recent scan
+// probe_data — the targeted-retry pass scans these (in addition to the standard
+// set) so a host on a non-standard port is still re-detected.
+func (s *Server) lastKnownOpenPorts(ctx context.Context, devID uuid.UUID) []int {
+	blob, err := s.queries.LatestDeviceProbeData(ctx, &devID)
+	if err != nil || len(blob) == 0 {
+		return nil
+	}
+	var d struct {
+		OpenPorts []int `json:"open_ports"`
+	}
+	if json.Unmarshal(blob, &d) != nil {
+		return nil
+	}
+	return d.OpenPorts
 }
 
 // scanDecrypt opens a credential's secret in memory for the scan pipeline. It
@@ -1054,16 +1221,41 @@ func (s *Server) getDiscoveryJob(w http.ResponseWriter, r *http.Request) {
 	results, _ := s.queries.ListDiscoveryResults(ctx, id)
 	// probe_data is a JSONB column stored as []byte; emit it as raw JSON (not the
 	// base64 Go would produce for a byte slice) so the UI gets the actionable
-	// per-device scan detail object.
+	// per-device scan detail object. Each row carries its Known-Device-Retry
+	// disposition + retry_count.
 	out := make([]map[string]any, 0, len(results))
+	// Separated, honest counts — found_count is NOT presented as a stable inventory
+	// number. targets_probed = IPs in scope this run.
+	var newlyDiscovered, knownSeen, knownRecovered, knownMissed, enrolledUpdated int
 	for _, x := range results {
-		row := map[string]any{
+		out = append(out, map[string]any{
 			"id": x.ID, "job_id": x.JobID, "ip": x.Ip, "outcome": x.Outcome,
 			"device_id": x.DeviceID, "driver": x.Driver, "category": x.Category,
 			"error": x.Error, "probed_at": x.ProbedAt,
+			"disposition": x.Disposition, "retry_count": x.RetryCount,
 			"probe_data": json.RawMessage(x.ProbeData),
+		})
+		switch x.Disposition {
+		case "newly_discovered":
+			newlyDiscovered++
+		case "known_seen":
+			knownSeen++
+		case "known_recovered":
+			knownRecovered++
+		case "known_missed", "known_unreachable":
+			knownMissed++
 		}
-		out = append(out, row)
+		if x.Outcome == "enrolled" {
+			enrolledUpdated++
+		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"job": job, "results": out})
+	counts := map[string]int{
+		"targets_probed":           int(job.HostCount),
+		"newly_discovered":         newlyDiscovered,
+		"known_seen_again":         knownSeen,
+		"known_recovered_by_retry": knownRecovered,
+		"known_missed_this_run":    knownMissed,
+		"enrolled_updated":         enrolledUpdated,
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"job": job, "results": out, "counts": counts})
 }

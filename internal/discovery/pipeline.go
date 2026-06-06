@@ -157,6 +157,11 @@ type PipelineConfig struct {
 	// PortTimeout bounds each TCP port-connect during the port scan + aliveness
 	// check. Zero falls back to 500ms.
 	PortTimeout time.Duration
+	// ExtraPorts are appended to the standard management-port set for the
+	// aliveness/port scan. The Known-Device Retry pass passes a missed device's
+	// last-known open ports here so a host listening only on a non-standard port
+	// is still re-detected on the targeted retry.
+	ExtraPorts []int
 }
 
 // explicitTierSpecificity ranks operator-selected groups above subnet (2) and
@@ -175,7 +180,13 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 	// keys on (DNS/DC/DB). This breadth lets the scan DETECT non-SNMP hosts
 	// (Windows workstations, Linux, cameras) that the old switch-centric list
 	// missed entirely.
-	r.OpenPorts = scanPorts(ctx, ip, []int{22, 23, 53, 80, 88, 135, 161, 389, 443, 445, 554, 636, 1433, 1521, 3389, 5432, 5985, 5986, 8000, 8080, 8443, 9100}, cfg.PortTimeout)
+	ports := []int{22, 23, 53, 80, 88, 135, 161, 389, 443, 445, 554, 636, 1433, 1521, 3389, 5432, 5985, 5986, 8000, 8080, 8443, 9100}
+	for _, p := range cfg.ExtraPorts { // targeted-retry: a missed known device's last-known open ports
+		if p > 0 && p < 65536 {
+			ports = append(ports, p)
+		}
+	}
+	r.OpenPorts = scanPorts(ctx, ip, ports, cfg.PortTimeout)
 	r.Probe = driver.Probe{IP: ip, OpenTCPPorts: r.OpenPorts}
 
 	// Step 2: Resolve credential candidates (scope-bound + operator-selected /

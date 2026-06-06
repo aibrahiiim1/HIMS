@@ -313,6 +313,11 @@ type Querier interface {
 	ListEnabledChecksWithDevice(ctx context.Context) ([]ListEnabledChecksWithDeviceRow, error)
 	ListHAMembers(ctx context.Context, deviceID uuid.UUID) ([]FirewallHaMember, error)
 	ListInterfaces(ctx context.Context, deviceID uuid.UUID) ([]Interface, error)
+	// Per-device scan dispositions across recent jobs (newest first). Powers the
+	// scan-stability Data Quality issues: missed-last-scan, flapping (recovered by
+	// retry), and frequently-missed-known-device. Bounded so the scan history of a
+	// long-lived deployment cannot blow up the query.
+	ListKnownDeviceScanDispositions(ctx context.Context) ([]ListKnownDeviceScanDispositionsRow, error)
 	ListLicenses(ctx context.Context, deviceID uuid.UUID) ([]FirewallLicense, error)
 	// Full flat list for building the location tree client-side.
 	ListLocations(ctx context.Context) ([]Location, error)

@@ -53,11 +53,24 @@ RETURNING *;
 
 -- name: UpdateDiscoveryResult :exec
 UPDATE discovery_results
-SET outcome = $2, device_id = $3, driver = $4, category = $5, error = $6, probe_data = $7
+SET outcome = $2, device_id = $3, driver = $4, category = $5, error = $6, probe_data = $7,
+    disposition = $8, retry_count = $9
 WHERE id = $1;
 
 -- name: ListDiscoveryResults :many
 SELECT * FROM discovery_results WHERE job_id = $1 ORDER BY probed_at DESC;
+
+-- name: ListKnownDeviceScanDispositions :many
+-- Per-device scan dispositions across recent jobs (newest first). Powers the
+-- scan-stability Data Quality issues: missed-last-scan, flapping (recovered by
+-- retry), and frequently-missed-known-device. Bounded so the scan history of a
+-- long-lived deployment cannot blow up the query.
+SELECT device_id, disposition, job_id, probed_at
+FROM discovery_results
+WHERE device_id IS NOT NULL
+  AND disposition IN ('known_seen','known_recovered','known_missed','known_unreachable')
+ORDER BY probed_at DESC
+LIMIT 5000;
 
 -- name: LatestDeviceProbeData :one
 -- The most recent scan probe_data for a device (open ports, evidence, etc.) —

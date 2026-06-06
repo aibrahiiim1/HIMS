@@ -606,6 +606,21 @@ export interface DiscoveryResult {
   error?: string | null
   probed_at: string
   probe_data?: ScanDetail | null
+  // Known-Device-Retry disposition: '' (legacy) | newly_discovered | known_seen |
+  // known_recovered | known_missed | known_unreachable.
+  disposition?: string
+  retry_count?: number
+}
+
+// Separated, honest per-job scan counts (found_count is NOT the stable inventory
+// count). Returned alongside {job, results} from GET /discovery/jobs/:id.
+export interface ScanJobCounts {
+  targets_probed: number
+  newly_discovered: number
+  known_seen_again: number
+  known_recovered_by_retry: number
+  known_missed_this_run: number
+  enrolled_updated: number
 }
 
 // ScanPreflight is shown before launching a scan: what protocols the operator is
