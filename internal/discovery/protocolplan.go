@@ -54,6 +54,21 @@ func planProtocols(ports []int, sshBanner, httpServer, httpTitle, httpBody strin
 	vmware := containsAny(web, "vmware", "esxi", "vsphere", "/sdk", "vmware esx")
 	netVendor := containsAny(web, "cisco", "huawei", "hp ", "hpe", "aruba", "extreme", "fortinet", "fortigate", "mikrotik", "ruckus", "juniper", "ubiquiti", "edgeos")
 
+	// applianceWeb: vendor names OR role/product markers in the web banner that
+	// indicate a network appliance management UI (controller/firewall/switch/etc).
+	applianceWeb := netVendor || containsAny(web,
+		"controller", "wireless", "firewall", "switch", "gateway", "appliance",
+		"fortios", "panos", "palo alto", "routeros", "big-ip", "f5", "vyos", "wlc")
+	// Non-standard management web ports (8443/8080/8000) strongly indicate an
+	// appliance UI rather than a plain web server (which uses 80/443).
+	mgmtWebPort := hasPort(ports, 8443) || hasPort(ports, 8080) || hasPort(ports, 8000)
+	// appliance: an SSH-reachable host that is a likely NETWORK APPLIANCE — it has
+	// SSH plus either a non-standard mgmt web port, OR a standard web port (80/443)
+	// carrying a vendor/role marker. These are commonly managed over SNMP/161 (UDP,
+	// invisible to a TCP port scan), so they must be SNMP-probed — unlike a plain
+	// Linux server. The marker gate keeps SNMP attempts off ordinary Linux servers.
+	appliance := hasPort(ports, 22) && (mgmtWebPort || (httpOpen && applianceWeb))
+
 	mk := func(cand string, expected []string, kinds ...domain.CredentialKind) ProtocolPlan {
 		rel := make(map[domain.CredentialKind]bool, len(kinds))
 		for _, k := range kinds {
@@ -77,6 +92,14 @@ func planProtocols(ports []int, sshBanner, httpServer, httpTitle, httpBody strin
 			return mk("windows", []string{"winrm"}, domain.CredWinRM, domain.CredHTTPBasic)
 		}
 		return mk("windows", []string{"winrm"}, domain.CredWinRM)
+	case appliance:
+		// SSH-managed network appliance (wireless controller, firewall, load
+		// balancer, switch with a mgmt UI). Try SNMP + SSH (+ HTTP) — NOT SSH-only —
+		// because these are routinely managed over SNMP even when the box is Linux
+		// underneath and presents an OpenSSH banner. Gated on appliance evidence
+		// (non-standard mgmt port or vendor/role web marker) so plain Linux servers
+		// stay SSH-only and don't generate noisy SNMP failures.
+		return mk("appliance", []string{"snmp", "ssh"}, domain.CredSNMPv2c, domain.CredSNMPv3, domain.CredSSH, domain.CredHTTPBasic)
 	case linux:
 		// Linux: SSH. (Some Linux servers run SNMP, but to keep health clean we
 		// expect SSH; SNMP can still be tested for network/unknown hosts.)
