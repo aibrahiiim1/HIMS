@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/coralsearesorts/hims/internal/credtest"
@@ -379,6 +380,67 @@ func (s *Server) accessCoverage(w http.ResponseWriter, r *http.Request) {
 		ByProtocol:       protoDTOs,
 		Unmanaged:        accessUnmanagedDTO{DeviceCount: unmanaged, Reasons: reasons},
 	})
+}
+
+// --- Sidebar badge counts ----------------------------------------------------
+
+// missingClassLowConf is the confidence threshold below which a device is
+// considered low-confidence (and therefore "missing classification"). Must stay
+// in lockstep with web/src/lib/classify.ts LOW_CONFIDENCE.
+const missingClassLowConf = 50
+
+// badgeCountsDTO powers the device-derived sidebar nav badges (Inventory →
+// Missing Classification and Unmanaged Devices). Computed server-side so the
+// sidebar never has to download the full device list just to size a badge.
+type badgeCountsDTO struct {
+	MissingClassification int `json:"missing_classification"`
+	Unmanaged             int `json:"unmanaged"`
+}
+
+// deviceNeedsClassification mirrors web/src/lib/classify.ts needsClassification:
+// HIMS does not fully KNOW WHAT the device is — category unknown, vendor missing,
+// or low-confidence evidence (and not operator-locked). Kept identical to the
+// frontend predicate so the badge count always matches the Missing Classification
+// page. If you change one, change the other.
+func deviceNeedsClassification(d db.Device) bool {
+	if d.Category == "" || d.Category == "unknown" {
+		return true
+	}
+	if d.Vendor == nil || strings.TrimSpace(*d.Vendor) == "" {
+		return true
+	}
+	if d.ConfidenceScore != nil && *d.ConfidenceScore > 0 && int(*d.ConfidenceScore) < missingClassLowConf && !d.ClassificationLocked {
+		return true
+	}
+	return false
+}
+
+// badgeCounts handles GET /dashboard/badge-counts. Both counts are derived from
+// the same site-scoped device set + proven-only access map used by the Missing
+// Classification / Unmanaged Devices pages, so the badges match those pages.
+func (s *Server) badgeCounts(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	devices, err := s.queries.ListAllDevices(ctx)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	devices = s.scopeDevices(ctx, devices)
+	am, err := s.deviceAccessMap(ctx)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	var missing, unmanaged int
+	for _, d := range devices {
+		if deviceNeedsClassification(d) {
+			missing++
+		}
+		if !am[d.ID].hasProven() { // proven-only: a bare binding is NOT managed
+			unmanaged++
+		}
+	}
+	writeJSON(w, http.StatusOK, badgeCountsDTO{MissingClassification: missing, Unmanaged: unmanaged})
 }
 
 // expectedProtocols lists the management protocol(s) a device of this class is
