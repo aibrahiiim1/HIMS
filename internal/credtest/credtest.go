@@ -209,7 +209,15 @@ func testHTTP(ctx context.Context, secret, host string, timeout time.Duration) O
 		switch {
 		case resp.StatusCode == 401 || resp.StatusCode == 403:
 			return Outcome{Category: CatAuthFailed, Detail: "HTTP " + resp.Status}
-		case resp.StatusCode < 400:
+		case resp.StatusCode >= 300 && resp.StatusCode < 400:
+			// A redirect is NOT proof of authentication: a server that ignores the
+			// Authorization header and redirects to a login/SSO page returns 302 just
+			// the same as one that authenticated. Counting it as success let wrong
+			// credentials (e.g. an iDRAC http_basic cred on a plain web app) falsely
+			// "bind" and mark a device managed while collecting nothing. Treat a bare
+			// redirect as not-authenticated so it never binds.
+			return Outcome{Category: CatAuthFailed, Detail: "HTTP " + resp.Status + " — redirected (HTTP basic not accepted; likely a login/SSO page)"}
+		case resp.StatusCode < 300:
 			return Outcome{Category: CatSuccess, Detail: "HTTP " + resp.Status}
 		default:
 			return Outcome{Category: CatError, Detail: "HTTP " + resp.Status}

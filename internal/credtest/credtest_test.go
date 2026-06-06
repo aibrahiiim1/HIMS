@@ -1,9 +1,49 @@
 package credtest
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
+
+// TestHTTPBasic_RedirectIsNotSuccess pins that a bare redirect (302 to a login
+// page) is NOT treated as a successful http_basic auth — that false-positive let
+// a wrong credential (e.g. an iDRAC http_basic cred on a plain web app) bind and
+// mark a device managed while collecting nothing. Only 2xx is success; 401/403
+// is auth_failed; 3xx is auth_failed (not authenticated).
+func TestHTTPBasic_RedirectIsNotSuccess(t *testing.T) {
+	cases := []struct {
+		name string
+		code int
+		want string
+	}{
+		{"200 ok", http.StatusOK, CatSuccess},
+		{"302 redirect to login", http.StatusFound, CatAuthFailed},
+		{"301 moved", http.StatusMovedPermanently, CatAuthFailed},
+		{"401 unauthorized", http.StatusUnauthorized, CatAuthFailed},
+		{"403 forbidden", http.StatusForbidden, CatAuthFailed},
+		{"500 error", http.StatusInternalServerError, CatError},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if tc.code >= 300 && tc.code < 400 {
+					w.Header().Set("Location", "/login")
+				}
+				w.WriteHeader(tc.code)
+			}))
+			defer srv.Close()
+			host := strings.TrimPrefix(srv.URL, "http://") // host:port
+			out := testHTTP(context.Background(), "admin:secret", host, 5*time.Second)
+			if out.Category != tc.want {
+				t.Errorf("status %d → category %q, want %q (detail: %s)", tc.code, out.Category, tc.want, out.Detail)
+			}
+		})
+	}
+}
 
 func TestProtocolForKind(t *testing.T) {
 	cases := map[string]string{
