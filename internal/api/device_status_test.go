@@ -37,14 +37,20 @@ func TestDeriveManagement(t *testing.T) {
 		}
 		return m
 	}
-	winrmAccess := &deviceAccess{protocols: map[string]string{"winrm": "bound_credential"}}
+	provenWinRM := &deviceAccess{protocols: map[string]string{"winrm": "evidence"}, proven: map[string]bool{"winrm": true}}
+	boundOnly := &deviceAccess{protocols: map[string]string{"winrm": "bound_credential"}, proven: map[string]bool{}}
 	legacyTS := &deviceTestStatus{kindCategory: map[string]string{"winrm": "auth_ok_operation_fault"}}
 	authFailTS := &deviceTestStatus{authFailed: true, kindCategory: map[string]string{"winrm": "auth_failed"}}
 
-	// Managed: a working method exists (never open ports).
-	m := mk(winrmAccess, nil, false, false)
+	// Managed: a PROVEN working method exists (never open ports).
+	m := mk(provenWinRM, nil, false, false)
 	if st, by := m.deriveManagement(db.Device{ID: id, Category: "endpoint"}); st != MgmtManaged || len(by) != 1 || by[0] != "winrm" {
 		t.Errorf("expected managed/winrm, got %s %v", st, by)
+	}
+	// Bound credential but never proven to work → NOT managed (collection failed).
+	m = mk(boundOnly, nil, false, false)
+	if st, _ := m.deriveManagement(db.Device{ID: id, Category: "server", CredentialID: &cred}); st != MgmtCollectionFailed {
+		t.Errorf("bound-but-unproven: expected collection_failed, got %s", st)
 	}
 	// Online but unmanaged: a credentialed category with nothing working.
 	m = mk(nil, nil, false, false)

@@ -66,7 +66,8 @@ func protocolRank(p string) int {
 // deviceAccess is the set of protocols a device is manageable by, each tagged
 // with its strongest source (bound_credential outranks evidence).
 type deviceAccess struct {
-	protocols map[string]string // protocol → source
+	protocols map[string]string // protocol → strongest source (display)
+	proven    map[string]bool   // protocol → has PROVEN working access (evidence or successful test), independent of the display source
 }
 
 func (a *deviceAccess) managed() bool { return a != nil && len(a.protocols) > 0 }
@@ -77,6 +78,24 @@ func (a *deviceAccess) has(p string) bool {
 	_, ok := a.protocols[p]
 	return ok
 }
+
+// provenProtocols returns the protocols a device is PROVEN to be managed by — a
+// successful authenticated collection (evidence) or a successful credential test.
+// A bare bound credential that was never proven to work is NOT counted: per the
+// management-status rules, "managed" means a credential that actually works, not
+// merely one that is bound. Open ports never appear here.
+func (a *deviceAccess) provenProtocols() []string {
+	if a == nil {
+		return nil
+	}
+	out := make([]string, 0, len(a.proven))
+	for p := range a.proven {
+		out = append(out, p)
+	}
+	return out
+}
+
+func (a *deviceAccess) hasProven() bool { return a != nil && len(a.proven) > 0 }
 
 // deviceAccessMap builds the per-device access map for ALL devices. Devices with
 // no working/bound method are simply absent from the map (→ unmanaged).
@@ -96,12 +115,18 @@ func buildAccessMap(rows []db.ListDeviceAccessSignalsRow) map[uuid.UUID]*deviceA
 	for _, r := range rows {
 		da := m[r.DeviceID]
 		if da == nil {
-			da = &deviceAccess{protocols: map[string]string{}}
+			da = &deviceAccess{protocols: map[string]string{}, proven: map[string]bool{}}
 			m[r.DeviceID] = da
 		}
 		// bound_credential is the authoritative source; never downgrade it.
 		if cur, ok := da.protocols[r.Protocol]; !ok || (cur != "bound_credential" && r.Source == "bound_credential") {
 			da.protocols[r.Protocol] = r.Source
+		}
+		// proven = a successful authenticated collection (evidence) or a successful
+		// credential test. Tracked independently of the display source so a protocol
+		// that is BOTH bound and evidenced still counts as proven.
+		if r.Source == "evidence" || r.Source == "test_result" {
+			da.proven[r.Protocol] = true
 		}
 	}
 	return m

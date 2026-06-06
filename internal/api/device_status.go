@@ -105,10 +105,11 @@ func (m *statusMaps) deriveManagement(d db.Device) (state string, managedBy []st
 	da := m.access[d.ID]
 	ts := m.test[d.ID]
 
-	if da.managed() {
-		for p := range da.protocols {
-			managedBy = append(managedBy, p)
-		}
+	// Managed requires a PROVEN working method (successful collection evidence or a
+	// successful credential test) — never a bare bound credential, and never an
+	// open port.
+	if da.hasProven() {
+		managedBy = da.provenProtocols()
 		sort.Slice(managedBy, func(i, j int) bool { return protocolRank(managedBy[i]) < protocolRank(managedBy[j]) })
 		return MgmtManaged, managedBy
 	}
