@@ -912,6 +912,7 @@ function JobsTab({ jobs, jobID, setJobID, detail, setMsg, qc }: { jobs: Discover
                         {typeof d.confidence === 'number' && d.confidence > 0 && <span className="muted" style={{ fontSize: 11 }}> · {d.confidence}%</span>}
                         {d.candidate && <div className="muted" style={{ fontSize: 11 }}>candidate: {d.candidate}</div>}
                         {(d.expected_protocols ?? []).length > 0 && <div style={{ fontSize: 11 }}>expected: <strong>{(d.expected_protocols ?? []).join(' / ').toUpperCase()}</strong></div>}
+                        {(d.opportunistic_protocols ?? []).length > 0 && <div style={{ fontSize: 11 }}>opportunistic: <strong>{(d.opportunistic_protocols ?? []).join(' / ').toUpperCase()}</strong></div>}
                         {(d.evidence ?? []).length > 0 && <div className="muted" style={{ fontSize: 11 }}>{(d.evidence ?? []).join(' · ')}</div>}
                       </td>
                       <td className="muted" style={{ fontSize: 11 }}>{(d.open_ports ?? []).join(', ') || '—'}</td>
@@ -923,7 +924,7 @@ function JobsTab({ jobs, jobID, setJobID, detail, setMsg, qc }: { jobs: Discover
                           </div>
                         ))}
                         {(d.skipped_protocols ?? []).length > 0 && (
-                          <div className="muted" style={{ fontSize: 10, marginTop: 2 }}>n/a: {(d.skipped_protocols ?? []).join(', ')}</div>
+                          <div className="muted" style={{ fontSize: 10, marginTop: 2 }}>skipped (not attempted): {(d.skipped_protocols ?? []).join(', ')}</div>
                         )}
                       </td>
                       <td>{d.bound_cred ? <span className="badge badge-up">{d.bound_cred}</span> : <span className="muted">—</span>}</td>

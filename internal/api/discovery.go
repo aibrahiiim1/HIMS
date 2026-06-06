@@ -608,18 +608,19 @@ type scanCredAttemptDTO struct {
 }
 
 type scanDetail struct {
-	OpenPorts         []int                `json:"open_ports,omitempty"`
-	Classification    string               `json:"classification"`
-	Confidence        int                  `json:"confidence"`
-	Evidence          []string             `json:"evidence,omitempty"`
-	Candidate         string               `json:"candidate,omitempty"`          // protocol-plan candidate type
-	ExpectedProtocols []string             `json:"expected_protocols,omitempty"` // what the scan expected to manage by
-	SkippedProtocols  []string             `json:"skipped_protocols,omitempty"`  // deliberately not tested (not applicable)
-	CredAttempts      []scanCredAttemptDTO `json:"cred_attempts,omitempty"`
-	BoundCred         string               `json:"bound_cred,omitempty"`
-	Enrichment        string               `json:"enrichment,omitempty"`
-	Profile           *scanProfileResult   `json:"profile,omitempty"`
-	NextAction        string               `json:"next_action"`
+	OpenPorts              []int                `json:"open_ports,omitempty"`
+	Classification         string               `json:"classification"`
+	Confidence             int                  `json:"confidence"`
+	Evidence               []string             `json:"evidence,omitempty"`
+	Candidate              string               `json:"candidate,omitempty"`               // protocol-plan candidate type
+	ExpectedProtocols      []string             `json:"expected_protocols,omitempty"`      // what the scan expected to manage by
+	OpportunisticProtocols []string             `json:"opportunistic_protocols,omitempty"` // not expected by the plan but probed anyway (e.g. SNMP — UDP/161, invisible to a port scan)
+	SkippedProtocols       []string             `json:"skipped_protocols,omitempty"`       // truly NOT attempted (not expected and not probed)
+	CredAttempts           []scanCredAttemptDTO `json:"cred_attempts,omitempty"`
+	BoundCred              string               `json:"bound_cred,omitempty"`
+	Enrichment             string               `json:"enrichment,omitempty"`
+	Profile                *scanProfileResult   `json:"profile,omitempty"`
+	NextAction             string               `json:"next_action"`
 	// How OS inventory was (or will be) collected for this host:
 	//   "" (n/a) | "direct" | "relay_agent" (queued) | "agent_offline" | "agent_missing"
 	CollectedVia string `json:"collected_via,omitempty"`
@@ -730,17 +731,53 @@ func scanNextActionWithProfile(category string, bound bool, boundKind string, pr
 // skippedProtocols lists the standard management protocols the scan deliberately
 // did NOT test for this candidate (not applicable) — so the operator sees, e.g.
 // on a Windows host, that SNMP/SSH/ONVIF were intentionally skipped, not failed.
-func skippedProtocols(plan discovery.ProtocolPlan) []string {
-	universe := []struct {
-		label string
-		kind  domain.CredentialKind
-	}{
-		{"SNMP", domain.CredSNMPv2c}, {"SSH", domain.CredSSH},
-		{"WinRM", domain.CredWinRM}, {"ONVIF", domain.CredONVIF},
+// protocolUniverse is the set of management protocols the scan reasons about for
+// the expected / opportunistic / skipped breakdown. token matches the cred-attempt
+// Protocol value ("snmp"/"ssh"/"winrm"/"onvif").
+var protocolUniverse = []struct {
+	label, token string
+	kind         domain.CredentialKind
+}{
+	{"SNMP", "snmp", domain.CredSNMPv2c}, {"SSH", "ssh", domain.CredSSH},
+	{"WinRM", "winrm", domain.CredWinRM}, {"ONVIF", "onvif", domain.CredONVIF},
+}
+
+// attemptedProtocols is the set of protocol tokens the scan actually tried, taken
+// from the recorded credential attempts (so "skipped" can never include something
+// that was attempted).
+func attemptedProtocols(attempts []scanCredAttemptDTO) map[string]bool {
+	set := make(map[string]bool, len(attempts))
+	for _, a := range attempts {
+		if a.Protocol != "" {
+			set[a.Protocol] = true
+		}
 	}
+	return set
+}
+
+// skippedProtocols lists protocols the scan TRULY did not attempt — not expected
+// by the plan AND no credential attempt recorded. A protocol probed
+// opportunistically (e.g. SNMP on a Linux host) is NOT skipped.
+func skippedProtocols(plan discovery.ProtocolPlan, attempts []scanCredAttemptDTO) []string {
+	tried := attemptedProtocols(attempts)
 	var out []string
-	for _, p := range universe {
-		if !plan.Relevant(p.kind) {
+	for _, p := range protocolUniverse {
+		if !plan.Relevant(p.kind) && !tried[p.token] {
+			out = append(out, p.label)
+		}
+	}
+	return out
+}
+
+// opportunisticProtocols lists protocols that were NOT expected by the plan but
+// were attempted anyway — SNMP is UDP/161 and invisible to a TCP port scan, so it
+// is probed on every alive host. Shown as "attempted opportunistically", never as
+// skipped.
+func opportunisticProtocols(plan discovery.ProtocolPlan, attempts []scanCredAttemptDTO) []string {
+	tried := attemptedProtocols(attempts)
+	var out []string
+	for _, p := range protocolUniverse {
+		if !plan.Relevant(p.kind) && tried[p.token] {
 			out = append(out, p.label)
 		}
 	}
@@ -855,8 +892,9 @@ func (s *Server) recordResult(ctx context.Context, jobID uuid.UUID, ip netip.Add
 	detail := scanDetail{
 		OpenPorts: r.OpenPorts, Classification: category, Confidence: r.Match.Confidence,
 		Evidence: evidence, Candidate: r.Plan.Candidate, ExpectedProtocols: r.Plan.Expected,
-		SkippedProtocols: skippedProtocols(r.Plan),
-		CredAttempts:     attempts, BoundCred: boundKind,
+		OpportunisticProtocols: opportunisticProtocols(r.Plan, attempts),
+		SkippedProtocols:       skippedProtocols(r.Plan, attempts),
+		CredAttempts:           attempts, BoundCred: boundKind,
 		Enrichment: enrichment, Profile: profRes,
 		NextAction:   scanNextActionWithPlan(category, bound, boundKind, profRes, r.Plan, attempts),
 		CollectedVia: collectedVia, AgentName: agentName,

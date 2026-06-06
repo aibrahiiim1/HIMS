@@ -575,6 +575,7 @@ export interface ScanDetail {
   evidence?: string[]
   candidate?: string
   expected_protocols?: string[]
+  opportunistic_protocols?: string[] // not expected by the plan but probed anyway (e.g. SNMP)
   skipped_protocols?: string[]
   cred_attempts?: ScanCredAttempt[]
   bound_cred?: string
