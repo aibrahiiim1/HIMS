@@ -194,6 +194,14 @@ func (s *Server) downloadAgentInstaller(w http.ResponseWriter, r *http.Request) 
 		if rerr != nil {
 			return rerr
 		}
+		// Windows PowerShell 5.1 reads a BOM-less file as the system ANSI codepage,
+		// which corrupts any non-ASCII byte and breaks the parser. The templates are
+		// ASCII, but emit a UTF-8 BOM on the .ps1 as defense-in-depth so the script
+		// is always parsed as UTF-8. (Never BOM the .cmd — cmd.exe chokes on it —
+		// nor the .sh — the shebang must be the first bytes.)
+		if strings.HasSuffix(outName, ".ps1") {
+			b = append([]byte{0xEF, 0xBB, 0xBF}, b...)
+		}
 		files = append(files, zipEntry{name: outName, data: b})
 		return nil
 	}

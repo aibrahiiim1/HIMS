@@ -1,4 +1,4 @@
-HIMS Relay Agent — Site Collector
+HIMS Relay Agent - Site Collector
 ==================================
 Agent name : {{.AgentName}}
 Site       : {{.SiteName}}
@@ -9,12 +9,12 @@ Package OS : {{.OSLabel}}
 WHAT THIS IS
 ------------
 The HIMS Relay Agent is a small service that runs on ONE trusted machine inside
-this site. HIMS hands it collection jobs (it polls outward — no inbound firewall
+this site. HIMS hands it collection jobs (it polls outward - no inbound firewall
 rule is needed), it collects locally (modern Windows over WinRM and legacy
 Windows over WMI/DCOM), and posts the results back. It is the official, supported
 way to collect site-local and legacy hosts.
 
->> SECURITY — THIS PACKAGE IS SENSITIVE <<
+>> SECURITY - THIS PACKAGE IS SENSITIVE <<
 This .zip contains a one-time registration TOKEN for this agent. Treat the file
 like a password:
   * Copy it to the target machine over a trusted channel only.
@@ -24,7 +24,7 @@ The package does NOT contain any device credentials. The agent never stores
 credentials; HIMS sends the right credential to the agent per job, over the
 authenticated channel, and the agent discards it after each job.
 
-INSTALL (recommended — no build tools required)
+INSTALL (recommended - no build tools required)
 -----------------------------------------------
 1. Copy this whole folder to the target Windows / domain-joined machine.
 2. Right-click  install.cmd  ->  "Run as administrator".
@@ -64,10 +64,10 @@ THE WINDOWS SERVICE
 
 TROUBLESHOOTING
 ---------------
-  * "token was rejected (HTTP 401)" — the token is wrong or was regenerated.
+  * "token was rejected (HTTP 401)" - the token is wrong or was regenerated.
     In HIMS open this agent, click "Regenerate token", download a fresh
     installer, and re-run it.
-  * Agent stays offline — confirm the service is Running (services.msc) and that
+  * Agent stays offline - confirm the service is Running (services.msc) and that
     this machine can reach {{.URL}} ; check the log file above.
   * Legacy Windows targets (Win7 / 2008 R2) are collected via WMI/DCOM from this
     agent; make sure the agent host can reach the target's RPC (TCP 135 + the
