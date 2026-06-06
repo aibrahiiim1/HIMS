@@ -18,8 +18,10 @@ var settingDefaults = map[string]int{
 	// tcp_timeout_ms bounds each TCP port-connect in the aliveness/port sweep. A
 	// host is "alive" if any scanned port answers within this window, so too tight
 	// a value drops slow-but-up hosts (busy switches / appliances) on big subnets.
-	// 1000ms is a gentle baseline that favours a complete sweep over raw speed.
-	"tcp_timeout_ms":   1000,
+	// 800ms is a balanced baseline: 60% more headroom than the old flicker-prone
+	// 500ms, paired with concurrency 16 (less contention) to favour a complete
+	// sweep without the steep scan-time cost of a 1000ms window across a /24.
+	"tcp_timeout_ms":   800,
 	"scan_concurrency": 16,
 	"http_timeout_ms":  20000,
 	"winrm_timeout_ms": 60000,
