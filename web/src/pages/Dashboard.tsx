@@ -10,6 +10,7 @@ import {
   ActivityFeed, EmptyState, StatusPill, OperationalHealthPanel, colorFor, timeAgo,
 } from '../components/ui'
 import { ManagementAccessCoverage } from '../components/AccessCoverageCard'
+import { ReachManageCards } from '../components/ReachManageCards'
 
 // timeAgo for an ISO string, with "Never" for null.
 const ago = (iso?: string | null) => (iso ? timeAgo(iso) : 'Never')
@@ -176,6 +177,8 @@ export function Dashboard() {
         <Kpi label="Open Work Orders" value={h.open_work_orders ?? 0} icon={ClipboardList} tone={(h.open_work_orders ?? 0) > 0 ? 'warn' : 'default'} sub="in progress" />
         <Kpi label="Expiring Systems" value={h.expiring_systems ?? 0} icon={ShieldAlert} tone={(h.expiring_systems ?? 0) > 0 ? 'warn' : 'default'} sub="next 90 days" />
       </div>
+
+      <ReachManageCards />
 
       <div className="grid-side">
         {/* Main column */}

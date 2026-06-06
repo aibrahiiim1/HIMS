@@ -156,6 +156,60 @@ func (m *statusMaps) statusFor(d db.Device) deviceStatus {
 	}
 }
 
+// statusDataQualityIssues derives the reachability-vs-management hygiene issues —
+// the cases that prove Online and Managed are distinct axes. Every count is real
+// (derived from monitoring status + proven access, never from open ports).
+func (m *statusMaps) statusDataQualityIssues(devs []db.Device, now time.Time) []dqIssue {
+	var onlineUnmanaged, reachableNoCred, credBoundNotWorking, needsAgentColl,
+		agentOfflineManaged, offlinePrevManaged, managedStale []db.Device
+	staleBefore := now.Add(-reachStale)
+	for _, d := range devs {
+		st := m.statusFor(d)
+		// Offline now but has a working method on record — was managed, can't be reached.
+		if st.PreviouslyManaged {
+			offlinePrevManaged = append(offlinePrevManaged, d)
+		}
+		// Managed but the last proven check is stale — collection may be silently rotting.
+		if st.Management == MgmtManaged {
+			if ts := m.test[d.ID]; ts != nil && !ts.lastTestedAt.IsZero() && ts.lastTestedAt.Before(staleBefore) {
+				managedStale = append(managedStale, d)
+			}
+		}
+		// Management-gap buckets (mutually exclusive by state).
+		switch st.Management {
+		case MgmtUnmanaged:
+			if st.Reachability == ReachOnline {
+				onlineUnmanaged = append(onlineUnmanaged, d)
+			}
+		case MgmtNeedsCredential:
+			if st.Reachability == ReachOnline {
+				reachableNoCred = append(reachableNoCred, d)
+			}
+		case MgmtCollectionFailed, MgmtCredentialFailed:
+			credBoundNotWorking = append(credBoundNotWorking, d)
+		case MgmtNeedsAgent:
+			needsAgentColl = append(needsAgentColl, d)
+		case MgmtAgentOffline:
+			agentOfflineManaged = append(agentOfflineManaged, d)
+		}
+	}
+	out := []dqIssue{}
+	add := func(key, label, desc, sev string, list []db.Device) {
+		if len(list) == 0 {
+			return
+		}
+		out = append(out, dqIssue{Key: key, Label: label, Description: desc, Severity: sev, Count: len(list), Devices: sampleDevices(list)})
+	}
+	add("online_but_unmanaged", "Online but Unmanaged", "These devices respond on the network but HIMS has no working management method for them. Being online (or having open ports) is NOT management — bind and prove a credential, or assign an agent, to manage them.", "warning", onlineUnmanaged)
+	add("reachable_but_no_credential", "Reachable but no credential", "Online devices in a credentialed class (switch, server, firewall, Windows/Linux host…) with no credential bound yet. Bind a credential so HIMS can authenticate and collect.", "warning", reachableNoCred)
+	add("credential_bound_but_not_working", "Credential bound but not working", "A credential is bound (or was tested) but no authenticated collection has succeeded — the device is NOT managed. Fix the credential or the access method.", "warning", credBoundNotWorking)
+	add("needs_agent_collection", "Needs agent collection", "Windows hosts that cannot be collected directly (legacy WSMan 2.0 or WinRM disabled). Install/assign a Relay Agent to their site to collect them via WMI/DCOM.", "warning", needsAgentColl)
+	add("agent_offline_for_managed_site", "Agent offline for managed site", "Hosts that depend on a site Relay Agent for collection, but that site's agent is currently offline. Bring the agent back online to resume management.", "critical", agentOfflineManaged)
+	add("offline_but_previously_managed", "Offline but previously Managed", "These devices have a proven working management method on record but are currently offline (unreachable). Check power/network — management resumes when they are reachable again.", "warning", offlinePrevManaged)
+	add("managed_device_collection_stale", "Managed device collection stale", "Devices that are Managed but whose last successful authenticated check is over 30 days old. Re-test the credential / re-collect to confirm management is still working.", "info", managedStale)
+	return out
+}
+
 // deviceWithStatus embeds the device row and adds the computed two-axis status,
 // so existing Device consumers keep working while the UI gains reachability +
 // management without conflating them.

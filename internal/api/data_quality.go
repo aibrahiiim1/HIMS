@@ -428,6 +428,13 @@ func (s *Server) dataQuality(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Reachability-vs-Management hygiene issues — the cases that prove Online and
+	// Managed are distinct (online-but-unmanaged, offline-but-previously-managed,
+	// credential-bound-but-not-working, …). Derived from the shared status model.
+	if sm, serr := s.buildStatusMaps(ctx); serr == nil {
+		issues = append(issues, sm.statusDataQualityIssues(devs, now)...)
+	}
+
 	// Stable order: critical first, then warning, then info; ties by count desc.
 	rank := map[string]int{"critical": 0, "warning": 1, "info": 2}
 	sort.SliceStable(issues, func(i, j int) bool {

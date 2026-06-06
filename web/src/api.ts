@@ -141,7 +141,44 @@ export interface Device {
   vlan?: string | null
   device_class?: string | null
   location?: string | null
+  // Two-axis status (computed server-side; see device_status.go). Reachability is
+  // "is it online" (monitoring); management is "can HIMS actually collect from it"
+  // (proven working method) — never conflated, never inferred from open ports.
+  reachability?: string // online | offline | warning | unknown
+  management?: string // managed | partially_managed | unmanaged | needs_credential | credential_failed | needs_agent | agent_offline | collection_failed
+  managed_by?: string[] // protocol tokens with a PROVEN working method
+  previously_managed?: boolean // offline now, but has a working method on record
 }
+
+// Fleet rollup (GET /devices/status-summary) — Online and Managed kept separate.
+export interface DeviceStatusSummary {
+  total: number
+  reachability: Record<string, number> // online/offline/warning/unknown
+  management: Record<string, number> // managed/unmanaged/needs_credential/...
+  managed_by_protocol: { protocol: string; label: string; count: number }[]
+  online_unmanaged: number
+  offline_prev_managed: number
+}
+
+// --- Reachability + Management badge vocabulary (shared by every surface) -----
+export const REACH_BADGE: Record<string, { label: string; cls: string }> = {
+  online: { label: 'Online', cls: 'badge-up' },
+  offline: { label: 'Offline', cls: 'badge-down' },
+  warning: { label: 'Warning', cls: 'badge-warning' },
+  unknown: { label: 'Unknown', cls: 'badge-unknown' },
+}
+export const MGMT_BADGE: Record<string, { label: string; cls: string }> = {
+  managed: { label: 'Managed', cls: 'badge-up' },
+  partially_managed: { label: 'Partially managed', cls: 'badge-warning' },
+  unmanaged: { label: 'Unmanaged', cls: 'badge-unknown' },
+  needs_credential: { label: 'Needs credential', cls: 'badge-warning' },
+  credential_failed: { label: 'Credential failed', cls: 'badge-down' },
+  needs_agent: { label: 'Needs agent', cls: 'badge-warning' },
+  agent_offline: { label: 'Agent offline', cls: 'badge-down' },
+  collection_failed: { label: 'Collection failed', cls: 'badge-down' },
+}
+export function reachBadge(v?: string) { return REACH_BADGE[v ?? 'unknown'] ?? REACH_BADGE.unknown }
+export function mgmtBadge(v?: string) { return MGMT_BADGE[v ?? 'unmanaged'] ?? MGMT_BADGE.unmanaged }
 
 export interface Interface {
   id: string

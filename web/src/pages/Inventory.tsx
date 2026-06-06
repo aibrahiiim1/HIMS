@@ -3,7 +3,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
 import { Boxes, RefreshCw, Trash2, Search, Wifi, WifiOff, Server, TriangleAlert, Package } from 'lucide-react'
 import { api, type Device, type Lookup, type Location, locationPaths } from '../api'
-import { PageHeader, Panel, Kpi, BarList, EmptyState, StatusPill, colorFor, usePaged, Pager } from '../components/ui'
+import { PageHeader, Panel, Kpi, BarList, EmptyState, colorFor, usePaged, Pager } from '../components/ui'
+import { ReachabilityBadge, ManagementBadge } from '../components/StatusBadges'
 
 const DETAIL_BASE: Record<string, string> = {
   switch: '/devices', server: '/servers', virtual_host: '/virtual-hosts', firewall: '/firewalls',
@@ -37,20 +38,29 @@ export function Inventory() {
   const access = sp.get('access') ?? ''
   const accessProtocol = sp.get('accessProtocol') ?? ''
   const accessIssue = sp.get('accessIssue') ?? ''
+  // Reachability / Management drill-down filters (Dashboard + Coverage cards).
+  // Server-side + bookmarkable: /inventory?reachability=online&management=unmanaged
+  const reachF = sp.get('reachability') ?? ''
+  const mgmtF = sp.get('management') ?? ''
   const accessQS = [
     access && `access=${encodeURIComponent(access)}`,
     accessProtocol && `accessProtocol=${encodeURIComponent(accessProtocol)}`,
     accessIssue && `accessIssue=${encodeURIComponent(accessIssue)}`,
+    reachF && `reachability=${encodeURIComponent(reachF)}`,
+    mgmtF && `management=${encodeURIComponent(mgmtF)}`,
   ].filter(Boolean).join('&')
   const accessActive = !!accessQS
   const accessChip = access === 'managed' ? 'Managed (any working access)'
     : access === 'unmanaged' ? 'Unmanaged (no usable credential)'
     : accessProtocol ? `Access: ${ACCESS_PROTOCOL_LABEL[accessProtocol] ?? accessProtocol}`
     : accessIssue ? `Issue: ${ACCESS_ISSUE_LABEL[accessIssue] ?? accessIssue}`
+    : reachF ? `Reachability: ${reachF}`
+    : mgmtF ? `Management: ${mgmtF.replace(/_/g, ' ')}`
     : ''
   const clearAccess = () => {
     const next = new URLSearchParams(sp)
     next.delete('access'); next.delete('accessProtocol'); next.delete('accessIssue')
+    next.delete('reachability'); next.delete('management')
     setSp(next, { replace: true })
   }
   const [cat, setCat] = useState('all')
@@ -268,7 +278,7 @@ export function Inventory() {
             <thead>
               <tr>
                 <th style={{ width: 28 }}><input type="checkbox" checked={allShownSelected} onChange={toggleAll} /></th>
-                <th>Device</th><th>IP</th><th>Category</th><th>VLAN</th><th>Class</th><th>Location</th><th>Vendor</th><th>Status</th><th></th>
+                <th>Device</th><th>IP</th><th>Category</th><th>VLAN</th><th>Class</th><th>Location</th><th>Vendor</th><th>Reachability</th><th>Management</th><th></th>
               </tr>
             </thead>
             <tbody>
@@ -310,7 +320,8 @@ export function Inventory() {
                         </select>
                       </td>
                       <td><input className="field" style={{ width: 90 }} value={editing.vendor ?? ''} onChange={(e) => setEditing({ ...editing, vendor: e.target.value })} /></td>
-                      <td><StatusPill status={d.status} /></td>
+                      <td><ReachabilityBadge value={d.reachability} /></td>
+                      <td><ManagementBadge value={d.management} managedBy={d.managed_by} /></td>
                       <td className="cell-actions">
                         <button className="btn btn-primary btn-xs" disabled={save.isPending} onClick={() => save.mutate(editing)}>Save</button>
                         <button className="btn btn-ghost btn-xs" onClick={() => setEditing(null)}>Cancel</button>
@@ -336,7 +347,8 @@ export function Inventory() {
                     <td>{d.device_class ?? '—'}</td>
                     <td style={{ fontSize: 12 }}>{locName(d.location_id)}</td>
                     <td>{d.vendor ?? '—'}</td>
-                    <td><StatusPill status={d.status} /></td>
+                    <td><ReachabilityBadge value={d.reachability} /></td>
+                    <td><ManagementBadge value={d.management} managedBy={d.managed_by} /></td>
                     <td className="cell-actions">
                       <button className="btn btn-ghost btn-xs" onClick={() => setEditing(d)}>Edit</button>
                       <button className="btn btn-ghost btn-xs" style={{ color: 'var(--crit)' }} onClick={() => { if (confirm(`Delete ${d.name}?`)) del.mutate([d.id]) }}>Delete</button>

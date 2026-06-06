@@ -5,9 +5,10 @@ import { Radar, Boxes, CircleX, Clock, KeyRound } from 'lucide-react'
 import {
   api, locationPaths,
   type DiscoveryJob, type DiscoveryResult, type Location, type Credential, type AccessCoverage,
-  type ScanPreflight, type RelayAgent,
+  type ScanPreflight, type RelayAgent, type Device,
 } from '../api'
 import { PageHeader, Kpi, timeAgo } from '../components/ui'
+import { ReachabilityBadge, ManagementBadge } from '../components/StatusBadges'
 
 // ---------- shared styles ----------
 const btn: React.CSSProperties = { padding: '8px 16px', background: '#1565c0', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 14, fontWeight: 600 }
@@ -838,6 +839,11 @@ function LegacyWindowsCard({ devs, sampleIPs, devIds, firstIP, collectorConfigur
 // ---------- Jobs ----------
 function JobsTab({ jobs, jobID, setJobID, detail, setMsg, qc }: { jobs: DiscoveryJob[]; jobID: string | null; setJobID: (s: string | null) => void; detail?: { job: DiscoveryJob; results: DiscoveryResult[] }; setMsg: (s: string) => void; qc: ReturnType<typeof useQueryClient> }) {
   const refresh = () => qc.invalidateQueries({ queryKey: ['discovery-jobs'] })
+  // Enrolled hosts carry a device_id; join to the live device to show the SAME
+  // two-axis status (reachability + management) the rest of the app uses, so the
+  // scan result reflects whether the host is actually managed now (not just found).
+  const devicesQ = useQuery({ queryKey: ['devices', 'all'], queryFn: () => api.get<Device[]>('/devices?category=all') })
+  const devMap = new Map((devicesQ.data ?? []).map((x) => [x.id, x]))
   const del = useMutation({ mutationFn: (id: string) => api.del(`/discovery/jobs/${id}`), onSuccess: () => { setJobID(null); setMsg('Job deleted.'); refresh() }, onError: (e) => setMsg((e as Error).message) })
   const rerun = useMutation({ mutationFn: (id: string) => api.post(`/discovery/jobs/${id}/rerun`, {}), onSuccess: () => { setMsg('Re-run launched.'); refresh() }, onError: (e) => setMsg((e as Error).message) })
 
@@ -882,16 +888,25 @@ function JobsTab({ jobs, jobID, setJobID, detail, setMsg, qc }: { jobs: Discover
           {detail.results.length > 0 && (
             <table>
               <thead><tr>
-                <th>IP</th><th>Outcome</th><th>Classification</th><th>Ports</th>
+                <th>IP</th><th>Outcome</th><th>Reach / Mgmt</th><th>Classification</th><th>Ports</th>
                 <th>Credentials tried</th><th>Bound</th><th>Collected via</th><th>Vendor profile</th><th>Enrichment</th><th>Next action</th>
               </tr></thead>
               <tbody>
                 {detail.results.map((r) => {
                   const d = r.probe_data ?? {}
+                  const dev = r.device_id ? devMap.get(r.device_id) : undefined
                   return (
                     <tr key={r.id}>
                       <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{r.ip}</td>
                       <td><span className={`badge badge-${outcomeBadge(r.outcome)}`}>{r.outcome}</span></td>
+                      <td style={{ whiteSpace: 'nowrap' }}>
+                        {dev ? (
+                          <span style={{ display: 'inline-flex', gap: 4, flexWrap: 'wrap' }}>
+                            <ReachabilityBadge value={dev.reachability} />
+                            <ManagementBadge value={dev.management} managedBy={dev.managed_by} />
+                          </span>
+                        ) : <span className="muted" style={{ fontSize: 11 }}>not enrolled</span>}
+                      </td>
                       <td>
                         {(r.category ?? d.classification ?? 'unknown')}
                         {typeof d.confidence === 'number' && d.confidence > 0 && <span className="muted" style={{ fontSize: 11 }}> · {d.confidence}%</span>}

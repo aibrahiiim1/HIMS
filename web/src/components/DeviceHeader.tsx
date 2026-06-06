@@ -1,8 +1,15 @@
-import { useMemo, type ComponentType } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { HardDrive, Radar, ShieldCheck, Activity, MapPin } from 'lucide-react'
+import { useMemo, useState, type ComponentType } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { HardDrive, Radar, ShieldCheck, MapPin, Wifi, Wrench } from 'lucide-react'
 import { api, type Device, type Location, type MonitoringCheck, locationPaths } from '../api'
-import { HealthRing, StatusPill, colorFor, timeAgo } from './ui'
+import { HealthRing, colorFor, timeAgo } from './ui'
+import { ReachabilityBadge, ManagementBadge } from './StatusBadges'
+
+const PORT_SOURCE_LABEL: Record<string, string> = {
+  discovered_open_port: 'discovered open port',
+  os_fallback: 'OS-aware fallback',
+  manual: 'manual',
+}
 
 function deviceHealth(checks: MonitoringCheck[]): { score: number; status: string } {
   if (checks.length === 0) return { score: 0, status: 'unknown' }
@@ -24,15 +31,36 @@ function deviceHealth(checks: MonitoringCheck[]): { score: number; status: strin
 export function DeviceHeader({ deviceId, icon: Icon = HardDrive }: {
   deviceId: string; icon?: ComponentType<{ size?: number | string }>
 }) {
+  const qc = useQueryClient()
   const devices = useQuery({ queryKey: ['devices', 'all'], queryFn: () => api.get<Device[]>('/devices?category=all') })
   const checksQ = useQuery({ queryKey: ['dev-checks', deviceId], queryFn: () => api.get<MonitoringCheck[]>(`/devices/${deviceId}/monitoring/checks`) })
   const locs = useQuery({ queryKey: ['locations-all'], queryFn: () => api.get<Location[]>('/locations/all') })
   const locPath = useMemo(() => locationPaths(locs.data ?? []), [locs.data])
 
+  const [repairing, setRepairing] = useState(false)
+  const [repairMsg, setRepairMsg] = useState<string | null>(null)
+
   const d = (devices.data ?? []).find((x) => x.id === deviceId)
   const checks = checksQ.data ?? []
-  const { score, status } = deviceHealth(checks)
-  const effStatus = status !== 'unknown' ? status : (d?.status ?? 'unknown')
+  const { score } = deviceHealth(checks)
+
+  // The reachability (TCP) check is the monitoring target that decides online/offline.
+  const tcpCheck = checks.find((c) => c.kind === 'tcp') ?? checks.find((c) => c.target_port != null)
+
+  async function repairReachability() {
+    setRepairing(true)
+    setRepairMsg(null)
+    try {
+      const res = await api.post<{ target_port: number; source: string }>(`/devices/${deviceId}/repair-reachability`, {})
+      setRepairMsg(`Reachability check set to port ${res.target_port} (${PORT_SOURCE_LABEL[res.source] ?? res.source}).`)
+      qc.invalidateQueries({ queryKey: ['dev-checks', deviceId] })
+      qc.invalidateQueries({ queryKey: ['devices'] })
+    } catch (e) {
+      setRepairMsg(`Repair failed: ${(e as Error).message}`)
+    } finally {
+      setRepairing(false)
+    }
+  }
 
   if (!d) {
     return (
@@ -57,7 +85,13 @@ export function DeviceHeader({ deviceId, icon: Icon = HardDrive }: {
         <div className="device-hero-text">
           <div className="device-hero-title">
             <h1>{d.name}</h1>
-            <StatusPill status={effStatus} />
+            <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+              <ReachabilityBadge value={d.reachability} />
+              <ManagementBadge value={d.management} managedBy={d.managed_by} />
+              {d.previously_managed && d.reachability === 'offline' && (
+                <span className="badge badge-unknown" title="Offline now, but has a working management method on record">was Managed</span>
+              )}
+            </span>
           </div>
           <div className="device-hero-sub">
             <span className="mono">{d.primary_ip ?? 'no IP'}</span>
@@ -76,14 +110,26 @@ export function DeviceHeader({ deviceId, icon: Icon = HardDrive }: {
       <div className="device-hero-metrics">
         {checks.length > 0 && <HealthRing score={score} size={84} label="Health" />}
         <div className="device-hero-stats">
-          <div className="hero-stat"><span className="hero-stat-ico tone-info"><Activity size={15} /></span>
-            <div><b>{checks.length}</b><small>monitor checks</small></div></div>
+          <div className="hero-stat"><span className="hero-stat-ico tone-info"><Wifi size={15} /></span>
+            <div>
+              <b>{tcpCheck?.target_port ? `:${tcpCheck.target_port}` : '—'}{tcpCheck ? ` · ${tcpCheck.last_status || 'unknown'}` : ''}</b>
+              <small>reachability target {tcpCheck?.last_run_at ? `· ${timeAgo(tcpCheck.last_run_at)}` : ''}</small>
+            </div></div>
+          <div className="hero-stat"><span className="hero-stat-ico"><ShieldCheck size={15} /></span>
+            <div>
+              <b>{d.managed_by && d.managed_by.length ? d.managed_by.map((p) => p.toUpperCase()).join(', ') : (d.driver ?? 'none')}</b>
+              <small>managed via</small>
+            </div></div>
           <div className="hero-stat"><span className="hero-stat-ico"><Radar size={15} /></span>
             <div><b>{timeAgo(d.last_discovery_at)}</b><small>last discovery</small></div></div>
           <div className="hero-stat"><span className="hero-stat-ico"><MapPin size={15} /></span>
             <div><b>{d.location_id ? (locPath[d.location_id] ?? '—') : '—'}</b><small>location</small></div></div>
-          <div className="hero-stat"><span className="hero-stat-ico"><ShieldCheck size={15} /></span>
-            <div><b>{d.driver ?? 'unbound'}</b><small>driver / credential</small></div></div>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end' }}>
+          <button className="btn btn-ghost btn-sm" onClick={repairReachability} disabled={repairing} title="Recompute the reachability monitoring target from discovered open ports">
+            <Wrench size={13} /> {repairing ? 'Repairing…' : 'Repair reachability check'}
+          </button>
+          {repairMsg && <span className="muted" style={{ fontSize: 11, maxWidth: 220, textAlign: 'right' }}>{repairMsg}</span>}
         </div>
       </div>
     </div>
