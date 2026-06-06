@@ -6,6 +6,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/coralsearesorts/hims/internal/credtest"
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
 	"github.com/google/uuid"
 )
@@ -115,6 +116,14 @@ type deviceTestStatus struct {
 	lastTestedAt time.Time
 	successKinds map[string]bool
 	failedKinds  map[string]bool
+	kindCategory map[string]string // latest category per kind (e.g. winrm → auth_ok_operation_fault)
+}
+
+// winrmLegacy reports that the latest WinRM test authenticated but the WSMan
+// operation faulted — a legacy WSMan 2.0 host (auth is fine; needs a fallback
+// collector), NOT a credential failure.
+func (t *deviceTestStatus) winrmLegacy() bool {
+	return t != nil && t.kindCategory["winrm"] == credtest.CatOperationFault
 }
 
 func (t *deviceTestStatus) anySuccess() bool { return t != nil && len(t.successKinds) > 0 }
@@ -129,17 +138,23 @@ func (s *Server) deviceTestMap(ctx context.Context) (map[uuid.UUID]*deviceTestSt
 	for _, r := range rows {
 		t := m[r.DeviceID]
 		if t == nil {
-			t = &deviceTestStatus{successKinds: map[string]bool{}, failedKinds: map[string]bool{}}
+			t = &deviceTestStatus{successKinds: map[string]bool{}, failedKinds: map[string]bool{}, kindCategory: map[string]string{}}
 			m[r.DeviceID] = t
 		}
 		t.tested = true
 		if r.TestedAt.After(t.lastTestedAt) {
 			t.lastTestedAt = r.TestedAt
 		}
+		// LatestDeviceKindResults is ordered newest-first per (device,kind); record
+		// the first (latest) category we see for each kind.
+		if _, seen := t.kindCategory[r.Kind]; !seen {
+			t.kindCategory[r.Kind] = r.Category
+		}
 		if r.Success {
 			t.successKinds[r.Kind] = true
 		} else {
 			t.failedKinds[r.Kind] = true
+			// auth_ok_operation_fault is NOT an auth failure — the credential is valid.
 			if r.Category == "auth_failed" {
 				t.authFailed = true
 			}

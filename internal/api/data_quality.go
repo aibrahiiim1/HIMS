@@ -180,20 +180,25 @@ func (s *Server) dataQuality(w http.ResponseWriter, r *http.Request) {
 			}
 			return false
 		}
-		var credFailed, neverTested, winNoWinRM, linNoSSH, camNoONVIF, swNoSSH []db.Device
+		// winLike = a Windows host whether or not the OS was collected yet (a legacy
+		// host that never collected has category=endpoint but os_family unset).
+		winLike := func(d db.Device) bool { return isWin(d) || d.Category == "endpoint" }
+		var credFailed, neverTested, linNoSSH, camNoONVIF, swNoSSH []db.Device
+		var legacyWin, winAuthFailed, winDisabled, winReady []db.Device
 		for _, d := range devs {
 			da := am[d.ID]
 			ts := tm[d.ID]
+			winrmCat := ""
+			if ts != nil {
+				winrmCat = ts.kindCategory["winrm"]
+			}
+			// auth_ok_operation_fault must NOT count as a failed credential.
 			if ts != nil && ts.authFailed && !da.managed() {
 				credFailed = append(credFailed, d)
 			}
-			// "Never tested" only for classes we'd expect to test (avoid noise).
 			testable := credentialedCategories[d.Category] || inCat(d, "camera", "nvr") || isWin(d) || isLin(d)
 			if testable && (ts == nil || !ts.tested) {
 				neverTested = append(neverTested, d)
-			}
-			if isWin(d) && !accessSatisfies(da, "winrm") {
-				winNoWinRM = append(winNoWinRM, d)
 			}
 			if isLin(d) && !accessSatisfies(da, "ssh") {
 				linNoSSH = append(linNoSSH, d)
@@ -204,10 +209,28 @@ func (s *Server) dataQuality(w http.ResponseWriter, r *http.Request) {
 			if inCat(d, "switch", "router", "firewall") && !accessSatisfies(da, "ssh") {
 				swNoSSH = append(swNoSSH, d)
 			}
+
+			// --- Windows onboarding buckets (mutually exclusive, most-specific first) ---
+			if !winLike(d) {
+				continue
+			}
+			switch {
+			case ts.winrmLegacy():
+				legacyWin = append(legacyWin, d) // auth OK, WSMan operation fault → needs fallback
+			case accessSatisfies(da, "winrm"):
+				winReady = append(winReady, d) // WinRM works — collection-ready
+			case winrmCat == "auth_failed":
+				winAuthFailed = append(winAuthFailed, d)
+			case winrmCat == "unreachable" || winrmCat == "":
+				winDisabled = append(winDisabled, d) // 5985 closed / WinRM disabled / not attempted
+			}
 		}
 		addIssue("credential_failed", "Failed credentials", "The latest credential test for these devices was rejected (authentication failed) and no other working method is bound. Fix the credential or bind a working one.", "warning", credFailed)
 		addIssue("never_tested", "Never credential-tested", "These devices (servers, network gear, cameras, Windows/Linux hosts) have no saved credential-test result yet. Run a credential test so HIMS knows what works.", "info", neverTested)
-		addIssue("windows_no_winrm", "Windows without working WinRM", "Windows hosts with no successful WinRM access (bound, collected, or tested). WinRM is needed for deep OS inventory.", "warning", winNoWinRM)
+		addIssue("legacy_windows_wsman2", "Legacy Windows — needs fallback collector", "Windows hosts where WinRM AUTHENTICATION SUCCEEDED but the WSMan operation faulted (legacy WSMan 2.0 — Windows 7 / Server 2008 R2). The credential is valid; native PowerShell works but the Go WinRM library cannot run commands. Configure the Windows Native Collector or WMI/DCOM fallback.", "warning", legacyWin)
+		addIssue("windows_winrm_auth_failed", "Windows with WinRM auth failed", "Windows hosts where WinRM is reachable but the credential was rejected. Fix the credential (DOMAIN\\user vs UPN, password).", "warning", winAuthFailed)
+		addIssue("windows_winrm_disabled", "Windows with WinRM disabled / closed", "Windows hosts with no WinRM evidence (5985/5986 closed or not responding). Enable PowerShell Remoting (GPO) and open the firewall, then re-scan.", "warning", winDisabled)
+		addIssue("windows_ready", "Windows ready for collection", "Windows hosts with working WinRM access — deep OS inventory can be collected.", "info", winReady)
 		addIssue("linux_no_ssh", "Linux without working SSH", "Linux hosts with no successful SSH access. SSH is needed for deep OS inventory.", "warning", linNoSSH)
 		addIssue("camera_no_onvif", "Cameras/NVRs without ONVIF", "Cameras/NVRs with no successful ONVIF access. ONVIF is needed for device-info and stream inventory.", "warning", camNoONVIF)
 		addIssue("switch_no_ssh", "Switches/firewalls without SSH", "Network devices with no successful SSH access. SSH enables CLI collection and config backup beyond SNMP.", "info", swNoSSH)

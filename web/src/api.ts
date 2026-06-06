@@ -1281,6 +1281,33 @@ export interface CredTestHistory {
   actor: string
   relevant?: boolean
 }
+// WinRM diagnostic (POST /credentials/winrm-diagnose) — for triaging legacy
+// Windows / WSMan 2.0 hosts. No secrets.
+export interface WinRMDiagModeResult {
+  mode: string
+  auth_method: string
+  encryption: boolean
+  result: string // success | auth_failed | connection_failed | timeout | error | auth_ok_operation_fault
+  fault_kind: string
+  error_type?: string
+  error_message?: string
+  fault_code?: string
+  fault_detail?: string
+  latency_ms: number
+}
+export interface WinRMDiag {
+  host: string
+  endpoint: string
+  username_sent: string
+  parsed_domain: string
+  parsed_user: string
+  domain_sent_in_ntlm: boolean
+  unauth_status: number
+  www_authenticate: string[]
+  probe_error?: string
+  modes: WinRMDiagModeResult[]
+}
+
 export interface AccessCoverage {
   total_devices: number
   managed_devices: number

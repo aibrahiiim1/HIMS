@@ -2,6 +2,7 @@ package osinv
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -9,6 +10,46 @@ import (
 
 	"github.com/masterzen/winrm"
 )
+
+// WinRMOperationFault is the credential-test category for "NTLM authentication
+// SUCCEEDED but the WSMan operation faulted" — the signature of a legacy WSMan
+// 2.0 stack (Windows 7 / Server 2008 R2) that the Go WinRM library can't drive
+// even though the credential is valid. It must NOT be reported as a wrong password.
+const WinRMOperationFault = "auth_ok_operation_fault"
+
+// ClassifyWinRMError maps a WinRM error to a credential-test category + detail +
+// (optional) WSMan fault code. The key distinction: a *winrm.ExecuteCommandError
+// means HTTP/NTLM auth already SUCCEEDED (HTTP 200) and the failure is a WSMan
+// SOAP fault at the operation layer → auth_ok_operation_fault (legacy WSMan),
+// never auth_failed. Pure; no secrets.
+func ClassifyWinRMError(err error) (category, detail, faultCode string) {
+	if err == nil {
+		return "success", "WinRM login ok", ""
+	}
+	var ce *winrm.ExecuteCommandError
+	if errors.As(err, &ce) {
+		code, reason := parseWSManFault(ce.Body)
+		shown := code
+		if shown == "" {
+			shown = "WSMan fault"
+		}
+		return WinRMOperationFault,
+			"authentication succeeded but the WSMan operation faulted (" + shown + ") — legacy WSMan 2.0 stack (Windows 7 / Server 2008 R2); native PowerShell works but the Go WinRM library cannot drive this host. Use the Windows Native Collector / WMI fallback. " + reason,
+			code
+	}
+	e := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(e, "401") || strings.Contains(e, "unauthorized") ||
+		strings.Contains(e, "the user name or password is incorrect") || strings.Contains(e, "access is denied"):
+		return "auth_failed", "authentication rejected", ""
+	case strings.Contains(e, "refused") || strings.Contains(e, "reset") ||
+		strings.Contains(e, "timeout") || strings.Contains(e, "deadline") ||
+		strings.Contains(e, "no route") || strings.Contains(e, "no such host") || strings.Contains(e, "unreachable"):
+		return "unreachable", "could not connect (WinRM/5985 unreachable or filtered)", ""
+	default:
+		return "error", strings.TrimSpace(err.Error()), ""
+	}
+}
 
 // WinRM client configuration constants — also surfaced in logs so an operator can
 // see exactly how HIMS talks WinRM (and confirm it is NOT plain Basic auth).

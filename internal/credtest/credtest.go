@@ -27,6 +27,10 @@ const (
 	CatUnreachable = "unreachable" // could not connect (port closed / timeout / no route)
 	CatUnsupported = "unsupported" // this tester can't probe that kind
 	CatError       = "error"       // anything else (malformed secret, protocol fault)
+	// CatOperationFault: WinRM/NTLM auth SUCCEEDED but the WSMan operation faulted
+	// (legacy WSMan 2.0 / Windows 7 / Server 2008 R2). The credential is valid —
+	// never treat this as a wrong password; the host needs a legacy collector.
+	CatOperationFault = osinv.WinRMOperationFault
 )
 
 // Outcome is the non-secret result of one credential↔host test.
@@ -220,7 +224,15 @@ func testWinRM(ctx context.Context, secret, host string, timeout time.Duration, 
 	user, pass := SplitUserPass(secret)
 	// Use the SAME WinRM transport the deep-inventory collector uses (NTLM +
 	// WSMan message encryption) so a "Test" result matches what Collect will do.
-	if err := osinv.WinRMCheckAuth(ctx, host, user, pass, timeout, credName); err != nil {
+	err := osinv.WinRMCheckAuth(ctx, host, user, pass, timeout, credName)
+	if err != nil {
+		// A WSMan operation fault means auth SUCCEEDED on a legacy stack — classify
+		// it as auth_ok_operation_fault, not a credential failure.
+		if cat, detail, _ := osinv.ClassifyWinRMError(err); cat == osinv.WinRMOperationFault {
+			return Outcome{Category: CatOperationFault, Detail: detail}
+		}
+	}
+	if err != nil {
 		cat, detail := categorizeErr(err.Error())
 		return Outcome{Category: cat, Detail: detail}
 	}

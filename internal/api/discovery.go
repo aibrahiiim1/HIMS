@@ -12,6 +12,7 @@ import (
 
 	"github.com/coralsearesorts/hims/internal/apply"
 	"github.com/coralsearesorts/hims/internal/credresolver"
+	"github.com/coralsearesorts/hims/internal/credtest"
 	"github.com/coralsearesorts/hims/internal/discovery"
 	"github.com/coralsearesorts/hims/internal/domain"
 	"github.com/coralsearesorts/hims/internal/scan"
@@ -676,6 +677,9 @@ func scanNextActionWithPlan(category string, bound bool, boundKind string, pr *s
 	case "windows":
 		if !tested {
 			return "Windows host — add a WinRM credential and enable PowerShell Remoting (5985/5986) for deep OS inventory"
+		}
+		if cat == credtest.CatOperationFault {
+			return "Authentication OK, but this Windows host uses an older WSMan stack (Windows 7 / Server 2008 R2). Native PowerShell works; the Go WinRM library cannot run commands here. Configure the Windows Native Collector / WMI fallback."
 		}
 		if cat == "auth_failed" {
 			return "Expected WinRM; WinRM auth_failed — check the domain username (DOMAIN\\user or user@domain) and password"

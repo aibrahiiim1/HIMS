@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { KeyRound, RefreshCw, Link2, Globe } from 'lucide-react'
-import { api, type CredTestHistory, type AuthMe, type CredentialGroup, type Device, type Location, locationPaths } from '../api'
+import { KeyRound, RefreshCw, Link2, Globe, Wrench } from 'lucide-react'
+import { api, type CredTestHistory, type AuthMe, type Credential, type CredentialGroup, type Device, type Location, type WinRMDiag, locationPaths } from '../api'
 import { Panel, EmptyState, timeAgo } from './ui'
 
 const PROTO_LABEL: Record<string, string> = {
@@ -55,15 +55,26 @@ export function DeviceCredentialHealth({ deviceId, category, osFamily }: { devic
   // Which successful credential the operator is applying to a scope (group/site).
   const [scope, setScope] = useState<{ credentialId: string; credentialName: string } | null>(null)
 
-  // Derive the device category when a caller didn't pass it (e.g. the generic
-  // detail page) so the "expected access method" is still correct. Cached query.
-  const devices = useQuery({
-    queryKey: ['devices', 'all'],
-    queryFn: () => api.get<Device[]>('/devices?category=all'),
-    enabled: !category,
-  })
-  const effCategory = category ?? devices.data?.find((d) => d.id === deviceId)?.category
+  // Device list (cached) — for category fallback, the host IP (WinRM diagnose),
+  // and to find a WinRM credential to diagnose with.
+  const devices = useQuery({ queryKey: ['devices', 'all'], queryFn: () => api.get<Device[]>('/devices?category=all') })
+  const dev = devices.data?.find((d) => d.id === deviceId)
+  const effCategory = category ?? dev?.category
   const expected = useMemo(() => expectedKindsFor(effCategory, osFamily), [effCategory, osFamily])
+
+  // WinRM diagnostic (legacy Windows / WSMan-2.0 triage).
+  const [diag, setDiag] = useState<WinRMDiag | null>(null)
+  const winDiag = useMutation({
+    mutationFn: async () => {
+      const creds = await api.get<Credential[]>('/credentials')
+      const winrm = creds.find((c) => c.kind === 'winrm')
+      if (!winrm) throw new Error('No WinRM credential configured — add one on the Credentials page.')
+      if (!dev?.primary_ip) throw new Error('Device has no IP to diagnose.')
+      return api.post<WinRMDiag>('/credentials/winrm-diagnose', { host: dev.primary_ip, credential_id: winrm.id })
+    },
+    onSuccess: (d) => setDiag(d),
+  })
+  const showDiagnose = expected.includes('winrm') || history.some((h) => h.kind === 'winrm') || effCategory === 'endpoint'
 
   // Latest result per credential-kind = the current credential health per protocol.
   const latestByKind = useMemo(() => {
@@ -134,10 +145,16 @@ export function DeviceCredentialHealth({ deviceId, category, osFamily }: { devic
       )}
 
       {/* Expected access method — the primary protocol for this device type. */}
-      <div style={{ marginBottom: 10, fontSize: 13 }}>
-        <span className="muted">Expected access method: </span>
-        <strong>{expectedLabel(effCategory, osFamily)}</strong>
+      <div style={{ marginBottom: 10, fontSize: 13, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <span><span className="muted">Expected access method: </span><strong>{expectedLabel(effCategory, osFamily)}</strong></span>
+        {showDiagnose && canManageCreds && (
+          <button className="btn btn-ghost btn-xs" disabled={winDiag.isPending} title="Probe WinRM auth schemes + transport modes (legacy WSMan triage)" onClick={() => winDiag.mutate()}>
+            <Wrench size={12} /> {winDiag.isPending ? 'Diagnosing…' : 'Diagnose WinRM'}
+          </button>
+        )}
       </div>
+      {winDiag.error && <p className="error-msg" style={{ marginTop: 0 }}>{(winDiag.error as Error).message}</p>}
+      {diag && <WinRMDiagPanel d={diag} onClose={() => setDiag(null)} />}
 
       {expectedRows.length > 0 ? (
         <table className="data-table">{tableHead}<tbody>{expectedRows.map(renderRow)}</tbody></table>
@@ -251,6 +268,72 @@ function ApplyScopeForm({ deviceId, credentialId, credentialName, onClose }: {
         </p>
       )}
       {apply.error && <p className="error-msg" style={{ marginTop: 8 }}>{(apply.error as Error).message}</p>}
+    </div>
+  )
+}
+
+// winrmRecommendation derives the operator-facing recommendation from a WinRM
+// diagnostic, mapping the transport-matrix outcome to the four states the
+// operator cares about.
+function winrmRecommendation(d: WinRMDiag): { tone: 'ok' | 'warn' | 'crit'; state: string; text: string } {
+  const enc = d.modes.find((m) => m.mode === 'ntlm-encrypted')
+  if (enc?.result === 'success') {
+    return { tone: 'ok', state: 'collection-ready', text: 'WinRM authenticated and the WSMan operation succeeded — this host collects via the standard Go WinRM path.' }
+  }
+  if (enc && (enc.result === 'auth_ok_operation_fault' || (enc.fault_kind === 'soap_fault'))) {
+    return {
+      tone: 'warn', state: 'legacy_wsman2_incompatible',
+      text: `Authentication succeeded, but this Windows host uses an older WSMan stack (fault ${enc.fault_code || 'WSMan'}). Native PowerShell works; the Go WinRM library cannot execute commands here. Use the Windows Native Collector / WMI fallback — do NOT treat the credential as wrong.`,
+    }
+  }
+  const any401 = d.modes.some((m) => m.fault_kind === 'http_401')
+  if (any401 && !d.www_authenticate.some((s) => /ntlm|negotiate/i.test(s))) {
+    return { tone: 'crit', state: 'auth_failed', text: 'The listener rejected the credential (HTTP 401). Check the username format (DOMAIN\\user vs UPN) and password, or the accepted auth schemes.' }
+  }
+  if (any401) {
+    return { tone: 'crit', state: 'auth_failed', text: 'HTTP 401 — credential rejected. Verify username/password and that the account may log on via WinRM.' }
+  }
+  return { tone: 'warn', state: 'unreachable', text: 'Could not complete a WinRM exchange (unreachable/timeout). Confirm WinRM is enabled and 5985/5986 is open.' }
+}
+
+// WinRMDiagPanel renders the WinRM diagnostic: advertised auth schemes, the
+// transport-matrix outcome, the SOAP fault (if any), and the exact recommendation.
+function WinRMDiagPanel({ d, onClose }: { d: WinRMDiag; onClose: () => void }) {
+  const rec = winrmRecommendation(d)
+  const toneColor = { ok: '#2e7d32', warn: '#8a6d00', crit: '#b71c1c' }[rec.tone]
+  const modeBadge = (r: string) =>
+    r === 'success' ? 'badge-up'
+      : r === 'auth_ok_operation_fault' ? 'badge-warning'
+        : r === 'auth_failed' ? 'badge-down' : 'badge-unknown'
+  return (
+    <div className="card" style={{ marginTop: 10, borderLeft: `4px solid ${toneColor}`, background: 'var(--surface-2)' }}>
+      <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+        <strong style={{ fontSize: 13 }}>WinRM diagnostic — {d.host}</strong>
+        <button className="btn btn-ghost btn-xs" onClick={onClose}>Close</button>
+      </div>
+      <div style={{ fontSize: 12, marginTop: 6 }}>
+        <div><span className="muted">Endpoint: </span><span className="mono">{d.endpoint}</span></div>
+        <div><span className="muted">Auth schemes advertised: </span><strong>{d.www_authenticate.join(', ') || '—'}</strong></div>
+        <div><span className="muted">Username parsed: </span>domain=<strong>{d.parsed_domain || '(none)'}</strong> user=<strong>{d.parsed_user}</strong>{!d.domain_sent_in_ntlm && ' · NTLM sends no domain (UPN)'}</div>
+      </div>
+      <table className="data-table" style={{ marginTop: 8 }}>
+        <thead><tr><th>Mode</th><th>Auth</th><th>Result</th><th>Fault</th><th>Latency</th></tr></thead>
+        <tbody>
+          {d.modes.map((m) => (
+            <tr key={m.mode}>
+              <td>{m.mode}{m.encryption ? ' (encrypted)' : ''}</td>
+              <td>{m.auth_method}</td>
+              <td><span className={`badge ${modeBadge(m.result)}`}>{m.result}</span></td>
+              <td className="muted" style={{ fontSize: 12 }}>{m.fault_code || m.error_type || '—'}{m.fault_detail ? ` · ${m.fault_detail}` : ''}</td>
+              <td className="muted">{m.latency_ms}ms</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div style={{ marginTop: 8, fontSize: 13 }}>
+        <span className="badge" style={{ background: toneColor, color: '#fff' }}>{rec.state}</span>
+        <div style={{ marginTop: 4 }}>{rec.text}</div>
+      </div>
     </div>
   )
 }

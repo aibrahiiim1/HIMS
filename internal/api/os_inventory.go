@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -168,6 +169,13 @@ func (s *Server) runOSCollection(ctx context.Context, d db.Device) osCollectResu
 				}
 			}
 		}
+		// Still unknown → fall back to the classified category. A Windows
+		// workstation (endpoint) that never collected has no os_family yet but is
+		// clearly WinRM-managed; this lets legacy Windows route to the WinRM path
+		// (and then the legacy-WSMan fallback) instead of bailing as unsupported.
+		if res.Method == "" && d.Category == "endpoint" {
+			res.Method = "winrm"
+		}
 		if res.Method == "" {
 			res.Reason, res.Detail = "unsupported_os", "OS family is not windows/linux — classify the device or bind a WinRM/SSH credential first"
 			return res
@@ -198,6 +206,33 @@ func (s *Server) runOSCollection(ctx context.Context, d db.Device) osCollectResu
 	for _, cd := range cands {
 		rep, err := s.collectWithCred(ctx, res.Method, res.IP, cd.user, cd.pass)
 		if err != nil {
+			// Legacy WSMan 2.0: NTLM auth SUCCEEDED but the WSMan operation faulted.
+			// The credential is valid — never a credential failure. Route to the
+			// Windows Native Collector fallback if configured; else honest gate.
+			if res.Method == "winrm" {
+				if cat, detail, _ := osinv.ClassifyWinRMError(err); cat == osinv.WinRMOperationFault {
+					if url, token := nativeCollectorConfig(); url != "" {
+						rep, nerr := osinv.CollectViaNativeCollector(ctx, url, token, res.IP, cd.user, cd.pass, 120*time.Second)
+						if nerr == nil {
+							if perr := osinv.Persist(ctx, s.queries, d.ID, rep, time.Now().UTC()); perr != nil {
+								res.Reason, res.Detail = "persist_error", "collected via Windows Native Collector but failed to save: "+perr.Error()
+								return res
+							}
+							res.Status, res.Method, res.CredentialUsed = "collected", "winrm-native", cd.name
+							res.Detail = "collected via Windows Native Collector (legacy WSMan fallback)"
+							return res
+						}
+						msg := nerr.Error()
+						if len(msg) > 160 {
+							msg = msg[:160] + "…"
+						}
+						res.Reason, res.Detail = "legacy_collector_failed", "legacy Windows host; Windows Native Collector error: "+msg
+						return res
+					}
+					res.Reason, res.Detail = "legacy_wsman2", detail+" Configure the Windows Native Collector (HIMS_WINDOWS_NATIVE_COLLECTOR_URL) or WMI/DCOM fallback."
+					return res
+				}
+			}
 			lastReason, lastDetail = categorizeCollectErr(res.Method, err.Error())
 			continue
 		}
@@ -306,6 +341,14 @@ func (s *Server) osCandidateCreds(ctx context.Context, cph *secret.Cipher, d db.
 		}
 	}
 	return out
+}
+
+// nativeCollectorConfig returns the Windows Native Collector helper URL + token
+// from the environment (empty url = not configured → honest gate). The token is a
+// shared secret HIMS presents to the trusted helper; it is never logged.
+func nativeCollectorConfig() (url, token string) {
+	return strings.TrimSpace(os.Getenv("HIMS_WINDOWS_NATIVE_COLLECTOR_URL")),
+		strings.TrimSpace(os.Getenv("HIMS_WINDOWS_NATIVE_COLLECTOR_TOKEN"))
 }
 
 func credKindMatchesMethod(kind, method string) bool {
