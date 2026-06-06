@@ -144,7 +144,8 @@ func (s *Server) testCredentials(w http.ResponseWriter, r *http.Request) {
 			case res.IP == "":
 				res.Category, res.Detail = credtest.CatError, "device has no IP to probe"
 			default:
-				o := credtest.Test(ctx, j.c.kind, j.c.secret, res.IP, credtest.Options{LegacyKEX: req.LegacyKEX, CredentialName: j.c.name})
+				wmiURL, wmiTok := wmiCollectorConfig()
+				o := credtest.Test(ctx, j.c.kind, j.c.secret, res.IP, credtest.Options{LegacyKEX: req.LegacyKEX, CredentialName: j.c.name, WMICollectorURL: wmiURL, WMICollectorToken: wmiTok})
 				res.Protocol, res.Category, res.Detail, res.LatencyMS = o.Protocol, o.Category, o.Detail, o.LatencyMS
 			}
 			res.Success = res.Category == credtest.CatSuccess
@@ -238,6 +239,51 @@ func (s *Server) winrmDiagnose(w http.ResponseWriter, r *http.Request) {
 	s.audit(r, "credential", "credential.winrm_diagnose", "credential", cid.String(),
 		"Ran WinRM diagnostic against "+req.Host, map[string]any{"host": req.Host, "credential": cred.Name})
 	writeJSON(w, http.StatusOK, report)
+}
+
+// wmiDiagnose handles POST /credentials/wmi-diagnose {host, credential_id}. It
+// probes DCOM/RPC reachability (135) and, if a WMI collector is configured, tries
+// an authenticated collect — returning a secrets-free diagnosis with the precise
+// failure category. Gated to credentials.manage.
+func (s *Server) wmiDiagnose(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Host         string `json:"host"`
+		CredentialID string `json:"credential_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Host == "" {
+		http.Error(w, "host is required", http.StatusBadRequest)
+		return
+	}
+	url, token := wmiCollectorConfig()
+	reachable, dcomCat, dcomDetail := osinv.WMIProbeReachable(r.Context(), req.Host, 5*time.Second)
+	out := map[string]any{
+		"host":                 req.Host,
+		"dcom_reachable":       reachable,
+		"dcom_status":          dcomCat,
+		"dcom_detail":          dcomDetail,
+		"collector_configured": url != "",
+	}
+	// If reachable + collector configured + a credential was supplied, try a real
+	// auth+collect so the operator sees the precise category.
+	if reachable && url != "" && req.CredentialID != "" {
+		if cid, err := uuid.Parse(req.CredentialID); err == nil {
+			if cred, err := s.queries.GetCredential(r.Context(), cid); err == nil && s.cipher() != nil {
+				if plain, derr := s.cipher().Open(cred.EncryptedBlob, cred.KeyID); derr == nil {
+					u, p := credtest.SplitUserPass(string(plain))
+					_, cerr := osinv.CollectViaWMICollector(r.Context(), url, token, req.Host, u, p, 30*time.Second)
+					cat, detail := osinv.ClassifyWMIError(cerr)
+					out["collect_result"] = cat
+					out["collect_detail"] = detail
+				}
+			}
+		}
+	}
+	s.audit(r, "credential", "credential.wmi_diagnose", "credential", req.CredentialID, "Ran WMI/DCOM diagnostic against "+req.Host, map[string]any{"host": req.Host})
+	writeJSON(w, http.StatusOK, out)
 }
 
 // persistScanCredAttempts saves the credential authentication attempts a

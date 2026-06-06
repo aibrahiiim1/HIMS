@@ -5,7 +5,7 @@ import { api, type CredTestHistory, type AuthMe, type Credential, type Credentia
 import { Panel, EmptyState, timeAgo } from './ui'
 
 const PROTO_LABEL: Record<string, string> = {
-  snmp_v2c: 'SNMP v2c', snmp_v3: 'SNMP v3', ssh: 'SSH', winrm: 'WinRM', onvif: 'ONVIF',
+  snmp_v2c: 'SNMP v2c', snmp_v3: 'SNMP v3', ssh: 'SSH', winrm: 'WinRM', wmi: 'WMI / DCOM', onvif: 'ONVIF',
   http_basic: 'HTTP Basic', vendor_api: 'Vendor API', ldap: 'LDAP',
 }
 const label = (k: string) => PROTO_LABEL[k] ?? k
@@ -18,8 +18,8 @@ function expectedKindsFor(category?: string, osFamily?: string): string[] {
   if (osFamily === 'windows') return ['winrm']
   if (osFamily === 'linux') return ['ssh']
   switch (category) {
-    case 'endpoint': case 'workstation': return ['winrm']
-    case 'server': return ['winrm', 'ssh']
+    case 'endpoint': case 'workstation': return ['winrm', 'wmi']
+    case 'server': return ['winrm', 'ssh', 'wmi']
     case 'switch': case 'router': case 'firewall': return ['snmp_v2c', 'ssh']
     case 'camera': case 'nvr': return ['onvif', 'http_basic']
     case 'virtual_host': return ['vmware', 'vendor_api']
@@ -75,6 +75,24 @@ export function DeviceCredentialHealth({ deviceId, category, osFamily }: { devic
     onSuccess: (d) => setDiag(d),
   })
   const showDiagnose = expected.includes('winrm') || history.some((h) => h.kind === 'winrm') || effCategory === 'endpoint'
+
+  // WMI/DCOM diagnostic (legacy Windows where WinRM is disabled).
+  const [wmiMsg, setWmiMsg] = useState('')
+  const wmiDiag = useMutation({
+    mutationFn: async () => {
+      if (!dev?.primary_ip) throw new Error('Device has no IP to diagnose.')
+      const creds = await api.get<Credential[]>('/credentials')
+      const wmi = creds.find((c) => c.kind === 'wmi') || creds.find((c) => c.kind === 'winrm')
+      return api.post<{ dcom_reachable: boolean; dcom_status: string; dcom_detail: string; collector_configured: boolean; collect_result?: string; collect_detail?: string }>(
+        '/credentials/wmi-diagnose', { host: dev.primary_ip, credential_id: wmi?.id ?? '' })
+    },
+    onSuccess: (d) => {
+      const parts = [`DCOM(135): ${d.dcom_reachable ? 'reachable' : d.dcom_status}`, `collector ${d.collector_configured ? 'configured' : 'not configured'}`]
+      if (d.collect_result) parts.push(`collect=${d.collect_result}`)
+      setWmiMsg(parts.join(' · ') + (d.collect_detail ? ` — ${d.collect_detail}` : d.dcom_detail ? ` — ${d.dcom_detail}` : ''))
+    },
+    onError: (e) => setWmiMsg((e as Error).message),
+  })
 
   // Latest result per credential-kind = the current credential health per protocol.
   const latestByKind = useMemo(() => {
@@ -152,8 +170,14 @@ export function DeviceCredentialHealth({ deviceId, category, osFamily }: { devic
             <Wrench size={12} /> {winDiag.isPending ? 'Diagnosing…' : 'Diagnose WinRM'}
           </button>
         )}
+        {showDiagnose && canManageCreds && (
+          <button className="btn btn-ghost btn-xs" disabled={wmiDiag.isPending} title="Probe DCOM/RPC (135) reachability + WMI auth (legacy Windows fallback)" onClick={() => wmiDiag.mutate()}>
+            <Wrench size={12} /> {wmiDiag.isPending ? 'Diagnosing…' : 'Diagnose WMI/DCOM'}
+          </button>
+        )}
       </div>
       {winDiag.error && <p className="error-msg" style={{ marginTop: 0 }}>{(winDiag.error as Error).message}</p>}
+      {wmiMsg && <p className="muted" style={{ marginTop: 0, fontSize: 12 }}>WMI/DCOM — {wmiMsg}</p>}
       {diag && <WinRMDiagPanel d={diag} onClose={() => setDiag(null)} />}
 
       {expectedRows.length > 0 ? (

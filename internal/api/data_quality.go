@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/coralsearesorts/hims/internal/osinv"
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
 	"github.com/google/uuid"
 )
@@ -185,6 +186,7 @@ func (s *Server) dataQuality(w http.ResponseWriter, r *http.Request) {
 		winLike := func(d db.Device) bool { return isWin(d) || d.Category == "endpoint" }
 		var credFailed, neverTested, linNoSSH, camNoONVIF, swNoSSH []db.Device
 		var legacyWin, winAuthFailed, winDisabled, winReady []db.Device
+		var wmiUnreachable, wmiAccessDenied, wmiCredFailed []db.Device
 		for _, d := range devs {
 			da := am[d.ID]
 			ts := tm[d.ID]
@@ -217,12 +219,27 @@ func (s *Server) dataQuality(w http.ResponseWriter, r *http.Request) {
 			switch {
 			case ts.winrmLegacy():
 				legacyWin = append(legacyWin, d) // auth OK, WSMan operation fault → needs fallback
-			case accessSatisfies(da, "winrm"):
-				winReady = append(winReady, d) // WinRM works — collection-ready
+			case accessSatisfies(da, "winrm") || accessSatisfies(da, "wmi"):
+				winReady = append(winReady, d) // WinRM or WMI works — collection-ready
 			case winrmCat == "auth_failed":
 				winAuthFailed = append(winAuthFailed, d)
 			case winrmCat == "unreachable" || winrmCat == "":
 				winDisabled = append(winDisabled, d) // 5985 closed / WinRM disabled / not attempted
+			}
+			// WMI/DCOM-specific buckets (latest wmi test outcome), independent of WinRM.
+			wmiCat := ""
+			if ts != nil {
+				wmiCat = ts.kindCategory["wmi"]
+			}
+			switch wmiCat {
+			case osinv.WMIDcomUnreachable, osinv.WMIRpcUnreachable, osinv.WMIFirewallBlocked:
+				if !accessSatisfies(da, "wmi") {
+					wmiUnreachable = append(wmiUnreachable, d)
+				}
+			case osinv.WMIAccessDenied:
+				wmiAccessDenied = append(wmiAccessDenied, d)
+			case osinv.WMIAuthFailed:
+				wmiCredFailed = append(wmiCredFailed, d)
 			}
 		}
 		addIssue("credential_failed", "Failed credentials", "The latest credential test for these devices was rejected (authentication failed) and no other working method is bound. Fix the credential or bind a working one.", "warning", credFailed)
@@ -234,7 +251,16 @@ func (s *Server) dataQuality(w http.ResponseWriter, r *http.Request) {
 		}
 		addIssue("windows_winrm_auth_failed", "Windows with WinRM auth failed", "Windows hosts where WinRM is reachable but the credential was rejected. Fix the credential (DOMAIN\\user vs UPN, password).", "warning", winAuthFailed)
 		addIssue("windows_winrm_disabled", "Windows with WinRM disabled / closed", "Windows hosts with no WinRM evidence (5985/5986 closed or not responding). Enable PowerShell Remoting (GPO) and open the firewall, then re-scan.", "warning", winDisabled)
-		addIssue("windows_ready", "Windows ready for collection", "Windows hosts with working WinRM access — deep OS inventory can be collected.", "info", winReady)
+		addIssue("windows_ready", "Windows ready for collection", "Windows hosts with working WinRM/WMI access — deep OS inventory can be collected.", "info", winReady)
+		addIssue("windows_wmi_unreachable", "Windows WMI/DCOM unreachable", "Legacy Windows hosts where WMI/DCOM (RPC 135) is unreachable or firewall-blocked. Open RPC (135 + the DCOM dynamic range) or use a collector on the same broadcast domain.", "warning", wmiUnreachable)
+		addIssue("windows_wmi_access_denied", "Windows WMI access denied", "WMI/DCOM authenticated but access was denied (DCOM launch/activation or namespace permissions). Grant the account WMI/DCOM remote access — NOT a wrong password.", "warning", wmiAccessDenied)
+		addIssue("windows_wmi_credential_failed", "Windows WMI credential failed", "The WMI/DCOM credential was rejected. Fix the domain credential (DOMAIN\\user / password).", "warning", wmiCredFailed)
+		// Legacy Windows that specifically needs the WMI/DCOM fallback (WinRM
+		// disabled or legacy-incompatible) when no WMI collector is configured.
+		if url, _ := wmiCollectorConfig(); url == "" && (len(winDisabled) > 0 || len(legacyWin) > 0) {
+			needsWMI := append(append([]db.Device{}, legacyWin...), winDisabled...)
+			addIssue("legacy_windows_needs_wmi", "Legacy Windows needs WMI/DCOM fallback", "Windows hosts that cannot be collected over WinRM (disabled or legacy WSMan 2.0) and have no WMI/DCOM collector configured. Set HIMS_WMI_COLLECTOR_URL and deploy the WMI collector helper, or enable WinRM.", "warning", needsWMI)
+		}
 		addIssue("linux_no_ssh", "Linux without working SSH", "Linux hosts with no successful SSH access. SSH is needed for deep OS inventory.", "warning", linNoSSH)
 		addIssue("camera_no_onvif", "Cameras/NVRs without ONVIF", "Cameras/NVRs with no successful ONVIF access. ONVIF is needed for device-info and stream inventory.", "warning", camNoONVIF)
 		addIssue("switch_no_ssh", "Switches/firewalls without SSH", "Network devices with no successful SSH access. SSH enables CLI collection and config backup beyond SNMP.", "info", swNoSSH)

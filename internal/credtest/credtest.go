@@ -49,6 +49,10 @@ type Options struct {
 	Timeout        time.Duration
 	LegacyKEX      bool   // try legacy SSH KEX/ciphers for old switches
 	CredentialName string // optional display label for safe debug logs (never a secret)
+	// WMI/DCOM fallback: when set, a wmi credential test (after a successful DCOM
+	// reachability probe) authenticates + collects through this WMI collector helper.
+	WMICollectorURL   string
+	WMICollectorToken string
 }
 
 func (o Options) timeout() time.Duration {
@@ -68,6 +72,8 @@ func ProtocolForKind(kind string) string {
 		return "ssh"
 	case k == "winrm":
 		return "winrm"
+	case k == "wmi":
+		return "wmi"
 	case k == "onvif":
 		return "onvif"
 	case k == "http_basic" || k == "http" || k == "vendor_api":
@@ -130,6 +136,8 @@ func Test(ctx context.Context, kind, secret, host string, opts Options) Outcome 
 		return finish(testONVIF(ctx, secret, host, opts.timeout()))
 	case "winrm":
 		return finish(testWinRM(ctx, secret, host, opts.timeout(), opts.CredentialName))
+	case "wmi":
+		return finish(testWMI(ctx, secret, host, opts))
 	default:
 		return finish(Outcome{Category: CatUnsupported, Detail: "no tester for kind " + kind})
 	}
@@ -237,4 +245,24 @@ func testWinRM(ctx context.Context, secret, host string, timeout time.Duration, 
 		return Outcome{Category: cat, Detail: detail}
 	}
 	return Outcome{Category: CatSuccess, Detail: "WinRM login ok"}
+}
+
+// testWMI probes DCOM/RPC reachability (135) and, when a WMI collector helper is
+// configured, authenticates + collects through it. A reachable host with no
+// collector is "unsupported" (honest gate), not success — open RPC ports never
+// count as managed access. Only a real auth+collect is success.
+func testWMI(ctx context.Context, secret, host string, opts Options) Outcome {
+	reachable, cat, detail := osinv.WMIProbeReachable(ctx, host, opts.timeout())
+	if !reachable {
+		return Outcome{Category: cat, Detail: detail}
+	}
+	if opts.WMICollectorURL == "" {
+		return Outcome{Category: osinv.WMIUnsupported, Detail: "DCOM/RPC reachable on 135, but no WMI collector is configured (set HIMS_WMI_COLLECTOR_URL or deploy the WMI collector helper)."}
+	}
+	user, pass := SplitUserPass(secret)
+	if _, err := osinv.CollectViaWMICollector(ctx, opts.WMICollectorURL, opts.WMICollectorToken, host, user, pass, opts.timeout()); err != nil {
+		c, d := osinv.ClassifyWMIError(err)
+		return Outcome{Category: c, Detail: d}
+	}
+	return Outcome{Category: CatSuccess, Detail: "WMI authenticated + collected"}
 }

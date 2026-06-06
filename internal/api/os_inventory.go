@@ -13,6 +13,7 @@ import (
 
 	"github.com/coralsearesorts/hims/internal/classify"
 	"github.com/coralsearesorts/hims/internal/credtest"
+	"github.com/coralsearesorts/hims/internal/discovery"
 	"github.com/coralsearesorts/hims/internal/domain"
 	"github.com/coralsearesorts/hims/internal/osinv"
 	"github.com/coralsearesorts/hims/internal/secret"
@@ -229,7 +230,15 @@ func (s *Server) runOSCollection(ctx context.Context, d db.Device) osCollectResu
 						res.Reason, res.Detail = "legacy_collector_failed", "legacy Windows host; Windows Native Collector error: "+msg
 						return res
 					}
-					res.Reason, res.Detail = "legacy_wsman2", detail+" Configure the Windows Native Collector (HIMS_WINDOWS_NATIVE_COLLECTOR_URL) or WMI/DCOM fallback."
+					// Native Collector not configured → try the WMI/DCOM fallback.
+					if okw, wr, wd := s.tryWMIFallback(ctx, d, res.IP, cands); okw {
+						res.Status, res.Method, res.Detail = "collected", "wmi", "collected via WMI/DCOM fallback (legacy WSMan host)"
+						return res
+					} else if wr != "wmi_not_configured" {
+						res.Reason, res.Detail = "legacy_wmi_"+wr, wd
+						return res
+					}
+					res.Reason, res.Detail = "legacy_wsman2", detail+" Configure the Windows Native Collector (HIMS_WINDOWS_NATIVE_COLLECTOR_URL) or the WMI/DCOM collector (HIMS_WMI_COLLECTOR_URL)."
 					return res
 				}
 			}
@@ -273,6 +282,18 @@ func (s *Server) runOSCollection(ctx context.Context, d db.Device) osCollectResu
 		res.Counts = map[string]int{"disks": len(rep.Disks), "nics": len(rep.Nics), "services": len(rep.Services), "processes": len(rep.Processes), "software": len(rep.Software)}
 		res.Detail = "collected via " + res.Method + " using credential " + cd.name
 		return res
+	}
+	// Priority-3 fallback: WinRM is exhausted for a reason OTHER than a rejected
+	// credential (disabled / unreachable / handshake) → try the WMI/DCOM collector
+	// if configured. This is the path for legacy Windows with WinRM turned off.
+	if res.Method == "winrm" && lastReason != "auth_failed" {
+		if okw, wr, wd := s.tryWMIFallback(ctx, d, res.IP, cands); okw {
+			res.Status, res.Method, res.Detail = "collected", "wmi", "collected via WMI/DCOM fallback"
+			return res
+		} else if wr != "wmi_not_configured" {
+			res.Reason, res.Detail = "wmi_"+wr, wd
+			return res
+		}
 	}
 	res.Reason, res.Detail = lastReason, lastDetail+" (tried "+strconv.Itoa(len(cands))+" credential(s))"
 	return res
@@ -349,6 +370,52 @@ func (s *Server) osCandidateCreds(ctx context.Context, cph *secret.Cipher, d db.
 func nativeCollectorConfig() (url, token string) {
 	return strings.TrimSpace(os.Getenv("HIMS_WINDOWS_NATIVE_COLLECTOR_URL")),
 		strings.TrimSpace(os.Getenv("HIMS_WINDOWS_NATIVE_COLLECTOR_TOKEN"))
+}
+
+// wmiCollectorConfig returns the WMI/DCOM collector helper URL + token from the
+// environment (empty url = not configured → honest gate). Never logged.
+func wmiCollectorConfig() (url, token string) {
+	return strings.TrimSpace(os.Getenv("HIMS_WMI_COLLECTOR_URL")),
+		strings.TrimSpace(os.Getenv("HIMS_WMI_COLLECTOR_TOKEN"))
+}
+
+// tryWMIFallback attempts WMI/DCOM collection of a Windows host through the
+// configured WMI collector helper. It is the priority-3 fallback (after Go WinRM
+// and the Native Collector): used when WinRM is disabled/legacy-incompatible. It
+// probes DCOM (135) first, persists every attempt to Credential Test History
+// (protocol "wmi"), and binds only on auth+collect success. Returns ok + a
+// reason/detail when it could not collect (honest gate when unconfigured).
+func (s *Server) tryWMIFallback(ctx context.Context, d db.Device, ip string, cands []osCred) (ok bool, reason, detail string) {
+	url, token := wmiCollectorConfig()
+	if url == "" {
+		return false, "wmi_not_configured", "WMI/DCOM collector not configured (set HIMS_WMI_COLLECTOR_URL) — cannot use the WMI fallback."
+	}
+	if reachable, cat, det := osinv.WMIProbeReachable(ctx, ip, 4*time.Second); !reachable {
+		// record a non-secret wmi attempt so history/coverage/DQ reflect it
+		s.persistScanCredAttempts(ctx, d, []discovery.CredAttempt{{Kind: domain.CredWMI, Protocol: "wmi", Success: false, Category: cat, Detail: det}})
+		return false, cat, det
+	}
+	for _, cd := range cands {
+		rep, err := osinv.CollectViaWMICollector(ctx, url, token, ip, cd.user, cd.pass, 120*time.Second)
+		cat, det := osinv.ClassifyWMIError(err)
+		s.persistScanCredAttempts(ctx, d, []discovery.CredAttempt{{CredentialID: cd.id, Kind: domain.CredWMI, Protocol: "wmi", Success: err == nil, Category: cat, Detail: det}})
+		if err != nil {
+			reason, detail = cat, det
+			continue
+		}
+		if perr := osinv.Persist(ctx, s.queries, d.ID, rep, time.Now().UTC()); perr != nil {
+			return false, "persist_error", "WMI collected but failed to save: " + perr.Error()
+		}
+		if cd.id != uuid.Nil {
+			cid := cd.id
+			_ = s.queries.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: d.ID, CredentialID: &cid})
+		}
+		return true, "", "collected via WMI/DCOM collector"
+	}
+	if reason == "" {
+		reason, detail = "wmi_auth_failed", "no credential authenticated via WMI/DCOM"
+	}
+	return false, reason, detail
 }
 
 func credKindMatchesMethod(kind, method string) bool {

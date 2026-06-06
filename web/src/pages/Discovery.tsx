@@ -253,6 +253,7 @@ function ScanPreflightPanel({ pf, siteSelected }: { pf: ScanPreflight; siteSelec
       <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>Scan preflight — credentials available for this scope</div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
         {chip('WinRM', c.winrm ?? 0)}
+        {chip('WMI/DCOM', c.wmi ?? 0)}
         {chip('SSH', c.ssh ?? 0)}
         {chip('SNMP', c.snmp ?? 0)}
         {chip('ONVIF', c.onvif ?? 0)}
@@ -550,6 +551,10 @@ function OnboardingActions({ results, qc, setMsg, onRescan, rescanning }: {
   const net = results.filter((r) => ['switch', 'router', 'firewall'].includes(r.category ?? ''))
   const netOk = net.filter((r) => ok(r, 'snmp'))
 
+  // WMI/DCOM blockers: a wmi attempt that failed (and didn't succeed by any method).
+  const wmiFailCats = ['dcom_unreachable', 'rpc_unreachable', 'wmi_access_denied', 'wmi_auth_failed', 'firewall_blocked', 'namespace_unavailable']
+  const wmiBlocked = win.filter((r) => !ok(r, 'wmi') && wmiFailCats.some((c) => cat(r, 'wmi', c)))
+
   type Card = {
     key: string; title: string; tone: 'ok' | 'warn' | 'crit'; count: number; sample: string
     cause: string; action: string; instructions?: React.ReactNode; button?: React.ReactNode
@@ -600,6 +605,17 @@ function OnboardingActions({ results, qc, setMsg, onRescan, rescanning }: {
   if (linClosed.length) cards.push({ key: 'lin-closed', title: 'Linux · SSH unreachable / 22 closed', tone: 'warn', count: linClosed.length, sample: ips(linClosed), cause: 'Port 22 not reachable — SSH not attempted.', action: 'Enable sshd / open port 22, then re-scan.', button: <button style={ghost} disabled={rescanning} onClick={onRescan}>{rescanning ? 'Re-scanning…' : 'Re-scan scope'}</button> })
 
   if (netOk.length) cards.push({ key: 'net-ok', title: 'Network · SNMP working', tone: 'ok', count: netOk.length, sample: ips(netOk), cause: 'Switches/firewalls authenticated via SNMP; interfaces/topology collected.', action: 'Completed — no action.' })
+
+  if (wmiBlocked.length) {
+    const c0 = (r: DiscoveryResult) => (r.probe_data?.cred_attempts ?? []).find((a) => a.protocol === 'wmi' && !a.success)?.category ?? 'wmi_error'
+    const sample = wmiBlocked[0] ? `${wmiBlocked[0].ip} (${c0(wmiBlocked[0])})` : ''
+    cards.push({
+      key: 'win-wmi', title: 'Windows · WMI/DCOM blocker', tone: 'warn', count: wmiBlocked.length, sample: ips(wmiBlocked) + (sample ? ` · e.g. ${sample}` : ''),
+      cause: 'WMI/DCOM (RPC 135) collection failed — see the per-host category (dcom_unreachable / firewall_blocked / wmi_access_denied / wmi_auth_failed). wmi_access_denied means the credential is valid but lacks DCOM/WMI remote rights — not a wrong password.',
+      action: 'Open RPC (135 + DCOM dynamic range), grant the account WMI/DCOM remote access, or fix the WMI credential; then re-scan. Configure HIMS_WMI_COLLECTOR_URL if not set.',
+      button: <button style={ghost} disabled={rescanning} onClick={onRescan}>{rescanning ? 'Re-scanning…' : 'Re-scan scope'}</button>,
+    })
+  }
 
   if (cards.length === 0 && winLegacy.length === 0) return null
   const toneColor = { ok: '#2e7d32', warn: '#8a6d00', crit: '#b71c1c' }

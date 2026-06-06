@@ -135,7 +135,7 @@ func (s *Server) scanPreflight(w http.ResponseWriter, r *http.Request) {
 	for _, id := range selected {
 		selSet[id] = true
 	}
-	counts := map[string]int{"snmp": 0, "ssh": 0, "winrm": 0, "onvif": 0, "http_basic": 0, "vendor_api": 0}
+	counts := map[string]int{"snmp": 0, "ssh": 0, "winrm": 0, "wmi": 0, "onvif": 0, "http_basic": 0, "vendor_api": 0}
 	for _, c := range creds {
 		if len(selSet) > 0 && !selSet[c.ID.String()] {
 			continue
@@ -147,6 +147,8 @@ func (s *Server) scanPreflight(w http.ResponseWriter, r *http.Request) {
 			counts["ssh"]++
 		case string(domain.CredWinRM):
 			counts["winrm"]++
+		case string(domain.CredWMI):
+			counts["wmi"]++
 		case string(domain.CredONVIF):
 			counts["onvif"]++
 		case string(domain.CredHTTPBasic):
@@ -233,6 +235,37 @@ func (s *Server) nativeCollectorTest(w http.ResponseWriter, r *http.Request) {
 	url, _ := nativeCollectorConfig()
 	if url == "" {
 		writeJSON(w, http.StatusOK, map[string]any{"configured": false, "reachable": false, "detail": "Windows Native Collector not configured (set HIMS_WINDOWS_NATIVE_COLLECTOR_URL)."})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 6*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"configured": true, "reachable": false, "detail": "invalid collector URL"})
+		return
+	}
+	cl := &http.Client{Timeout: 6 * time.Second, Transport: insecureDoer(6 * time.Second).Transport}
+	resp, derr := cl.Do(req)
+	if derr != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"configured": true, "reachable": false, "detail": shortErr(derr)})
+		return
+	}
+	_ = resp.Body.Close()
+	writeJSON(w, http.StatusOK, map[string]any{"configured": true, "reachable": true, "detail": "collector responded (HTTP " + itoaN(resp.StatusCode) + ")"})
+}
+
+// wmiCollectorStatus handles GET /discovery/wmi-collector-status — booleans only.
+func (s *Server) wmiCollectorStatus(w http.ResponseWriter, r *http.Request) {
+	url, token := wmiCollectorConfig()
+	writeJSON(w, http.StatusOK, map[string]any{"url_configured": url != "", "token_configured": token != ""})
+}
+
+// wmiCollectorTest handles POST /discovery/wmi-collector-test — reachability of
+// the configured WMI collector helper URL.
+func (s *Server) wmiCollectorTest(w http.ResponseWriter, r *http.Request) {
+	url, _ := wmiCollectorConfig()
+	if url == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"configured": false, "reachable": false, "detail": "WMI/DCOM collector not configured (set HIMS_WMI_COLLECTOR_URL)."})
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 6*time.Second)

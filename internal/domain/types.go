@@ -59,6 +59,7 @@ const (
 	CredONVIF     CredentialKind = "onvif"
 	CredVendorAPI CredentialKind = "vendor_api"
 	CredLDAP      CredentialKind = "ldap"
+	CredWMI       CredentialKind = "wmi" // Windows WMI/DCOM (legacy Windows fallback)
 )
 
 // Credential is an encrypted secret. EncryptedBlob is never logged or

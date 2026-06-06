@@ -19,7 +19,7 @@ function EncryptionGate() {
   )
 }
 
-const KINDS = ['snmp_v2c', 'snmp_v3', 'ssh', 'winrm', 'http_basic', 'onvif', 'vendor_api', 'ldap']
+const KINDS = ['snmp_v2c', 'snmp_v3', 'ssh', 'winrm', 'wmi', 'http_basic', 'onvif', 'vendor_api', 'ldap']
 
 const btn: React.CSSProperties = {
   padding: '8px 16px', background: '#1565c0', color: '#fff', border: 'none',
@@ -132,7 +132,7 @@ function CreateForm({ onDone }: { onDone: () => void }) {
 
   const isV3 = kind === 'snmp_v3'
   // http/winrm/onvif/vendor creds use "username:password"; surface a hint.
-  const userPass = kind === 'ssh' || kind === 'winrm' || kind === 'http_basic' || kind === 'onvif' || kind === 'vendor_api'
+  const userPass = kind === 'ssh' || kind === 'winrm' || kind === 'wmi' || kind === 'http_basic' || kind === 'onvif' || kind === 'vendor_api'
 
   const buildSecret = (): string => {
     if (isV3) {

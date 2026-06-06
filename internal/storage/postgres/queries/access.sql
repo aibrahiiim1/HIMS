@@ -13,10 +13,15 @@ SELECT device_id, protocol::text AS protocol, source::text AS source FROM (
     FROM devices d JOIN credentials c ON c.id = d.credential_id
     WHERE d.deleted_at IS NULL
 
-  -- 2) Deep OS inventory proves authenticated WinRM/SSH.
+  -- 2) Deep OS inventory proves authenticated WinRM/SSH/WMI. winrm-native (the
+  --    Windows Native Collector helper) is still WinRM-family; wmi is its own.
   UNION ALL
-  SELECT device_id, collection_method AS protocol, 'evidence' AS source
-    FROM os_inventory WHERE collection_method IN ('winrm', 'ssh')
+  SELECT device_id,
+         CASE WHEN collection_method = 'wmi' THEN 'wmi'
+              WHEN collection_method = 'ssh' THEN 'ssh'
+              ELSE 'winrm' END AS protocol,
+         'evidence' AS source
+    FROM os_inventory WHERE collection_method IN ('winrm', 'ssh', 'winrm-native', 'wmi')
 
   -- 3) ONVIF camera inventory (authenticated device-info / profiles).
   UNION ALL
