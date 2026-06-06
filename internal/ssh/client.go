@@ -24,9 +24,22 @@ type Creds struct {
 // key-exchange + cipher algorithms are appended for legacy switches (e.g. older
 // Cisco/Aruba that only speak diffie-hellman-group1/14-sha1 + CBC ciphers).
 func buildConfig(c Creds, legacyKEX bool, timeout time.Duration) *gossh.ClientConfig {
+	// Offer BOTH password and keyboard-interactive. Many Linux hosts (PAM) and
+	// network appliances only advertise keyboard-interactive and reject the bare
+	// SSH "password" method — that is exactly why a login works in PuTTY (which
+	// uses keyboard-interactive) but a password-only client gets "authentication
+	// rejected". keyboard-interactive answers every prompt with the same password,
+	// so it covers the common single-password PAM flow without weakening anything.
+	ki := gossh.KeyboardInteractive(func(_, _ string, questions []string, _ []bool) ([]string, error) {
+		answers := make([]string, len(questions))
+		for i := range questions {
+			answers[i] = c.Password
+		}
+		return answers, nil
+	})
 	cfg := &gossh.ClientConfig{
 		User:            c.Username,
-		Auth:            []gossh.AuthMethod{gossh.Password(c.Password)},
+		Auth:            []gossh.AuthMethod{gossh.Password(c.Password), ki},
 		HostKeyCallback: gossh.InsecureIgnoreHostKey(), //nolint:gosec // device host keys are not pinned (see package doc)
 		Timeout:         timeout,
 	}
