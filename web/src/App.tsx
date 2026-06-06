@@ -6,6 +6,8 @@ import { Login } from './pages/Login'
 import { DeviceList } from './pages/DeviceList'
 import { Dashboard } from './pages/Dashboard'
 import { Discovery } from './pages/Discovery'
+import { ScanJobs, ScanResultsRedirect } from './pages/ScanJobs'
+import { ScanJobResults } from './pages/ScanJobResults'
 import { ServerDetail } from './pages/ServerDetail'
 import { EndpointDetail } from './pages/EndpointDetail'
 import { FirewallDetail } from './pages/FirewallDetail'
@@ -102,6 +104,11 @@ function Shell({ me, onLogout }: { me?: AuthMe; onLogout: () => void }) {
           <Routes>
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/discovery" element={<Discovery />} />
+            {/* Scan Jobs / Results are standalone full pages, not a Discovery tab. */}
+            <Route path="/discovery/jobs" element={<ScanJobs />} />
+            <Route path="/discovery/jobs/:jobId" element={<ScanJobResults />} />
+            <Route path="/discovery/jobs/:jobId/results" element={<ScanJobResults />} />
+            <Route path="/discovery/results" element={<ScanResultsRedirect />} />
             <Route path="/" element={<DeviceList category="switch" title="Switches" detailBase="/devices" />} />
             <Route path="/servers" element={<DeviceList category="server" title="Servers" detailBase="/servers" />} />
             <Route path="/firewalls" element={<DeviceList category="firewall" title="Firewalls" detailBase="/firewalls" />} />

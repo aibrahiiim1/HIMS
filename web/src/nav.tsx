@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Bell, Search, HeartPulse, Radar, BookOpen, KeyRound,
   Boxes, Layers, Network, Flame, Wifi, Cpu, Server, HardDrive, MonitorSmartphone,
   Plug, BatteryCharging, ShieldAlert, Camera, Video, Phone, CircleHelp, Brain, Laptop,
-  Map, Route as RouteIcon, Waypoints, ClipboardList, Wrench, Package, DollarSign, Building2,
+  Map, Route as RouteIcon, Waypoints, ClipboardList, ListChecks, Wrench, Package, DollarSign, Building2,
   FileChartColumn, FileSearch, ChartLine, Tag, Download,
   Users, ShieldCheck, LayoutTemplate, ScanLine, Settings, FileClock, Lock, Activity, MonitorPlay, ClipboardCheck, Send, FileCode, BadgeCheck, DatabaseBackup,
 } from 'lucide-react'
@@ -51,6 +51,8 @@ export const NAV: NavGroup[] = [
     title: 'Discovery',
     items: [
       { label: 'Discovery Center', icon: Radar, to: '/discovery', badge: 'failed_scans' },
+      { label: 'Scan Jobs', icon: ListChecks, to: '/discovery/jobs' },
+      { label: 'Scan Results', icon: ClipboardList, to: '/discovery/results' },
       { label: 'MIB Browser', icon: BookOpen, to: '/mibs' },
       { label: 'Credentials', icon: KeyRound, to: '/credentials' },
       { label: 'Vendor Profiles', icon: Plug, to: '/vendor-profiles' },

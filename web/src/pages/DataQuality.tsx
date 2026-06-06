@@ -13,6 +13,29 @@ const SEV: Record<string, { cls: string; icon: typeof Info }> = {
   info: { cls: 'badge-unknown', icon: Info },
 }
 
+// issueDeepLink routes a DQ issue to the page that owns its remediation:
+// classification problems → Missing Classification; access/management problems →
+// Unmanaged Devices (deep-linked to the matching management filter when possible).
+function issueDeepLink(key: string): { to: string; label: string } | null {
+  const classification = ['unknown_category', 'missing_classification', 'low_confidence', 'missing_vendor', 'missing_model']
+  if (classification.includes(key)) return { to: '/inventory/missing-classification', label: 'Open Missing Classification →' }
+  const mgmt: Record<string, string> = {
+    online_but_unmanaged: '/inventory/unmanaged?management=online_unmanaged',
+    reachable_but_no_credential: '/inventory/unmanaged?management=needs_credential',
+    credential_failed: '/inventory/unmanaged?management=credential_failed',
+    credential_bound_but_not_working: '/inventory/unmanaged?management=collection_failed',
+    no_credential_bound: '/inventory/unmanaged?management=needs_credential',
+    missing_credentials: '/inventory/unmanaged?management=needs_credential',
+    needs_agent_collection: '/inventory/unmanaged?management=needs_agent',
+    device_requires_agent: '/inventory/unmanaged?management=needs_agent',
+    agent_offline_for_managed_site: '/inventory/unmanaged?management=agent_offline',
+    managed_device_collection_stale: '/inventory/unmanaged',
+    offline_but_previously_managed: '/inventory/unmanaged',
+  }
+  if (mgmt[key]) return { to: mgmt[key], label: 'Open Unmanaged Devices →' }
+  return null
+}
+
 export function DataQuality() {
   const q = useQuery({ queryKey: ['data-quality'], queryFn: () => api.get<DataQualityReport>('/data-quality') })
   const [open, setOpen] = useState<string | null>(null)
@@ -48,7 +71,8 @@ export function DataQuality() {
                     <ChevronRight size={14} style={{ transform: isOpen ? 'rotate(90deg)' : 'none', transition: 'transform .15s' }} /> {isOpen ? 'Hide' : `Show ${Math.min(iss.count, 100)}`}
                   </button>}
                 >
-                  <p className="muted" style={{ fontSize: 13, marginBottom: isOpen ? 12 : 0 }}>{iss.description}</p>
+                  <p className="muted" style={{ fontSize: 13, marginBottom: 6 }}>{iss.description}</p>
+                  {(() => { const dl = issueDeepLink(iss.key); return dl ? <div style={{ marginBottom: isOpen ? 12 : 0 }}><Link className="btn btn-ghost btn-xs" to={dl.to}>{dl.label}</Link></div> : null })()}
                   {iss.key === 'missing_location' && <ReconcileSites onApplied={() => q.refetch()} />}
                   {iss.key === 'os_not_inventoried' && <BulkCollectOS devices={iss.devices} onDone={() => q.refetch()} />}
                   {isOpen && (

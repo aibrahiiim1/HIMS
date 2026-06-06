@@ -1,24 +1,24 @@
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Radar, Boxes, CircleX, Clock, KeyRound } from 'lucide-react'
 import {
   api, locationPaths,
   type DiscoveryJob, type DiscoveryResult, type Location, type Credential, type AccessCoverage,
-  type ScanPreflight, type RelayAgent, type Device,
+  type ScanPreflight, type RelayAgent,
 } from '../api'
 import { PageHeader, Kpi, timeAgo } from '../components/ui'
-import { ReachabilityBadge, ManagementBadge } from '../components/StatusBadges'
 
 // ---------- shared styles ----------
 const btn: React.CSSProperties = { padding: '8px 16px', background: '#1565c0', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 14, fontWeight: 600 }
 const ghost: React.CSSProperties = { padding: '4px 10px', background: 'transparent', color: '#90caf9', border: '1px solid #90caf9', borderRadius: 6, cursor: 'pointer', fontSize: 12 }
-const danger: React.CSSProperties = { padding: '4px 10px', background: 'transparent', color: '#ef9a9a', border: '1px solid #ef9a9a', borderRadius: 6, cursor: 'pointer', fontSize: 12 }
 const input: React.CSSProperties = { padding: '8px 10px', border: '1px solid #ccc', borderRadius: 6, fontSize: 13 }
 // readable on the white dropdown panel
 const pickerBtn: React.CSSProperties = { padding: '3px 10px', background: '#f0f4f8', color: '#1565c0', border: '1px solid #90caf9', borderRadius: 6, cursor: 'pointer', fontSize: 12 }
 
-const TABS = ['Network scan', 'Import', 'Controllers', 'Active Directory', 'Jobs'] as const
+// Scan Jobs / Results are now standalone pages (/discovery/jobs). Discovery
+// Center stays focused on STARTING scans + preflight.
+const TABS = ['Network scan', 'Import', 'Controllers', 'Active Directory'] as const
 type Tab = typeof TABS[number]
 
 type ScanMode = 'single' | 'range' | 'cidr' | 'site_subnets'
@@ -30,8 +30,10 @@ const MODE_PH: Record<ScanMode, string> = {
 const CATEGORIES = ['unknown', 'switch', 'router', 'firewall', 'access_point', 'wireless_controller', 'server', 'virtual_host', 'virtual_machine', 'storage', 'nvr', 'camera', 'printer', 'ip_phone', 'pbx', 'voice_gateway', 'database', 'directory', 'dns', 'dhcp', 'fingerprint', 'endpoint', 'ups', 'isp_router', 'application']
 const CTRL_KINDS = ['unifi', 'ruckus', 'omada', 'extreme', 'vsphere', 'hyperv', 'redfish', 'onvif', 'cucm']
 
-const jobBadge = (s: string) => (s === 'running' ? 'warning' : s === 'completed' ? 'up' : s === 'failed' || s === 'cancelled' ? 'down' : 'unknown')
-const outcomeBadge = (o: string) => (o === 'enrolled' ? 'up' : o === 'failed' ? 'down' : o === 'classified' ? 'access' : 'unknown')
+// eslint-disable-next-line react-refresh/only-export-components -- shared helper reused by the standalone Scan Jobs pages
+export const jobBadge = (s: string) => (s === 'running' ? 'warning' : s === 'completed' ? 'up' : s === 'failed' || s === 'cancelled' ? 'down' : 'unknown')
+// eslint-disable-next-line react-refresh/only-export-components -- shared helper reused by the standalone Scan Jobs pages
+export const outcomeBadge = (o: string) => (o === 'enrolled' ? 'up' : o === 'failed' ? 'down' : o === 'classified' ? 'access' : 'unknown')
 
 // profileVendorHint maps a scanned category to the vendor_type to pre-select when
 // creating a profile from a Scan Result. Wireless has several vendor types, so the
@@ -55,7 +57,7 @@ function profileVendorHint(category?: string | null): string {
 // CollectedViaCell shows how a host's OS inventory was (or will be) collected:
 // directly by HIMS, dispatched to a site Relay Agent (queued), or blocked
 // because the site agent is offline / missing.
-function CollectedViaCell({ via, agent }: { via?: string; agent?: string }) {
+export function CollectedViaCell({ via, agent }: { via?: string; agent?: string }) {
   switch (via) {
     case 'direct':
       return <span className="badge badge-up">direct</span>
@@ -70,7 +72,7 @@ function CollectedViaCell({ via, agent }: { via?: string; agent?: string }) {
   }
 }
 
-function ProfileCell({ r, qc, jobID }: { r: DiscoveryResult; qc: ReturnType<typeof useQueryClient>; jobID: string | null }) {
+export function ProfileCell({ r, qc, jobID }: { r: DiscoveryResult; qc: ReturnType<typeof useQueryClient>; jobID: string | null }) {
   const p = r.probe_data?.profile
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
@@ -130,7 +132,8 @@ function ProfileCell({ r, qc, jobID }: { r: DiscoveryResult; qc: ReturnType<type
   )
 }
 
-function duration(a?: string | null, b?: string | null): string {
+// eslint-disable-next-line react-refresh/only-export-components -- shared helper reused by the standalone Scan Jobs pages
+export function duration(a?: string | null, b?: string | null): string {
   if (!a) return '—'
   const end = b ? new Date(b).getTime() : Date.now()
   const s = Math.max(0, Math.round((end - new Date(a).getTime()) / 1000))
@@ -139,8 +142,8 @@ function duration(a?: string | null, b?: string | null): string {
 
 export function Discovery() {
   const qc = useQueryClient()
+  const navigate = useNavigate()
   const [tab, setTab] = useState<Tab>('Network scan')
-  const [jobID, setJobID] = useState<string | null>(null)
   const [msg, setMsg] = useState('')
 
   const locations = useQuery({ queryKey: ['locations-all'], queryFn: () => api.get<Location[]>('/locations/all') })
@@ -148,12 +151,8 @@ export function Discovery() {
   const locPath = locationPaths(locations.data ?? [])
 
   const jobs = useQuery({ queryKey: ['discovery-jobs'], queryFn: () => api.get<DiscoveryJob[]>('/discovery/jobs'), refetchInterval: 5000 })
-  const detail = useQuery({
-    queryKey: ['discovery-job', jobID],
-    queryFn: () => api.get<{ job: DiscoveryJob; results: DiscoveryResult[] }>(`/discovery/jobs/${jobID}`),
-    enabled: !!jobID, refetchInterval: 4000,
-  })
-  const afterLaunch = (j: DiscoveryJob) => { setJobID(j.id); setTab('Jobs'); qc.invalidateQueries({ queryKey: ['discovery-jobs'] }) }
+  // Launching a scan now jumps straight to the standalone Job Results page.
+  const afterLaunch = (j: DiscoveryJob) => { qc.invalidateQueries({ queryKey: ['discovery-jobs'] }); navigate(`/discovery/jobs/${j.id}/results`) }
 
   const cov = useQuery({ queryKey: ['access-coverage'], queryFn: () => api.get<AccessCoverage>('/dashboard/access-coverage'), retry: 0 })
 
@@ -167,7 +166,7 @@ export function Discovery() {
       <PageHeader title="Discovery Center" icon={Radar} subtitle="Scan networks, import assets, and onboard devices into inventory" />
 
       <div className="kpi-grid">
-        <Kpi label="Scan Jobs" value={jobList.length} icon={Radar} tone="info" />
+        <Link to="/discovery/jobs" style={{ textDecoration: 'none' }}><Kpi label="Scan Jobs" value={jobList.length} icon={Radar} tone="info" sub="open jobs page →" /></Link>
         <Kpi label="Devices Found" value={foundTotal} icon={Boxes} tone="default" sub="all scans" />
         <Kpi label="Failed Scans" value={failedCount} icon={CircleX} tone={failedCount > 0 ? 'crit' : 'default'} />
         <Kpi label="Last Scan" value={lastJob ? timeAgo(lastJob.created_at) : '—'} icon={Clock} tone="default" sub={lastJob?.scope_cidr ?? undefined} />
@@ -181,10 +180,9 @@ export function Discovery() {
       <div className="card">
         <div className="seg">
           {TABS.map((t) => (
-            <button key={t} className={'seg-chip' + (tab === t ? ' active' : '')} onClick={() => setTab(t)}>
-              {t}{t === 'Jobs' && jobs.data ? ` (${jobs.data.length})` : ''}
-            </button>
+            <button key={t} className={'seg-chip' + (tab === t ? ' active' : '')} onClick={() => setTab(t)}>{t}</button>
           ))}
+          <Link className="seg-chip" to="/discovery/jobs" style={{ marginLeft: 'auto' }}>Scan Jobs ({jobs.data?.length ?? 0}) →</Link>
         </div>
         {msg && <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>{msg}</div>}
       </div>
@@ -193,7 +191,6 @@ export function Discovery() {
       {tab === 'Import' && <ImportTab locations={locations.data ?? []} locPath={locPath} setMsg={setMsg} qc={qc} />}
       {tab === 'Controllers' && <ControllersTab locations={locations.data ?? []} locPath={locPath} onLaunch={afterLaunch} setMsg={setMsg} />}
       {tab === 'Active Directory' && <ADTab locations={locations.data ?? []} locPath={locPath} onLaunch={afterLaunch} setMsg={setMsg} />}
-      {tab === 'Jobs' && <JobsTab jobs={jobs.data ?? []} jobID={jobID} setJobID={setJobID} detail={detail.data} setMsg={setMsg} qc={qc} />}
     </div>
   )
 }
@@ -521,7 +518,7 @@ function ADTab({ locations, locPath, onLaunch, setMsg }: { locations: Location[]
 // actionable card: count, sample devices, cause, next action, and a button wired
 // to an EXISTING endpoint (credential test / re-scan). No new discovery features —
 // just makes the current blockers operationally clear.
-function OnboardingActions({ results, qc, setMsg, onRescan, rescanning }: {
+export function OnboardingActions({ results, qc, setMsg, onRescan, rescanning }: {
   results: DiscoveryResult[]
   qc: ReturnType<typeof useQueryClient>
   setMsg: (s: string) => void
@@ -833,113 +830,5 @@ function LegacyWindowsCard({ devs, sampleIPs, devIds, firstIP, collectorConfigur
         </div>
       )}
     </div>
-  )
-}
-
-// ---------- Jobs ----------
-function JobsTab({ jobs, jobID, setJobID, detail, setMsg, qc }: { jobs: DiscoveryJob[]; jobID: string | null; setJobID: (s: string | null) => void; detail?: { job: DiscoveryJob; results: DiscoveryResult[] }; setMsg: (s: string) => void; qc: ReturnType<typeof useQueryClient> }) {
-  const refresh = () => qc.invalidateQueries({ queryKey: ['discovery-jobs'] })
-  // Enrolled hosts carry a device_id; join to the live device to show the SAME
-  // two-axis status (reachability + management) the rest of the app uses, so the
-  // scan result reflects whether the host is actually managed now (not just found).
-  const devicesQ = useQuery({ queryKey: ['devices', 'all'], queryFn: () => api.get<Device[]>('/devices?category=all') })
-  const devMap = new Map((devicesQ.data ?? []).map((x) => [x.id, x]))
-  const del = useMutation({ mutationFn: (id: string) => api.del(`/discovery/jobs/${id}`), onSuccess: () => { setJobID(null); setMsg('Job deleted.'); refresh() }, onError: (e) => setMsg((e as Error).message) })
-  const rerun = useMutation({ mutationFn: (id: string) => api.post(`/discovery/jobs/${id}/rerun`, {}), onSuccess: () => { setMsg('Re-run launched.'); refresh() }, onError: (e) => setMsg((e as Error).message) })
-
-  return (
-    <>
-      <div className="card">
-        <h3>Scan jobs</h3>
-        {jobs.length === 0 && <div className="muted">No jobs yet.</div>}
-        {jobs.length > 0 && (
-          <table>
-            <thead><tr><th>Scope</th><th>Status</th><th>Hosts</th><th>Found</th><th>Duration</th><th>Started</th><th></th></tr></thead>
-            <tbody>
-              {jobs.map((j) => (
-                <tr key={j.id} style={jobID === j.id ? { background: '#1a2733' } : {}}>
-                  <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{j.scope_cidr ?? '—'}</td>
-                  <td><span className={`badge badge-${jobBadge(j.status)}`}>{j.status}</span></td>
-                  <td>{j.host_count}</td>
-                  <td>{j.found_count}</td>
-                  <td>{duration(j.started_at, j.finished_at)}</td>
-                  <td>{j.started_at ? new Date(j.started_at).toLocaleTimeString() : '—'}</td>
-                  <td style={{ whiteSpace: 'nowrap' }}>
-                    <button style={ghost} onClick={() => setJobID(j.id)}>Results</button>{' '}
-                    {j.scope_cidr && <button style={ghost} disabled={rerun.isPending} onClick={() => rerun.mutate(j.id)}>Rerun</button>}{' '}
-                    <button style={danger} onClick={() => { if (confirm('Delete this job and its results?')) del.mutate(j.id) }}>Delete</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-
-      {jobID && detail && detail.results.length > 0 && (
-        <OnboardingActions results={detail.results} qc={qc} setMsg={setMsg} onRescan={() => rerun.mutate(jobID)} rescanning={rerun.isPending} />
-      )}
-
-      {jobID && detail && (
-        <div className="card">
-          <h3>Results — {detail.job.scope_cidr ?? 'import'} <span className={`badge badge-${jobBadge(detail.job.status)}`}>{detail.job.status}</span></h3>
-          {detail.job.error && <div className="error-msg" style={{ fontSize: 12 }}>{detail.job.error}</div>}
-          {detail.results.length === 0 && <div className="muted">No host results recorded{detail.job.status === 'running' ? ' yet (scanning…)' : ''}.</div>}
-          {detail.results.length > 0 && (
-            <table>
-              <thead><tr>
-                <th>IP</th><th>Outcome</th><th>Reach / Mgmt</th><th>Classification</th><th>Ports</th>
-                <th>Credentials tried</th><th>Bound</th><th>Collected via</th><th>Vendor profile</th><th>Enrichment</th><th>Next action</th>
-              </tr></thead>
-              <tbody>
-                {detail.results.map((r) => {
-                  const d = r.probe_data ?? {}
-                  const dev = r.device_id ? devMap.get(r.device_id) : undefined
-                  return (
-                    <tr key={r.id}>
-                      <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{r.ip}</td>
-                      <td><span className={`badge badge-${outcomeBadge(r.outcome)}`}>{r.outcome}</span></td>
-                      <td style={{ whiteSpace: 'nowrap' }}>
-                        {dev ? (
-                          <span style={{ display: 'inline-flex', gap: 4, flexWrap: 'wrap' }}>
-                            <ReachabilityBadge value={dev.reachability} />
-                            <ManagementBadge value={dev.management} managedBy={dev.managed_by} />
-                          </span>
-                        ) : <span className="muted" style={{ fontSize: 11 }}>not enrolled</span>}
-                      </td>
-                      <td>
-                        {(r.category ?? d.classification ?? 'unknown')}
-                        {typeof d.confidence === 'number' && d.confidence > 0 && <span className="muted" style={{ fontSize: 11 }}> · {d.confidence}%</span>}
-                        {d.candidate && <div className="muted" style={{ fontSize: 11 }}>candidate: {d.candidate}</div>}
-                        {(d.expected_protocols ?? []).length > 0 && <div style={{ fontSize: 11 }}>expected: <strong>{(d.expected_protocols ?? []).join(' / ').toUpperCase()}</strong></div>}
-                        {(d.opportunistic_protocols ?? []).length > 0 && <div style={{ fontSize: 11 }}>opportunistic: <strong>{(d.opportunistic_protocols ?? []).join(' / ').toUpperCase()}</strong></div>}
-                        {(d.evidence ?? []).length > 0 && <div className="muted" style={{ fontSize: 11 }}>{(d.evidence ?? []).join(' · ')}</div>}
-                      </td>
-                      <td className="muted" style={{ fontSize: 11 }}>{(d.open_ports ?? []).join(', ') || '—'}</td>
-                      <td style={{ fontSize: 11 }}>
-                        {(d.cred_attempts ?? []).length === 0 ? <span className="muted">none relevant</span> : (d.cred_attempts ?? []).map((a, i) => (
-                          <div key={i}>
-                            <span className={`badge badge-${a.success ? 'up' : a.category === 'auth_failed' ? 'down' : 'unknown'}`}>{a.kind}</span>
-                            <span className="muted"> {a.success ? 'ok' : a.category}{a.relevant ? '' : ' (other)'}</span>
-                          </div>
-                        ))}
-                        {(d.skipped_protocols ?? []).length > 0 && (
-                          <div className="muted" style={{ fontSize: 10, marginTop: 2 }}>skipped (not attempted): {(d.skipped_protocols ?? []).join(', ')}</div>
-                        )}
-                      </td>
-                      <td>{d.bound_cred ? <span className="badge badge-up">{d.bound_cred}</span> : <span className="muted">—</span>}</td>
-                      <td style={{ fontSize: 11 }}><CollectedViaCell via={d.collected_via} agent={d.agent_name} /></td>
-                      <td style={{ fontSize: 11, minWidth: 160 }}><ProfileCell r={r} qc={qc} jobID={jobID} /></td>
-                      <td className="muted" style={{ fontSize: 11 }}>{d.enrichment || '—'}</td>
-                      <td style={{ fontSize: 12 }}>{r.error ? <span className="error-msg">{r.error}</span> : (d.next_action ?? '—')}</td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          )}
-        </div>
-      )}
-    </>
   )
 }
