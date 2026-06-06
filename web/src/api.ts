@@ -1316,3 +1316,39 @@ export interface AccessCoverage {
   by_protocol: AccessProtocol[]
   unmanaged: { device_count: number; reasons: AccessReason[] }
 }
+
+// ---- HIMS Relay Agent / Site Collector --------------------------------------
+// One installable agent runs on a trusted machine inside a site and collects
+// from devices the main API can't reach directly (legacy Windows / WMI-DCOM,
+// local SNMP/SSH, VMware, CCTV). It PULLS jobs (NAT-friendly), runs them
+// locally, and posts structured results back. It authenticates with a per-agent
+// bearer token — only the SHA-256 hash is stored; the token is shown once at
+// creation. The Relay Agent is the preferred collector; it replaces the older
+// standalone helper scripts. Secrets are never returned in this DTO.
+export interface RelayAgent {
+  id: string
+  name: string
+  location_id?: string
+  hostname?: string
+  ip?: string
+  os?: string
+  version?: string
+  capabilities: string[]
+  status: string // registered | online | offline | disabled
+  enabled: boolean
+  last_heartbeat?: string
+  last_error?: string
+  online: boolean // computed: enabled && status==online && heartbeat fresh
+}
+// Returned exactly once by POST /agents — the token is never shown again.
+export interface RelayAgentCreated { agent: RelayAgent; token: string }
+export interface AgentJob {
+  id: string
+  kind: string // collect_os | test
+  protocol?: string
+  target?: string
+  status: string // queued | dispatched | done | failed
+  category?: string
+  error?: string
+  created_at: string
+}

@@ -144,6 +144,20 @@ func (s *Server) routes() {
 		// --- Discovery (operator-launched subnet scans) --------------
 		r.Get("/discovery/jobs", s.listDiscoveryJobs)
 		r.Get("/discovery/scan-preflight", s.scanPreflight)
+		// --- Relay Agent / Site Collector ----------------------------
+		// Agent protocol (agent-token bearer auth; session-exempt via authMiddleware).
+		r.Post("/agent/register", s.agentRegister)
+		r.Post("/agent/heartbeat", s.agentHeartbeat)
+		r.Get("/agent/jobs", s.agentPollJobs)
+		r.Post("/agent/jobs/{id}/result", s.agentJobResult)
+		// Management (operator session; credentials.manage via authz "agents" tag).
+		r.Get("/agents", s.listRelayAgents)
+		r.Post("/agents", s.createRelayAgent)
+		r.Patch("/agents/{id}", s.patchRelayAgent)
+		r.Delete("/agents/{id}", s.deleteRelayAgent)
+		r.Post("/agents/{id}/test", s.enqueueAgentTest)
+		r.Get("/agents/{id}/jobs", s.listRelayAgentJobs)
+
 		r.Get("/discovery/native-collector-status", s.nativeCollectorStatus)
 		r.Post("/discovery/native-collector-test", s.nativeCollectorTest)
 		r.Get("/discovery/wmi-collector-status", s.wmiCollectorStatus)

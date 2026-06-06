@@ -18,13 +18,18 @@ type mockWriter struct {
 	rolesAdded   []string
 	rolesDeleted int
 	staleCalls   int
+	diskSource   string
 }
 
 func (m *mockWriter) UpsertOSInventory(_ context.Context, a db.UpsertOSInventoryParams) (db.OsInventory, error) {
 	m.inv = &a
 	return db.OsInventory{}, nil
 }
-func (m *mockWriter) UpsertOSDisk(context.Context, db.UpsertOSDiskParams) error { m.disks++; return nil }
+func (m *mockWriter) UpsertOSDisk(_ context.Context, a db.UpsertOSDiskParams) error {
+	m.disks++
+	m.diskSource = a.CollectionSource
+	return nil
+}
 func (m *mockWriter) DeleteStaleOSDisks(context.Context, db.DeleteStaleOSDisksParams) error {
 	m.staleCalls++
 	return nil
@@ -94,6 +99,41 @@ func TestPersist_Windows(t *testing.T) {
 	// DC + DNS + SQL roles from services.
 	if len(m.rolesAdded) != 3 {
 		t.Errorf("expected 3 roles, got %v", m.rolesAdded)
+	}
+}
+
+func TestBaseSource(t *testing.T) {
+	// Fine-grained methods collapse to their base transport family so child-table
+	// CHECK constraints (winrm/ssh/snmp) pass and prune-on-poll works across paths.
+	cases := map[string]string{
+		"winrm": "winrm", "winrm-agent": "winrm", "winrm-native": "winrm", "wmi": "winrm",
+		"ssh": "ssh", "snmp": "snmp", "": "snmp",
+	}
+	for in, want := range cases {
+		if got := baseSource(in); got != want {
+			t.Errorf("baseSource(%q)=%q, want %q", in, got, want)
+		}
+	}
+}
+
+// A Relay Agent report (Method="winrm-agent") must persist child rows under the
+// base "winrm" source — the os_disks/nics/... CHECK constraints reject the
+// fine-grained method — while os_inventory keeps the precise provenance.
+func TestPersist_AgentMethodNormalizesChildSource(t *testing.T) {
+	rep, err := CollectWindows(context.Background(), winMock{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep.Method = "winrm-agent"
+	m := &mockWriter{}
+	if err := Persist(context.Background(), m, uuid.New(), rep, time.Now()); err != nil {
+		t.Fatalf("persist: %v", err)
+	}
+	if m.inv == nil || m.inv.CollectionMethod != "winrm-agent" {
+		t.Fatalf("os_inventory must keep precise method winrm-agent, got %v", m.inv)
+	}
+	if m.diskSource != "winrm" {
+		t.Errorf("child collection_source must be base family winrm, got %q", m.diskSource)
 	}
 }
 

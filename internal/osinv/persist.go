@@ -28,15 +28,35 @@ type Writer interface {
 	DeleteStaleOSRoles(ctx context.Context, arg db.DeleteStaleOSRolesParams) error
 }
 
+// baseSource maps a fine-grained collection method to the base transport family
+// used for child-table collection_source. os_inventory.collection_method keeps
+// the precise provenance (winrm-agent / winrm-native / wmi); the child tables
+// (os_disks/nics/services/…) store only the family (winrm/ssh/snmp) so that
+//
+//	(1) their CHECK constraints are satisfied, and
+//	(2) prune-on-poll works across collection paths — a fresh Windows poll by
+//	    ANY method (direct WinRM, Relay Agent, native, WMI/DCOM) replaces the
+//	    prior Windows child rows instead of accumulating per-path duplicates.
+//
+// SNMP server inventory stays a distinct family so a WinRM poll never prunes it.
+func baseSource(method string) string {
+	switch method {
+	case "ssh":
+		return "ssh"
+	case "snmp", "":
+		return "snmp"
+	default: // winrm, winrm-agent, winrm-native, wmi — all WinRM/Windows family
+		return "winrm"
+	}
+}
+
 // Persist writes a Report for one device, then prunes rows from the same source
 // not seen this poll (the established prune-on-poll pattern). Detected roles are
-// refreshed under this source only. The source is the Report.Method
-// ("winrm"|"ssh"). Returns the first error encountered.
+// refreshed under this source only. The child collection_source is the base
+// transport family of Report.Method (see baseSource); os_inventory keeps the
+// precise method. Returns the first error encountered.
 func Persist(ctx context.Context, w Writer, deviceID uuid.UUID, rep Report, poll time.Time) error {
-	src := rep.Method
-	if src == "" {
-		src = "snmp"
-	}
+	src := baseSource(rep.Method)
 
 	if _, err := w.UpsertOSInventory(ctx, buildOSInventoryParams(deviceID, rep)); err != nil {
 		return err
@@ -136,7 +156,7 @@ func buildOSInventoryParams(deviceID uuid.UUID, rep Report) db.UpsertOSInventory
 		DeviceID: deviceID, CollectionMethod: method,
 		Hostname: ptr(rep.Identity.Hostname), Fqdn: ptr(rep.Identity.FQDN),
 		Domain: ptr(rep.Identity.Domain), Workgroup: ptr(rep.Identity.Workgroup),
-		LoggedOnUser: ptr(rep.Identity.LoggedOnUser),
+		LoggedOnUser:        ptr(rep.Identity.LoggedOnUser),
 		AdDistinguishedName: ptr(rep.Identity.ADDistinguishedName), AdOuPath: ptr(rep.Identity.ADOUPath),
 		OsCaption: ptr(rep.OS.Caption), OsVersion: ptr(rep.OS.Version), OsBuild: ptr(rep.OS.Build),
 		OsEdition: ptr(rep.OS.Edition), OsArch: ptr(rep.OS.Arch), Kernel: ptr(rep.OS.Kernel),

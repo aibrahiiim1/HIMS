@@ -52,6 +52,13 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		// Relay-agent endpoints authenticate with their own agent token (Bearer),
+		// not an operator session — they are exempt from the session gate and
+		// self-authenticate inside each handler. Path: /api/v1/agent/...
+		if strings.Contains(p, "/api/v1/agent/") {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if !s.authActive.Load() {
 			next.ServeHTTP(w, r) // open mode: no enforcement until a password exists
 			return

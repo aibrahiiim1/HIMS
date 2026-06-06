@@ -38,6 +38,7 @@ type Querier interface {
 	// metadata, assignments and group memberships. Flag for re-entry.
 	ClearAllCredentialSecrets(ctx context.Context) error
 	ClearReentryFlag(ctx context.Context, id uuid.UUID) error
+	CompleteAgentJob(ctx context.Context, arg CompleteAgentJobParams) error
 	// ---- Work-order parts (stock consumption) ---------------------------------
 	// Atomic: decrement stock AND record the consumption in ONE statement. The
 	// UPDATE's WHERE quantity >= $3 is the precondition; if it fails to match,
@@ -58,6 +59,7 @@ type Querier interface {
 	// Blobs sealed under a key id other than the one currently loaded.
 	CountUndecryptableCredentials(ctx context.Context, keyID string) (int64, error)
 	CountUsersWithPassword(ctx context.Context) (int64, error)
+	CreateAgentJob(ctx context.Context, arg CreateAgentJobParams) (AgentJob, error)
 	// ---- Alert rules ----------------------------------------------------------
 	CreateAlertRule(ctx context.Context, arg CreateAlertRuleParams) (AlertRule, error)
 	CreateCredential(ctx context.Context, arg CreateCredentialParams) (Credential, error)
@@ -77,6 +79,9 @@ type Querier interface {
 	CreatePermission(ctx context.Context, arg CreatePermissionParams) (Permission, error)
 	// ---- Purchases ------------------------------------------------------------
 	CreatePurchase(ctx context.Context, arg CreatePurchaseParams) (Purchase, error)
+	// Relay Agent / Site Collector persistence. No secrets stored here; the agent
+	// token is stored only as a SHA-256 hash.
+	CreateRelayAgent(ctx context.Context, arg CreateRelayAgentParams) (RelayAgent, error)
 	CreateReportSchedule(ctx context.Context, arg CreateReportScheduleParams) (ReportSchedule, error)
 	CreateRole(ctx context.Context, arg CreateRoleParams) (Role, error)
 	CreateSession(ctx context.Context, arg CreateSessionParams) error
@@ -113,6 +118,7 @@ type Querier interface {
 	DeleteOIDMapping(ctx context.Context, id uuid.UUID) error
 	DeletePermission(ctx context.Context, id uuid.UUID) error
 	DeletePurchase(ctx context.Context, id uuid.UUID) error
+	DeleteRelayAgent(ctx context.Context, id uuid.UUID) error
 	DeleteReportSchedule(ctx context.Context, id uuid.UUID) error
 	DeleteRole(ctx context.Context, id uuid.UUID) error
 	DeleteSession(ctx context.Context, tokenHash string) error
@@ -161,6 +167,7 @@ type Querier interface {
 	// Topology search: which switch + port + VLAN carries a MAC?
 	FindMACOnSwitches(ctx context.Context, mac string) ([]FindMACOnSwitchesRow, error)
 	FlowOverview(ctx context.Context, at time.Time) (FlowOverviewRow, error)
+	GetAgentJob(ctx context.Context, id uuid.UUID) (AgentJob, error)
 	GetAlert(ctx context.Context, id uuid.UUID) (Alert, error)
 	GetBMCInfo(ctx context.Context, deviceID uuid.UUID) (BmcInfo, error)
 	GetCameraInfo(ctx context.Context, deviceID uuid.UUID) (CameraInfo, error)
@@ -184,6 +191,8 @@ type Querier interface {
 	// collections follow the prune-on-poll pattern (Upsert all rows with last_seen_at
 	// = poll, then DeleteStale* removes rows from the same source not seen this poll).
 	GetOSInventory(ctx context.Context, deviceID uuid.UUID) (OsInventory, error)
+	GetRelayAgent(ctx context.Context, id uuid.UUID) (RelayAgent, error)
+	GetRelayAgentByToken(ctx context.Context, tokenHash string) (RelayAgent, error)
 	GetReportSchedule(ctx context.Context, id uuid.UUID) (ReportSchedule, error)
 	// Resolve a live session to its user (joined), enforcing expiry.
 	GetSession(ctx context.Context, tokenHash string) (GetSessionRow, error)
@@ -218,6 +227,7 @@ type Querier interface {
 	ListARPForDevice(ctx context.Context, deviceID uuid.UUID) ([]ListARPForDeviceRow, error)
 	ListAccessPoints(ctx context.Context, controllerDeviceID uuid.UUID) ([]AccessPoint, error)
 	ListActiveMaintenanceWindows(ctx context.Context) ([]MaintenanceWindow, error)
+	ListAgentJobs(ctx context.Context, arg ListAgentJobsParams) ([]ListAgentJobsRow, error)
 	ListAlertEvents(ctx context.Context, alertID uuid.UUID) ([]AlertEvent, error)
 	ListAlertRules(ctx context.Context) ([]AlertRule, error)
 	ListAlerts(ctx context.Context) ([]Alert, error)
@@ -332,8 +342,10 @@ type Querier interface {
 	ListPortVlans(ctx context.Context, deviceID uuid.UUID) ([]PortVlan, error)
 	ListPrinterSupplies(ctx context.Context, deviceID uuid.UUID) ([]PrinterSupply, error)
 	ListPurchases(ctx context.Context) ([]Purchase, error)
+	ListQueuedAgentJobs(ctx context.Context, agentID uuid.UUID) ([]AgentJob, error)
 	// Fleet activity feed for the Config page: recent captures with device name.
 	ListRecentConfigBackups(ctx context.Context, limit int32) ([]ListRecentConfigBackupsRow, error)
+	ListRelayAgents(ctx context.Context) ([]RelayAgent, error)
 	ListReportSchedules(ctx context.Context) ([]ReportSchedule, error)
 	ListRoles(ctx context.Context) ([]Role, error)
 	ListRootLocations(ctx context.Context) ([]Location, error)
@@ -370,6 +382,7 @@ type Querier interface {
 	// selected, location_id = NULL) still reconciles instead of duplicating.
 	LiveDeviceByIPAndLocation(ctx context.Context, arg LiveDeviceByIPAndLocationParams) (Device, error)
 	MACCountByPort(ctx context.Context, deviceID uuid.UUID) ([]MACCountByPortRow, error)
+	MarkAgentJobDispatched(ctx context.Context, id uuid.UUID) error
 	// Freshness of the most recent LLDP/CDP neighbor observation (topology age).
 	MaxNeighborSeenAt(ctx context.Context) (time.Time, error)
 	// Live fleet rollup: how many checks sit in each status bucket.
@@ -390,6 +403,7 @@ type Querier interface {
 	RecordReportScheduleRun(ctx context.Context, arg RecordReportScheduleRunParams) error
 	// Bump version + stamp the rotation; sets the new key's fingerprint.
 	RecordRotation(ctx context.Context, arg RecordRotationParams) error
+	RelayAgentHeartbeat(ctx context.Context, arg RelayAgentHeartbeatParams) error
 	ResolveAlert(ctx context.Context, id uuid.UUID) (Alert, error)
 	// The resolver-assembly query: for a device IP, return every credential in a
 	// group bound to either a subnet that contains the IP (more specific) or a
@@ -399,6 +413,9 @@ type Querier interface {
 	ResolveCandidatesForIP(ctx context.Context, arg ResolveCandidatesForIPParams) ([]ResolveCandidatesForIPRow, error)
 	// Auto-resolve: any un-resolved alert whose check has recovered to 'up'.
 	ResolveRecoveredAlerts(ctx context.Context) ([]ResolveRecoveredAlertsRow, error)
+	// The newest enabled, recently-online agent assigned to a location — used to
+	// prefer agent collection for devices in that site.
+	ResolveSiteAgent(ctx context.Context, locationID *uuid.UUID) (RelayAgent, error)
 	// Profiles applicable to a device during a scan: a profile bound to this exact
 	// device, or one bound to this location (site-level), or an unbound global
 	// profile — for the given vendor_type. Most specific first.
@@ -424,6 +441,8 @@ type Querier interface {
 	SetDiscoveryJobMetadata(ctx context.Context, arg SetDiscoveryJobMetadataParams) error
 	SetMonitoringCheckEnabled(ctx context.Context, arg SetMonitoringCheckEnabledParams) (MonitoringCheck, error)
 	SetNotificationChannelEnabled(ctx context.Context, arg SetNotificationChannelEnabledParams) (NotificationChannel, error)
+	SetRelayAgentEnabled(ctx context.Context, arg SetRelayAgentEnabledParams) error
+	SetRelayAgentLocation(ctx context.Context, arg SetRelayAgentLocationParams) error
 	SetReportScheduleEnabled(ctx context.Context, arg SetReportScheduleEnabledParams) (ReportSchedule, error)
 	SetRolePermissionsClear(ctx context.Context, roleID uuid.UUID) error
 	SetUserPassword(ctx context.Context, arg SetUserPasswordParams) error
@@ -463,6 +482,7 @@ type Querier interface {
 	UpdateDiscoveryJobStatus(ctx context.Context, arg UpdateDiscoveryJobStatusParams) error
 	UpdateDiscoveryResult(ctx context.Context, arg UpdateDiscoveryResultParams) error
 	UpdateLocation(ctx context.Context, arg UpdateLocationParams) (Location, error)
+	UpdateRelayAgentIdentity(ctx context.Context, arg UpdateRelayAgentIdentityParams) error
 	UpdateSparePart(ctx context.Context, arg UpdateSparePartParams) (SparePart, error)
 	UpdateSystem(ctx context.Context, arg UpdateSystemParams) (System, error)
 	UpdateUser(ctx context.Context, arg UpdateUserParams) (User, error)

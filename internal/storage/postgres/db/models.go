@@ -23,6 +23,24 @@ type AccessPoint struct {
 	LastSeenAt         time.Time   `json:"last_seen_at"`
 }
 
+type AgentJob struct {
+	ID           uuid.UUID  `json:"id"`
+	AgentID      uuid.UUID  `json:"agent_id"`
+	DeviceID     *uuid.UUID `json:"device_id"`
+	CredentialID *uuid.UUID `json:"credential_id"`
+	Kind         string     `json:"kind"`
+	Protocol     string     `json:"protocol"`
+	Target       string     `json:"target"`
+	Status       string     `json:"status"`
+	Request      []byte     `json:"request"`
+	Result       []byte     `json:"result"`
+	Category     string     `json:"category"`
+	Error        string     `json:"error"`
+	CreatedAt    time.Time  `json:"created_at"`
+	DispatchedAt *time.Time `json:"dispatched_at"`
+	FinishedAt   *time.Time `json:"finished_at"`
+}
+
 type Alert struct {
 	ID             uuid.UUID  `json:"id"`
 	RuleID         uuid.UUID  `json:"rule_id"`
@@ -729,6 +747,24 @@ type Purchase struct {
 	InvoiceRef  *string    `json:"invoice_ref"`
 	Notes       *string    `json:"notes"`
 	CreatedAt   time.Time  `json:"created_at"`
+}
+
+type RelayAgent struct {
+	ID            uuid.UUID  `json:"id"`
+	Name          string     `json:"name"`
+	LocationID    *uuid.UUID `json:"location_id"`
+	TokenHash     string     `json:"token_hash"`
+	Hostname      string     `json:"hostname"`
+	Ip            string     `json:"ip"`
+	Os            string     `json:"os"`
+	Version       string     `json:"version"`
+	Capabilities  []byte     `json:"capabilities"`
+	Status        string     `json:"status"`
+	Enabled       bool       `json:"enabled"`
+	LastHeartbeat *time.Time `json:"last_heartbeat"`
+	LastError     string     `json:"last_error"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
 }
 
 type ReportSchedule struct {
