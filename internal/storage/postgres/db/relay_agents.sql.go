@@ -37,6 +37,32 @@ func (q *Queries) CompleteAgentJob(ctx context.Context, arg CompleteAgentJobPara
 	return err
 }
 
+const countActiveDeviceAgentJobs = `-- name: CountActiveDeviceAgentJobs :one
+SELECT count(*) FROM agent_jobs
+WHERE device_id = $1 AND kind = 'collect_os' AND status IN ('queued', 'dispatched')
+`
+
+// In-flight collection jobs for a device (queued or dispatched) — used to avoid
+// enqueuing a duplicate when a scan re-routes the same device to its site agent.
+func (q *Queries) CountActiveDeviceAgentJobs(ctx context.Context, deviceID *uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countActiveDeviceAgentJobs, deviceID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countFailedAgentJobs = `-- name: CountFailedAgentJobs :one
+SELECT count(*) FROM agent_jobs WHERE agent_id = $1 AND status = 'failed'
+`
+
+// Failed jobs for one agent (for the agent detail page + Data Quality count).
+func (q *Queries) CountFailedAgentJobs(ctx context.Context, agentID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countFailedAgentJobs, agentID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createAgentJob = `-- name: CreateAgentJob :one
 INSERT INTO agent_jobs (agent_id, device_id, credential_id, kind, protocol, target, request)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -294,6 +320,60 @@ func (q *Queries) ListQueuedAgentJobs(ctx context.Context, agentID uuid.UUID) ([
 			&i.Status,
 			&i.Request,
 			&i.Result,
+			&i.Category,
+			&i.Error,
+			&i.CreatedAt,
+			&i.DispatchedAt,
+			&i.FinishedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRecentAgentJobsAll = `-- name: ListRecentAgentJobsAll :many
+SELECT id, agent_id, device_id, kind, protocol, target, status, category, error, created_at, dispatched_at, finished_at
+FROM agent_jobs ORDER BY created_at DESC LIMIT $1
+`
+
+type ListRecentAgentJobsAllRow struct {
+	ID           uuid.UUID  `json:"id"`
+	AgentID      uuid.UUID  `json:"agent_id"`
+	DeviceID     *uuid.UUID `json:"device_id"`
+	Kind         string     `json:"kind"`
+	Protocol     string     `json:"protocol"`
+	Target       string     `json:"target"`
+	Status       string     `json:"status"`
+	Category     string     `json:"category"`
+	Error        string     `json:"error"`
+	CreatedAt    time.Time  `json:"created_at"`
+	DispatchedAt *time.Time `json:"dispatched_at"`
+	FinishedAt   *time.Time `json:"finished_at"`
+}
+
+// Recent jobs across all agents (fleet-wide failed-job / Data Quality views).
+func (q *Queries) ListRecentAgentJobsAll(ctx context.Context, limit int32) ([]ListRecentAgentJobsAllRow, error) {
+	rows, err := q.db.Query(ctx, listRecentAgentJobsAll, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListRecentAgentJobsAllRow{}
+	for rows.Next() {
+		var i ListRecentAgentJobsAllRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.AgentID,
+			&i.DeviceID,
+			&i.Kind,
+			&i.Protocol,
+			&i.Target,
+			&i.Status,
 			&i.Category,
 			&i.Error,
 			&i.CreatedAt,

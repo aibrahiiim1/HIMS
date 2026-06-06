@@ -153,6 +153,7 @@ func (s *Server) routes() {
 		// Management (operator session; credentials.manage via authz "agents" tag).
 		r.Get("/agents", s.listRelayAgents)
 		r.Post("/agents", s.createRelayAgent)
+		r.Get("/agents/{id}", s.getRelayAgent)
 		r.Patch("/agents/{id}", s.patchRelayAgent)
 		r.Delete("/agents/{id}", s.deleteRelayAgent)
 		r.Post("/agents/{id}/test", s.enqueueAgentTest)

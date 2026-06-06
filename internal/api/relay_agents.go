@@ -42,6 +42,7 @@ type agentDTO struct {
 	LastHeartbeat string   `json:"last_heartbeat,omitempty"`
 	LastError     string   `json:"last_error,omitempty"`
 	Online        bool     `json:"online"`
+	FailedJobs    int64    `json:"failed_jobs,omitempty"` // count of failed collection jobs
 }
 
 // agentOnlineWindow: a heartbeat older than this flips the agent to "offline"
@@ -83,9 +84,42 @@ func (s *Server) listRelayAgents(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]agentDTO, 0, len(rows))
 	for _, a := range rows {
-		out = append(out, toAgentDTO(a))
+		dto := toAgentDTO(a)
+		if n, err := s.queries.CountFailedAgentJobs(r.Context(), a.ID); err == nil {
+			dto.FailedJobs = n
+		}
+		out = append(out, dto)
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// getRelayAgent returns one agent's detail (DTO) plus job rollups for the detail
+// page: how many jobs are in flight (queued/dispatched) and how many failed.
+func (s *Server) getRelayAgent(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	a, err := s.queries.GetRelayAgent(r.Context(), id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	failed, _ := s.queries.CountFailedAgentJobs(r.Context(), id)
+	var running int64
+	if rows, rerr := s.queries.ListAgentJobs(r.Context(), db.ListAgentJobsParams{AgentID: id, Limit: 200}); rerr == nil {
+		for _, j := range rows {
+			if j.Status == "queued" || j.Status == "dispatched" {
+				running++
+			}
+		}
+	}
+	dto := toAgentDTO(a)
+	dto.FailedJobs = failed
+	writeJSON(w, http.StatusOK, map[string]any{
+		"agent": dto, "failed_jobs": failed, "running_jobs": running,
+	})
 }
 
 // createRelayAgent registers a new agent and returns its enrollment token ONCE.

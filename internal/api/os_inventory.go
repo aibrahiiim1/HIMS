@@ -82,16 +82,21 @@ type osCollectResult struct {
 	DeviceID       string         `json:"device_id"`
 	Name           string         `json:"name"`
 	IP             string         `json:"ip"`
-	Status         string         `json:"status"` // collected | failed
+	Status         string         `json:"status"` // collected | queued | failed
 	Method         string         `json:"method,omitempty"`
-	Reason         string         `json:"reason,omitempty"` // reason code (failed only)
+	Reason         string         `json:"reason,omitempty"` // reason code (failed/queued)
 	Detail         string         `json:"detail"`
 	CredentialUsed string         `json:"credential_used,omitempty"`
+	AgentName      string         `json:"agent_name,omitempty"` // relay agent the job was dispatched to
 	Counts         map[string]int `json:"counts,omitempty"`
 	Roles          []string       `json:"roles,omitempty"`
 }
 
 func (r osCollectResult) ok() bool { return r.Status == "collected" }
+
+// queued reports whether collection was dispatched to a site Relay Agent and
+// will complete asynchronously (not a failure, not yet collected).
+func (r osCollectResult) queued() bool { return r.Status == "queued" }
 
 // reasonHTTP maps a failure reason code to an HTTP status for the single-device
 // endpoint (client-fixable → 400, remote/transport → 502).
@@ -212,6 +217,13 @@ func (s *Server) runOSCollection(ctx context.Context, d db.Device) osCollectResu
 			// Windows Native Collector fallback if configured; else honest gate.
 			if res.Method == "winrm" {
 				if cat, detail, _ := osinv.ClassifyWinRMError(err); cat == osinv.WinRMOperationFault {
+					// PREFERRED: route legacy WSMan-2.0 hosts to the site Relay Agent
+					// (WMI/DCOM). The agent runs inside the site and collects locally;
+					// this is the preferred architecture over the standalone helper
+					// collectors below (kept only for backward compatibility).
+					if ar, handled := s.routeViaSiteAgent(ctx, d, res.IP, "wmi"); handled {
+						return ar
+					}
 					if url, token := nativeCollectorConfig(); url != "" {
 						rep, nerr := osinv.CollectViaNativeCollector(ctx, url, token, res.IP, cd.user, cd.pass, 120*time.Second)
 						if nerr == nil {
@@ -238,7 +250,11 @@ func (s *Server) runOSCollection(ctx context.Context, d db.Device) osCollectResu
 						res.Reason, res.Detail = "legacy_wmi_"+wr, wd
 						return res
 					}
-					res.Reason, res.Detail = "legacy_wsman2", detail+" Configure the Windows Native Collector (HIMS_WINDOWS_NATIVE_COLLECTOR_URL) or the WMI/DCOM collector (HIMS_WMI_COLLECTOR_URL)."
+					// No online site agent and no helper collector configured → honest
+					// gate. Surface the agent path first (preferred): install/assign a
+					// Relay Agent to this site, or fix an offline one.
+					gate := s.agentGateReason(ctx, d, "legacy_wsman2")
+					res.Reason, res.Detail = gate.Reason, detail+" "+gate.Detail
 					return res
 				}
 			}
@@ -283,10 +299,14 @@ func (s *Server) runOSCollection(ctx context.Context, d db.Device) osCollectResu
 		res.Detail = "collected via " + res.Method + " using credential " + cd.name
 		return res
 	}
-	// Priority-3 fallback: WinRM is exhausted for a reason OTHER than a rejected
-	// credential (disabled / unreachable / handshake) → try the WMI/DCOM collector
-	// if configured. This is the path for legacy Windows with WinRM turned off.
+	// WinRM exhausted for a reason OTHER than a rejected credential (disabled /
+	// unreachable / handshake). The host may still be reachable from inside the
+	// site, so PREFER the site Relay Agent (WMI/DCOM); fall back to the standalone
+	// WMI collector only if no online agent is assigned.
 	if res.Method == "winrm" && lastReason != "auth_failed" {
+		if ar, handled := s.routeViaSiteAgent(ctx, d, res.IP, "wmi"); handled {
+			return ar
+		}
 		if okw, wr, wd := s.tryWMIFallback(ctx, d, res.IP, cands); okw {
 			res.Status, res.Method, res.Detail = "collected", "wmi", "collected via WMI/DCOM fallback"
 			return res
@@ -297,6 +317,22 @@ func (s *Server) runOSCollection(ctx context.Context, d db.Device) osCollectResu
 	}
 	res.Reason, res.Detail = lastReason, lastDetail+" (tried "+strconv.Itoa(len(cands))+" credential(s))"
 	return res
+}
+
+// agentGateReason returns the honest gate (reason + detail) when direct
+// collection failed and no online site agent could take over. It distinguishes
+// "the site agent is offline" (agent_offline) from "no agent assigned to this
+// site" (agent_missing) so the operator gets the exact next action. Read-only —
+// it inspects agent availability without enqueuing anything.
+func (s *Server) agentGateReason(ctx context.Context, d db.Device, base string) (out osCollectResult) {
+	if d.LocationID != nil && s.siteHasAnyAgent(ctx, *d.LocationID) {
+		out.Reason = base + "_agent_offline"
+		out.Detail = "The Relay Agent assigned to this site is offline — start/repair it (Discovery → Relay Agents), or configure a helper collector."
+		return out
+	}
+	out.Reason = base + "_no_agent"
+	out.Detail = "Install or assign a Relay Agent to this site (Discovery → Relay Agents) to collect this host, or configure the Windows Native/WMI collector."
+	return out
 }
 
 // reclassifyFromCaption corrects a device's category/os_family/device_class from
@@ -453,6 +489,13 @@ func (s *Server) collectOSInventory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res := s.runOSCollection(ctx, d)
+	if res.queued() {
+		// Dispatched to the site Relay Agent — collection completes asynchronously.
+		s.audit(r, "inventory", "device.collect_os_queued", "device", id.String(),
+			"Queued deep OS inventory for "+d.Name+" via relay agent "+res.AgentName, nil)
+		writeJSON(w, http.StatusAccepted, map[string]any{"queued": true, "method": res.Method, "agent": res.AgentName, "detail": res.Detail})
+		return
+	}
 	if !res.ok() {
 		http.Error(w, res.Detail, reasonHTTP(res.Reason))
 		return

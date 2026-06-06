@@ -514,6 +514,10 @@ export interface ScanDetail {
   enrichment?: string
   profile?: ScanProfileResult | null
   next_action?: string
+  // How OS inventory was (or will be) collected for this host:
+  // "" | "direct" | "relay_agent" (queued) | "agent_offline" | "agent_missing"
+  collected_via?: string
+  agent_name?: string
 }
 export interface DiscoveryResult {
   id: string
@@ -1339,6 +1343,13 @@ export interface RelayAgent {
   last_heartbeat?: string
   last_error?: string
   online: boolean // computed: enabled && status==online && heartbeat fresh
+  failed_jobs?: number // count of failed collection jobs
+}
+// GET /agents/{id} — agent detail + job rollups.
+export interface RelayAgentDetail {
+  agent: RelayAgent
+  failed_jobs: number
+  running_jobs: number
 }
 // Returned exactly once by POST /agents — the token is never shown again.
 export interface RelayAgentCreated { agent: RelayAgent; token: string }

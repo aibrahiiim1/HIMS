@@ -139,6 +139,15 @@ func (s *Server) dataQuality(w http.ResponseWriter, r *http.Request) {
 		}
 		issues = append(issues, dqIssue{Key: key, Label: label, Description: desc, Severity: sev, Count: len(list), Devices: sampleDevices(list)})
 	}
+	// addDQ appends an issue whose "devices" are pre-built rows (used for
+	// agent-centric issues where the subject is a Relay Agent or a relay job, not
+	// a device). count is the caller-supplied total (list may already be capped).
+	addDQ := func(key, label, desc, sev string, list []dqDevice, count int) {
+		if count == 0 {
+			return
+		}
+		issues = append(issues, dqIssue{Key: key, Label: label, Description: desc, Severity: sev, Count: count, Devices: list})
+	}
 	addIssue("stale_devices", "Not seen recently", "These devices have not been re-discovered in over 30 days (or never). They may be decommissioned, moved, or unreachable.", "warning", stale)
 	addIssue("missing_location", "Missing location", "Devices not assigned to a site/location. Assign them so they roll up correctly in Sites Health and reports.", "warning", missingLoc)
 	addIssue("missing_credentials", "Missing credentials", "Credentialed device classes (switches, firewalls, servers…) with no bound credential cannot be deeply collected. Bind a working credential.", "warning", missingCreds)
@@ -336,6 +345,87 @@ func (s *Server) dataQuality(w http.ResponseWriter, r *http.Request) {
 			addIssue("nvr_not_authenticated", "NVR/DVR not authenticated", "NVR/DVR candidates with no successful ONVIF authentication yet. Bind a working ONVIF/HTTP credential or create a CCTV Vendor Connection Profile.", "warning", nvrNotAuth)
 			addIssue("vendor_profile_failed", "Vendor profile connection failed", "Devices whose matching Vendor Connection Profile failed its last connection test. Fix the credential/URL in Vendor Profiles.", "warning", profFailedDevs)
 		}
+
+		// --- Relay Agent / Site Collector issues ---------------------------------
+		// Windows hosts that cannot be collected directly (legacy WSMan 2.0 or WinRM
+		// disabled/unreachable) need the site Relay Agent. Surface where an agent is
+		// missing, offline, stale, or failing jobs so the operator can fix it.
+		agents, aerr := s.queries.ListRelayAgents(ctx)
+		if aerr == nil {
+			agentSites := map[uuid.UUID]bool{}  // location has >=1 agent
+			onlineSites := map[uuid.UUID]bool{} // location has >=1 online agent
+			for _, a := range agents {
+				if a.LocationID != nil {
+					agentSites[*a.LocationID] = true
+					if relayAgentOnline(a) {
+						onlineSites[*a.LocationID] = true
+					}
+				}
+			}
+			// Devices needing local/agent collection = legacy + WinRM-disabled Windows.
+			needSet := append(append([]db.Device{}, legacyWin...), winDisabled...)
+			var needsAgent, siteNoAgent []db.Device
+			for _, d := range needSet {
+				needsAgent = append(needsAgent, d)
+				onlineHere := d.LocationID != nil && onlineSites[*d.LocationID]
+				if !onlineHere && (d.LocationID == nil || !agentSites[*d.LocationID]) {
+					siteNoAgent = append(siteNoAgent, d)
+				}
+			}
+			addIssue("device_requires_agent", "Devices that need a Relay Agent", "Windows hosts that cannot be collected directly (legacy WSMan 2.0, or WinRM disabled/unreachable). Install or assign a Relay Agent to their site and HIMS will collect them via WMI/DCOM.", "warning", needsAgent)
+			addIssue("site_legacy_windows_no_agent", "Sites with legacy Windows but no Relay Agent", "These hosts need local collection but no Relay Agent is assigned to their site (or they have no site). Install a Relay Agent on a trusted machine in the site and assign it (Discovery → Relay Agents).", "warning", siteNoAgent)
+
+			// Agent-centric issues (subject is the agent, not a device).
+			var offline, staleHb, failedAgents []dqDevice
+			for _, a := range agents {
+				if !a.Enabled {
+					continue
+				}
+				if !relayAgentOnline(a) {
+					note, dest := "never connected", &offline
+					if a.LastHeartbeat != nil {
+						note = "last heartbeat " + a.LastHeartbeat.Format("2006-01-02 15:04 MST")
+						if timeSince(*a.LastHeartbeat) < 15*time.Minute {
+							dest = &staleHb // recently online, just went quiet
+						}
+					}
+					if a.LastError != "" {
+						note += "; last error: " + truncate(a.LastError, 100)
+					}
+					*dest = append(*dest, agentDQ(a, note))
+				}
+				if n, _ := s.queries.CountFailedAgentJobs(ctx, a.ID); n > 0 {
+					failedAgents = append(failedAgents, agentDQ(a, strconv.FormatInt(n, 10)+" failed collection job(s)"))
+				}
+			}
+			addDQ("relay_agent_offline", "Relay Agent offline", "Enabled Relay Agents that are not reporting in. Start or repair the agent service on the site machine; devices that depend on it cannot be collected until it is back.", "critical", offline, len(offline))
+			addDQ("relay_agent_stale_heartbeat", "Relay Agent heartbeat stale", "Relay Agents that were online recently but have stopped heartbeating. Check the agent process and network path before it is marked offline.", "warning", staleHb, len(staleHb))
+			addDQ("relay_agent_failed_jobs", "Relay Agent has failed jobs", "Relay Agents with one or more failed collection jobs. Open the agent to see the failures (bad credential, unreachable target, or collection error).", "warning", failedAgents, len(failedAgents))
+
+			// Recent failed relay jobs (subject is the job).
+			if jobs, jerr := s.queries.ListRecentAgentJobsAll(ctx, 200); jerr == nil {
+				name := map[uuid.UUID]string{}
+				for _, a := range agents {
+					name[a.ID] = a.Name
+				}
+				var jobFails []dqDevice
+				total := 0
+				for _, j := range jobs {
+					if j.Status != "failed" {
+						continue
+					}
+					total++
+					if len(jobFails) >= dqSampleCap {
+						continue
+					}
+					jobFails = append(jobFails, dqDevice{
+						Name: name[j.AgentID] + " → " + j.Target, Category: j.Protocol,
+						Note: strings.TrimSpace(j.Category + " " + truncate(j.Error, 120)),
+					})
+				}
+				addDQ("relay_job_failed", "Relay collection job failed", "Recent Relay Agent collection jobs that failed. Review the cause (credential rejected, target unreachable, or collection error) and retry.", "warning", jobFails, total)
+			}
+		}
 	}
 
 	// Stable order: critical first, then warning, then info; ties by count desc.
@@ -366,6 +456,13 @@ func toDQ(d db.Device) dqDevice {
 		dd.Vendor = *d.Vendor
 	}
 	return dd
+}
+
+// agentDQ renders a Relay Agent as a Data-Quality "device" row so agent-centric
+// issues display in the same table. Category "relay_agent" lets the UI link to
+// the agent detail page; Note carries the human cause.
+func agentDQ(a db.RelayAgent, note string) dqDevice {
+	return dqDevice{ID: a.ID.String(), Name: a.Name, PrimaryIP: a.Ip, Category: "relay_agent", Note: note}
 }
 
 func sampleDevices(list []db.Device) []dqDevice {

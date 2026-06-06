@@ -427,6 +427,7 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 		// Post-onboarding follow-ups for an enrolled host (best-effort).
 		enrichment := ""
 		var profRes *scanProfileResult
+		collectedVia, agentName := "", "" // how OS inventory was/will be collected
 		if r.Facts != nil {
 			enrichment = "SNMP facts collected"
 		}
@@ -438,14 +439,33 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 				// A WinRM/SSH bind means we onboarded a Windows/Linux host. Run a
 				// deep OS collection to refine classification (workstation vs
 				// server) and enrich vendor/model/OS — reusing the bound credential.
-				if r.BoundCred != nil && s.cipher() != nil &&
-					(r.BoundCred.Kind == domain.CredWinRM || r.BoundCred.Kind == domain.CredSSH) {
+				// ALSO run it for a legacy WSMan-2.0 Windows host that authenticated
+				// but could not be driven over Go WinRM (auth_ok_operation_fault):
+				// runOSCollection will route it to the site Relay Agent (WMI/DCOM).
+				// Bounded to that signal so a broad scan doesn't retry every host.
+				legacyWSMan := false
+				for _, a := range r.CredAttempts {
+					if a.Category == credtest.CatOperationFault {
+						legacyWSMan = true
+						break
+					}
+				}
+				boundOS := r.BoundCred != nil && (r.BoundCred.Kind == domain.CredWinRM || r.BoundCred.Kind == domain.CredSSH)
+				if s.cipher() != nil && (boundOS || legacyWSMan) {
 					cctx, ccancel := context.WithTimeout(ctx, 2*time.Minute)
 					oc := s.runOSCollection(cctx, dev)
 					ccancel()
-					if oc.Status == "collected" {
-						enrichment = "Deep OS inventory collected"
-					} else {
+					switch {
+					case oc.Status == "collected":
+						enrichment, collectedVia = "Deep OS inventory collected", "direct"
+					case oc.Status == "queued":
+						// Dispatched to the site Relay Agent — completes out of band.
+						enrichment, collectedVia, agentName = oc.Detail, "relay_agent", oc.AgentName
+					case strings.Contains(oc.Reason, "agent_offline"):
+						enrichment, collectedVia = "OS collection needs the site Relay Agent, which is offline", "agent_offline"
+					case strings.Contains(oc.Reason, "no_agent") || strings.Contains(oc.Reason, "agent_missing"):
+						enrichment, collectedVia = "OS collection needs a Relay Agent for this site (none assigned)", "agent_missing"
+					default:
 						enrichment = "OS collection incomplete: " + oc.Reason
 					}
 				} else if string(r.Match.Category) == string(domain.CatVirtualHost) && s.cipher() != nil {
@@ -554,7 +574,7 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 			}
 		}
 		if r.Alive {
-			s.recordResult(hctx, jobID, ip, r, id, err, enrichment, profRes)
+			s.recordResult(hctx, jobID, ip, r, id, err, enrichment, profRes, collectedVia, agentName)
 		}
 		return id, err
 	})
@@ -596,6 +616,10 @@ type scanDetail struct {
 	Enrichment        string               `json:"enrichment,omitempty"`
 	Profile           *scanProfileResult   `json:"profile,omitempty"`
 	NextAction        string               `json:"next_action"`
+	// How OS inventory was (or will be) collected for this host:
+	//   "" (n/a) | "direct" | "relay_agent" (queued) | "agent_offline" | "agent_missing"
+	CollectedVia string `json:"collected_via,omitempty"`
+	AgentName    string `json:"agent_name,omitempty"` // relay agent the job was dispatched to
 }
 
 // scanProfileResult records how a Vendor Connection Profile was used during the
@@ -778,7 +802,7 @@ func scanNextActionWithPlan(category string, bound bool, boundKind string, pr *s
 }
 
 // recordResult writes one actionable discovery_results row for an alive host.
-func (s *Server) recordResult(ctx context.Context, jobID uuid.UUID, ip netip.Addr, r discovery.HostResult, id uuid.UUID, applyErr error, enrichment string, profRes *scanProfileResult) {
+func (s *Server) recordResult(ctx context.Context, jobID uuid.UUID, ip netip.Addr, r discovery.HostResult, id uuid.UUID, applyErr error, enrichment string, profRes *scanProfileResult, collectedVia, agentName string) {
 	outcome := "alive"
 	switch {
 	case applyErr != nil:
@@ -830,7 +854,17 @@ func (s *Server) recordResult(ctx context.Context, jobID uuid.UUID, ip netip.Add
 		SkippedProtocols: skippedProtocols(r.Plan),
 		CredAttempts:     attempts, BoundCred: boundKind,
 		Enrichment: enrichment, Profile: profRes,
-		NextAction: scanNextActionWithPlan(category, bound, boundKind, profRes, r.Plan, attempts),
+		NextAction:   scanNextActionWithPlan(category, bound, boundKind, profRes, r.Plan, attempts),
+		CollectedVia: collectedVia, AgentName: agentName,
+	}
+	// Sharpen the next action for agent-routed Windows hosts.
+	switch collectedVia {
+	case "relay_agent":
+		detail.NextAction = "Collection dispatched to site Relay Agent " + agentName + " — inventory appears when the agent reports back"
+	case "agent_offline":
+		detail.NextAction = "This host needs the site Relay Agent, which is offline — start/repair it (Discovery → Relay Agents)"
+	case "agent_missing":
+		detail.NextAction = "This host needs a Relay Agent — install or assign one to this site (Discovery → Relay Agents)"
 	}
 	blob, merr := json.Marshal(detail)
 	if merr != nil {

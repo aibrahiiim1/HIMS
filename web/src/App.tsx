@@ -27,6 +27,7 @@ import { Expenses } from './pages/Expenses'
 import { Credentials } from './pages/Credentials'
 import { VendorProfiles } from './pages/VendorProfiles'
 import { Agents } from './pages/Agents'
+import { AgentDetail } from './pages/AgentDetail'
 import { Mibs } from './pages/Mibs'
 import { Settings } from './pages/Settings'
 import { Inventory } from './pages/Inventory'
@@ -150,6 +151,7 @@ function Shell({ me, onLogout }: { me?: AuthMe; onLogout: () => void }) {
             <Route path="/credentials" element={<Credentials />} />
             <Route path="/vendor-profiles" element={<VendorProfiles />} />
             <Route path="/agents" element={<Agents />} />
+            <Route path="/agents/:id" element={<AgentDetail />} />
             <Route path="/mibs" element={<Mibs />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/inventory" element={<Inventory />} />

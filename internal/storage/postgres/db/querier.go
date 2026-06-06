@@ -46,6 +46,9 @@ type Querier interface {
 	// ErrNoRows — which the handler maps to "insufficient stock" (409). This is
 	// the atomic-DB-signal pattern: no SELECT-then-UPDATE TOCTOU window.
 	ConsumePartToWorkOrder(ctx context.Context, arg ConsumePartToWorkOrderParams) (WorkOrderPart, error)
+	// In-flight collection jobs for a device (queued or dispatched) — used to avoid
+	// enqueuing a duplicate when a scan re-routes the same device to its site agent.
+	CountActiveDeviceAgentJobs(ctx context.Context, deviceID *uuid.UUID) (int64, error)
 	// Overview KPIs: total versions, distinct devices backed up, and changes today.
 	CountConfigBackupStats(ctx context.Context) (CountConfigBackupStatsRow, error)
 	CountCredentialsNeedingReentry(ctx context.Context) (int64, error)
@@ -54,6 +57,8 @@ type Querier interface {
 	CountEncryptedCredentials(ctx context.Context) (int64, error)
 	// Systems whose license OR support expires within 90 days (or already has).
 	CountExpiringSystems(ctx context.Context) (int64, error)
+	// Failed jobs for one agent (for the agent detail page + Data Quality count).
+	CountFailedAgentJobs(ctx context.Context, agentID uuid.UUID) (int64, error)
 	CountOpenAlerts(ctx context.Context) (int64, error)
 	CountOpenWorkOrders(ctx context.Context) (int64, error)
 	// Blobs sealed under a key id other than the one currently loaded.
@@ -343,6 +348,8 @@ type Querier interface {
 	ListPrinterSupplies(ctx context.Context, deviceID uuid.UUID) ([]PrinterSupply, error)
 	ListPurchases(ctx context.Context) ([]Purchase, error)
 	ListQueuedAgentJobs(ctx context.Context, agentID uuid.UUID) ([]AgentJob, error)
+	// Recent jobs across all agents (fleet-wide failed-job / Data Quality views).
+	ListRecentAgentJobsAll(ctx context.Context, limit int32) ([]ListRecentAgentJobsAllRow, error)
 	// Fleet activity feed for the Config page: recent captures with device name.
 	ListRecentConfigBackups(ctx context.Context, limit int32) ([]ListRecentConfigBackupsRow, error)
 	ListRelayAgents(ctx context.Context) ([]RelayAgent, error)

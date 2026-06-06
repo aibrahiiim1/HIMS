@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Server, Wifi, WifiOff, Bell, ClipboardList, ShieldAlert,
   Radar, Activity, TriangleAlert, RefreshCw, Clock, Boxes, TrendingUp, Lock, KeyRound, HeartPulse, Network,
 } from 'lucide-react'
-import { api, type Device, type Alert, type DiscoveryJob, type MonitoringOverviewRow, type RoleSummaryRow, type ExpenseByCategory, type EncryptionStatus, type OperationalHealth, type InfrastructureHealth } from '../api'
+import { api, type Device, type Alert, type DiscoveryJob, type MonitoringOverviewRow, type RoleSummaryRow, type ExpenseByCategory, type EncryptionStatus, type OperationalHealth, type InfrastructureHealth, type RelayAgent } from '../api'
 import {
   PageHeader, Panel, Kpi, HealthRing, Donut, Legend, BarList, Sparkline,
   ActivityFeed, EmptyState, StatusPill, OperationalHealthPanel, colorFor, timeAgo,
@@ -340,6 +340,7 @@ export function Dashboard() {
                   impact="Unresolved critical alerts mean active incidents needing attention."
                   action={<Link className="btn btn-ghost btn-sm" to="/alerts">Open Alerts →</Link>}
                 />
+                <AgentHealthPanel />
               </>
             )
           })()}
@@ -371,5 +372,31 @@ export function Dashboard() {
         </div>
       </div>
     </div>
+  )
+}
+
+// AgentHealthPanel — Relay Agent fleet status on the dashboard. Critical when any
+// enabled agent is offline; warning when agents have failed jobs; healthy when
+// all online; unknown (with onboarding hint) when none are registered yet.
+function AgentHealthPanel() {
+  const q = useQuery({ queryKey: ['relay-agents'], queryFn: () => api.get<RelayAgent[]>('/agents'), refetchInterval: 20_000 })
+  const agents = q.data ?? []
+  const online = agents.filter((a) => a.online).length
+  const offline = agents.filter((a) => a.enabled && !a.online).length
+  const failing = agents.filter((a) => (a.failed_jobs ?? 0) > 0).length
+  const status = agents.length === 0 ? 'unknown' : offline > 0 ? 'critical' : failing > 0 ? 'warning' : 'healthy'
+  return (
+    <OperationalHealthPanel
+      title="Relay Agents" icon={Radar} status={status}
+      notCollectedReason="No Relay Agents registered yet. Install one in a site to collect legacy/local Windows hosts (WMI/DCOM) and other site-local devices."
+      rows={[
+        { label: 'Total', value: agents.length },
+        { label: 'Online', value: online },
+        { label: 'Offline', value: <span style={{ color: offline > 0 ? 'var(--crit)' : undefined }}>{offline}</span> },
+        { label: 'With failed jobs', value: <span style={{ color: failing > 0 ? 'var(--warn)' : undefined }}>{failing}</span> },
+      ]}
+      impact="Relay Agents are the preferred collector for legacy/local Windows; an offline agent blocks collection for its site."
+      action={<Link className="btn btn-ghost btn-sm" to="/agents">Open Relay Agents →</Link>}
+    />
   )
 }

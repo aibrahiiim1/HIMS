@@ -5,7 +5,7 @@ import { Radar, Boxes, CircleX, Clock, KeyRound } from 'lucide-react'
 import {
   api, locationPaths,
   type DiscoveryJob, type DiscoveryResult, type Location, type Credential, type AccessCoverage,
-  type ScanPreflight,
+  type ScanPreflight, type RelayAgent,
 } from '../api'
 import { PageHeader, Kpi, timeAgo } from '../components/ui'
 
@@ -51,6 +51,24 @@ function profileVendorHint(category?: string | null): string {
 //   • Matching profile found           → Open Vendor Profile
 //   • Profile test succeeded / failed  → (with the failure reason)
 //   • Collection succeeded / failed    → Retry with profile
+// CollectedViaCell shows how a host's OS inventory was (or will be) collected:
+// directly by HIMS, dispatched to a site Relay Agent (queued), or blocked
+// because the site agent is offline / missing.
+function CollectedViaCell({ via, agent }: { via?: string; agent?: string }) {
+  switch (via) {
+    case 'direct':
+      return <span className="badge badge-up">direct</span>
+    case 'relay_agent':
+      return <span className="badge badge-up" title={`dispatched to ${agent ?? 'site agent'}`}>via agent{agent ? ` · ${agent}` : ''}</span>
+    case 'agent_offline':
+      return <span className="badge badge-down">agent offline</span>
+    case 'agent_missing':
+      return <span className="badge badge-warning">no agent</span>
+    default:
+      return <span className="muted">—</span>
+  }
+}
+
 function ProfileCell({ r, qc, jobID }: { r: DiscoveryResult; qc: ReturnType<typeof useQueryClient>; jobID: string | null }) {
   const p = r.probe_data?.profile
   const [busy, setBusy] = useState(false)
@@ -532,6 +550,15 @@ function OnboardingActions({ results, qc, setMsg, onRescan, rescanning }: {
     queryKey: ['native-collector-status'],
     queryFn: () => api.get<{ url_configured: boolean; token_configured: boolean }>('/discovery/native-collector-status'),
   })
+  const agents = useQuery({ queryKey: ['relay-agents'], queryFn: () => api.get<RelayAgent[]>('/agents') })
+  const agentList = agents.data ?? []
+  const haveAgents = agentList.length > 0
+  const failedAgents = agentList.filter((a) => (a.failed_jobs ?? 0) > 0)
+  // Relay-agent collection outcomes recorded on THIS job's hosts.
+  const via = (v: string) => results.filter((r) => r.probe_data?.collected_via === v)
+  const agentMissing = via('agent_missing')
+  const agentOffline = via('agent_offline')
+  const agentQueued = via('relay_agent')
 
   const win = results.filter((r) => r.probe_data?.candidate === 'windows')
   // Legacy WSMan 2.0: authentication succeeded but the WSMan operation faulted —
@@ -614,6 +641,61 @@ function OnboardingActions({ results, qc, setMsg, onRescan, rescanning }: {
       cause: 'WMI/DCOM (RPC 135) collection failed — see the per-host category (dcom_unreachable / firewall_blocked / wmi_access_denied / wmi_auth_failed). wmi_access_denied means the credential is valid but lacks DCOM/WMI remote rights — not a wrong password.',
       action: 'Open RPC (135 + DCOM dynamic range), grant the account WMI/DCOM remote access, or fix the WMI credential; then re-scan. Configure HIMS_WMI_COLLECTOR_URL if not set.',
       button: <button style={ghost} disabled={rescanning} onClick={onRescan}>{rescanning ? 'Re-scanning…' : 'Re-scan scope'}</button>,
+    })
+  }
+
+  // ---- Relay Agent onboarding cards -------------------------------------------
+  const regBtn = <Link to="/agents" style={{ ...ghost, textDecoration: 'none' }}>Open Relay Agents</Link>
+  const rescanBtn = <button style={ghost} disabled={rescanning} onClick={onRescan}>{rescanning ? 'Re-scanning…' : 'Re-scan (route via agent)'}</button>
+  if (!haveAgents && (agentMissing.length || winLegacy.length || winClosed.length)) {
+    cards.push({
+      key: 'agent-install', title: 'Install Relay Agent', tone: 'crit',
+      count: agentMissing.length || (winLegacy.length + winClosed.length), sample: ips(agentMissing.length ? agentMissing : [...winLegacy, ...winClosed]),
+      cause: 'No Relay Agent exists yet. Legacy / WMI-only Windows hosts in a site cannot be collected directly by the HIMS server.',
+      action: 'Install one HIMS Relay Agent on a trusted machine inside the site, then assign it to the site. HIMS will collect these hosts via WMI/DCOM.',
+      button: regBtn,
+    })
+  }
+  if (haveAgents && agentMissing.length) {
+    cards.push({
+      key: 'agent-assign', title: 'Assign Relay Agent to Site', tone: 'warn', count: agentMissing.length, sample: ips(agentMissing),
+      cause: 'These hosts need local/agent collection but no Relay Agent is assigned to their site.',
+      action: 'Assign an existing Relay Agent to this site (Relay Agents → set Site), then re-scan.',
+      button: <span style={{ display: 'inline-flex', gap: 8 }}>{regBtn}{rescanBtn}</span>,
+    })
+  }
+  if (agentMissing.length) {
+    cards.push({
+      key: 'agent-missing', title: 'Agent Missing', tone: 'warn', count: agentMissing.length, sample: ips(agentMissing),
+      cause: 'Direct collection is not possible (legacy WSMan / WMI-only) and no online Relay Agent serves this site.',
+      action: haveAgents ? 'Assign a Relay Agent to this site.' : 'Install a Relay Agent for this site.',
+      button: regBtn,
+    })
+  }
+  if (agentOffline.length) {
+    cards.push({
+      key: 'agent-offline', title: 'Agent Offline', tone: 'crit', count: agentOffline.length, sample: ips(agentOffline),
+      cause: 'The Relay Agent assigned to this site is offline (no recent heartbeat), so these hosts could not be collected via the agent.',
+      action: 'Start / repair the agent service on the site machine, then re-scan to route collection through it.',
+      button: <span style={{ display: 'inline-flex', gap: 8 }}>{regBtn}{rescanBtn}</span>,
+    })
+  }
+  if (agentQueued.length) {
+    cards.push({
+      key: 'agent-queued', title: 'Collected via Relay Agent', tone: 'ok', count: agentQueued.length, sample: ips(agentQueued),
+      cause: 'Collection was dispatched to the site Relay Agent. The agent collects locally (WMI/DCOM) and posts results back on its next poll.',
+      action: 'No action — inventory appears shortly. Re-scan to retry if it does not complete.',
+      button: rescanBtn,
+    })
+  }
+  if (failedAgents.length) {
+    cards.push({
+      key: 'agent-jobfailed', title: 'Agent Job Failed', tone: 'warn',
+      count: failedAgents.reduce((n, a) => n + (a.failed_jobs ?? 0), 0),
+      sample: failedAgents.map((a) => `${a.name} (${a.failed_jobs})`).slice(0, 6).join(', '),
+      cause: 'One or more Relay Agents have failed collection jobs (credential rejected, target unreachable from the agent, or collection error).',
+      action: 'Open the agent to see the failed jobs and fix the cause, then retry.',
+      button: <Link to={`/agents/${failedAgents[0].id}`} style={{ ...ghost, textDecoration: 'none' }}>Open agent</Link>,
     })
   }
 
@@ -801,7 +883,7 @@ function JobsTab({ jobs, jobID, setJobID, detail, setMsg, qc }: { jobs: Discover
             <table>
               <thead><tr>
                 <th>IP</th><th>Outcome</th><th>Classification</th><th>Ports</th>
-                <th>Credentials tried</th><th>Bound</th><th>Vendor profile</th><th>Enrichment</th><th>Next action</th>
+                <th>Credentials tried</th><th>Bound</th><th>Collected via</th><th>Vendor profile</th><th>Enrichment</th><th>Next action</th>
               </tr></thead>
               <tbody>
                 {detail.results.map((r) => {
@@ -830,6 +912,7 @@ function JobsTab({ jobs, jobID, setJobID, detail, setMsg, qc }: { jobs: Discover
                         )}
                       </td>
                       <td>{d.bound_cred ? <span className="badge badge-up">{d.bound_cred}</span> : <span className="muted">—</span>}</td>
+                      <td style={{ fontSize: 11 }}><CollectedViaCell via={d.collected_via} agent={d.agent_name} /></td>
                       <td style={{ fontSize: 11, minWidth: 160 }}><ProfileCell r={r} qc={qc} jobID={jobID} /></td>
                       <td className="muted" style={{ fontSize: 11 }}>{d.enrichment || '—'}</td>
                       <td style={{ fontSize: 12 }}>{r.error ? <span className="error-msg">{r.error}</span> : (d.next_action ?? '—')}</td>

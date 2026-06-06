@@ -69,3 +69,18 @@ WHERE id = $1;
 -- name: ListAgentJobs :many
 SELECT id, agent_id, device_id, kind, protocol, target, status, category, error, created_at, dispatched_at, finished_at
 FROM agent_jobs WHERE agent_id = $1 ORDER BY created_at DESC LIMIT $2;
+
+-- name: CountActiveDeviceAgentJobs :one
+-- In-flight collection jobs for a device (queued or dispatched) — used to avoid
+-- enqueuing a duplicate when a scan re-routes the same device to its site agent.
+SELECT count(*) FROM agent_jobs
+WHERE device_id = $1 AND kind = 'collect_os' AND status IN ('queued', 'dispatched');
+
+-- name: ListRecentAgentJobsAll :many
+-- Recent jobs across all agents (fleet-wide failed-job / Data Quality views).
+SELECT id, agent_id, device_id, kind, protocol, target, status, category, error, created_at, dispatched_at, finished_at
+FROM agent_jobs ORDER BY created_at DESC LIMIT $1;
+
+-- name: CountFailedAgentJobs :one
+-- Failed jobs for one agent (for the agent detail page + Data Quality count).
+SELECT count(*) FROM agent_jobs WHERE agent_id = $1 AND status = 'failed';

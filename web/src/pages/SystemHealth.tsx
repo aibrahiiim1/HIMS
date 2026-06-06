@@ -1,8 +1,9 @@
 import type { ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Activity, ListChecks, RefreshCw } from 'lucide-react'
-import { api, type RuntimeInfo } from '../api'
-import { PageHeader, Panel } from '../components/ui'
+import { Activity, ListChecks, RefreshCw, Radar } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { api, type RuntimeInfo, type RelayAgent } from '../api'
+import { PageHeader, Panel, timeAgo } from '../components/ui'
 import { StartupChecklist } from '../components/EncryptionSetup'
 
 const ENC: Record<string, { cls: string; label: string }> = {
@@ -58,8 +59,63 @@ export function SystemHealth() {
             <RefreshCw size={12} style={{ verticalAlign: '-1px' }} /> Re-runs automatically every 20s.
           </p>
         </Panel>
+
+        <RelayAgentsHealth />
       </div>
     </div>
+  )
+}
+
+// RelayAgentsHealth summarises the Relay Agent fleet on System Health: how many
+// are online vs offline/disabled and which have failed jobs, with a link to each.
+function RelayAgentsHealth() {
+  const q = useQuery({ queryKey: ['relay-agents'], queryFn: () => api.get<RelayAgent[]>('/agents'), refetchInterval: 15_000 })
+  const agents = q.data ?? []
+  const online = agents.filter((a) => a.online).length
+  const offline = agents.filter((a) => a.enabled && !a.online).length
+  const disabled = agents.filter((a) => !a.enabled).length
+  const failing = agents.filter((a) => (a.failed_jobs ?? 0) > 0).length
+  const tone = offline > 0 ? 'badge-down' : online > 0 ? 'badge-up' : 'badge-unknown'
+  const summary = agents.length === 0 ? 'none' : `${online} online`
+  return (
+    <Panel
+      title="Relay Agents" icon={Radar}
+      subtitle={<span className={`badge ${tone}`}>{summary}</span>}
+      actions={<Link to="/agents" style={{ fontSize: 12 }}>Manage →</Link>}
+    >
+      {q.isLoading && <div className="loading">Loading…</div>}
+      {agents.length === 0 && !q.isLoading && (
+        <div className="muted" style={{ fontSize: 13 }}>
+          No Relay Agents registered. Install one on a trusted machine inside a site to collect legacy/local
+          Windows hosts (WMI/DCOM) and other site-local devices. <Link to="/agents">Register an agent →</Link>
+        </div>
+      )}
+      {agents.length > 0 && (
+        <>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 14, marginBottom: 12 }}>
+            <KV label="Total" value={String(agents.length)} />
+            <KV label="Online" value={<span className="badge badge-up">{online}</span>} />
+            <KV label="Offline" value={offline ? <span className="badge badge-down">{offline}</span> : '0'} />
+            <KV label="Disabled" value={String(disabled)} />
+            <KV label="With failed jobs" value={failing ? <span className="badge badge-warning">{failing}</span> : '0'} />
+          </div>
+          <table>
+            <thead><tr><th>Name</th><th>Site / host</th><th>Status</th><th>Heartbeat</th><th>Failed jobs</th></tr></thead>
+            <tbody>
+              {agents.map((a) => (
+                <tr key={a.id}>
+                  <td><Link to={`/agents/${a.id}`}>{a.name}</Link></td>
+                  <td className="muted" style={{ fontSize: 12 }}>{a.hostname || a.ip || '—'}</td>
+                  <td><span className={`badge ${a.enabled ? (a.online ? 'badge-up' : 'badge-down') : 'badge-unknown'}`}>{a.enabled ? (a.online ? 'online' : 'offline') : 'disabled'}</span></td>
+                  <td className="muted" style={{ fontSize: 12 }}>{timeAgo(a.last_heartbeat)}</td>
+                  <td>{a.failed_jobs ? <span className="badge badge-down">{a.failed_jobs}</span> : '0'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+    </Panel>
   )
 }
 

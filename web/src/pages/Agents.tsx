@@ -139,7 +139,7 @@ export function Agents() {
               {list.data.map((a) => (
                 <Fragment key={a.id}>
                   <tr>
-                    <td><strong>{a.name}</strong>{a.last_error && <div className="error-msg" style={{ fontSize: 11, whiteSpace: 'normal', maxWidth: 220 }}>{a.last_error}</div>}</td>
+                    <td><Link to={`/agents/${a.id}`}><strong>{a.name}</strong></Link>{a.failed_jobs ? <span className="badge badge-down" style={{ marginLeft: 6 }}>{a.failed_jobs} failed</span> : null}{a.last_error && <div className="error-msg" style={{ fontSize: 11, whiteSpace: 'normal', maxWidth: 220 }}>{a.last_error}</div>}</td>
                     <td style={{ minWidth: 150 }}>
                       <select style={{ ...input, fontSize: 12, padding: '4px 6px' }} value={a.location_id ?? ''} onChange={(e) => setSite.mutate({ id: a.id, location_id: e.target.value })}>
                         <option value="">— unassigned —</option>
