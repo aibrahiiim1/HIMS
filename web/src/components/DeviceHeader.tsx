@@ -1,10 +1,11 @@
 import { useMemo, useState, type ComponentType } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { HardDrive, Radar, ShieldCheck, MapPin, Wifi, Wrench, RefreshCw, KeyRound } from 'lucide-react'
+import { HardDrive, Radar, ShieldCheck, MapPin, Wifi, Wrench, RefreshCw, KeyRound, Pencil, Lock } from 'lucide-react'
 import { api, type Device, type Location, type MonitoringCheck, type DiscoveryJob, type Credential, locationPaths } from '../api'
 import { HealthRing, colorFor, timeAgo } from './ui'
 import { ReachabilityBadge, ManagementBadge } from './StatusBadges'
+import { EditDevice } from './EditDevice'
 
 const PORT_SOURCE_LABEL: Record<string, string> = {
   discovered_open_port: 'discovered open port',
@@ -43,6 +44,7 @@ export function DeviceHeader({ deviceId, icon: Icon = HardDrive }: {
 
   const [repairing, setRepairing] = useState(false)
   const [repairMsg, setRepairMsg] = useState<string | null>(null)
+  const [editing, setEditing] = useState(false)
   const [scanning, setScanning] = useState(false)
   const [scanMsg, setScanMsg] = useState<string | null>(null)
 
@@ -137,6 +139,10 @@ export function DeviceHeader({ deviceId, icon: Icon = HardDrive }: {
               {d.previously_managed && d.reachability === 'offline' && (
                 <span className="badge badge-unknown" title="Offline now, but has a working management method on record">was Managed</span>
               )}
+              {d.classification_locked && (
+                <span className="badge badge-warning" title={d.manual_classification_reason || 'Classification locked — scans will not overwrite identity'}><Lock size={11} style={{ verticalAlign: -1 }} /> manual</span>
+              )}
+              <button className="btn btn-ghost btn-xs" onClick={() => setEditing(true)} title="Edit device identity, location, criticality, classification lock"><Pencil size={12} /> Edit</button>
             </span>
           </div>
           <div className="device-hero-sub">
@@ -197,6 +203,7 @@ export function DeviceHeader({ deviceId, icon: Icon = HardDrive }: {
           {repairMsg && <span className="muted" style={{ fontSize: 11, maxWidth: 240, textAlign: 'right' }}>{repairMsg}</span>}
         </div>
       </div>
+      {editing && <EditDevice device={d} onClose={() => setEditing(false)} onSaved={() => qc.invalidateQueries({ queryKey: ['devices', 'all'] })} />}
     </div>
   )
 }

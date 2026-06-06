@@ -149,6 +149,14 @@ export interface Device {
   management?: string // managed | partially_managed | unmanaged | needs_credential | credential_failed | needs_agent | agent_offline | collection_failed
   managed_by?: string[] // protocol tokens with a PROVEN working method
   previously_managed?: boolean // offline now, but has a working method on record
+  // Operator-editable management attributes (Edit Device).
+  subtype?: string
+  notes?: string
+  criticality?: string // '' | low | normal | high | critical
+  monitoring_enabled?: boolean
+  classification_locked?: boolean // manual identity lock — scans won't overwrite
+  manual_classification_reason?: string
+  confidence_score?: number | null
 }
 
 // Fleet rollup (GET /devices/status-summary) — Online and Managed kept separate.

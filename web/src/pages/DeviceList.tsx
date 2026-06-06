@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { Boxes, Wifi, WifiOff, Server, Radar } from 'lucide-react'
+import { Boxes, Wifi, WifiOff, Server, Radar, Pencil } from 'lucide-react'
 import { api, type Device } from '../api'
 import { PageHeader, Panel, Kpi, StatusPill, EmptyState, colorFor, usePaged, Pager } from '../components/ui'
 import { DeleteAllToggle } from '../components/DeleteAllToggle'
+import { EditDevice } from '../components/EditDevice'
 
 interface Props {
   category: string
@@ -17,6 +18,7 @@ const isOffline = (s: string) => ['down', 'offline', 'needs_attention'].includes
 export function DeviceList({ category, title, detailBase }: Props) {
   const qc = useQueryClient()
   const [msg, setMsg] = useState('')
+  const [editDev, setEditDev] = useState<Device | null>(null)
   const { data, isLoading, error } = useQuery({
     queryKey: ['devices', category],
     queryFn: () => api.get<Device[]>(`/devices?category=${category}`),
@@ -78,7 +80,7 @@ export function DeviceList({ category, title, detailBase }: Props) {
           </div>
           <table className="data-table">
             <thead>
-              <tr><th>Device</th><th>IP</th><th>Vendor</th><th>Model</th><th>OS</th><th>Driver</th><th>Status</th></tr>
+              <tr><th>Device</th><th>IP</th><th>Vendor</th><th>Model</th><th>OS</th><th>Driver</th><th>Status</th><th></th></tr>
             </thead>
             <tbody>
               {paged.slice.map((d) => (
@@ -98,6 +100,7 @@ export function DeviceList({ category, title, detailBase }: Props) {
                   <td>{d.os_version ?? '—'}</td>
                   <td>{d.driver ?? '—'}</td>
                   <td><StatusPill status={d.status} /></td>
+                  <td><button className="btn btn-ghost btn-xs" onClick={() => setEditDev(d)} title="Edit device"><Pencil size={12} /></button></td>
                 </tr>
               ))}
             </tbody>
@@ -106,6 +109,7 @@ export function DeviceList({ category, title, detailBase }: Props) {
           </>
         )}
       </Panel>
+      {editDev && <EditDevice device={editDev} onClose={() => setEditDev(null)} />}
     </div>
   )
 }

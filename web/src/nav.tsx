@@ -95,7 +95,9 @@ export const NAV: NavGroup[] = [
         label: 'Voice', icon: Phone,
         children: [{ label: 'PBX / Voice', to: '/pbx', icon: Phone }],
       },
-      { label: 'Unknown Devices', icon: CircleHelp, to: '/unknown', badge: 'unknown' },
+      // Conceptual split: classification problems vs access/management problems.
+      { label: 'Missing Classification', icon: CircleHelp, to: '/inventory/missing-classification', badge: 'unknown' },
+      { label: 'Unmanaged Devices', icon: ShieldAlert, to: '/inventory/unmanaged' },
       { label: 'Device Intelligence', icon: Brain, to: '/device-intelligence' },
     ],
   },

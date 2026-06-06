@@ -31,6 +31,8 @@ import { AgentDetail } from './pages/AgentDetail'
 import { Mibs } from './pages/Mibs'
 import { Settings } from './pages/Settings'
 import { Inventory } from './pages/Inventory'
+import { MissingClassification } from './pages/MissingClassification'
+import { UnmanagedDevices } from './pages/UnmanagedDevices'
 import { Locations } from './pages/Locations'
 import { Reports } from './pages/Reports'
 import { DeviceIntelligence } from './pages/DeviceIntelligence'
@@ -121,7 +123,11 @@ function Shell({ me, onLogout }: { me?: AuthMe; onLogout: () => void }) {
             <Route path="/ups/:id" element={<UPSDetail />} />
             <Route path="/pbx" element={<DeviceList category="pbx" title="Call Managers / PBX" detailBase="/pbx" />} />
             <Route path="/pbx/:id" element={<PbxDetail />} />
-            <Route path="/unknown" element={<DeviceList category="unknown" title="Unknown Devices" detailBase="/devices" />} />
+            {/* Conceptual split: Missing Classification (don't know WHAT it is) vs
+                Unmanaged (can't access it). /unknown kept as a redirect for old links. */}
+            <Route path="/inventory/missing-classification" element={<MissingClassification />} />
+            <Route path="/inventory/unmanaged" element={<UnmanagedDevices />} />
+            <Route path="/unknown" element={<Navigate to="/inventory/missing-classification" replace />} />
             <Route path="/topology" element={<TopologyPage />} />
             <Route path="/monitoring" element={<Monitoring />} />
             <Route path="/alerts" element={<Alerts />} />
