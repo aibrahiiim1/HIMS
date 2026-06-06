@@ -6,22 +6,13 @@ import { api, type Device } from '../api'
 import { PageHeader, Panel, Kpi, EmptyState, usePaged, Pager, colorFor } from '../components/ui'
 import { ReachabilityBadge, ManagementBadge } from '../components/StatusBadges'
 import { EditDevice } from '../components/EditDevice'
+import { needsClassification } from '../lib/classify'
 
 // Missing Classification = HIMS does not yet KNOW WHAT the device is (category,
 // vendor, model, weak/low-confidence evidence). This is a classification-cleanup
 // queue — explicitly NOT the same as Unmanaged (can't access). A device can be
-// Missing Classification but fully Managed, and vice-versa.
-const LOW_CONFIDENCE = 50
-
-function needsClassification(d: Device): { why: string[] } | null {
-  const why: string[] = []
-  if (!d.category || d.category === 'unknown') why.push('category unknown')
-  if (!d.vendor || !d.vendor.trim()) why.push('vendor missing')
-  if (typeof d.confidence_score === 'number' && d.confidence_score > 0 && d.confidence_score < LOW_CONFIDENCE && !d.classification_locked) {
-    why.push(`low confidence ${d.confidence_score}%`)
-  }
-  return why.length ? { why } : null
-}
+// Missing Classification but fully Managed, and vice-versa. The needsClassification
+// predicate is shared with the sidebar badge (lib/classify) so they always agree.
 
 export function MissingClassification() {
   const qc = useQueryClient()

@@ -1,10 +1,9 @@
 import { useQuery } from '@tanstack/react-query'
-import { api, type DiscoveryJob } from '../api'
+import { api, type DiscoveryJob, type Device } from '../api'
 import type { BadgeKey } from '../nav'
+import { needsClassification } from '../lib/classify'
 
-interface CountRow { category?: string; status?: string; count: number }
 interface DashboardData {
-  by_category?: CountRow[]
   headline?: {
     open_work_orders?: number
     open_alerts?: number
@@ -41,9 +40,18 @@ export function useBadges(): BadgeCounts {
     refetchInterval: 60_000,
     retry: 0,
   })
+  // Missing-Classification count. Uses the SAME devices query + needsClassification
+  // predicate as the Missing Classification page so the badge always matches the
+  // page (category unknown OR vendor missing OR low confidence — NOT category-only).
+  const devices = useQuery({
+    queryKey: ['devices', 'all'],
+    queryFn: () => api.get<Device[]>('/devices?category=all'),
+    refetchInterval: 60_000,
+    retry: 0,
+  })
 
   const headline = dash.data?.headline ?? {}
-  const unknown = (dash.data?.by_category ?? []).find((r) => r.category === 'unknown')?.count
+  const unknown = (devices.data ?? []).filter((d) => needsClassification(d)).length
   const failed = (jobs.data ?? []).filter((j) => {
     const s = (j.status || '').toLowerCase()
     return s === 'failed' || s === 'error'
@@ -52,7 +60,7 @@ export function useBadges(): BadgeCounts {
   return {
     alerts: headline.open_alerts,
     work_orders: headline.open_work_orders,
-    unknown,
+    unknown: unknown || undefined,
     unmanaged: coverage.data?.unmanaged_devices || undefined,
     failed_scans: failed || undefined,
   }
