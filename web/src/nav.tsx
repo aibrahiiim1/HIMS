@@ -8,7 +8,7 @@ import {
   Users, ShieldCheck, LayoutTemplate, ScanLine, Settings, FileClock, Lock, Activity, MonitorPlay, ClipboardCheck, Send, FileCode, BadgeCheck, DatabaseBackup,
 } from 'lucide-react'
 
-export type BadgeKey = 'alerts' | 'failed_scans' | 'unknown' | 'work_orders'
+export type BadgeKey = 'alerts' | 'failed_scans' | 'unknown' | 'unmanaged' | 'work_orders'
 
 export interface NavLeaf {
   label: string
@@ -99,7 +99,7 @@ export const NAV: NavGroup[] = [
       },
       // Conceptual split: classification problems vs access/management problems.
       { label: 'Missing Classification', icon: CircleHelp, to: '/inventory/missing-classification', badge: 'unknown' },
-      { label: 'Unmanaged Devices', icon: ShieldAlert, to: '/inventory/unmanaged' },
+      { label: 'Unmanaged Devices', icon: ShieldAlert, to: '/inventory/unmanaged', badge: 'unmanaged' },
       { label: 'Device Intelligence', icon: Brain, to: '/device-intelligence' },
     ],
   },

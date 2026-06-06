@@ -10,6 +10,7 @@ interface DashboardData {
     open_alerts?: number
   }
 }
+interface AccessCoverage { unmanaged_devices?: number }
 
 export type BadgeCounts = Partial<Record<BadgeKey, number>>
 
@@ -31,6 +32,15 @@ export function useBadges(): BadgeCounts {
     refetchInterval: 60_000,
     retry: 0,
   })
+  // Unmanaged-devices count for the Inventory → Unmanaged Devices badge. Reuses the
+  // proven-only Management Access Coverage figure (unmanaged = total − proven-managed),
+  // which matches the Unmanaged Devices page's `/devices?management=not_managed` list.
+  const coverage = useQuery({
+    queryKey: ['access-coverage'],
+    queryFn: () => api.get<AccessCoverage>('/dashboard/access-coverage'),
+    refetchInterval: 60_000,
+    retry: 0,
+  })
 
   const headline = dash.data?.headline ?? {}
   const unknown = (dash.data?.by_category ?? []).find((r) => r.category === 'unknown')?.count
@@ -43,6 +53,7 @@ export function useBadges(): BadgeCounts {
     alerts: headline.open_alerts,
     work_orders: headline.open_work_orders,
     unknown,
+    unmanaged: coverage.data?.unmanaged_devices || undefined,
     failed_scans: failed || undefined,
   }
 }
