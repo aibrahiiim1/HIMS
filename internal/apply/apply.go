@@ -139,16 +139,18 @@ func (a *Applier) reconcile(ctx context.Context, ip netip.Addr, locationID *uuid
 	// is the hard backstop; if a concurrent job wins the insert race, we catch
 	// the conflict and update instead.
 	update := func(existing db.Device) (db.Device, error) {
-		// Preserve a manual classification lock: an operator who locked the
-		// category owns it — discovery enriches everything else but must not
-		// overwrite the category they pinned.
-		category := create.Category
+		// Manual classification lock = operator-owned IDENTITY. When locked, the
+		// operator's category/vendor/model/serial/name are authoritative: discovery
+		// still refreshes volatile fields (status, driver, OS version, hostname) but
+		// must NOT overwrite the identity the operator pinned. Unlock to let scans
+		// take over again.
+		category, vendor, model, serial, name := create.Category, create.Vendor, create.Model, create.Serial, create.Name
 		if existing.ClassificationLocked {
-			category = existing.Category
+			category, vendor, model, serial, name = existing.Category, existing.Vendor, existing.Model, existing.Serial, existing.Name
 		}
 		return a.w.UpdateDiscoveredDevice(ctx, db.UpdateDiscoveredDeviceParams{
-			ID: existing.ID, Hostname: create.Hostname, Name: create.Name, Vendor: create.Vendor,
-			Model: create.Model, Serial: create.Serial, OsVersion: create.OsVersion,
+			ID: existing.ID, Hostname: create.Hostname, Name: name, Vendor: vendor,
+			Model: model, Serial: serial, OsVersion: create.OsVersion,
 			Category: category, Driver: create.Driver, Status: create.Status,
 		})
 	}

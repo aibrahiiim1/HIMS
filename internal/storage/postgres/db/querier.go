@@ -476,7 +476,10 @@ type Querier interface {
 	UpdateCredentialMeta(ctx context.Context, arg UpdateCredentialMetaParams) (Credential, error)
 	// Used by key rotation: re-seal the secret under a new key + KeyID.
 	UpdateCredentialSecret(ctx context.Context, arg UpdateCredentialSecretParams) error
-	// Operator edit of a device's identity fields (Inventory CRUD).
+	// Operator edit of a device's identity + management attributes (Edit Device).
+	// classification_locked, when set, also protects identity (category/vendor/model/
+	// serial) from being overwritten by future discovery scans (see the reconcile
+	// path UpdateDiscoveredDeviceRespectingLock).
 	UpdateDevice(ctx context.Context, arg UpdateDeviceParams) (Device, error)
 	// Auto-classification write: set category + OS family + subtype + confidence +
 	// evidence trail in one shot. The `classification_locked = false` guard makes

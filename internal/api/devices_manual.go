@@ -102,21 +102,36 @@ func manualDeviceParams(req manualDeviceReq) (db.CreateDeviceParams, error) {
 	}, nil
 }
 
+// updateDeviceReq is a PARTIAL update: every field is a pointer, so only the
+// keys present in the JSON body are changed. Absent keys keep their stored value.
+// An empty string for a nullable field (vendor/model/…) clears it.
 type updateDeviceReq struct {
-	Name       string  `json:"name"`
-	Category   string  `json:"category"`
-	Vendor     string  `json:"vendor"`
-	Model      string  `json:"model"`
-	Serial     string  `json:"serial"`
-	OSVersion  string  `json:"os_version"`
-	Hostname   string  `json:"hostname"`
-	VLAN       string  `json:"vlan"`
-	Class      string  `json:"class"`
-	Location   string  `json:"location"`
-	LocationID *string `json:"location_id"` // locations-tree node
+	Name                       *string `json:"name"`
+	Category                   *string `json:"category"`
+	Subtype                    *string `json:"subtype"`
+	Vendor                     *string `json:"vendor"`
+	Model                      *string `json:"model"`
+	Serial                     *string `json:"serial"`
+	OSVersion                  *string `json:"os_version"`
+	Hostname                   *string `json:"hostname"`
+	VLAN                       *string `json:"vlan"`
+	Class                      *string `json:"class"`
+	Location                   *string `json:"location"`
+	LocationID                 *string `json:"location_id"` // "" clears; omitted keeps
+	Notes                      *string `json:"notes"`
+	Criticality                *string `json:"criticality"`
+	MonitoringEnabled          *bool   `json:"monitoring_enabled"`
+	ClassificationLocked       *bool   `json:"classification_locked"`
+	ManualClassificationReason *string `json:"manual_classification_reason"`
 }
 
-// updateDevice handles PATCH /devices/{id} — operator edit of identity fields.
+var validCriticality = map[string]bool{"": true, "low": true, "normal": true, "high": true, "critical": true}
+
+// updateDevice handles PATCH /devices/{id} — operator edit of identity +
+// management attributes. Partial (only provided fields change), audited, and
+// site-scope/RBAC enforced by middleware. Setting classification_locked makes the
+// operator's identity (category/vendor/model/serial/name) authoritative — future
+// discovery scans will not overwrite it (see apply.reconcile).
 func (s *Server) updateDevice(w http.ResponseWriter, r *http.Request) {
 	ctx, id, ok := pathDevice(w, r)
 	if !ok {
@@ -127,30 +142,135 @@ func (s *Server) updateDevice(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if strings.TrimSpace(req.Name) == "" {
-		http.Error(w, "name is required", http.StatusBadRequest)
-		return
-	}
-	cat := strings.TrimSpace(req.Category)
-	if cat == "" {
-		cat = string(domain.CatUnknown)
-	}
-	if !validCategory(cat) {
-		http.Error(w, "invalid category "+strconv.Quote(cat)+"; use one of: "+strings.Join(categoryList, ", "), http.StatusBadRequest)
-		return
-	}
-	dev, err := s.queries.UpdateDevice(ctx, db.UpdateDeviceParams{
-		ID: id, Name: strings.TrimSpace(req.Name), Category: cat,
-		Vendor: strPtr(req.Vendor), Model: strPtr(req.Model), Serial: strPtr(req.Serial),
-		OsVersion: strPtr(req.OSVersion), Hostname: strPtr(req.Hostname),
-		Vlan: strPtr(req.VLAN), DeviceClass: strPtr(req.Class), Location: strPtr(req.Location),
-		LocationID: parseUUIDPtr(req.LocationID),
-	})
+	cur, err := s.queries.GetDevice(ctx, id)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
+
+	// Merge provided fields over the current values.
+	name := cur.Name
+	if req.Name != nil {
+		if strings.TrimSpace(*req.Name) == "" {
+			http.Error(w, "name cannot be empty", http.StatusBadRequest)
+			return
+		}
+		name = strings.TrimSpace(*req.Name)
+	}
+	cat := cur.Category
+	if req.Category != nil {
+		cat = strings.TrimSpace(*req.Category)
+		if cat == "" {
+			cat = string(domain.CatUnknown)
+		}
+		if !validCategory(cat) {
+			http.Error(w, "invalid category "+strconv.Quote(cat)+"; use one of: "+strings.Join(categoryList, ", "), http.StatusBadRequest)
+			return
+		}
+	}
+	crit := cur.Criticality
+	if req.Criticality != nil {
+		crit = strings.TrimSpace(*req.Criticality)
+		if !validCriticality[crit] {
+			http.Error(w, "invalid criticality; use one of: low, normal, high, critical (or empty)", http.StatusBadRequest)
+			return
+		}
+	}
+
+	params := db.UpdateDeviceParams{
+		ID: id, Name: name, Category: cat,
+		Vendor:                     mergeNullStr(req.Vendor, cur.Vendor),
+		Model:                      mergeNullStr(req.Model, cur.Model),
+		Serial:                     mergeNullStr(req.Serial, cur.Serial),
+		OsVersion:                  mergeNullStr(req.OSVersion, cur.OsVersion),
+		Hostname:                   mergeNullStr(req.Hostname, cur.Hostname),
+		Vlan:                       mergeNullStr(req.VLAN, cur.Vlan),
+		DeviceClass:                mergeNullStr(req.Class, cur.DeviceClass),
+		Location:                   mergeNullStr(req.Location, cur.Location),
+		LocationID:                 cur.LocationID,
+		Subtype:                    mergeStr(req.Subtype, cur.Subtype),
+		Notes:                      mergeStr(req.Notes, cur.Notes),
+		Criticality:                crit,
+		MonitoringEnabled:          mergeBool(req.MonitoringEnabled, cur.MonitoringEnabled),
+		ClassificationLocked:       mergeBool(req.ClassificationLocked, cur.ClassificationLocked),
+		ManualClassificationReason: mergeStr(req.ManualClassificationReason, cur.ManualClassificationReason),
+	}
+	if req.LocationID != nil {
+		params.LocationID = parseUUIDPtr(req.LocationID) // "" → nil (clear)
+	}
+
+	dev, err := s.queries.UpdateDevice(ctx, params)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+
+	// Audit: record WHAT changed (field names only — no need to log every value).
+	changed := changedDeviceFields(cur, dev)
+	s.audit(r, "inventory", "device.update", "device", id.String(),
+		"Edited device "+dev.Name, map[string]any{
+			"fields":                changed,
+			"classification_locked": dev.ClassificationLocked,
+		})
 	writeJSON(w, http.StatusOK, dev)
+}
+
+// mergeStr returns *p (when provided) else the current NOT-NULL string.
+func mergeStr(p *string, cur string) string {
+	if p != nil {
+		return strings.TrimSpace(*p)
+	}
+	return cur
+}
+
+// mergeNullStr returns a nullable string: *p (empty → nil to clear) when provided,
+// else the current pointer unchanged.
+func mergeNullStr(p *string, cur *string) *string {
+	if p != nil {
+		return strPtr(strings.TrimSpace(*p))
+	}
+	return cur
+}
+
+func mergeBool(p *bool, cur bool) bool {
+	if p != nil {
+		return *p
+	}
+	return cur
+}
+
+// changedDeviceFields lists the identity/management fields that differ between
+// before and after, for the audit detail.
+func changedDeviceFields(a, b db.Device) []string {
+	var out []string
+	add := func(name string, changed bool) {
+		if changed {
+			out = append(out, name)
+		}
+	}
+	eqp := func(x, y *string) bool {
+		if x == nil || y == nil {
+			return x == y
+		}
+		return *x == *y
+	}
+	add("name", a.Name != b.Name)
+	add("category", a.Category != b.Category)
+	add("subtype", a.Subtype != b.Subtype)
+	add("vendor", !eqp(a.Vendor, b.Vendor))
+	add("model", !eqp(a.Model, b.Model))
+	add("serial", !eqp(a.Serial, b.Serial))
+	add("os_version", !eqp(a.OsVersion, b.OsVersion))
+	add("hostname", !eqp(a.Hostname, b.Hostname))
+	add("vlan", !eqp(a.Vlan, b.Vlan))
+	add("class", !eqp(a.DeviceClass, b.DeviceClass))
+	add("location", !eqp(a.Location, b.Location))
+	add("location_id", a.LocationID != b.LocationID)
+	add("notes", a.Notes != b.Notes)
+	add("criticality", a.Criticality != b.Criticality)
+	add("monitoring_enabled", a.MonitoringEnabled != b.MonitoringEnabled)
+	add("classification_locked", a.ClassificationLocked != b.ClassificationLocked)
+	return out
 }
 
 // deleteDevice handles DELETE /devices/{id} — hard delete (cascades inventory).

@@ -48,11 +48,17 @@ WHERE id = $1
 RETURNING *;
 
 -- name: UpdateDevice :one
--- Operator edit of a device's identity fields (Inventory CRUD).
+-- Operator edit of a device's identity + management attributes (Edit Device).
+-- classification_locked, when set, also protects identity (category/vendor/model/
+-- serial) from being overwritten by future discovery scans (see the reconcile
+-- path UpdateDiscoveredDeviceRespectingLock).
 UPDATE devices SET
     name = $2, category = $3, vendor = $4, model = $5, serial = $6,
     os_version = $7, hostname = $8, vlan = $9, device_class = $10,
-    location = $11, location_id = $12, updated_at = now()
+    location = $11, location_id = $12,
+    subtype = $13, notes = $14, criticality = $15, monitoring_enabled = $16,
+    classification_locked = $17, manual_classification_reason = $18,
+    updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
 RETURNING *;
 
