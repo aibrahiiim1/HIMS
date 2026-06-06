@@ -1,7 +1,8 @@
 import { useMemo, useState, type ComponentType } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { HardDrive, Radar, ShieldCheck, MapPin, Wifi, Wrench } from 'lucide-react'
-import { api, type Device, type Location, type MonitoringCheck, locationPaths } from '../api'
+import { Link } from 'react-router-dom'
+import { HardDrive, Radar, ShieldCheck, MapPin, Wifi, Wrench, RefreshCw } from 'lucide-react'
+import { api, type Device, type Location, type MonitoringCheck, type DiscoveryJob, locationPaths } from '../api'
 import { HealthRing, colorFor, timeAgo } from './ui'
 import { ReachabilityBadge, ManagementBadge } from './StatusBadges'
 
@@ -39,6 +40,8 @@ export function DeviceHeader({ deviceId, icon: Icon = HardDrive }: {
 
   const [repairing, setRepairing] = useState(false)
   const [repairMsg, setRepairMsg] = useState<string | null>(null)
+  const [scanning, setScanning] = useState(false)
+  const [scanMsg, setScanMsg] = useState<string | null>(null)
 
   const d = (devices.data ?? []).find((x) => x.id === deviceId)
   const checks = checksQ.data ?? []
@@ -59,6 +62,32 @@ export function DeviceHeader({ deviceId, icon: Icon = HardDrive }: {
       setRepairMsg(`Repair failed: ${(e as Error).message}`)
     } finally {
       setRepairing(false)
+    }
+  }
+
+  // Re-scan THIS device by its IP: re-runs discovery (tries every relevant stored
+  // credential, classifies, and binds on success) — the action to use after
+  // adding/fixing a credential so a "failed to be managed" host gets re-probed.
+  async function rescan() {
+    if (!d?.primary_ip) {
+      setScanMsg('This device has no IP to scan.')
+      return
+    }
+    setScanning(true)
+    setScanMsg(null)
+    try {
+      const job = await api.post<DiscoveryJob>('/discovery/scan', { mode: 'targets', targets: d.primary_ip })
+      setScanMsg(`Scan launched for ${d.primary_ip}. Tries all stored credentials and binds on success.`)
+      void job
+      // Refresh device + checks shortly after so the page reflects the new result.
+      setTimeout(() => {
+        qc.invalidateQueries({ queryKey: ['devices'] })
+        qc.invalidateQueries({ queryKey: ['dev-checks', deviceId] })
+      }, 6000)
+    } catch (e) {
+      setScanMsg(`Scan failed to launch: ${(e as Error).message}`)
+    } finally {
+      setScanning(false)
     }
   }
 
@@ -125,11 +154,20 @@ export function DeviceHeader({ deviceId, icon: Icon = HardDrive }: {
           <div className="hero-stat"><span className="hero-stat-ico"><MapPin size={15} /></span>
             <div><b>{d.location_id ? (locPath[d.location_id] ?? '—') : '—'}</b><small>location</small></div></div>
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end' }}>
+          <button className="btn btn-primary btn-sm" onClick={rescan} disabled={scanning || !d.primary_ip}
+            title="Re-run discovery against this device — tries every stored credential and binds on success. Use after adding/fixing a credential.">
+            <RefreshCw size={13} /> {scanning ? 'Launching…' : 'Re-scan this device'}
+          </button>
+          {scanMsg && (
+            <span className="muted" style={{ fontSize: 11, maxWidth: 240, textAlign: 'right' }}>
+              {scanMsg} <Link to="/discovery">View scan jobs</Link>
+            </span>
+          )}
           <button className="btn btn-ghost btn-sm" onClick={repairReachability} disabled={repairing} title="Recompute the reachability monitoring target from discovered open ports">
             <Wrench size={13} /> {repairing ? 'Repairing…' : 'Repair reachability check'}
           </button>
-          {repairMsg && <span className="muted" style={{ fontSize: 11, maxWidth: 220, textAlign: 'right' }}>{repairMsg}</span>}
+          {repairMsg && <span className="muted" style={{ fontSize: 11, maxWidth: 240, textAlign: 'right' }}>{repairMsg}</span>}
         </div>
       </div>
     </div>
