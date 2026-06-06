@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { Boxes, Wifi, WifiOff, Server, Radar } from 'lucide-react'
 import { api, type Device } from '../api'
 import { PageHeader, Panel, Kpi, StatusPill, EmptyState, colorFor, usePaged, Pager } from '../components/ui'
+import { DeleteAllToggle } from '../components/DeleteAllToggle'
 
 interface Props {
   category: string
@@ -14,9 +15,16 @@ interface Props {
 const isOffline = (s: string) => ['down', 'offline', 'needs_attention'].includes((s || '').toLowerCase())
 
 export function DeviceList({ category, title, detailBase }: Props) {
+  const qc = useQueryClient()
+  const [msg, setMsg] = useState('')
   const { data, isLoading, error } = useQuery({
     queryKey: ['devices', category],
     queryFn: () => api.get<Device[]>(`/devices?category=${category}`),
+  })
+  const del = useMutation({
+    mutationFn: (ids: string[]) => api.post<{ deleted: number }>('/devices/bulk-delete', { ids }),
+    onSuccess: (r) => { setMsg(`Deleted ${(r as { deleted: number }).deleted} ${title.toLowerCase()}.`); qc.invalidateQueries({ queryKey: ['devices'] }) },
+    onError: (e) => setMsg((e as Error).message),
   })
 
   const all = data ?? []
@@ -35,7 +43,14 @@ export function DeviceList({ category, title, detailBase }: Props) {
 
   return (
     <div>
-      <PageHeader title={title} subtitle={`Managed ${title.toLowerCase()} across the fleet`} icon={Boxes} />
+      <PageHeader title={title} subtitle={`Managed ${title.toLowerCase()} across the fleet`} icon={Boxes}
+        actions={
+          <DeleteAllToggle ids={filtered.map((d) => d.id)} fullInventory={false}
+            scope={q.trim() ? `filtered ${title.toLowerCase()}` : `all ${title.toLowerCase()}`}
+            onDelete={(ids) => del.mutate(ids)} busy={del.isPending} />
+        }
+      />
+      {msg && <div className="banner" style={{ marginBottom: 12, fontSize: 13 }}>{msg}</div>}
 
       <div className="kpi-grid">
         <Kpi label={title} value={all.length} icon={Boxes} tone="info" />

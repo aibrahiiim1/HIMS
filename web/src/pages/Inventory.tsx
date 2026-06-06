@@ -5,6 +5,7 @@ import { Boxes, RefreshCw, Trash2, Search, Wifi, WifiOff, Server, TriangleAlert,
 import { api, type Device, type Lookup, type Location, locationPaths } from '../api'
 import { PageHeader, Panel, Kpi, BarList, EmptyState, colorFor, usePaged, Pager } from '../components/ui'
 import { ReachabilityBadge, ManagementBadge } from '../components/StatusBadges'
+import { DeleteAllToggle } from '../components/DeleteAllToggle'
 
 const DETAIL_BASE: Record<string, string> = {
   switch: '/devices', server: '/servers', virtual_host: '/virtual-hosts', firewall: '/firewalls',
@@ -174,21 +175,9 @@ export function Inventory() {
     if (sel.size === 0) return
     if (confirm(`Delete ${sel.size} device(s)? This also removes their collected inventory and cannot be undone.`)) del.mutate([...sel])
   }
-  // Delete the entire filtered result set (every page, not just the visible 10).
-  // Wiping the whole unfiltered inventory requires typing DELETE as a backstop.
-  const doDeleteAllMatching = () => {
-    const ids = rows.map((d) => d.id)
-    if (ids.length === 0) return
-    const filtered = cat !== 'all' || !!classF || !!locF || !!q || !!access || !!accessProtocol || !!accessIssue || !!reachF || !!mgmtF
-    const scope = filtered ? `all ${ids.length} device(s) matching the current filter` : `ALL ${ids.length} device(s) in the entire inventory`
-    if (!filtered) {
-      const typed = prompt(`This will permanently delete ${scope}, including all collected inventory. This cannot be undone.\n\nType DELETE to confirm:`)
-      if (typed !== 'DELETE') { if (typed !== null) setMsg('Delete cancelled — confirmation text did not match.'); return }
-    } else if (!confirm(`Delete ${scope}? This also removes their collected inventory and cannot be undone.`)) {
-      return
-    }
-    del.mutate(ids)
-  }
+  // Is the current view the whole, unfiltered inventory? (Drives the stricter
+  // typed-DELETE confirmation in the shared Delete-all control.)
+  const isFullInventory = cat === 'all' && !classF && !locF && !q && !access && !accessProtocol && !accessIssue && !reachF && !mgmtF
   const doRescanSelected = () => {
     const ips = selRows.map((d) => d.primary_ip).filter(Boolean) as string[]
     if (ips.length === 0) { setMsg('None of the selected devices have an IP to re-scan.'); return }
@@ -212,10 +201,9 @@ export function Inventory() {
             <button className="btn btn-danger btn-sm" disabled={sel.size === 0 || del.isPending} onClick={doDeleteSelected}>
               <Trash2 size={14} /> Delete{sel.size > 0 ? ` (${sel.size})` : ''}
             </button>
-            <button className="btn btn-danger btn-sm" disabled={rows.length === 0 || del.isPending} onClick={doDeleteAllMatching}
-              title={`Delete every device in the current view (all ${rows.length} across all pages), not just the selected ones`}>
-              <Trash2 size={14} /> Delete all{rows.length > 0 ? ` (${rows.length})` : ''}
-            </button>
+            <DeleteAllToggle ids={rows.map((d) => d.id)} fullInventory={isFullInventory}
+              scope={isFullInventory ? 'the entire inventory' : 'matching the current filter'}
+              onDelete={(ids) => del.mutate(ids)} busy={del.isPending} />
           </>
         }
       />
