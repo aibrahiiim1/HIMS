@@ -139,13 +139,25 @@ func buildAccessMap(rows []db.ListDeviceAccessSignalsRow) map[uuid.UUID]*deviceA
 		// credential test. Tracked independently of the display source so a protocol
 		// that is BOTH bound and evidenced still counts as proven. Record HOW it was
 		// proven for the coverage source label (evidence outranks test_result).
+		//
+		// EXCEPTION — HTTP Basic / HTTP is a WEB LOGIN, not inventory collection: a
+		// successful credential TEST (an HTTP 2xx) only proves the page authenticates,
+		// NOT that HIMS can manage the host — nothing was collected. So an http(_basic)
+		// test_result is still recorded as a binding/method for display, but does NOT
+		// count as proven-managed. Only collection EVIDENCE (a real BMC / Redfish /
+		// vendor-profile collector that actually pulled data over HTTP) makes
+		// http(_basic) managed. This keeps a web app that merely returns 200 OK — or a
+		// BMC/iDRAC credential mis-bound to the wrong host — out of "Managed".
 		if r.Source == "evidence" || r.Source == "test_result" {
-			da.proven[r.Protocol] = true
-			switch {
-			case da.provenSrc[r.Protocol] == "" || da.provenSrc[r.Protocol] == r.Source:
-				da.provenSrc[r.Protocol] = r.Source
-			default:
-				da.provenSrc[r.Protocol] = "mixed"
+			authOnlyHTTP := (r.Protocol == "http_basic" || r.Protocol == "http") && r.Source == "test_result"
+			if !authOnlyHTTP {
+				da.proven[r.Protocol] = true
+				switch {
+				case da.provenSrc[r.Protocol] == "" || da.provenSrc[r.Protocol] == r.Source:
+					da.provenSrc[r.Protocol] = r.Source
+				default:
+					da.provenSrc[r.Protocol] = "mixed"
+				}
 			}
 		}
 	}

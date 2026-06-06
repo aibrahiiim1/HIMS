@@ -567,14 +567,23 @@ export function OnboardingActions({ results, qc, setMsg, onRescan, rescanning }:
   const isNetCat = (r: DiscoveryResult) => ['switch', 'router', 'firewall'].includes(r.category ?? '')
   const viaOf = (r: DiscoveryResult) => r.probe_data?.collected_via ?? ''
 
+  // HTTP authenticated (a 2xx or a bound http_basic credential) — but HTTP auth is
+  // a WEB LOGIN, not inventory collection. It only counts as managed when data was
+  // actually collected over it, which happens via a vendor profile (Redfish/BMC/
+  // VMware/CCTV/…) — handled by the profile-ok / managed-other branches above the
+  // http check, never by a bare 200.
+  const httpAuthed = (r: DiscoveryResult) =>
+    att(r).some((a) => (a.protocol === 'http' || a.protocol === 'http_basic') && a.success) ||
+    (r.probe_data?.bound_cred ?? '').startsWith('http')
+
   function bucketOf(r: DiscoveryResult): string {
-    // 1) MANAGED — proven access wins over any OS guess (richest protocol first)
+    // 1) MANAGED — proven access wins over any OS guess (richest protocol first).
+    // NOTE: bare http_basic is intentionally NOT here — see httpAuthed below.
     if (ok(r, 'winrm')) return 'win-ok'
     if (ok(r, 'wmi')) return 'wmi-ok'
     if (ok(r, 'ssh')) return 'ssh-ok'
     if (ok(r, 'snmp')) return 'snmp-ok'
-    if (ok(r, 'http_basic') || ok(r, 'redfish')) return 'http-ok'
-    if (r.probe_data?.profile?.collection_ok) return 'profile-ok'
+    if (r.probe_data?.profile?.collection_ok) return 'profile-ok' // HTTP/HTTPS collection via vendor profile
     if (viaOf(r) === 'relay_agent') return 'agent-queued' // managed-pending via agent
     if (viaOf(r) === 'direct') return 'managed-other'
     // 2) NOT MANAGED — relay-agent routing states are the actionable thing
@@ -596,7 +605,10 @@ export function OnboardingActions({ results, qc, setMsg, onRescan, rescanning }:
     }
     // 5) Network device (switch/router/firewall) whose SNMP did not authenticate
     if (isNetCat(r)) return 'net-failed'
-    // 6) Alive but not managed — split by whether we even know what it is
+    // 6) HTTP authenticated (2xx / bound http_basic) but nothing was collected —
+    //    a web login is NOT management.
+    if (httpAuthed(r)) return 'http-noinv'
+    // 7) Alive but not managed — split by whether we even know what it is
     const known = (r.category ?? '') !== '' && r.category !== 'unknown'
     return known ? 'needs-manage' : 'needs-classify'
   }
@@ -606,12 +618,12 @@ export function OnboardingActions({ results, qc, setMsg, onRescan, rescanning }:
   const B = (k: string) => byBucket[k] ?? []
 
   const winOk = B('win-ok'), wmiOk = B('wmi-ok'), sshOk = B('ssh-ok'), snmpOk = B('snmp-ok')
-  const httpOk = B('http-ok'), profileOk = B('profile-ok'), managedOther = B('managed-other')
+  const profileOk = B('profile-ok'), managedOther = B('managed-other')
   const winLegacy = B('win-legacy'), winAuth = B('win-auth'), winUnreach = B('win-unreach'), winClosed = B('win-closed'), wmiBlocked = B('win-wmi')
-  const linAuth = B('lin-auth'), linClosed = B('lin-closed'), netFailed = B('net-failed')
+  const linAuth = B('lin-auth'), linClosed = B('lin-closed'), netFailed = B('net-failed'), httpNoInv = B('http-noinv')
   const needsManage = B('needs-manage'), needsClassify = B('needs-classify')
   const agentMissing = B('agent-missing'), agentOffline = B('agent-offline'), agentQueued = B('agent-queued')
-  const managedTotal = winOk.length + wmiOk.length + sshOk.length + snmpOk.length + httpOk.length + profileOk.length + managedOther.length + agentQueued.length
+  const managedTotal = winOk.length + wmiOk.length + sshOk.length + snmpOk.length + profileOk.length + managedOther.length + agentQueued.length
 
   type Card = {
     key: string; title: string; tone: 'ok' | 'warn' | 'crit'; count: number; sample: string
@@ -624,8 +636,7 @@ export function OnboardingActions({ results, qc, setMsg, onRescan, rescanning }:
   if (wmiOk.length) cards.push({ key: 'wmi-ok', title: 'Windows · WMI/DCOM working', tone: 'ok', count: wmiOk.length, sample: ips(wmiOk), cause: 'WMI/DCOM authenticated; Windows inventory collected.', action: 'None — onboarded.' })
   if (sshOk.length) cards.push({ key: 'ssh-ok', title: 'Managed via SSH', tone: 'ok', count: sshOk.length, sample: ips(sshOk), cause: 'SSH authenticated; OS / host inventory collected (Linux, BSD, appliances).', action: 'None — onboarded.' })
   if (snmpOk.length) cards.push({ key: 'snmp-ok', title: 'Managed via SNMP', tone: 'ok', count: snmpOk.length, sample: ips(snmpOk), cause: 'Authenticated via SNMP — interfaces / topology / host inventory collected. Includes switches and firewalls AND any host (server, appliance, VM host) that answered SNMP even when SSH/WinRM did not.', action: 'Completed — no action.' })
-  if (httpOk.length) cards.push({ key: 'http-ok', title: 'Managed via HTTP / Redfish', tone: 'ok', count: httpOk.length, sample: ips(httpOk), cause: 'Authenticated over HTTP Basic / Redfish — web appliance or BMC inventory collected.', action: 'None — onboarded.' })
-  if (profileOk.length) cards.push({ key: 'profile-ok', title: 'Managed via Vendor Profile', tone: 'ok', count: profileOk.length, sample: ips(profileOk), cause: 'A vendor connection profile (VMware / CCTV / wireless / voice) logged in and collected.', action: 'None — onboarded.' })
+  if (profileOk.length) cards.push({ key: 'profile-ok', title: 'Managed via Vendor Profile', tone: 'ok', count: profileOk.length, sample: ips(profileOk), cause: 'A vendor connection profile (VMware / CCTV / wireless / voice / Redfish BMC) logged in and actually collected inventory over HTTP/HTTPS.', action: 'None — onboarded.' })
   if (managedOther.length) cards.push({ key: 'managed-other', title: 'Managed · collected directly', tone: 'ok', count: managedOther.length, sample: ips(managedOther), cause: 'Inventory was collected directly by the HIMS server (no finer protocol attribution recorded).', action: 'None — onboarded.' })
 
   // ---- Windows needs-action ladder -------------------------------------------
@@ -689,6 +700,14 @@ export function OnboardingActions({ results, qc, setMsg, onRescan, rescanning }:
       button: <button style={ghost} disabled={rescanning} onClick={onRescan}>{rescanning ? 'Re-scanning…' : 'Re-scan scope'}</button>,
     })
   }
+
+  // ---- HTTP authenticated but no inventory collected -------------------------
+  if (httpNoInv.length) cards.push({
+    key: 'http-noinv', title: 'Web login only · no inventory collected', tone: 'warn', count: httpNoInv.length, sample: ips(httpNoInv),
+    cause: 'A web page authenticated (HTTP returned 200 and an http_basic credential is bound) but NOTHING was collected — an HTTP login is not management. This is common when an http_basic credential (e.g. a BMC / iDRAC / iLO login) is bound to a host that is actually something else, or to a plain web app. These are NOT counted as Managed.',
+    action: 'Manage it the right way: bind an SNMP / SSH / WinRM credential for the host, or attach a Vendor Connection Profile (VMware / CCTV / wireless / BMC) so HIMS can actually collect — then re-scan. If the http_basic credential is wrong for this host, unbind it on the device.',
+    button: <span style={{ display: 'inline-flex', gap: 8 }}><Link to="/inventory/unmanaged" style={{ ...ghost, textDecoration: 'none' }}>Unmanaged Devices</Link><button style={ghost} disabled={rescanning} onClick={onRescan}>{rescanning ? 'Re-scanning…' : 'Re-scan scope'}</button></span>,
+  })
 
   // ---- Found but not yet onboarded — every remaining alive host -------------
   if (needsClassify.length) cards.push({

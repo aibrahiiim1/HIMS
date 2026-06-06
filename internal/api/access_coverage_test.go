@@ -46,16 +46,27 @@ func TestBuildAccessMap_MergeAndSourcePriority(t *testing.T) {
 // filters: a bound credential alone is NEVER Managed — only a successful test
 // (test_result) or authenticated-collection evidence counts. A failed/302 test
 // produces no test_result signal, so it stays unmanaged.
+//
+// HTTP Basic / HTTP is special: a 2xx credential TEST is a web login, not
+// inventory collection, so it does NOT make a device Managed on its own — only
+// collection EVIDENCE over HTTP does. A successful test of a real management
+// protocol (ssh/snmp/winrm/…) still counts.
 func TestManagedRequiresProven(t *testing.T) {
-	boundFailed, boundUntested, proven2xx := uuid.New(), uuid.New(), uuid.New()
+	boundFailed, boundUntested, httpAuthOnly, httpEvidence, provenSSH := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	rows := []db.ListDeviceAccessSignalsRow{
 		// bound http_basic credential whose latest test was 302/auth_failed:
 		// only the binding signal exists (a failed test emits no test_result row).
 		{DeviceID: boundFailed, Protocol: "http_basic", Source: "bound_credential"},
 		// bound credential, never tested → only a binding signal.
 		{DeviceID: boundUntested, Protocol: "ssh", Source: "bound_credential"},
-		// latest 2xx http_basic success → a test_result signal.
-		{DeviceID: proven2xx, Protocol: "http_basic", Source: "test_result"},
+		// latest 2xx http_basic success → a test_result signal, but a web login is
+		// NOT management: must stay unmanaged (the reported bug).
+		{DeviceID: httpAuthOnly, Protocol: "http_basic", Source: "test_result"},
+		// http_basic with collection EVIDENCE (a real BMC/Redfish collector pulled
+		// data) → genuinely managed over HTTP.
+		{DeviceID: httpEvidence, Protocol: "http_basic", Source: "evidence"},
+		// a real management protocol proven by a successful test → managed.
+		{DeviceID: provenSSH, Protocol: "ssh", Source: "test_result"},
 	}
 	m := buildAccessMap(rows)
 
@@ -65,13 +76,20 @@ func TestManagedRequiresProven(t *testing.T) {
 	if m[boundUntested].hasProven() {
 		t.Error("bound-but-untested credential must NOT count as managed")
 	}
-	if !m[proven2xx].hasProven() || !m[proven2xx].provenHas("http_basic") {
-		t.Error("latest 2xx http_basic success must count as managed")
+	if m[httpAuthOnly].hasProven() {
+		t.Error("HTTP Basic 2xx web login (test_result only) must NOT count as managed — nothing was collected")
 	}
-	// The bindings are still recorded (credentials are never deleted) — they just
-	// don't make the device Managed.
-	if !m[boundFailed].has("http_basic") || !m[boundUntested].has("ssh") {
-		t.Error("bound credentials must still be recorded as bindings")
+	if !m[httpEvidence].hasProven() || !m[httpEvidence].provenHas("http_basic") {
+		t.Error("http_basic with collection evidence must count as managed")
+	}
+	if !m[provenSSH].hasProven() || !m[provenSSH].provenHas("ssh") {
+		t.Error("a successful ssh test must count as managed")
+	}
+	// The bindings/methods are still recorded (credentials are never deleted, and
+	// the auth-only HTTP method is still a known method) — they just don't make the
+	// device Managed.
+	if !m[boundFailed].has("http_basic") || !m[boundUntested].has("ssh") || !m[httpAuthOnly].has("http_basic") {
+		t.Error("bound credentials and auth-only HTTP methods must still be recorded")
 	}
 }
 
