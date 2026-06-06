@@ -436,6 +436,10 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 				// Persist every credential auth attempt (success + failure + reason)
 				// to credential-test history → feeds Coverage / Data Quality.
 				s.persistScanCredAttempts(ctx, dev, r.CredAttempts)
+				// Point this host's reachability check at a port it actually answered
+				// on (or SNMP), so a freshly-discovered/up host is never marked
+				// "offline" for a category-default port it doesn't serve.
+				s.seedReachabilityCheck(ctx, dev, r.OpenPorts, r.Probe.SNMPSysDescr != "")
 				// A WinRM/SSH bind means we onboarded a Windows/Linux host. Run a
 				// deep OS collection to refine classification (workstation vs
 				// server) and enrich vendor/model/OS — reusing the bound credential.

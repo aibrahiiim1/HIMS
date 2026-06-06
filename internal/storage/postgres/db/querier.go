@@ -109,6 +109,10 @@ type Querier interface {
 	// Hard delete (cascades to inventory child rows via FK ON DELETE CASCADE).
 	DeleteDevice(ctx context.Context, id uuid.UUID) error
 	DeleteDeviceLifecycle(ctx context.Context, deviceID uuid.UUID) error
+	// Remove a device's TCP reachability checks so a fresh, evidence-based one can
+	// replace them (used when a scan re-points the check at a port the host
+	// actually answered on). SNMP/metric checks are left untouched.
+	DeleteDeviceReachabilityChecks(ctx context.Context, deviceID uuid.UUID) error
 	DeleteDeviceTemplate(ctx context.Context, id uuid.UUID) error
 	// Bulk hard delete (multi-select). Returns the number of rows removed.
 	DeleteDevices(ctx context.Context, dollar_1 []uuid.UUID) (int64, error)
@@ -291,7 +295,7 @@ type Querier interface {
 	ListDevicesByOSFamily(ctx context.Context, osFamily string) ([]Device, error)
 	ListDevicesByRole(ctx context.Context, role string) ([]Device, error)
 	// Devices with a reachable IP but no monitoring check yet — the seeder turns
-	// each into a default TCP check (port chosen by category).
+	// each into a default TCP check (port chosen by category + os_family).
 	ListDevicesNeedingDefaultCheck(ctx context.Context) ([]ListDevicesNeedingDefaultCheckRow, error)
 	// Credentialed device classes (server/endpoint) that have never been OS-inventoried.
 	ListDevicesWithoutOSInventory(ctx context.Context) ([]ListDevicesWithoutOSInventoryRow, error)

@@ -11,6 +11,33 @@ import (
 	"github.com/coralsearesorts/hims/internal/snmp"
 )
 
+func TestReachabilityPort(t *testing.T) {
+	cases := []struct {
+		name     string
+		category string
+		os       string
+		open     []int
+		want     int
+	}{
+		// Prefer a confirmed-open port over the category default.
+		{"windows endpoint open 135/445", "endpoint", "windows", []int{135, 445}, 445},
+		{"switch ssh closed but https/9100 open", "switch", "", []int{80, 443, 8080, 9100}, 443},
+		{"printer no 443 but 80/9100", "printer", "", []int{80, 8000, 8443, 9100}, 8443},
+		{"firewall only 80 open", "firewall", "", []int{80}, 80},
+		{"single odd open port still used", "unknown", "", []int{4444}, 4444},
+		// No open ports → OS-aware category fallback.
+		{"windows fallback → RDP", "endpoint", "windows", nil, 3389},
+		{"switch fallback → 22", "switch", "", nil, 22},
+		{"printer fallback → 9100", "printer", "", nil, 9100},
+		{"unmapped fallback → 443", "unknown", "", nil, 443},
+	}
+	for _, c := range cases {
+		if got := ReachabilityPort(c.category, c.os, c.open); got != c.want {
+			t.Errorf("%s: ReachabilityPort(%q,%q,%v)=%d, want %d", c.name, c.category, c.os, c.open, got, c.want)
+		}
+	}
+}
+
 // fakeSNMP is an in-memory snmp.Client for ProbeSNMP tests.
 type fakeSNMP struct {
 	connectErr error

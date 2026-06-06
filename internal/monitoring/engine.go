@@ -73,7 +73,10 @@ func (e *Engine) SeedDefaults(ctx context.Context) (int, error) {
 	}
 	n := 0
 	for _, d := range rows {
-		port := int32(DefaultPort(d.Category))
+		// OS-aware default (Windows hosts answer RDP/WinRM, not 22/443). This is
+		// the no-scan fallback for imported devices; scanned devices get an
+		// evidence-based port (from their open ports) at enrollment time.
+		port := int32(DefaultPortForDevice(d.Category, d.OsFamily))
 		if _, err := e.repo.UpsertMonitoringCheck(ctx, db.UpsertMonitoringCheckParams{
 			DeviceID:        d.ID,
 			Kind:            "tcp",

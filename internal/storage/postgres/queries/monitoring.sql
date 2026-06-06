@@ -73,11 +73,17 @@ GROUP BY last_status;
 
 -- name: ListDevicesNeedingDefaultCheck :many
 -- Devices with a reachable IP but no monitoring check yet — the seeder turns
--- each into a default TCP check (port chosen by category).
-SELECT id, primary_ip, category FROM devices
+-- each into a default TCP check (port chosen by category + os_family).
+SELECT id, primary_ip, category, os_family FROM devices
 WHERE primary_ip IS NOT NULL
   AND NOT EXISTS (SELECT 1 FROM monitoring_checks c WHERE c.device_id = devices.id)
 LIMIT 1000;
+
+-- name: DeleteDeviceReachabilityChecks :exec
+-- Remove a device's TCP reachability checks so a fresh, evidence-based one can
+-- replace them (used when a scan re-points the check at a port the host
+-- actually answered on). SNMP/metric checks are left untouched.
+DELETE FROM monitoring_checks WHERE device_id = $1 AND kind = 'tcp';
 
 -- name: UpdateDeviceMonitoringStatus :exec
 -- Reflect the worst current check status onto the device row so device lists

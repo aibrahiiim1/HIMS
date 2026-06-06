@@ -12,6 +12,18 @@ import (
 	"github.com/google/uuid"
 )
 
+const deleteDeviceReachabilityChecks = `-- name: DeleteDeviceReachabilityChecks :exec
+DELETE FROM monitoring_checks WHERE device_id = $1 AND kind = 'tcp'
+`
+
+// Remove a device's TCP reachability checks so a fresh, evidence-based one can
+// replace them (used when a scan re-points the check at a port the host
+// actually answered on). SNMP/metric checks are left untouched.
+func (q *Queries) DeleteDeviceReachabilityChecks(ctx context.Context, deviceID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteDeviceReachabilityChecks, deviceID)
+	return err
+}
+
 const deleteMonitoringCheck = `-- name: DeleteMonitoringCheck :exec
 DELETE FROM monitoring_checks WHERE id = $1
 `
@@ -74,7 +86,7 @@ func (q *Queries) InsertMonitoringSample(ctx context.Context, arg InsertMonitori
 }
 
 const listDevicesNeedingDefaultCheck = `-- name: ListDevicesNeedingDefaultCheck :many
-SELECT id, primary_ip, category FROM devices
+SELECT id, primary_ip, category, os_family FROM devices
 WHERE primary_ip IS NOT NULL
   AND NOT EXISTS (SELECT 1 FROM monitoring_checks c WHERE c.device_id = devices.id)
 LIMIT 1000
@@ -84,10 +96,11 @@ type ListDevicesNeedingDefaultCheckRow struct {
 	ID        uuid.UUID   `json:"id"`
 	PrimaryIp *netip.Addr `json:"primary_ip"`
 	Category  string      `json:"category"`
+	OsFamily  string      `json:"os_family"`
 }
 
 // Devices with a reachable IP but no monitoring check yet — the seeder turns
-// each into a default TCP check (port chosen by category).
+// each into a default TCP check (port chosen by category + os_family).
 func (q *Queries) ListDevicesNeedingDefaultCheck(ctx context.Context) ([]ListDevicesNeedingDefaultCheckRow, error) {
 	rows, err := q.db.Query(ctx, listDevicesNeedingDefaultCheck)
 	if err != nil {
@@ -97,7 +110,12 @@ func (q *Queries) ListDevicesNeedingDefaultCheck(ctx context.Context) ([]ListDev
 	items := []ListDevicesNeedingDefaultCheckRow{}
 	for rows.Next() {
 		var i ListDevicesNeedingDefaultCheckRow
-		if err := rows.Scan(&i.ID, &i.PrimaryIp, &i.Category); err != nil {
+		if err := rows.Scan(
+			&i.ID,
+			&i.PrimaryIp,
+			&i.Category,
+			&i.OsFamily,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

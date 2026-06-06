@@ -55,6 +55,33 @@ func DefaultPortForDevice(category, osFamily string) int {
 	return DefaultPort(category)
 }
 
+// reachabilityPref ranks ports by how meaningful they are as a management/
+// liveness signal, so when a host answered on several we pick the best one.
+var reachabilityPref = []int{443, 8443, 22, 3389, 5985, 5986, 80, 8080, 8000, 9100, 445, 135, 23, 161}
+
+// ReachabilityPort chooses the TCP port the reachability check should dial. It
+// PREFERS a port the host actually answered on during discovery (openPorts), so
+// a host that is up is never marked "down" for a port it doesn't serve — the
+// previous behaviour of dialing a single category-default port (e.g. 443 for a
+// Windows workstation, or 22 for a switch with SSH disabled) produced false
+// "offline" flapping. When no open ports are known (e.g. an imported device that
+// was never scanned), it falls back to the OS-aware category default.
+func ReachabilityPort(category, osFamily string, openPorts []int) int {
+	if len(openPorts) > 0 {
+		open := make(map[int]bool, len(openPorts))
+		for _, p := range openPorts {
+			open[p] = true
+		}
+		for _, p := range reachabilityPref {
+			if open[p] {
+				return p
+			}
+		}
+		return openPorts[0] // any answered port proves the host is up
+	}
+	return DefaultPortForDevice(category, osFamily)
+}
+
 // DialFunc dials a network address with a context. Production uses
 // net.Dialer.DialContext; tests substitute a fake so the poller is exercised
 // without real sockets.
