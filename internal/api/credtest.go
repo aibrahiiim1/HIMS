@@ -7,8 +7,12 @@ import (
 	"sort"
 	"sync"
 
+	"time"
+
 	"github.com/coralsearesorts/hims/internal/credtest"
 	"github.com/coralsearesorts/hims/internal/discovery"
+	"github.com/coralsearesorts/hims/internal/domain"
+	"github.com/coralsearesorts/hims/internal/osinv"
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
 	"github.com/google/uuid"
 )
@@ -183,6 +187,57 @@ func (s *Server) testCredentials(w http.ResponseWriter, r *http.Request) {
 		"successes": successes,
 		"failures":  len(results) - successes,
 	})
+}
+
+// winrmDiagnose handles POST /credentials/winrm-diagnose {host, credential_id}.
+// It runs the WinRM auth diagnostic matrix (NTLM+encryption / plain NTLM / Basic)
+// against a target with a stored credential and returns a secrets-free report:
+// the unauthenticated WWW-Authenticate challenge, the go-ntlmssp username parse,
+// and per-mode result/fault. For triaging cases where native PowerShell succeeds
+// but the Go WinRM library returns 401. Gated to credentials.manage.
+func (s *Server) winrmDiagnose(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Host         string `json:"host"`
+		CredentialID string `json:"credential_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Host == "" || req.CredentialID == "" {
+		http.Error(w, "host and credential_id are required", http.StatusBadRequest)
+		return
+	}
+	cph := s.cipher()
+	if cph == nil {
+		http.Error(w, "encryption key not loaded; cannot decrypt credential", http.StatusServiceUnavailable)
+		return
+	}
+	cid, err := uuid.Parse(req.CredentialID)
+	if err != nil {
+		http.Error(w, "invalid credential_id", http.StatusBadRequest)
+		return
+	}
+	cred, err := s.queries.GetCredential(r.Context(), cid)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if cred.Kind != string(domain.CredWinRM) {
+		http.Error(w, "credential is not a winrm credential", http.StatusBadRequest)
+		return
+	}
+	plain, err := cph.Open(cred.EncryptedBlob, cred.KeyID)
+	if err != nil {
+		http.Error(w, "could not decrypt credential", http.StatusBadRequest)
+		return
+	}
+	user, pass := credtest.SplitUserPass(string(plain))
+
+	report := osinv.WinRMDiagnose(r.Context(), req.Host, user, pass, 15*time.Second)
+	s.audit(r, "credential", "credential.winrm_diagnose", "credential", cid.String(),
+		"Ran WinRM diagnostic against "+req.Host, map[string]any{"host": req.Host, "credential": cred.Name})
+	writeJSON(w, http.StatusOK, report)
 }
 
 // persistScanCredAttempts saves the credential authentication attempts a
