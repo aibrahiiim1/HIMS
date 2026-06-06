@@ -54,8 +54,8 @@ export function Inventory() {
     : access === 'unmanaged' ? 'Unmanaged (no usable credential)'
     : accessProtocol ? `Access: ${ACCESS_PROTOCOL_LABEL[accessProtocol] ?? accessProtocol}`
     : accessIssue ? `Issue: ${ACCESS_ISSUE_LABEL[accessIssue] ?? accessIssue}`
-    : reachF ? `Reachability: ${reachF}`
-    : mgmtF ? `Management: ${mgmtF.replace(/_/g, ' ')}`
+    : (reachF || mgmtF)
+      ? [reachF && `Reachability: ${reachF}`, mgmtF && `Management: ${mgmtF === 'not_managed' ? 'not managed (any state)' : mgmtF.replace(/_/g, ' ')}`].filter(Boolean).join(' · ')
     : ''
   const clearAccess = () => {
     const next = new URLSearchParams(sp)

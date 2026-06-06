@@ -68,7 +68,7 @@ export function ReachManageCards() {
 
           {/* Cross-axis callouts — the cases that prove the two signals are distinct. */}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, paddingTop: 4 }}>
-            <Link to="/inventory?reachability=online&management=unmanaged" className="badge badge-warning" style={{ textDecoration: 'none' }} title="Devices that respond on the network but HIMS cannot manage — open ports are not management">
+            <Link to="/inventory?reachability=online&management=not_managed" className="badge badge-warning" style={{ textDecoration: 'none' }} title="Devices that respond on the network but HIMS cannot manage (any non-managed state) — open ports are not management">
               Online but Unmanaged: {d.online_unmanaged}
             </Link>
             <Link to="/data-quality" className="badge badge-unknown" style={{ textDecoration: 'none' }} title="Devices offline now that have a working management method on record">

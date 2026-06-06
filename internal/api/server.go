@@ -482,7 +482,14 @@ func (s *Server) listDevices(w http.ResponseWriter, r *http.Request) {
 			if reachFilter != "" && d.Reachability != reachFilter {
 				continue
 			}
-			if mgmtFilter != "" && d.Management != mgmtFilter {
+			// `not_managed` is a meta-value: any management state except managed.
+			// It backs the dashboard "Online but Unmanaged" drill-down so the count
+			// (online && != managed) matches the filtered list exactly.
+			if mgmtFilter == "not_managed" {
+				if d.Management == MgmtManaged {
+					continue
+				}
+			} else if mgmtFilter != "" && d.Management != mgmtFilter {
 				continue
 			}
 			filtered = append(filtered, d)
