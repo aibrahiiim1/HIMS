@@ -14,8 +14,12 @@ import (
 // their fallback values. Unknown keys are rejected by PUT so the surface stays
 // closed. Bounds guard against footguns (e.g. a 0ms timeout).
 var settingDefaults = map[string]int{
-	"snmp_timeout_ms":  3000,
-	"tcp_timeout_ms":   500,
+	"snmp_timeout_ms": 3000,
+	// tcp_timeout_ms bounds each TCP port-connect in the aliveness/port sweep. A
+	// host is "alive" if any scanned port answers within this window, so too tight
+	// a value drops slow-but-up hosts (busy switches / appliances) on big subnets.
+	// 1000ms is a gentle baseline that favours a complete sweep over raw speed.
+	"tcp_timeout_ms":   1000,
 	"scan_concurrency": 16,
 	"http_timeout_ms":  20000,
 	"winrm_timeout_ms": 60000,
