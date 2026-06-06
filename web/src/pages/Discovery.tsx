@@ -552,33 +552,66 @@ export function OnboardingActions({ results, qc, setMsg, onRescan, rescanning }:
   const agentList = agents.data ?? []
   const haveAgents = agentList.length > 0
   const failedAgents = agentList.filter((a) => (a.failed_jobs ?? 0) > 0)
-  // Relay-agent collection outcomes recorded on THIS job's hosts.
-  const via = (v: string) => results.filter((r) => r.probe_data?.collected_via === v)
-  const agentMissing = via('agent_missing')
-  const agentOffline = via('agent_offline')
-  const agentQueued = via('relay_agent')
-
-  const win = results.filter((r) => r.probe_data?.candidate === 'windows')
-  // Legacy WSMan 2.0: authentication succeeded but the WSMan operation faulted —
-  // its OWN bucket, kept distinct from auth_failed / unreachable / disabled.
+  // ── Exhaustive onboarding partition ───────────────────────────────────────
+  // Every host found by this scan lands in EXACTLY ONE state, so the cards always
+  // sum to the number of devices found — no host is invisible. A host counts as
+  // MANAGED if any relevant protocol proved out (a successful credential attempt
+  // or a bound credential) REGARDLESS of the planner's OS guess. That keeps a host
+  // the planner guessed "linux" but that was actually onboarded via SNMP (e.g.
+  // 172.21.96.112: SSH closed, SNMP working) OUT of the SSH-failure bucket and in
+  // "Managed via SNMP", and gives alive-but-uncredentialed hosts their own visible
+  // "needs attention" bucket instead of dropping them on the floor.
   const isLegacy = (r: DiscoveryResult) => cat(r, 'winrm', 'auth_ok_operation_fault')
-  const winLegacy = win.filter(isLegacy)
-  const winOk = win.filter((r) => !isLegacy(r) && ok(r, 'winrm'))
-  const winAuth = win.filter((r) => !isLegacy(r) && !ok(r, 'winrm') && cat(r, 'winrm', 'auth_failed'))
-  const winUnreach = win.filter((r) => !isLegacy(r) && !ok(r, 'winrm') && cat(r, 'winrm', 'unreachable'))
-  const winClosed = win.filter((r) => !isLegacy(r) && !ok(r, 'winrm') && !cat(r, 'winrm', 'auth_failed') && !cat(r, 'winrm', 'unreachable') && !portOpen(r, 5985, 5986))
-
-  const lin = results.filter((r) => r.probe_data?.candidate === 'linux')
-  const linOk = lin.filter((r) => ok(r, 'ssh'))
-  const linAuth = lin.filter((r) => !ok(r, 'ssh') && cat(r, 'ssh', 'auth_failed'))
-  const linClosed = lin.filter((r) => !ok(r, 'ssh') && !cat(r, 'ssh', 'auth_failed'))
-
-  const net = results.filter((r) => ['switch', 'router', 'firewall'].includes(r.category ?? ''))
-  const netOk = net.filter((r) => ok(r, 'snmp'))
-
-  // WMI/DCOM blockers: a wmi attempt that failed (and didn't succeed by any method).
   const wmiFailCats = ['dcom_unreachable', 'rpc_unreachable', 'wmi_access_denied', 'wmi_auth_failed', 'firewall_blocked', 'namespace_unavailable']
-  const wmiBlocked = win.filter((r) => !ok(r, 'wmi') && wmiFailCats.some((c) => cat(r, 'wmi', c)))
+  const isWmiBlocked = (r: DiscoveryResult) => !ok(r, 'wmi') && wmiFailCats.some((c) => cat(r, 'wmi', c))
+  const isNetCat = (r: DiscoveryResult) => ['switch', 'router', 'firewall'].includes(r.category ?? '')
+  const viaOf = (r: DiscoveryResult) => r.probe_data?.collected_via ?? ''
+
+  function bucketOf(r: DiscoveryResult): string {
+    // 1) MANAGED — proven access wins over any OS guess (richest protocol first)
+    if (ok(r, 'winrm')) return 'win-ok'
+    if (ok(r, 'wmi')) return 'wmi-ok'
+    if (ok(r, 'ssh')) return 'ssh-ok'
+    if (ok(r, 'snmp')) return 'snmp-ok'
+    if (ok(r, 'http_basic') || ok(r, 'redfish')) return 'http-ok'
+    if (r.probe_data?.profile?.collection_ok) return 'profile-ok'
+    if (viaOf(r) === 'relay_agent') return 'agent-queued' // managed-pending via agent
+    if (viaOf(r) === 'direct') return 'managed-other'
+    // 2) NOT MANAGED — relay-agent routing states are the actionable thing
+    if (viaOf(r) === 'agent_offline') return 'agent-offline'
+    if (viaOf(r) === 'agent_missing') return 'agent-missing'
+    // 3) NOT MANAGED — Windows failure ladder (auth_ok_operation_fault = legacy)
+    if (r.probe_data?.candidate === 'windows') {
+      if (isLegacy(r)) return 'win-legacy'
+      if (cat(r, 'winrm', 'auth_failed')) return 'win-auth'
+      if (cat(r, 'winrm', 'unreachable')) return 'win-unreach'
+      if (isWmiBlocked(r)) return 'win-wmi'
+      if (portOpen(r, 5985, 5986)) return 'win-unreach'
+      return 'win-closed'
+    }
+    // 4) NOT MANAGED — Linux failure ladder
+    if (r.probe_data?.candidate === 'linux') {
+      if (cat(r, 'ssh', 'auth_failed')) return 'lin-auth'
+      return 'lin-closed'
+    }
+    // 5) Network device (switch/router/firewall) whose SNMP did not authenticate
+    if (isNetCat(r)) return 'net-failed'
+    // 6) Alive but not managed — split by whether we even know what it is
+    const known = (r.category ?? '') !== '' && r.category !== 'unknown'
+    return known ? 'needs-manage' : 'needs-classify'
+  }
+
+  const byBucket: Record<string, DiscoveryResult[]> = {}
+  for (const r of results) (byBucket[bucketOf(r)] ??= []).push(r)
+  const B = (k: string) => byBucket[k] ?? []
+
+  const winOk = B('win-ok'), wmiOk = B('wmi-ok'), sshOk = B('ssh-ok'), snmpOk = B('snmp-ok')
+  const httpOk = B('http-ok'), profileOk = B('profile-ok'), managedOther = B('managed-other')
+  const winLegacy = B('win-legacy'), winAuth = B('win-auth'), winUnreach = B('win-unreach'), winClosed = B('win-closed'), wmiBlocked = B('win-wmi')
+  const linAuth = B('lin-auth'), linClosed = B('lin-closed'), netFailed = B('net-failed')
+  const needsManage = B('needs-manage'), needsClassify = B('needs-classify')
+  const agentMissing = B('agent-missing'), agentOffline = B('agent-offline'), agentQueued = B('agent-queued')
+  const managedTotal = winOk.length + wmiOk.length + sshOk.length + snmpOk.length + httpOk.length + profileOk.length + managedOther.length + agentQueued.length
 
   type Card = {
     key: string; title: string; tone: 'ok' | 'warn' | 'crit'; count: number; sample: string
@@ -586,7 +619,16 @@ export function OnboardingActions({ results, qc, setMsg, onRescan, rescanning }:
   }
   const cards: Card[] = []
 
+  // ---- Managed (done) — by the protocol that actually proved out --------------
   if (winOk.length) cards.push({ key: 'win-ok', title: 'Windows · WinRM working', tone: 'ok', count: winOk.length, sample: ips(winOk), cause: 'WinRM authenticated; deep OS inventory collected.', action: 'None — onboarded.' })
+  if (wmiOk.length) cards.push({ key: 'wmi-ok', title: 'Windows · WMI/DCOM working', tone: 'ok', count: wmiOk.length, sample: ips(wmiOk), cause: 'WMI/DCOM authenticated; Windows inventory collected.', action: 'None — onboarded.' })
+  if (sshOk.length) cards.push({ key: 'ssh-ok', title: 'Managed via SSH', tone: 'ok', count: sshOk.length, sample: ips(sshOk), cause: 'SSH authenticated; OS / host inventory collected (Linux, BSD, appliances).', action: 'None — onboarded.' })
+  if (snmpOk.length) cards.push({ key: 'snmp-ok', title: 'Managed via SNMP', tone: 'ok', count: snmpOk.length, sample: ips(snmpOk), cause: 'Authenticated via SNMP — interfaces / topology / host inventory collected. Includes switches and firewalls AND any host (server, appliance, VM host) that answered SNMP even when SSH/WinRM did not.', action: 'Completed — no action.' })
+  if (httpOk.length) cards.push({ key: 'http-ok', title: 'Managed via HTTP / Redfish', tone: 'ok', count: httpOk.length, sample: ips(httpOk), cause: 'Authenticated over HTTP Basic / Redfish — web appliance or BMC inventory collected.', action: 'None — onboarded.' })
+  if (profileOk.length) cards.push({ key: 'profile-ok', title: 'Managed via Vendor Profile', tone: 'ok', count: profileOk.length, sample: ips(profileOk), cause: 'A vendor connection profile (VMware / CCTV / wireless / voice) logged in and collected.', action: 'None — onboarded.' })
+  if (managedOther.length) cards.push({ key: 'managed-other', title: 'Managed · collected directly', tone: 'ok', count: managedOther.length, sample: ips(managedOther), cause: 'Inventory was collected directly by the HIMS server (no finer protocol attribution recorded).', action: 'None — onboarded.' })
+
+  // ---- Windows needs-action ladder -------------------------------------------
   if (winAuth.length) cards.push({
     key: 'win-auth', title: 'Windows · WinRM auth_failed', tone: 'warn', count: winAuth.length, sample: ips(winAuth),
     cause: 'WinRM reachable (5985 open) but the credential was rejected — wrong password or username format.',
@@ -615,7 +657,7 @@ export function OnboardingActions({ results, qc, setMsg, onRescan, rescanning }:
     button: <button style={ghost} disabled={rescanning} onClick={onRescan}>{rescanning ? 'Re-scanning…' : 'Re-scan after enabling WinRM'}</button>,
   })
 
-  if (linOk.length) cards.push({ key: 'lin-ok', title: 'Linux · SSH working', tone: 'ok', count: linOk.length, sample: ips(linOk), cause: 'SSH authenticated; OS inventory collected.', action: 'None — onboarded.' })
+  // ---- Linux / SSH needs-action ----------------------------------------------
   if (linAuth.length) cards.push({
     key: 'lin-auth', title: 'Linux · SSH auth_failed', tone: 'warn', count: linAuth.length, sample: ips(linAuth),
     cause: 'Port 22 reachable but the SSH credential was rejected.',
@@ -629,7 +671,13 @@ export function OnboardingActions({ results, qc, setMsg, onRescan, rescanning }:
   })
   if (linClosed.length) cards.push({ key: 'lin-closed', title: 'Linux · SSH unreachable / 22 closed', tone: 'warn', count: linClosed.length, sample: ips(linClosed), cause: 'Port 22 not reachable — SSH not attempted.', action: 'Enable sshd / open port 22, then re-scan.', button: <button style={ghost} disabled={rescanning} onClick={onRescan}>{rescanning ? 'Re-scanning…' : 'Re-scan scope'}</button> })
 
-  if (netOk.length) cards.push({ key: 'net-ok', title: 'Network · SNMP working', tone: 'ok', count: netOk.length, sample: ips(netOk), cause: 'Switches/firewalls authenticated via SNMP; interfaces/topology collected.', action: 'Completed — no action.' })
+  // ---- Network device whose SNMP did not authenticate ------------------------
+  if (netFailed.length) cards.push({
+    key: 'net-failed', title: 'Network · SNMP failed', tone: 'warn', count: netFailed.length, sample: ips(netFailed),
+    cause: 'Classified as a network device (switch / router / firewall) but no SNMP community or credential authenticated, so interfaces and topology could not be collected.',
+    action: 'Add or fix the SNMP credential for this site (v2c community or v3 user), then re-scan. SNMP is UDP/161 and is probed on every alive host — a failure here means the credential, not a closed port.',
+    button: <button style={ghost} disabled={rescanning} onClick={onRescan}>{rescanning ? 'Re-scanning…' : 'Re-scan scope'}</button>,
+  })
 
   if (wmiBlocked.length) {
     const c0 = (r: DiscoveryResult) => (r.probe_data?.cred_attempts ?? []).find((a) => a.protocol === 'wmi' && !a.success)?.category ?? 'wmi_error'
@@ -641,6 +689,20 @@ export function OnboardingActions({ results, qc, setMsg, onRescan, rescanning }:
       button: <button style={ghost} disabled={rescanning} onClick={onRescan}>{rescanning ? 'Re-scanning…' : 'Re-scan scope'}</button>,
     })
   }
+
+  // ---- Found but not yet onboarded — every remaining alive host -------------
+  if (needsClassify.length) cards.push({
+    key: 'needs-classify', title: 'Found · not yet classified', tone: 'warn', count: needsClassify.length, sample: ips(needsClassify),
+    cause: 'Alive and answered the scan, but no protocol authenticated and HIMS cannot tell what they are — no SNMP / SSH / WinRM / HTTP evidence and an unknown category. These are the hosts you would otherwise never see in this panel.',
+    action: 'Open Missing Classification to identify them — add the right credential for the site or classify manually — then re-scan.',
+    button: <span style={{ display: 'inline-flex', gap: 8 }}><Link to="/inventory/missing-classification" style={{ ...ghost, textDecoration: 'none' }}>Missing Classification</Link><button style={ghost} disabled={rescanning} onClick={onRescan}>{rescanning ? 'Re-scanning…' : 'Re-scan scope'}</button></span>,
+  })
+  if (needsManage.length) cards.push({
+    key: 'needs-manage', title: 'Found · classified but not managed', tone: 'warn', count: needsManage.length, sample: ips(needsManage),
+    cause: 'HIMS knows what these devices are, but no credential or protocol has proven management access yet.',
+    action: 'Open Unmanaged Devices to bind and test a credential for them, then re-scan.',
+    button: <span style={{ display: 'inline-flex', gap: 8 }}><Link to="/inventory/unmanaged" style={{ ...ghost, textDecoration: 'none' }}>Unmanaged Devices</Link><button style={ghost} disabled={rescanning} onClick={onRescan}>{rescanning ? 'Re-scanning…' : 'Re-scan scope'}</button></span>,
+  })
 
   // ---- Relay Agent onboarding cards -------------------------------------------
   const regBtn = <Link to="/agents" style={{ ...ghost, textDecoration: 'none' }}>Open Relay Agents</Link>
@@ -702,7 +764,7 @@ export function OnboardingActions({ results, qc, setMsg, onRescan, rescanning }:
 
   return (
     <div className="card">
-      <h3>Onboarding actions <span className="muted" style={{ fontSize: 12, fontWeight: 400 }}>— what's blocking the rest of this scan, and how to fix it</span></h3>
+      <h3>Onboarding actions <span className="muted" style={{ fontSize: 12, fontWeight: 400 }}>— every host this scan found: what's managed, and what's blocking the rest</span></h3>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 12 }}>
         {winLegacy.length > 0 && (
           <LegacyWindowsCard
@@ -725,6 +787,11 @@ export function OnboardingActions({ results, qc, setMsg, onRescan, rescanning }:
           </div>
         ))}
       </div>
+      {results.length > 0 && (
+        <div className="muted" style={{ fontSize: 11, marginTop: 10 }}>
+          All {results.length} host(s) found by this scan are represented above — {managedTotal} managed, {results.length - managedTotal} need action. Every found host lands in exactly one bucket, so these always reconcile.
+        </div>
+      )}
     </div>
   )
 }
