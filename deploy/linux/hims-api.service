@@ -1,0 +1,35 @@
+# systemd unit for the HIMS API.
+# Install to /etc/systemd/system/hims-api.service (install-linux-service.sh does this).
+#
+# Runs on boot, restarts on failure, loads config from /etc/hims/hims-api.env,
+# and logs to the journal (view: journalctl -u hims-api -f).
+[Unit]
+Description=HIMS inventory & monitoring REST API
+Documentation=https://github.com/coralsearesorts/hims
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Dedicated unprivileged service account (install script creates it).
+User=hims
+Group=hims
+# All secrets/config live here, root-owned 0600 — never on the command line.
+EnvironmentFile=/etc/hims/hims-api.env
+# HIMS_SERVICE_MODE lets System Health show how the process is supervised.
+Environment=HIMS_SERVICE_MODE=systemd
+ExecStart=/opt/hims/hims-api
+# Graceful stop: main() handles SIGTERM and drains connections (10s budget).
+KillSignal=SIGTERM
+TimeoutStopSec=20
+Restart=on-failure
+RestartSec=5s
+# Hardening: the API needs only its working dir + config; lock the rest down.
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+WorkingDirectory=/opt/hims
+
+[Install]
+WantedBy=multi-user.target

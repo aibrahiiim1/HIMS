@@ -16,12 +16,14 @@ var dbURLPasswordRe = regexp.MustCompile(`://([^:@/?#]+):[^@/?#]*@`)
 // handler can redact its password before returning it. The encryption key is
 // never stored in this struct.
 type RuntimeInfo struct {
-	StartedAt time.Time
-	Version   string
-	Commit    string
-	Addr      string
-	DBURL     string
-	Env       string
+	StartedAt   time.Time
+	Version     string
+	Commit      string
+	Addr        string
+	DBURL       string
+	Env         string
+	ServiceMode string // "windows-service" | "systemd" | "foreground" | "docker"
+	LogPath     string // where this process writes its log (operator hint)
 }
 
 // SetRuntime records the process identity captured at startup (called once
@@ -63,18 +65,33 @@ func (s *Server) systemRuntime(w http.ResponseWriter, r *http.Request) {
 		addr = ":8090"
 	}
 
+	// Live deployment checks so System Health can confirm a service restart came
+	// up correctly: DB reachable, encryption actually enabled, and the Relay Agent
+	// installer is staged/servable.
+	ctx := r.Context()
+	_, dbErr := s.queries.CountEncryptedCredentials(ctx) // cheap round-trip = DB reachable
+	dbConnected := dbErr == nil
+	_, winOK := agentBinaryPath("windows")
+	_, linOK := agentBinaryPath("linux")
+	relayInstaller := winOK || linOK
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"process_id":            os.Getpid(),
-		"started_at":            startedAt,
-		"uptime":                uptime.String(),
-		"uptime_seconds":        int64(uptime.Seconds()),
-		"api_version":           firstNonEmpty(s.rt.Version, "dev"),
-		"git_commit":            firstNonEmpty(s.rt.Commit, "unknown"),
-		"database_url_redacted": redactDBURL(s.rt.DBURL),
-		"encryption_state":      es.Status,
-		"key_id":                keyID,
-		"port":                  addr,
-		"environment":           firstNonEmpty(s.rt.Env, "development"),
-		"hostname":              host,
+		"process_id":                os.Getpid(),
+		"started_at":                startedAt,
+		"uptime":                    uptime.String(),
+		"uptime_seconds":            int64(uptime.Seconds()),
+		"api_version":               firstNonEmpty(s.rt.Version, "dev"),
+		"git_commit":                firstNonEmpty(s.rt.Commit, "unknown"),
+		"database_url_redacted":     redactDBURL(s.rt.DBURL),
+		"database_connected":        dbConnected,
+		"encryption_state":          es.Status,
+		"encryption_enabled":        es.Status == encEnabled,
+		"key_id":                    keyID,
+		"port":                      addr,
+		"environment":               firstNonEmpty(s.rt.Env, "development"),
+		"hostname":                  host,
+		"service_mode":              firstNonEmpty(s.rt.ServiceMode, "foreground"),
+		"log_path":                  s.rt.LogPath,
+		"relay_installer_available": relayInstaller,
 	})
 }

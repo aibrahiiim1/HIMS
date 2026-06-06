@@ -23,3 +23,9 @@ web/dist/
 *.swp
 *.tmp
 bin/dev-encryption-key
+
+# Docker deployment secrets/env (never commit)
+deploy/docker/.env
+deploy/docker/*.secret
+# Linux filled-in env (only the .example is tracked)
+deploy/linux/hims-api.env

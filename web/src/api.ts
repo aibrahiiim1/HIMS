@@ -1046,10 +1046,15 @@ export interface RuntimeInfo {
   git_commit: string
   database_url_redacted: string
   encryption_state: EncryptionState
+  encryption_enabled?: boolean
+  database_connected?: boolean
   key_id: string
   port: string
   environment: string
   hostname: string
+  service_mode?: string // windows-service | systemd | docker | foreground
+  log_path?: string
+  relay_installer_available?: boolean
 }
 
 export interface DataQualityDevice { id: string; name: string; primary_ip?: string; category: string; vendor?: string; note?: string }

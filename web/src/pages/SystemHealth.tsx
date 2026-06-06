@@ -35,7 +35,11 @@ export function SystemHealth() {
             <>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 14 }}>
                 <KV label="Process ID (PID)" mono value={String(r.process_id)} />
+                <KV label="Service mode" value={<span className="badge badge-unknown">{(r.service_mode || 'foreground').replace(/-/g, ' ')}</span>} />
                 <KV label="Encryption state" value={<span className={`badge ${enc!.cls}`}>{enc!.label}</span>} />
+                <KV label="Encryption enabled" value={<span className={`badge ${r.encryption_enabled ? 'badge-up' : 'badge-down'}`}>{r.encryption_enabled ? 'yes' : 'no'}</span>} />
+                <KV label="Database" value={<span className={`badge ${r.database_connected ? 'badge-up' : 'badge-down'}`}>{r.database_connected ? 'connected' : 'unreachable'}</span>} />
+                <KV label="Relay installer" value={<span className={`badge ${r.relay_installer_available ? 'badge-up' : 'badge-warning'}`}>{r.relay_installer_available ? 'available' : 'not staged'}</span>} />
                 <KV label="Key ID" mono value={r.key_id || '—'} />
                 <KV label="Started at" value={r.started_at ? new Date(r.started_at).toLocaleString() : '—'} />
                 <KV label="Uptime" value={r.uptime || '—'} />
@@ -44,7 +48,8 @@ export function SystemHealth() {
                 <KV label="Hostname" mono value={r.hostname} />
                 <KV label="Version" mono value={r.api_version} />
                 <KV label="Git commit" mono value={r.git_commit} />
-                <KV label="Database" mono full value={r.database_url_redacted || '—'} />
+                {r.log_path && <KV label="Log file" mono full value={r.log_path} />}
+                <KV label="Database URL" mono full value={r.database_url_redacted || '—'} />
               </div>
               <p className="muted" style={{ fontSize: 12, marginTop: 14 }}>
                 This is the exact process answering API requests. Only one <code>hims-api</code> can own the port at a time — it claims the listen socket at startup and exits if another instance already holds it. If the encryption state above isn&apos;t what you expect, confirm this PID matches the instance you started.

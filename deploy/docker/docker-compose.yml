@@ -1,0 +1,75 @@
+# HIMS API + PostgreSQL for Docker / Compose deployments.
+#
+#   cd deploy/docker
+#   cp .env.example .env            # then edit .env
+#   printf '%s' "$(openssl rand -base64 32)" > hims_encryption_key.secret
+#   docker compose up -d --build
+#
+# The encryption key is delivered as a Docker SECRET (file-mounted at
+# /run/secrets/...), NOT an env var, so it never shows up in `docker inspect`,
+# image layers, or process listings. The entrypoint reads the *_FILE indirection.
+#
+# Build context is the repo root (two levels up) so the Go module is in scope.
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-hims}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hims}
+      POSTGRES_DB: ${POSTGRES_DB:-hims}
+    volumes:
+      - hims-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-hims} -d ${POSTGRES_DB:-hims}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    image: hims-api:latest
+    restart: unless-stopped          # start on boot + restart on failure/crash
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      HIMS_DATABASE_URL: postgres://${POSTGRES_USER:-hims}:${POSTGRES_PASSWORD:-hims}@db:5432/${POSTGRES_DB:-hims}?sslmode=disable
+      HIMS_ADDR: ":8090"
+      HIMS_ENV: ${HIMS_ENV:-production}
+      HIMS_SERVICE_MODE: docker
+      HIMS_AGENT_DIST_DIR: /opt/hims/agents
+      # Indirection: the key is read from the mounted secret file, not the env.
+      HIMS_ENCRYPTION_KEY_FILE: /run/secrets/hims_encryption_key
+    secrets:
+      - hims_encryption_key
+    # Run migrations, load the key from its secret file, then exec the API.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        /opt/hims/hims-migrate up || exit 1
+        export HIMS_ENCRYPTION_KEY="$$(cat "$$HIMS_ENCRYPTION_KEY_FILE")"
+        exec /opt/hims/hims-api
+    ports:
+      - "${HIMS_PORT:-8090}:8090"
+    volumes:
+      - hims-logs:/var/log/hims          # log volume (known location)
+      - hims-agents:/opt/hims/agents     # staged relay-agent installers
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8090/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+secrets:
+  hims_encryption_key:
+    file: ./hims_encryption_key.secret   # 0600; gitignored — never commit
+
+volumes:
+  hims-pgdata:
+  hims-logs:
+  hims-agents:
