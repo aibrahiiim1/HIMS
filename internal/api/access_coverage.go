@@ -68,8 +68,12 @@ func protocolRank(p string) int {
 type deviceAccess struct {
 	protocols map[string]string // protocol → strongest source (display)
 	proven    map[string]bool   // protocol → has PROVEN working access (evidence or successful test), independent of the display source
+	provenSrc map[string]string // protocol → how it was proven: "evidence" | "test_result" | "mixed" (evidence outranks)
 }
 
+// managed reports a BOUND credential exists (any source). NOTE: this is NOT the
+// management-status definition — "Managed" requires hasProven() (a credential
+// proven to work). Kept only for callers that genuinely mean "has a binding".
 func (a *deviceAccess) managed() bool { return a != nil && len(a.protocols) > 0 }
 func (a *deviceAccess) has(p string) bool {
 	if a == nil {
@@ -77,6 +81,15 @@ func (a *deviceAccess) has(p string) bool {
 	}
 	_, ok := a.protocols[p]
 	return ok
+}
+
+// provenHas reports the device is PROVEN manageable by protocol p (evidence or a
+// successful credential test) — never a bare binding.
+func (a *deviceAccess) provenHas(p string) bool {
+	if a == nil {
+		return false
+	}
+	return a.proven[p]
 }
 
 // provenProtocols returns the protocols a device is PROVEN to be managed by — a
@@ -115,7 +128,7 @@ func buildAccessMap(rows []db.ListDeviceAccessSignalsRow) map[uuid.UUID]*deviceA
 	for _, r := range rows {
 		da := m[r.DeviceID]
 		if da == nil {
-			da = &deviceAccess{protocols: map[string]string{}, proven: map[string]bool{}}
+			da = &deviceAccess{protocols: map[string]string{}, proven: map[string]bool{}, provenSrc: map[string]string{}}
 			m[r.DeviceID] = da
 		}
 		// bound_credential is the authoritative source; never downgrade it.
@@ -124,9 +137,16 @@ func buildAccessMap(rows []db.ListDeviceAccessSignalsRow) map[uuid.UUID]*deviceA
 		}
 		// proven = a successful authenticated collection (evidence) or a successful
 		// credential test. Tracked independently of the display source so a protocol
-		// that is BOTH bound and evidenced still counts as proven.
+		// that is BOTH bound and evidenced still counts as proven. Record HOW it was
+		// proven for the coverage source label (evidence outranks test_result).
 		if r.Source == "evidence" || r.Source == "test_result" {
 			da.proven[r.Protocol] = true
+			switch {
+			case da.provenSrc[r.Protocol] == "" || da.provenSrc[r.Protocol] == r.Source:
+				da.provenSrc[r.Protocol] = r.Source
+			default:
+				da.provenSrc[r.Protocol] = "mixed"
+			}
 		}
 	}
 	return m
@@ -252,16 +272,20 @@ func (s *Server) accessCoverage(w http.ResponseWriter, r *http.Request) {
 
 	for _, d := range devices {
 		da := am[d.ID]
-		if da.managed() {
+		// MANAGED = proven (successful test or collection evidence), never a bare
+		// bound credential. Count each device under every protocol it is PROVEN by.
+		if da.hasProven() {
 			managed++
-			for p, src := range da.protocols {
+			for _, p := range da.provenProtocols() {
 				a := byProto[p]
 				if a == nil {
 					a = &agg{sources: map[string]bool{}}
 					byProto[p] = a
 				}
 				a.count++
-				a.sources[src] = true
+				if da != nil {
+					a.sources[da.provenSrc[p]] = true
+				}
 			}
 			continue
 		}
@@ -298,14 +322,14 @@ func (s *Server) accessCoverage(w http.ResponseWriter, r *http.Request) {
 
 	protoDTOs := make([]accessProtocolDTO, 0, len(byProto))
 	for p, a := range byProto {
-		src := "evidence"
+		// Source now reflects HOW management was proven (never bound_credential,
+		// since bound-but-unproven no longer counts as managed).
+		src := "test_result"
 		switch {
-		case len(a.sources) > 1:
+		case len(a.sources) > 1 || a.sources["mixed"]:
 			src = "mixed"
-		case a.sources["bound_credential"]:
-			src = "bound_credential"
-		case a.sources["test_result"]:
-			src = "test_result"
+		case a.sources["evidence"]:
+			src = "evidence"
 		}
 		protoDTOs = append(protoDTOs, accessProtocolDTO{
 			Protocol: p, Label: protocolLabel(p), DeviceCount: a.count,
@@ -408,19 +432,19 @@ func filterDevicesByAccess(rows []db.Device, am map[uuid.UUID]*deviceAccess, tm 
 		keep := true
 		switch access {
 		case "managed":
-			keep = da.managed()
+			keep = da.hasProven() // proven working method, not a bare binding
 		case "unmanaged":
-			keep = !da.managed()
+			keep = !da.hasProven()
 		}
 		if keep && proto != "" {
-			keep = da.has(proto)
+			keep = da.provenHas(proto) // matches the by_protocol (proven) counts
 		}
 		if keep && issue != "" {
 			switch issue {
 			case "no_credential_bound":
-				keep = d.CredentialID == nil && !da.managed()
+				keep = d.CredentialID == nil && !da.hasProven()
 			case "credential_failed":
-				keep = ts != nil && ts.authFailed && !da.managed()
+				keep = ts != nil && ts.authFailed && !da.hasProven()
 			case "not_tested":
 				keep = ts == nil || !ts.tested
 			case "stale":

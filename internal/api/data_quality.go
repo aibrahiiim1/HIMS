@@ -203,8 +203,10 @@ func (s *Server) dataQuality(w http.ResponseWriter, r *http.Request) {
 			if ts != nil {
 				winrmCat = ts.kindCategory["winrm"]
 			}
-			// auth_ok_operation_fault must NOT count as a failed credential.
-			if ts != nil && ts.authFailed && !da.managed() {
+			// auth_ok_operation_fault must NOT count as a failed credential. A bound
+			// credential that is not PROVEN to work still counts as failed (proven-only
+			// management rule) — a bare binding never masks a real auth failure.
+			if ts != nil && ts.authFailed && !da.hasProven() {
 				credFailed = append(credFailed, d)
 			}
 			testable := credentialedCategories[d.Category] || inCat(d, "camera", "nvr") || isWin(d) || isLin(d)

@@ -41,6 +41,40 @@ func TestBuildAccessMap_MergeAndSourcePriority(t *testing.T) {
 	}
 }
 
+// TestManagedRequiresProven pins the proven-only management rule used by the
+// Management Access Coverage card, by_protocol counts, and the Inventory access
+// filters: a bound credential alone is NEVER Managed — only a successful test
+// (test_result) or authenticated-collection evidence counts. A failed/302 test
+// produces no test_result signal, so it stays unmanaged.
+func TestManagedRequiresProven(t *testing.T) {
+	boundFailed, boundUntested, proven2xx := uuid.New(), uuid.New(), uuid.New()
+	rows := []db.ListDeviceAccessSignalsRow{
+		// bound http_basic credential whose latest test was 302/auth_failed:
+		// only the binding signal exists (a failed test emits no test_result row).
+		{DeviceID: boundFailed, Protocol: "http_basic", Source: "bound_credential"},
+		// bound credential, never tested → only a binding signal.
+		{DeviceID: boundUntested, Protocol: "ssh", Source: "bound_credential"},
+		// latest 2xx http_basic success → a test_result signal.
+		{DeviceID: proven2xx, Protocol: "http_basic", Source: "test_result"},
+	}
+	m := buildAccessMap(rows)
+
+	if m[boundFailed].hasProven() {
+		t.Error("bound http_basic with a failed/302 latest test must NOT count as managed")
+	}
+	if m[boundUntested].hasProven() {
+		t.Error("bound-but-untested credential must NOT count as managed")
+	}
+	if !m[proven2xx].hasProven() || !m[proven2xx].provenHas("http_basic") {
+		t.Error("latest 2xx http_basic success must count as managed")
+	}
+	// The bindings are still recorded (credentials are never deleted) — they just
+	// don't make the device Managed.
+	if !m[boundFailed].has("http_basic") || !m[boundUntested].has("ssh") {
+		t.Error("bound credentials must still be recorded as bindings")
+	}
+}
+
 func TestFilterDevicesByAccess(t *testing.T) {
 	managedID, unmanagedID := uuid.New(), uuid.New()
 	credID := uuid.New()
@@ -49,7 +83,8 @@ func TestFilterDevicesByAccess(t *testing.T) {
 		{ID: unmanagedID, CredentialID: nil},
 	}
 	am := map[uuid.UUID]*deviceAccess{
-		managedID: {protocols: map[string]string{"snmp_v2c": "bound_credential"}},
+		// Managed requires PROVEN access (not a bare binding) — mark snmp_v2c proven.
+		managedID: {protocols: map[string]string{"snmp_v2c": "test_result"}, proven: map[string]bool{"snmp_v2c": true}},
 		// unmanagedID absent → unmanaged
 	}
 
