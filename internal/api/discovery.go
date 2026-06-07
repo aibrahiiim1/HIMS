@@ -457,12 +457,26 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 		enrichment := ""
 		var profRes *scanProfileResult
 		var sshSum *scanSSHSummary
+		effCat, classNote := "", ""        // reconciled category + honest preservation note
 		collectedVia, agentName := "", "" // how OS inventory was/will be collected
 		if r.Facts != nil {
 			enrichment = "SNMP facts collected"
 		}
 		if err == nil && id != uuid.Nil {
 			if dev, derr := s.queries.GetDevice(ctx, id); derr == nil {
+				// The reconciled category is authoritative for this scan record + for
+				// gating collection below. When it differs from this run's fresh probe
+				// guess AND the device is known managed infrastructure, the reconcile
+				// preserved the established identity (transient SNMP failure, or an
+				// operator lock) — surface that honestly in Job Results.
+				effCat = dev.Category
+				if fresh := string(r.Match.Category); fresh != "" && fresh != dev.Category && domain.IsStickyInfraCategory(dev.Category) {
+					if dev.ClassificationLocked {
+						classNote = "Operator-locked classification \"" + dev.Category + "\" preserved (this run probed as \"" + fresh + "\")."
+					} else {
+						classNote = "SNMP identity probe did not confirm this device this run (transient failure) — preserved known classification \"" + dev.Category + "\" instead of the weaker guess \"" + fresh + "\"; collection attempted via the device's known identity."
+					}
+				}
 				// Persist every credential auth attempt (success + failure + reason)
 				// to credential-test history → feeds Coverage / Data Quality.
 				s.persistScanCredAttempts(ctx, dev, r.CredAttempts)
@@ -485,7 +499,22 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 					}
 				}
 				boundOS := r.BoundCred != nil && (r.BoundCred.Kind == domain.CredWinRM || r.BoundCred.Kind == domain.CredSSH)
-				if s.cipher() != nil && (boundOS || legacyWSMan) {
+				// Specialized appliances (wireless / VMware / voice / CCTV) have their
+				// own dedicated collection branch below and must take it even when an
+				// SSH/WinRM credential happens to bind during the probe — generic "deep
+				// OS inventory" is for plain servers/endpoints. Gate on the RECONCILED
+				// dev.Category (not the volatile r.Match) so a known wireless controller
+				// whose SNMP identity probe transiently failed this run is still routed
+				// to its wireless branch instead of being treated as an SSH server.
+				specialized := func(cat string) bool {
+					switch domain.DeviceCategory(cat) {
+					case domain.CatVirtualHost, domain.CatWirelessController, domain.CatAccessPoint,
+						domain.CatPBX, domain.CatVoiceGateway, domain.CatCamera, domain.CatNVR:
+						return true
+					}
+					return false
+				}(dev.Category)
+				if s.cipher() != nil && (boundOS || legacyWSMan) && !specialized {
 					s.publishScanEvent(jobID, ip, id, "collection_started", "", "started", "deep OS inventory")
 					cctx, ccancel := context.WithTimeout(ctx, 2*time.Minute)
 					oc := s.runOSCollection(cctx, dev)
@@ -503,7 +532,7 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 					default:
 						enrichment = "OS collection incomplete: " + oc.Reason
 					}
-				} else if string(r.Match.Category) == string(domain.CatVirtualHost) && s.cipher() != nil {
+				} else if dev.Category == string(domain.CatVirtualHost) && s.cipher() != nil {
 					// ESXi/vCenter candidate. PREFER a matching Vendor Connection
 					// Profile (device > site > global) so we authenticate to the
 					// configured vCenter/ESXi URL with the linked credential; fall
@@ -533,7 +562,7 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 							enrichment = "VMware collection incomplete: " + vc.Reason
 						}
 					}
-				} else if cat := string(r.Match.Category); (cat == string(domain.CatWirelessController) || cat == string(domain.CatAccessPoint)) && s.cipher() != nil {
+				} else if cat := dev.Category; (cat == string(domain.CatWirelessController) || cat == string(domain.CatAccessPoint)) && s.cipher() != nil {
 					// Wireless controller candidate — use a matching Vendor Connection
 					// Profile (controller URL + site) if the operator configured one.
 					if prof, found := s.resolveScanProfile(ctx, cat, dev.ID, dev.LocationID); found {
@@ -601,7 +630,7 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 							}
 						}
 					}
-				} else if cat := string(r.Match.Category); (cat == string(domain.CatPBX) || cat == string(domain.CatVoiceGateway)) && s.cipher() != nil {
+				} else if cat := dev.Category; (cat == string(domain.CatPBX) || cat == string(domain.CatVoiceGateway)) && s.cipher() != nil {
 					// Voice/PBX candidate — use a matching CUCM Vendor Connection Profile.
 					if prof, found := s.resolveScanProfile(ctx, cat, dev.ID, dev.LocationID); found {
 						cctx, ccancel := context.WithTimeout(ctx, 90*time.Second)
@@ -625,7 +654,7 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 						profRes = &scanProfileResult{Resolved: false}
 						enrichment = "Voice/PBX — add a Vendor Connection Profile (Discovery → Vendor Profiles) to onboard"
 					}
-				} else if cat := string(r.Match.Category); (cat == string(domain.CatCamera) || cat == string(domain.CatNVR)) && s.cipher() != nil {
+				} else if cat := dev.Category; (cat == string(domain.CatCamera) || cat == string(domain.CatNVR)) && s.cipher() != nil {
 					// Camera/NVR/DVR candidate. PREFER a matching CCTV Vendor Connection
 					// Profile (device > site > global) so we authenticate to the
 					// configured target with the linked ONVIF/HTTP credential; fall back
@@ -683,7 +712,7 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 					s.publishScanEvent(jobID, ip, id, "collection_failed", "", "failed", enrichment)
 				}
 			}
-			s.recordResult(hctx, jobID, ip, r, id, err, enrichment, profRes, collectedVia, agentName, disp, 0, sshSum)
+			s.recordResult(hctx, jobID, ip, r, id, err, enrichment, profRes, collectedVia, agentName, disp, 0, sshSum, effCat, classNote)
 		}
 		return id, err
 	})
@@ -773,7 +802,7 @@ func (s *Server) retryMissedKnown(ctx context.Context, jobID uuid.UUID, locID *u
 				acancel()
 				s.recordResult(ctx, jobID, ip, rr, id, aerr,
 					"Recovered by Known-Device Retry (attempt "+strconv.Itoa(attempt)+" of "+strconv.Itoa(maxAttempts)+", slower targeted probe)",
-					nil, "", "", "known_recovered", attempt, nil)
+					nil, "", "", "known_recovered", attempt, nil, "", "")
 				s.publishScanEvent(jobID, ip, dev.ID, "known_recovered", "", "success", "recovered on retry "+strconv.Itoa(attempt))
 				*recoveredCount++
 				recovered = true
@@ -829,6 +858,10 @@ type scanDetail struct {
 	CollectedVia string `json:"collected_via,omitempty"`
 	AgentName    string `json:"agent_name,omitempty"` // relay agent the job was dispatched to
 	SSH          *scanSSHSummary `json:"ssh,omitempty"`   // Extreme XCC SSH CLI collection summary
+	// ClassNote explains a scan-stability decision: a known managed-infrastructure
+	// classification was preserved this run even though the fresh probe pointed
+	// elsewhere (transient SNMP failure or an operator lock). Empty in the normal case.
+	ClassNote string `json:"class_note,omitempty"`
 }
 
 // scanSSHSummary is the per-result SSH CLI collection rollup shown in Job Results.
@@ -1063,7 +1096,7 @@ func scanNextActionWithPlan(category string, bound bool, boundKind string, pr *s
 // disposition tags the row for the Known-Device-Retry / scan-stability counts
 // (newly_discovered | known_seen | known_recovered); retryCount is how many
 // targeted retries were spent (0 for the main sweep).
-func (s *Server) recordResult(ctx context.Context, jobID uuid.UUID, ip netip.Addr, r discovery.HostResult, id uuid.UUID, applyErr error, enrichment string, profRes *scanProfileResult, collectedVia, agentName, disposition string, retryCount int, sshSum *scanSSHSummary) {
+func (s *Server) recordResult(ctx context.Context, jobID uuid.UUID, ip netip.Addr, r discovery.HostResult, id uuid.UUID, applyErr error, enrichment string, profRes *scanProfileResult, collectedVia, agentName, disposition string, retryCount int, sshSum *scanSSHSummary, effectiveCat, classNote string) {
 	// Persist with a FRESH context, independent of the caller's per-host probe
 	// deadline (hctx, 45s). A slow host whose probe+deep-collection exceeds that
 	// deadline must still get its result row — otherwise it is counted-alive but
@@ -1087,7 +1120,14 @@ func (s *Server) recordResult(ctx context.Context, jobID uuid.UUID, ip netip.Add
 		return
 	}
 
+	// The DISPLAYED + persisted category is the reconciled device category when the
+	// host was enrolled (effectiveCat) — honest even when this run's probe guessed
+	// otherwise and the reconcile preserved a known classification. Falls back to
+	// this run's fresh match for not-yet-enrolled / retry rows (effectiveCat == "").
 	category := string(r.Match.Category)
+	if effectiveCat != "" {
+		category = effectiveCat
+	}
 	bound := r.BoundCred != nil
 	boundKind := ""
 	if bound {
@@ -1096,6 +1136,9 @@ func (s *Server) recordResult(ctx context.Context, jobID uuid.UUID, ip netip.Add
 
 	// Human-readable evidence trail (safe, non-secret).
 	var evidence []string
+	if classNote != "" {
+		evidence = append(evidence, classNote)
+	}
 	if len(r.OpenPorts) > 0 {
 		evidence = append(evidence, "open ports detected")
 	}
@@ -1124,7 +1167,7 @@ func (s *Server) recordResult(ctx context.Context, jobID uuid.UUID, ip netip.Add
 		CredAttempts:           attempts, BoundCred: boundKind,
 		Enrichment: enrichment, Profile: profRes,
 		NextAction:   scanNextActionWithPlan(category, bound, boundKind, profRes, r.Plan, attempts),
-		CollectedVia: collectedVia, AgentName: agentName, SSH: sshSum,
+		CollectedVia: collectedVia, AgentName: agentName, SSH: sshSum, ClassNote: classNote,
 	}
 	// Sharpen the next action for agent-routed Windows hosts.
 	switch collectedVia {

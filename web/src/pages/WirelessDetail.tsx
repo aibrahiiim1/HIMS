@@ -117,7 +117,7 @@ export function WirelessDetail() {
             <Kpi label="Active APs" value={sm.ap_status_exposed ? sm.active_aps : '—'} icon={Radio} sub={sm.ap_status_exposed ? undefined : 'not exposed by CLI'} />
             <Kpi label="Non-active APs" value={sm.ap_status_exposed ? sm.non_active_aps : '—'} icon={Radio} sub={sm.ap_status_exposed ? undefined : 'not exposed by CLI'} />
             <Kpi label="Total clients (reported)" value={sm.clients_total || (c.clients ?? 0)} icon={Users} tone={cliMissing > 0 ? 'warn' : 'info'} sub={`parsed ${c.clients ?? 0}${cliMissing > 0 ? ` · live ±${cliMissing}` : ''}`} />
-            <Kpi label="SSIDs" value={c.ssids ?? 0} icon={ShieldCheck} />
+            <Kpi label="SSIDs" value={c.ssids ?? 0} icon={ShieldCheck} sub="full WLAN list incl. disabled (show wlans)" />
             <Kpi label="Networks" value={sm.networks} icon={Router} sub="client-derived" />
             <Kpi label="Switches" value={sm.switches} icon={Router} />
             <Kpi label="Collection status" value={collStatusLabelShort(sm.collection_status)} icon={Activity} tone={collStatusKpiTone(sm.collection_status)} sub={sm.collected_at ? dataAge(sm.collected_at) + ' ago' : undefined} />

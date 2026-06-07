@@ -113,12 +113,21 @@ func (a *Applier) Apply(ctx context.Context, res discovery.HostResult, locationI
 	}
 	name, hostname, vendor, model, serial, osVersion := identity(res)
 
+	// Did this run produce AUTHORITATIVE identity evidence? SNMP system-group
+	// answered, or a driver / vendor-fingerprint matched. Without it — e.g. a
+	// transient SNMP timeout that leaves only a TCP-port / SSH-banner guess — we
+	// must NOT downgrade a known managed-infrastructure classification (a wireless
+	// controller flipping to "server" on one timeout). reconcile uses this to keep
+	// the established identity unless the scan brings stronger, authenticated proof.
+	authoritative := res.Probe.SNMPSysDescr != "" || res.Probe.SNMPSysObjectID != "" ||
+		res.Probe.SNMPSysName != "" || res.MatchedDrv != nil || res.Vendor != ""
+
 	// Reconcile by (primary_ip, location); update if found, else create.
 	dev, err := a.reconcile(ctx, res.IP, locationID, db.CreateDeviceParams{
 		LocationID: locationID, PrimaryIp: &res.IP, Hostname: hostname, Name: name,
 		Vendor: vendor, Model: model, Serial: serial, OsVersion: osVersion,
 		Category: category, Status: "up", Driver: driverName, Metadata: []byte("{}"),
-	})
+	}, authoritative)
 	if err != nil {
 		return uuid.Nil, err
 	}
@@ -167,7 +176,7 @@ func (a *Applier) applySNMPIdentity(ctx context.Context, devID uuid.UUID, p driv
 	}
 }
 
-func (a *Applier) reconcile(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, create db.CreateDeviceParams) (db.Device, error) {
+func (a *Applier) reconcile(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, create db.CreateDeviceParams, authoritative bool) (db.Device, error) {
 	// ONE live device per IP. Match by primary_ip alone (not by scope), so the
 	// same physical device scanned with a site, without a site, or by a
 	// different job always updates the SAME row — never a duplicate. The update
@@ -182,7 +191,18 @@ func (a *Applier) reconcile(ctx context.Context, ip netip.Addr, locationID *uuid
 		// must NOT overwrite the identity the operator pinned. Unlock to let scans
 		// take over again.
 		category, vendor, model, serial, name := create.Category, create.Vendor, create.Model, create.Serial, create.Name
-		if existing.ClassificationLocked {
+		switch {
+		case existing.ClassificationLocked:
+			category, vendor, model, serial, name = existing.Category, existing.Vendor, existing.Model, existing.Serial, existing.Name
+		case !authoritative && create.Category != existing.Category && domain.IsStickyInfraCategory(existing.Category):
+			// Scan-stability / classification preservation. A device already known as
+			// managed infrastructure (e.g. a wireless controller) produced only a weak,
+			// UNAUTHENTICATED guess this run — typically a transient SNMP timeout that
+			// left an SSH-banner/open-port "server" inference. Keep the established
+			// identity instead of downgrading it; volatile fields (status, driver, OS
+			// version, hostname) below still refresh. A genuine reclassification still
+			// lands when the scan brings authoritative evidence (SNMP system-group
+			// answered, or a driver/fingerprint match) — see Apply's `authoritative`.
 			category, vendor, model, serial, name = existing.Category, existing.Vendor, existing.Model, existing.Serial, existing.Name
 		}
 		return a.w.UpdateDiscoveredDevice(ctx, db.UpdateDiscoveredDeviceParams{

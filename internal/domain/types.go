@@ -116,6 +116,21 @@ const (
 	CatApplication        DeviceCategory = "application"
 )
 
+// IsStickyInfraCategory reports whether a category is managed network/wireless
+// infrastructure whose established identity must NOT be downgraded by a weak,
+// unauthenticated re-scan — e.g. a transient SNMP timeout that leaves only an
+// SSH-banner / open-port guess ("server"). A scan may still RECLASSIFY such a
+// device, but only on AUTHORITATIVE evidence (SNMP identity answered, or a
+// driver/fingerprint match). See apply.reconcile, which uses this to keep a
+// known wireless controller from flipping to "server" on a single SNMP timeout.
+func IsStickyInfraCategory(cat string) bool {
+	switch DeviceCategory(cat) {
+	case CatWirelessController, CatAccessPoint, CatSwitch, CatRouter, CatFirewall, CatISPRouter:
+		return true
+	}
+	return false
+}
+
 // DeviceRole is a role a device fulfils; a device may hold several at once
 // (e.g. a Windows box that is DC + DNS + DHCP). Mirrors the device_roles
 // table's CHECK set.

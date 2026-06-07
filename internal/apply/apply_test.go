@@ -290,6 +290,94 @@ func TestApply_NotAliveSkips(t *testing.T) {
 	}
 }
 
+// wirelessIP is the IP both the existing controller and the rescans use.
+var wirelessIP = netip.MustParseAddr("172.21.96.100")
+
+// existingController is a known Extreme VE6120 wireless controller in inventory.
+func existingController() *db.Device {
+	v, m := "Extreme Networks", "VE6120 Medium"
+	return &db.Device{ID: uuid.New(), PrimaryIp: &wirelessIP, Category: string(domain.CatWirelessController), Vendor: &v, Model: &m}
+}
+
+// weakServerRescan is a re-scan where SNMP timed out (no system-group, no driver,
+// no fingerprint) so only an SSH-banner/open-port guess ("server") is available.
+func weakServerRescan() discovery.HostResult {
+	return discovery.HostResult{
+		IP: wirelessIP, Alive: true, OpenPorts: []int{22, 443},
+		Match: driver.Match{Confidence: 60, Category: domain.CatServer},
+		// No MatchedDrv, no Vendor, empty Probe → NOT authoritative.
+	}
+}
+
+// TestApply_PreservesStickyClassificationOnWeakRescan is the scan-stability
+// guarantee: a transient SNMP failure must NOT downgrade a known wireless
+// controller to "server". The reconcile keeps category/vendor/model.
+func TestApply_PreservesStickyClassificationOnWeakRescan(t *testing.T) {
+	f := &fakeWriter{existing: existingController()}
+	a := New(f)
+	if _, err := a.Apply(context.Background(), weakServerRescan(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.updated) != 1 {
+		t.Fatalf("want one update, got %d", len(f.updated))
+	}
+	u := f.updated[0]
+	if u.Category != string(domain.CatWirelessController) {
+		t.Fatalf("classification downgraded on transient SNMP failure: got %q want wireless_controller", u.Category)
+	}
+	if u.Vendor == nil || *u.Vendor != "Extreme Networks" || u.Model == nil || *u.Model != "VE6120 Medium" {
+		t.Fatalf("vendor/model not preserved: vendor=%v model=%v", u.Vendor, u.Model)
+	}
+}
+
+// TestApply_AuthoritativeRescanReclassifies proves the escape hatch: when the
+// re-scan brings AUTHORITATIVE evidence (SNMP system-group answered) classifying
+// the host as a server, the controller identity IS allowed to change.
+func TestApply_AuthoritativeRescanReclassifies(t *testing.T) {
+	f := &fakeWriter{existing: existingController()}
+	a := New(f)
+	res := weakServerRescan()
+	res.Probe.SNMPSysDescr = "Linux host 5.15 x86_64" // SNMP answered → authoritative
+	if _, err := a.Apply(context.Background(), res, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.updated) != 1 || f.updated[0].Category != string(domain.CatServer) {
+		t.Fatalf("authoritative reclassification not applied: %+v", f.updated)
+	}
+}
+
+// TestApply_NonInfraNotPreserved confirms preservation is scoped to managed
+// infrastructure: a plain server is freely reclassified by a weak re-scan.
+func TestApply_NonInfraNotPreserved(t *testing.T) {
+	existingID := uuid.New()
+	f := &fakeWriter{existing: &db.Device{ID: existingID, PrimaryIp: &wirelessIP, Category: string(domain.CatServer)}}
+	a := New(f)
+	res := weakServerRescan()
+	res.Match.Category = domain.CatEndpoint
+	if _, err := a.Apply(context.Background(), res, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.updated) != 1 || f.updated[0].Category != string(domain.CatEndpoint) {
+		t.Fatalf("non-infra category should not be preserved: %+v", f.updated)
+	}
+}
+
+// TestApply_LockedClassificationStillPreserved is the pre-existing lock contract,
+// re-asserted now that it shares the reconcile switch with sticky preservation.
+func TestApply_LockedClassificationStillPreserved(t *testing.T) {
+	v := "Operator Vendor"
+	f := &fakeWriter{existing: &db.Device{ID: uuid.New(), PrimaryIp: &wirelessIP, Category: string(domain.CatPrinter), Vendor: &v, ClassificationLocked: true}}
+	a := New(f)
+	res := weakServerRescan()
+	res.Probe.SNMPSysDescr = "anything" // even authoritative evidence must not override an operator lock
+	if _, err := a.Apply(context.Background(), res, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.updated) != 1 || f.updated[0].Category != string(domain.CatPrinter) {
+		t.Fatalf("operator lock not honored: %+v", f.updated)
+	}
+}
+
 func hasRole(roles []db.AddDeviceRoleParams, want string) bool {
 	for _, r := range roles {
 		if r.Role == want {

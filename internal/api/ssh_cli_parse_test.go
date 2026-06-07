@@ -70,6 +70,103 @@ func TestParseCLIClientRows(t *testing.T) {
 	}
 }
 
+// Two AP groups in one client dump — proves per-AP client counts are grouped by
+// the `AP Serial:` header, not lumped together.
+const sampleShowClientsTwoAPs = `AP Serial: 03052207160281
+
+Client IP      Client MAC         Protocol  Radio  BSS MAC            SSID                User
+172.21.89.10   26:AD:F7:9F:C1:00  5.0ac     2      78:7D:53:49:4D:60  CoralSea Aqua WiFi  Tab-A
+172.21.89.11   16:42:36:D2:F8:80  2.4       1      78:7D:53:49:4D:61  CoralSea Staff      Phone-1
+
+AP Serial: 03052207160285
+
+Client IP      Client MAC         Protocol  Radio  BSS MAC            SSID                User
+172.21.89.20   26:AD:F7:9F:C2:00  5.0ac     2      78:7D:53:49:4E:60  CoralSea Aqua WiFi  Tab-B
+`
+
+func TestClientCountsByAP(t *testing.T) {
+	clients, _, _ := parseCLIClientRows(sampleShowClientsTwoAPs)
+	if len(clients) != 3 {
+		t.Fatalf("clients = %d, want 3", len(clients))
+	}
+	counts := clientCountsByAP(clients)
+	if counts["03052207160281"] != 2 {
+		t.Errorf("AP 03052207160281 client count = %d, want 2", counts["03052207160281"])
+	}
+	if counts["03052207160285"] != 1 {
+		t.Errorf("AP 03052207160285 client count = %d, want 1", counts["03052207160285"])
+	}
+	if len(counts) != 2 {
+		t.Errorf("distinct APs with clients = %d, want 2 (%v)", len(counts), counts)
+	}
+}
+
+// Real captured `show wlans` from the VE6120 — the full WLAN list (4 SSIDs incl.
+// the disabled "test" WLAN), which `show clients` can't see (only 2 have clients).
+const sampleShowWlans = `Name                Service Type  Enabled   SSID                Privacy  Auth Mode  Radio Mode
+
+CoralSea Aqua WiFi  std           enabled   CoralSea Aqua WiFi  none     disabled
+Admin-IT            std           enabled   IT                  wpa-psk  ****
+chr                 std           enabled   chr                 wpa-psk  ****
+test                std           disabled  test                none     disabled
+`
+
+func TestParseWLANRows(t *testing.T) {
+	wl, _ := parseWLANRows(sampleShowWlans)
+	if len(wl) != 4 {
+		t.Fatalf("wlans = %d, want 4 (%v)", len(wl), wl)
+	}
+	bySSID := map[string]wlanInfo{}
+	for _, w := range wl {
+		bySSID[w.SSID] = w
+	}
+	for _, ssid := range []string{"CoralSea Aqua WiFi", "IT", "chr", "test"} {
+		if _, ok := bySSID[ssid]; !ok {
+			t.Errorf("missing SSID %q in %v", ssid, bySSID)
+		}
+	}
+	if bySSID["test"].Status != "inactive" {
+		t.Errorf("test WLAN status = %q, want inactive (disabled)", bySSID["test"].Status)
+	}
+	if bySSID["CoralSea Aqua WiFi"].Status != "active" {
+		t.Errorf("CoralSea WLAN status = %q, want active", bySSID["CoralSea Aqua WiFi"].Status)
+	}
+	if bySSID["IT"].Security != "wpa-psk" {
+		t.Errorf("IT WLAN security = %q, want wpa-psk", bySSID["IT"].Security)
+	}
+}
+
+func TestParseActiveAPSerials(t *testing.T) {
+	in := `Active Wireless APs
+Serial          Name        Status
+03052207160281  AP305C-1    active
+03052207160285  AP305C-2    active
+`
+	got := parseActiveAPSerials(in)
+	if len(got) != 2 {
+		t.Fatalf("active serials = %d (%v), want 2", len(got), got)
+	}
+	if got[0] != "03052207160281" || got[1] != "03052207160285" {
+		t.Errorf("serials = %v, want [03052207160281 03052207160285]", got)
+	}
+}
+
+func TestParseKindCoversInvestigationCandidates(t *testing.T) {
+	// The confirmed candidate commands must route to a parser so their output is
+	// interpreted (not silently dropped) when the controller supports them.
+	cases := map[string]string{
+		"show wlans":                      "wlans",
+		"show report active_wireless_aps": "active_aps",
+		"show ap":                         "aps",
+		"show clients":                    "clients",
+	}
+	for cmd, want := range cases {
+		if got := cliParseKind(cmd); got != want {
+			t.Errorf("cliParseKind(%q) = %q, want %q", cmd, got, want)
+		}
+	}
+}
+
 func TestClassifyUnsupportedMarkers(t *testing.T) {
 	for _, s := range []string{"Invalid command", "% Invalid input", "Ambiguous command", "command not found"} {
 		if !reUnsupported.MatchString(s) {

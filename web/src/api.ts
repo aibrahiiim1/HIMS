@@ -617,6 +617,10 @@ export interface ScanDetail {
     warnings: number
     detail: string
   } | null
+  // Scan-stability: a known managed-infrastructure classification was preserved
+  // this run even though the fresh probe pointed elsewhere (transient SNMP
+  // failure, or an operator lock). Empty in the normal case.
+  class_note?: string
 }
 export interface DiscoveryResult {
   id: string

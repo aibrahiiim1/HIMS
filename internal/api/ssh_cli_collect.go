@@ -62,6 +62,14 @@ var xccCLICommands = []string{
 	"show running-config",
 	"help",
 	"show ?",
+	// --- Extreme EWC/XCC commands that DO expose the two data points the GUI
+	// shows but `show ap`/`show clients` don't (confirmed live on the VE6120):
+	//   show wlans                      → the FULL WLAN list (all SSIDs incl. idle ones)
+	//   show report active_wireless_aps → the active-AP roster (→ per-AP up/down: 121/2)
+	// (`show vns`/`show service`/`show ap <state>`/`show report ap_availability`
+	// were probed; the first three are rejected and the last adds no data we parse.)
+	"show wlans",
+	"show report active_wireless_aps",
 }
 
 // cliParseKind picks which parser (if any) applies to a command's output.
@@ -69,6 +77,10 @@ func cliParseKind(cmd string) string {
 	switch cmd {
 	case "show ap", "show aps", "show wireless":
 		return "aps"
+	case "show wlans":
+		return "wlans" // Extreme WLAN table: full SSID list incl. idle WLANs
+	case "show report active_wireless_aps":
+		return "active_aps" // active-AP roster → per-AP online/offline
 	case "show wlan", "show ssid", "show network", "show networks":
 		return "ssids"
 	case "show clients", "show stations", "show station":
@@ -266,6 +278,15 @@ func (s *Server) collectSSHCLI(ctx context.Context, dev db.Device, overUser, ove
 
 	var apN, ssidN, cliN, activeAPs, nonActiveAPs int
 	var ctrl ctrlSummary
+	// Accumulate parsed rows across the whole command sweep, then persist AFTER the
+	// loop. This lets per-AP client counts be derived from the client roster (each
+	// client carries its AP serial), which `show clients` only exposes after the
+	// earlier `show ap` command has already run.
+	var collectedAPs []cliAP
+	var collectedClients []cliClient
+	var collectedWLANs []wlanInfo       // full WLAN list from `show wlans` (all SSIDs, incl. idle)
+	var activeAPSerials []string        // active AP serials from `show report active_wireless_aps`
+	var clientSSIDs, ssidNames []string // SSIDs derived from clients / from WLAN-list commands
 	for _, cmd := range xccCLICommands {
 		emit("ssh_cli_command_started", "started", cmd, "", 0, 0, 0)
 		out, err := ssh.Run(ctx, host, 22, creds, legacy, cmd, 15*time.Second)
@@ -292,9 +313,7 @@ func (s *Server) collectSSHCLI(ctx context.Context, dev db.Device, overUser, ove
 				aps, d := parseCLIAPRows(full)
 				diag = d
 				rows = len(aps)
-				if persistWireless {
-					apN += s.persistAPs(ctx, dev, aps)
-				}
+				collectedAPs = append(collectedAPs, aps...)
 				for _, a := range aps {
 					switch a.Status {
 					case "online":
@@ -307,21 +326,23 @@ func (s *Server) collectSSHCLI(ctx context.Context, dev db.Device, overUser, ove
 				clients, ssids, d := parseCLIClientRows(full)
 				diag = d
 				rows = len(clients)
-				if persistWireless {
-					c, sd := s.persistClients(ctx, dev, clients, ssids)
-					cliN += c
-					ssidN += sd
-				} else {
-					ssidN += len(ssids)
-				}
+				collectedClients = append(collectedClients, clients...)
+				clientSSIDs = appendUniqueStrings(clientSSIDs, ssids...)
+			case "wlans":
+				wl, d := parseWLANRows(full)
+				diag = d
+				rows = len(wl)
+				collectedWLANs = append(collectedWLANs, wl...)
+			case "active_aps":
+				serials := parseActiveAPSerials(full)
+				rows = len(serials)
+				activeAPSerials = appendUniqueStrings(activeAPSerials, serials...)
 			case "ssids":
 				names, d := parseSSIDNamesDiag(full)
 				diag = d
 				rows = len(names)
 				ctrl.networks = maxInt(ctrl.networks, len(names))
-				if persistWireless {
-					ssidN += s.persistSSIDNames(ctx, dev, names)
-				}
+				ssidNames = appendUniqueStrings(ssidNames, names...)
 			case "summary":
 				parseControllerSummary(full, &ctrl)
 				if ctrl.found {
@@ -377,6 +398,62 @@ func (s *Server) collectSSHCLI(ctx context.Context, dev db.Device, overUser, ove
 			emit("ssh_cli_command_supported", "supported", cmd, "", 0, res.SkippedRows, warnN)
 		}
 		sum.Results = append(sum.Results, res)
+	}
+
+	// Per-AP client count: clients carry their AP serial (the `AP Serial:` grouping
+	// header in `show clients`), and APs are keyed by that same serial. Group the
+	// roster by AP serial so each AP card shows how many clients are associated.
+	collectedAPs = dedupeAPs(collectedAPs)
+	clientCountBySerial := clientCountsByAP(collectedClients)
+
+	// Per-AP online/offline status from `show report active_wireless_aps`. The
+	// report lists the serials the controller currently counts as ACTIVE; intersect
+	// with the known roster so report noise (counters/timestamps) can't be mistaken
+	// for a serial. An AP in `show ap` but absent from the active list is non-active
+	// — this is how the controller's "121 active / 2 non-active" split is derived.
+	apSerialSet := map[string]bool{}
+	for _, a := range collectedAPs {
+		if a.Serial != "" {
+			apSerialSet[a.Serial] = true
+		}
+	}
+	activeSet := map[string]bool{}
+	for _, sn := range activeAPSerials {
+		if apSerialSet[sn] {
+			activeSet[sn] = true
+		}
+	}
+	if len(activeSet) > 0 {
+		activeAPs, nonActiveAPs = 0, 0
+		for i := range collectedAPs {
+			if collectedAPs[i].Serial != "" && activeSet[collectedAPs[i].Serial] {
+				collectedAPs[i].Status = "online"
+				activeAPs++
+			} else {
+				collectedAPs[i].Status = "offline"
+				nonActiveAPs++
+			}
+		}
+	}
+
+	// Distinct SSID set across every source (full WLAN list wins on status). Used
+	// for the SSID count regardless of which commands the controller supported.
+	allSSIDNames := appendUniqueStrings(append([]string{}, clientSSIDs...), ssidNames...)
+	for _, w := range collectedWLANs {
+		allSSIDNames = appendUniqueStrings(allSSIDNames, w.SSID)
+	}
+
+	if persistWireless {
+		apN = s.persistAPs(ctx, dev, collectedAPs, clientCountBySerial)
+		cliN, _ = s.persistClients(ctx, dev, collectedClients, clientSSIDs) // client-derived SSIDs (active)
+		_ = s.persistSSIDNames(ctx, dev, ssidNames)                         // legacy ssid-command names
+		s.persistWLANs(ctx, dev, collectedWLANs)                            // authoritative full WLAN list (status+security) — wins
+		ssidN = len(allSSIDNames)
+	} else {
+		// Read-only test path: report what WOULD be collected without writing.
+		apN = len(collectedAPs)
+		cliN = len(collectedClients)
+		ssidN = len(allSSIDNames)
 	}
 
 	sum.APs, sum.SSIDs, sum.Clients = apN, ssidN, cliN
@@ -641,6 +718,98 @@ func parseSSIDNamesDiag(out string) ([]string, parseDiag) {
 	return names, parseDiag{}
 }
 
+// wlanInfo is one row of Extreme `show wlans` — the authoritative WLAN list
+// (every configured SSID, including idle ones with no associated clients).
+type wlanInfo struct {
+	Name, SSID, Status, Security string
+}
+
+// parseWLANRows parses the `show wlans` column table:
+//
+//	Name                Service Type  Enabled   SSID                Privacy  Auth Mode  Radio Mode
+//	CoralSea Aqua WiFi  std           enabled   CoralSea Aqua WiFi  none     disabled
+//	Admin-IT            std           enabled   IT                  wpa-psk  ****
+//
+// Header-driven (columns are 2+-space separated; SSID values keep single spaces).
+// Status is active|inactive from the Enabled column; Security from Privacy.
+func parseWLANRows(out string) ([]wlanInfo, parseDiag) {
+	lines := strings.Split(out, "\n")
+	colIdx := map[string]int{}
+	headerAt := -1
+	for i, ln := range lines {
+		low := strings.ToLower(ln)
+		if strings.Contains(low, "ssid") && (strings.Contains(low, "enabled") || strings.Contains(low, "service")) {
+			for j, name := range reCols.Split(strings.TrimSpace(ln), -1) {
+				colIdx[strings.ToLower(strings.TrimSpace(name))] = j
+			}
+			headerAt = i
+			break
+		}
+	}
+	d := parseDiag{}
+	if headerAt < 0 {
+		d.warnings = append(d.warnings, "no WLAN table header detected (Name/SSID/Enabled)")
+		return nil, d
+	}
+	d.header = strings.TrimSpace(lines[headerAt])
+	get := func(vals []string, keys ...string) string {
+		for _, key := range keys {
+			if j, ok := colIdx[key]; ok && j < len(vals) {
+				if v := strings.TrimSpace(vals[j]); v != "" {
+					return v
+				}
+			}
+		}
+		return ""
+	}
+	var out2 []wlanInfo
+	seen := map[string]bool{}
+	for i, ln := range lines {
+		if i <= headerAt || strings.TrimSpace(ln) == "" {
+			continue
+		}
+		vals := reCols.Split(strings.TrimSpace(ln), -1)
+		ssid := get(vals, "ssid")
+		if ssid == "" || strings.EqualFold(ssid, "ssid") {
+			d.skipped++
+			continue
+		}
+		key := strings.ToLower(ssid)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		status := "inactive"
+		if strings.EqualFold(get(vals, "enabled"), "enabled") {
+			status = "active"
+		}
+		out2 = append(out2, wlanInfo{
+			Name: get(vals, "name"), SSID: ssid, Status: status,
+			Security: get(vals, "privacy", "auth mode"),
+		})
+	}
+	return out2, d
+}
+
+// parseActiveAPSerials extracts AP serial tokens from `show report
+// active_wireless_aps`. Tolerant of layout — collects every field that looks like
+// an AP serial (10+ digits); the caller intersects with the known roster so any
+// non-serial numerics in the report are discarded.
+func parseActiveAPSerials(out string) []string {
+	seen := map[string]bool{}
+	var serials []string
+	for _, ln := range strings.Split(out, "\n") {
+		for _, f := range strings.Fields(ln) {
+			f = strings.TrimSpace(f)
+			if reSerial15.MatchString(f) && !seen[f] {
+				seen[f] = true
+				serials = append(serials, f)
+			}
+		}
+	}
+	return serials
+}
+
 // parseControllerSummary extracts controller-reported counts from a summary
 // command's output (labels like "APs: 123", "Active APs 121", "Clients 358").
 // Best-effort + tolerant of layout; sets c.found when any count is recognized.
@@ -696,7 +865,7 @@ func grabPairAny(out string, labels ...string) (int, bool) {
 	return 0, false
 }
 
-func (s *Server) persistAPs(ctx context.Context, dev db.Device, aps []cliAP) int {
+func (s *Server) persistAPs(ctx context.Context, dev db.Device, aps []cliAP, clientCounts map[string]int) int {
 	n := 0
 	for _, ap := range aps {
 		name := ap.Name
@@ -715,13 +884,70 @@ func (s *Server) persistAPs(ctx context.Context, dev db.Device, aps []cliAP) int
 		if a, e := netip.ParseAddr(ap.IP); e == nil {
 			ip = &a
 		}
+		// Clients reference their AP by serial; fall back to the AP name when a row
+		// had no serial. 0 is the honest default when no clients are associated.
+		cc := clientCounts[ap.Serial]
+		if cc == 0 {
+			cc = clientCounts[name]
+		}
 		_, _ = s.queries.UpsertAccessPoint(ctx, db.UpsertAccessPointParams{
 			ControllerDeviceID: dev.ID, Name: name, Mac: macPtr, Model: nzPtr(ap.Model), Ip: ip,
-			Status: nz(ap.Status, "unknown"), ClientCount: 0, Serial: ap.Serial, Source: sshCLISource,
+			Status: nz(ap.Status, "unknown"), ClientCount: int32(cc), Serial: ap.Serial, Source: sshCLISource,
 		})
 		n++
 	}
 	return n
+}
+
+// clientCountsByAP groups the client roster by AP serial — the key APs are
+// stored under — so each AP can report how many clients are associated to it.
+// `show clients` emits an `AP Serial:` header per AP group; the parser stamps
+// that serial onto each client's AP field.
+func clientCountsByAP(clients []cliClient) map[string]int {
+	m := map[string]int{}
+	for _, c := range clients {
+		if c.AP != "" {
+			m[c.AP]++
+		}
+	}
+	return m
+}
+
+// dedupeAPs collapses APs sharing the same identity (serial, else name) so a
+// roster exposed by more than one command isn't double-counted.
+func dedupeAPs(aps []cliAP) []cliAP {
+	seen := map[string]bool{}
+	out := make([]cliAP, 0, len(aps))
+	for _, a := range aps {
+		key := a.Serial
+		if key == "" {
+			key = a.Name
+		}
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, a)
+	}
+	return out
+}
+
+// appendUniqueStrings appends only values not already present (case-insensitive),
+// preserving order — used to merge SSID names across multiple commands.
+func appendUniqueStrings(dst []string, vals ...string) []string {
+	seen := map[string]bool{}
+	for _, d := range dst {
+		seen[strings.ToLower(d)] = true
+	}
+	for _, v := range vals {
+		v = strings.TrimSpace(v)
+		if v == "" || seen[strings.ToLower(v)] {
+			continue
+		}
+		seen[strings.ToLower(v)] = true
+		dst = append(dst, v)
+	}
+	return dst
 }
 
 // persistClients persists clients + derived SSIDs; returns (clients, ssids).
@@ -747,6 +973,24 @@ func (s *Server) persistSSIDNames(ctx context.Context, dev db.Device, names []st
 		})
 	}
 	return len(names)
+}
+
+// persistWLANs upserts the authoritative WLAN list from `show wlans` — every
+// configured SSID with its real enabled/disabled status + security, including
+// idle WLANs that have no associated clients (which the client-derived path
+// can't see). Runs LAST so its status wins over the client-derived "active".
+func (s *Server) persistWLANs(ctx context.Context, dev db.Device, wlans []wlanInfo) int {
+	n := 0
+	for _, w := range wlans {
+		if w.SSID == "" {
+			continue
+		}
+		_, _ = s.queries.UpsertWirelessSSID(ctx, db.UpsertWirelessSSIDParams{
+			ControllerDeviceID: dev.ID, Name: w.SSID, Status: w.Status, Security: w.Security, Source: sshCLISource,
+		})
+		n++
+	}
+	return n
 }
 
 func bandFromProto(p string) string {

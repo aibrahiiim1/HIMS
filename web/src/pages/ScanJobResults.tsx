@@ -213,7 +213,7 @@ export function ScanJobResults() {
                         </td>
                         <td>{d ? <ReachabilityBadge value={d.reachability} /> : '—'}</td>
                         <td>{d ? <ManagementBadge value={d.management} managedBy={d.managed_by} /> : '—'}</td>
-                        <td style={{ textTransform: 'capitalize' }}>{(r.category ?? p.classification ?? d?.category ?? 'unknown').replace(/_/g, ' ')}{typeof p.confidence === 'number' && p.confidence > 0 ? <span className="muted" style={{ fontSize: 11 }}> · {p.confidence}%</span> : null}</td>
+                        <td style={{ textTransform: 'capitalize' }}>{(r.category ?? p.classification ?? d?.category ?? 'unknown').replace(/_/g, ' ')}{typeof p.confidence === 'number' && p.confidence > 0 ? <span className="muted" style={{ fontSize: 11 }}> · {p.confidence}%</span> : null}{p.class_note && <span className="badge badge-warning" style={{ fontSize: 9, marginLeft: 4, textTransform: 'none' }} title={p.class_note}>classification preserved</span>}</td>
                         <td>{d?.vendor || '—'}{d?.model ? ` / ${d.model}` : ''}</td>
                         <td style={{ fontSize: 11 }}>{(p.expected_protocols ?? []).join(', ').toUpperCase() || '—'}</td>
                         <td style={{ fontSize: 11 }}>{(p.opportunistic_protocols ?? []).join(', ').toUpperCase() || '—'}</td>
