@@ -74,9 +74,36 @@ func (s *Server) walkTables(ctx context.Context, dev db.Device, c snmp.Client, p
 		if !t.Enabled {
 			continue
 		}
-		// One raw subtree walk per table: capture every varbind faithfully (the
-		// Explorer's source of truth), then interpret it as a table for mapping.
-		vars, status, detail := mibpack.RawWalk(ctx, c, t.RootOid, 0)
+		cm := parseColMap(t.ColumnMap)
+		// Targeted column walk: when a table has a column map, walk ONLY the mapped
+		// column sub-trees (entry.<col>) rather than the entire (often 50-column)
+		// table. On large controllers — a Ruckus ZD with 200+ APs and 700+ clients
+		// is ~36k varbinds for the full tables but ~7k for the ~7 mapped columns —
+		// this keeps the walk an order of magnitude smaller: inside the scan/timeout
+		// budget, and below the raw cap that would otherwise silently truncate rows.
+		// Operational tables (no column map) still get a full subtree walk so the
+		// Explorer keeps faithful raw capture for field discovery.
+		var vars []mibpack.RawVar
+		var status mibpack.TableStatus
+		var detail string
+		if cols := mappedColumns(cm); len(cols) > 0 {
+			entry := strings.TrimSuffix(t.RootOid, ".") + ".1"
+			for _, col := range cols {
+				cv, st, d := mibpack.RawWalk(ctx, c, entry+"."+strconv.Itoa(col), 0)
+				vars = append(vars, cv...)
+				if st == mibpack.StatusSupported {
+					status = st
+				}
+				if d != "" {
+					detail = d
+				}
+			}
+			if status == "" {
+				status = mibpack.StatusEmpty
+			}
+		} else {
+			vars, status, detail = mibpack.RawWalk(ctx, c, t.RootOid, 0)
+		}
 		tr := tableResult{Table: t.TableName, RootOID: t.RootOid, Purpose: t.Purpose, Status: string(status), RawVars: len(vars), Detail: detail}
 
 		// Raw rows (always; honest capture even when nothing maps) — replace the
@@ -95,7 +122,6 @@ func (s *Server) walkTables(ctx context.Context, dev db.Device, c snmp.Client, p
 		// Interpret the varbinds as a table (boundary-correct column/index split).
 		rows := mibpack.GroupRows(vars, t.RootOid, maxRows)
 		tr.Count = len(rows)
-		cm := parseColMap(t.ColumnMap)
 		for i, row := range rows {
 			if i < 5 {
 				tr.Sample = append(tr.Sample, rowPreview(row))
@@ -117,9 +143,15 @@ func (s *Server) walkTables(ctx context.Context, dev db.Device, c snmp.Client, p
 				if a, e := netip.ParseAddr(colVal(row, cm, "ap_ip")); e == nil {
 					ip = &a
 				}
+				// Per-AP client count when the MIB exposes it (e.g. Ruckus ZD
+				// ruckusZDWLANAPNumSta). 0 is the honest default when unmapped.
+				cc := 0
+				if v, e := strconv.Atoi(strings.TrimSpace(colVal(row, cm, "ap_client_count"))); e == nil && v > 0 {
+					cc = v
+				}
 				_, _ = s.queries.UpsertAccessPoint(ctx, db.UpsertAccessPointParams{
 					ControllerDeviceID: dev.ID, Name: name, Mac: nzPtr(mac), Model: nzPtr(colVal(row, cm, "ap_model")),
-					Ip: ip, Status: nz(normAPStatus(colVal(row, cm, "ap_status")), "unknown"), ClientCount: 0,
+					Ip: ip, Status: nz(normAPStatus(colVal(row, cm, "ap_status")), "unknown"), ClientCount: int32(cc),
 					Serial: colVal(row, cm, "ap_serial"), Firmware: colVal(row, cm, "ap_firmware"), Source: mibSource,
 				})
 				apN++
@@ -131,9 +163,14 @@ func (s *Server) walkTables(ctx context.Context, dev db.Device, c snmp.Client, p
 				if name == "" {
 					continue
 				}
+				scc := 0
+				if v, e := strconv.Atoi(strings.TrimSpace(colVal(row, cm, "ssid_client_count"))); e == nil && v > 0 {
+					scc = v
+				}
 				_, _ = s.queries.UpsertWirelessSSID(ctx, db.UpsertWirelessSSIDParams{
 					ControllerDeviceID: dev.ID, Name: name, Status: nz(colVal(row, cm, "ssid_status"), "unknown"),
-					Security: colVal(row, cm, "ssid_security"), Band: colVal(row, cm, "ssid_band"), Vlan: colVal(row, cm, "ssid_vlan"), Source: mibSource,
+					Security: colVal(row, cm, "ssid_security"), Band: colVal(row, cm, "ssid_band"), Vlan: colVal(row, cm, "ssid_vlan"),
+					ClientCount: int32(scc), Source: mibSource,
 				})
 				ssidN++
 			case "clients":
@@ -506,6 +543,22 @@ func indexToMAC(idx string) string {
 func byteHex(b byte) string {
 	const h = "0123456789abcdef"
 	return string([]byte{h[b>>4], h[b&0x0f]})
+}
+
+// mappedColumns returns the distinct positive column subIDs referenced by a
+// column map (col 0 = "use row index", so it's not a column to walk). Empty
+// result ⇒ the table has no real columns mapped, so walkTables falls back to a
+// full subtree walk (covers operational tables + index-only mappings).
+func mappedColumns(cm map[string]int) []int {
+	seen := map[int]bool{}
+	var out []int
+	for _, c := range cm {
+		if c > 0 && !seen[c] {
+			seen[c] = true
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 func normAPStatus(s string) string {

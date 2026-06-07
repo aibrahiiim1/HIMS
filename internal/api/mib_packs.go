@@ -87,30 +87,82 @@ func builtinHiPathTables() []builtinTable {
 
 const builtinHiPathName = "Extreme / HiPath Wireless Controller MIB"
 
+// ---- built-in Ruckus ZoneDirector pack -------------------------------------
+
+const builtinRuckusZDName = "Ruckus ZoneDirector Wireless MIB"
+
+// builtinRuckusZDTables maps the RUCKUS-ZD-WLAN-MIB roster tables
+// (ruckusZDWLANModule = 1.3.6.1.4.1.25053.1.2.2.1). Column subIDs are the MIB
+// column numbers (verified against RUCKUS-ZD-WLAN-MIB). Unlike the Extreme HWC,
+// ZoneDirector DOES expose the full AP/WLAN/client roster over SNMP, so these
+// tables populate directly.
+func builtinRuckusZDTables() []builtinTable {
+	return []builtinTable{
+		// ruckusZDWLANAPTable (ruckusZDWLANAPInfo.1): per-AP inventory + NumSta.
+		{"ruckusZDWLANAPTable", "1.3.6.1.4.1.25053.1.2.2.1.1.2.1", "aps",
+			map[string]int{"ap_mac": 1, "ap_name": 2, "ap_status": 3, "ap_model": 4, "ap_serial": 5, "ap_firmware": 7, "ap_ip": 10, "ap_client_count": 15}},
+		// ruckusZDWLANTable (ruckusZDWLANInfo.1): configured WLANs (all SSIDs).
+		{"ruckusZDWLANTable", "1.3.6.1.4.1.25053.1.2.2.1.1.1.1", "ssids",
+			map[string]int{"ssid_ssid": 1, "ssid_name": 1, "ssid_vlan": 7, "ssid_client_count": 12}},
+		// ruckusZDWLANStaTable (ruckusZDWLANStaInfo.1): associated wireless clients.
+		{"ruckusZDWLANStaTable", "1.3.6.1.4.1.25053.1.2.2.1.1.3.1", "clients",
+			map[string]int{"client_mac": 1, "client_ap": 2, "client_ssid": 4, "client_hostname": 5, "client_band": 6, "client_ip": 8, "client_rssi": 81}},
+	}
+}
+
 // SeedBuiltinMibPacks is the exported startup hook (called from cmd/hims-api).
 func (s *Server) SeedBuiltinMibPacks(ctx context.Context) error { return s.seedBuiltinMibPacks(ctx) }
 
-// seedBuiltinMibPacks creates the built-in HiPath pack if absent. Idempotent.
+// seedBuiltinMibPacks creates each built-in pack if absent. Idempotent per-pack
+// (so adding a new built-in pack seeds it on the next restart without disturbing
+// existing packs or operator-uploaded ones).
 func (s *Server) seedBuiltinMibPacks(ctx context.Context) error {
 	packs, err := s.queries.ListMibPacks(ctx)
 	if err != nil {
 		return err
 	}
+	have := map[string]bool{}
 	for _, p := range packs {
-		if p.Source == "builtin" && p.Name == builtinHiPathName {
-			return nil // already seeded
+		if p.Source == "builtin" {
+			have[p.Name] = true
 		}
 	}
-	applies, _ := json.Marshal(mibAppliesTo{
-		SysObjectIDPrefixes: []string{"1.3.6.1.4.1.1916", "1.3.6.1.4.1.5624"},
-		SysDescrContains:    []string{"ExtremeCloud IQ Controller", "Summit WM", "HiPath Wireless"},
-		Categories:          []string{string(domain.CatWirelessController)},
-	})
-	tables := builtinHiPathTables()
-	meta, _ := json.Marshal(map[string]any{"root": "1.3.6.1.4.1.5624.1.2", "table_count": len(tables)})
+
+	if !have[builtinHiPathName] {
+		applies, _ := json.Marshal(mibAppliesTo{
+			SysObjectIDPrefixes: []string{"1.3.6.1.4.1.1916", "1.3.6.1.4.1.5624"},
+			SysDescrContains:    []string{"ExtremeCloud IQ Controller", "Summit WM", "HiPath Wireless"},
+			Categories:          []string{string(domain.CatWirelessController)},
+		})
+		if err := s.seedOnePack(ctx, builtinHiPathName, "Extreme Networks", "HWC",
+			"Built-in HiPath/Enterasys wireless controller MIB (apTable/wlanTable/muTable/etc.), root 1.3.6.1.4.1.5624.1.2.",
+			applies, "1.3.6.1.4.1.5624.1.2", builtinHiPathTables()); err != nil {
+			return err
+		}
+	}
+
+	if !have[builtinRuckusZDName] {
+		// Vendor-exact match only (sysObjectID 25053 / sysDescr) — deliberately NO
+		// broad category, so it never shadows another vendor's wireless controller.
+		applies, _ := json.Marshal(mibAppliesTo{
+			SysObjectIDPrefixes: []string{"1.3.6.1.4.1.25053"},
+			SysDescrContains:    []string{"ruckus", "zonedirector", "zd1", "zd3", "zd5"},
+		})
+		if err := s.seedOnePack(ctx, builtinRuckusZDName, "Ruckus Wireless", "ZD",
+			"Built-in Ruckus ZoneDirector WLAN MIB (AP/WLAN/station tables), root 1.3.6.1.4.1.25053.1.2.2.1. ZoneDirector exposes the full roster over SNMP.",
+			applies, "1.3.6.1.4.1.25053.1.2.2.1", builtinRuckusZDTables()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// seedOnePack creates a built-in pack + its mapped tables.
+func (s *Server) seedOnePack(ctx context.Context, name, vendor, version, desc string, applies []byte, root string, tables []builtinTable) error {
+	meta, _ := json.Marshal(map[string]any{"root": root, "table_count": len(tables)})
 	pack, err := s.queries.CreateMibPack(ctx, db.CreateMibPackParams{
-		Name: builtinHiPathName, Vendor: "Extreme Networks", Category: string(domain.CatWirelessController),
-		Source: "builtin", Enabled: true, Priority: 100, Version: "HWC", Description: "Built-in HiPath/Enterasys wireless controller MIB (apTable/wlanTable/muTable/etc.), root 1.3.6.1.4.1.5624.1.2.",
+		Name: name, Vendor: vendor, Category: string(domain.CatWirelessController),
+		Source: "builtin", Enabled: true, Priority: 100, Version: version, Description: desc,
 		AppliesTo: applies, ParseMeta: meta,
 	})
 	if err != nil {
@@ -133,17 +185,52 @@ func (s *Server) matchMibPack(ctx context.Context, dev db.Device) (db.MibPack, b
 		return db.MibPack{}, false
 	}
 	sysOID, sysDescr := s.deviceSysIdentity(ctx, dev)
-	// ListMibPacks already orders user-first by priority; first match wins.
+	// Pick the MOST SPECIFIC match, not merely the first: a sysObjectID-prefix hit
+	// (vendor-exact) outranks a sysDescr substring, which outranks a bare category
+	// match. Without this, a pack that lists a broad category (e.g. the HiPath pack
+	// claiming all wireless_controllers) would shadow the vendor-exact Ruckus pack
+	// for a Ruckus device just because it sorts earlier. ListMibPacks orders
+	// user-first by priority, so on a score tie the more-preferred pack wins.
+	best := db.MibPack{}
+	bestScore := 0
 	for _, p := range packs {
 		if !p.Enabled {
 			continue
 		}
-		a := parseAppliesTo(p.AppliesTo)
-		if mibApplies(a, sysOID, sysDescr, dev.Category) {
-			return p, true
+		sc := mibMatchScore(parseAppliesTo(p.AppliesTo), sysOID, sysDescr, dev.Category)
+		if sc > bestScore {
+			best, bestScore = p, sc
 		}
 	}
+	if bestScore > 0 {
+		return best, true
+	}
 	return db.MibPack{}, false
+}
+
+// mibMatchScore ranks how specifically a pack's AppliesTo matches a device:
+// sysObjectID prefix = 3 (vendor-exact), sysDescr substring = 2, category = 1,
+// no match = 0. Used by matchMibPack to prefer the vendor-exact pack.
+func mibMatchScore(a mibAppliesTo, sysOID, sysDescr, category string) int {
+	oid := strings.TrimPrefix(sysOID, ".")
+	for _, p := range a.SysObjectIDPrefixes {
+		p = strings.TrimPrefix(p, ".")
+		if p != "" && (oid == p || strings.HasPrefix(oid, p+".")) {
+			return 3
+		}
+	}
+	low := strings.ToLower(sysDescr)
+	for _, c := range a.SysDescrContains {
+		if c != "" && strings.Contains(low, strings.ToLower(c)) {
+			return 2
+		}
+	}
+	for _, c := range a.Categories {
+		if c != "" && c == category {
+			return 1
+		}
+	}
+	return 0
 }
 
 func mibApplies(a mibAppliesTo, sysOID, sysDescr, category string) bool {
