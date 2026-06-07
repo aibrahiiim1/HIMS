@@ -305,13 +305,15 @@ export function LiveDiscovery() {
           {job?.scope_cidr && <button className="btn btn-sm" disabled={rerun.isPending} onClick={() => rerun.mutate()}><RefreshCw size={14} /> Re-run</button>}
         </>} />
 
-      {/* Scan progress (hosts processed of total) + managed-of-pingable ratio. */}
+      {/* Left: reachable-device discovery (sweeps the whole subnet 0→100%, headline =
+          reachable count). Right: how many of those reachable devices are managed. */}
       {job && (
         <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '12px 14px', marginBottom: 12, display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))' }}>
           <ProgressBar value={progressPct} tone={done ? '#16a34a' : 'var(--brand)'} pulse={running}
-            label={running ? 'Scanning…' : done ? 'Scan complete' : job.status} sublabel={`${Math.min(scanned, total)} of ${total} hosts`} />
+            label={running ? `Discovering… ${pingable} reachable` : `${pingable} reachable found`}
+            sublabel={`${Math.min(scanned, total)} of ${total} hosts scanned`} />
           <ProgressBar value={managedPct} tone="#16a34a"
-            label="Managed of pingable" sublabel={`${counters.managed} managed · ${pingable} pingable (responded)`} />
+            label="Managed of reachable" sublabel={`${counters.managed} of ${pingable} reachable managed`} />
         </div>
       )}
 

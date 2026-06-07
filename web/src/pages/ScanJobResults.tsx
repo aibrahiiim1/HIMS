@@ -164,12 +164,14 @@ export function ScanJobResults() {
       {detail.isLoading && <div className="loading">Loading…</div>}
       {job && (
         <>
-          {/* Scan progress (hosts processed of total) + managed-of-pingable ratio. */}
+          {/* Left: reachable-device discovery (sweeps the whole subnet 0→100%, headline =
+              reachable count). Right: how many of those reachable devices are managed. */}
           <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '12px 14px', marginBottom: 12, display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))' }}>
             <ProgressBar value={progressPct} tone={done ? '#16a34a' : 'var(--brand)'} pulse={!done}
-              label={done ? 'Scan complete' : 'Scanning…'} sublabel={`${Math.min(scanned, total)} of ${total} hosts`} />
+              label={done ? `${k.pingable} reachable found` : `Discovering… ${k.pingable} reachable`}
+              sublabel={`${Math.min(scanned, total)} of ${total} hosts scanned`} />
             <ProgressBar value={managedPct} tone="#16a34a"
-              label="Managed of pingable" sublabel={`${k.managed} managed · ${k.pingable} pingable (responded)`} />
+              label="Managed of reachable" sublabel={`${k.managed} of ${k.pingable} reachable managed`} />
           </div>
           {/* A. Scan stability — separated, honest counts (NOT a stable inventory total). */}
           <div className="kpi-grid">
@@ -182,9 +184,9 @@ export function ScanJobResults() {
           </div>
           {/* Live device state across this job's results. */}
           <div className="kpi-grid">
-            <Kpi label="Pingable" value={k.pingable} icon={Wifi} tone="info" sub="responded to scan" />
+            <Kpi label="Reachable" value={k.pingable} icon={Wifi} tone="info" sub="responded to scan" />
             <Kpi label="Online" value={k.online} icon={Wifi} tone="ok" />
-            <Kpi label="Managed" value={k.managed} icon={ShieldCheck} tone="ok" sub={`of ${k.pingable} pingable`} />
+            <Kpi label="Managed" value={k.managed} icon={ShieldCheck} tone="ok" sub={`of ${k.pingable} reachable`} />
             <Kpi label="Unmanaged" value={k.unmanaged} icon={ShieldOff} tone={k.unmanaged > 0 ? 'warn' : 'default'} />
             <Kpi label="Missing classification" value={k.missing} icon={HelpCircle} tone={k.missing > 0 ? 'warn' : 'default'} />
             <Kpi label="Credential failed" value={k.credFail} icon={KeyRound} tone={k.credFail > 0 ? 'crit' : 'default'} />
