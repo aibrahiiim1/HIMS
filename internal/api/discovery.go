@@ -419,6 +419,10 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 		Registry: s.reg, Fetcher: s.fetcher, Decrypt: s.scanDecrypt,
 		ExtraGroups: extraGroups,
 		SNMPTimeout: snmpTO, PortTimeout: portTO,
+		// Vendor-fingerprint library (operator ∪ built-in) — overrides generic
+		// driver categories from product evidence (e.g. ExtremeCloud IQ Controller
+		// → wireless_controller, not "Extreme switch"). Loaded once per job.
+		Fingerprints: s.scanFingerprintLibrary(ctx),
 	}
 	applier := apply.New(s.queries)
 

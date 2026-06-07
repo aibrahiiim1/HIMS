@@ -45,6 +45,94 @@ func TestNoEvidenceNoMatch(t *testing.T) {
 	}
 }
 
+func TestExtremeCloudControllerBeatsGenericSwitch(t *testing.T) {
+	lib := Library()
+	// The exact VE6120 sysObjectID (.1916.2.284) ALSO matches the generic Extreme
+	// PEN prefix (.1916 → switch @82). The product fingerprint (@95) must win, so
+	// 172.21.96.100 classifies as a wireless_controller, not a switch.
+	ev := Evidence{
+		SysObjectID: "1.3.6.1.4.1.1916.2.284",
+		SysDescr:    "Extreme Networks ExtremeCloud IQ Controller - VE6120 Medium, System Version 10.05.04.0006",
+		SysName:     "XIQC.coralsearesorts.com",
+	}
+	res := Match(ev, lib)
+	if len(res) == 0 {
+		t.Fatal("expected matches for VE6120 evidence")
+	}
+	top := res[0]
+	if top.Kind != KindOID || top.Pattern != "1.3.6.1.4.1.1916.2.284" {
+		t.Fatalf("expected exact VE6120 OID to rank first, got %+v", top)
+	}
+	if top.Vendor != "Extreme Networks" || top.DeviceType != "wireless_controller" {
+		t.Fatalf("expected Extreme Networks/wireless_controller, got %+v", top)
+	}
+	if top.Confidence < 90 {
+		t.Fatalf("expected exact-OID confidence ≥90 to beat generic switch @82, got %d", top.Confidence)
+	}
+	// The generic .1916 switch prefix is still present (for real Extreme switches)
+	// but must rank BELOW the product print.
+	var sawGenericSwitch bool
+	for _, r := range res {
+		if r.Pattern == "1.3.6.1.4.1.1916" && r.DeviceType == "switch" {
+			sawGenericSwitch = true
+			if r.Confidence >= top.Confidence {
+				t.Errorf("generic Extreme switch prefix should not outrank the product print: %+v", r)
+			}
+		}
+	}
+	if !sawGenericSwitch {
+		t.Error("expected the generic .1916 Extreme switch prefix to still be in the library")
+	}
+}
+
+func TestExtremeCloudBySysDescrAlone(t *testing.T) {
+	// Even without the sysObjectID (e.g. a device that only answers sysDescr), the
+	// "ExtremeCloud IQ Controller" service print classifies it as wireless_controller.
+	res := Match(Evidence{SysDescr: "ExtremeCloud IQ Controller - VE6120 Medium"}, Library())
+	if len(res) == 0 || res[0].DeviceType != "wireless_controller" || res[0].Vendor != "Extreme Networks" {
+		t.Fatalf("expected Extreme Networks/wireless_controller from sysDescr, got %+v", res)
+	}
+}
+
+func TestModelFromSysDescr(t *testing.T) {
+	cases := map[string]string{
+		"Extreme Networks ExtremeCloud IQ Controller - VE6120 Medium, System Version 10.05.04.0006": "VE6120 Medium",
+		"Some Vendor Product - X1000, v2":                                                           "X1000",
+		"No model here":                                                                             "",
+		"Trailing - ":                                                                               "",
+	}
+	for in, want := range cases {
+		if got := ModelFromSysDescr(in); got != want {
+			t.Errorf("ModelFromSysDescr(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestCanonicalCategory(t *testing.T) {
+	cases := map[string]string{
+		"":                    "",
+		"wireless":            "wireless_controller",
+		"voip":                "pbx",
+		"switch":              "switch",
+		"wireless_controller": "wireless_controller",
+	}
+	for in, want := range cases {
+		if got := CanonicalCategory(in); got != want {
+			t.Errorf("CanonicalCategory(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestSysNameMatch(t *testing.T) {
+	lib := []Print{{KindSysName, "XIQC", "Extreme Networks", "wireless_controller", 70}}
+	if r := Match(Evidence{SysName: "XIQC.coralsearesorts.com"}, lib); len(r) == 0 || r[0].Kind != KindSysName {
+		t.Fatalf("expected a sysName match, got %+v", r)
+	}
+	if r := Match(Evidence{SysDescr: "XIQC"}, lib); len(r) != 0 {
+		t.Errorf("sysName print must not match against sysDescr, got %+v", r)
+	}
+}
+
 func TestMultiSignalRanksStrongest(t *testing.T) {
 	lib := Library()
 	// Both an OID (conf 82) and a generic OpenSSH banner (conf 30) present:

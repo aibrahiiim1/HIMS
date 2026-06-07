@@ -13,10 +13,11 @@ import (
 
 // Kinds of fingerprint pattern. Each matches a different evidence channel.
 const (
-	KindOID     = "oid"     // SNMP sysObjectID prefix (enterprise PEN)
+	KindOID     = "oid"     // SNMP sysObjectID prefix (enterprise PEN) or exact identity
 	KindHTTP    = "http"    // substring of the HTTP Server header / page title
 	KindSSH     = "ssh"     // substring of the SSH identification banner
 	KindService = "service" // substring of SNMP sysDescr / service banner
+	KindSysName = "sysname" // substring of SNMP sysName (administrative host name)
 	KindPort    = "port"    // an open TCP port number (weak signal)
 )
 
@@ -33,6 +34,7 @@ type Print struct {
 type Evidence struct {
 	SysObjectID string `json:"sysobjectid"`
 	SysDescr    string `json:"sysdescr"`
+	SysName     string `json:"sysname"`
 	HTTPServer  string `json:"http_server"`
 	SSHBanner   string `json:"ssh_banner"`
 	Ports       []int  `json:"ports"`
@@ -71,6 +73,8 @@ func (p Print) matches(ev Evidence) bool {
 		return ev.SSHBanner != "" && containsFold(ev.SSHBanner, p.Pattern)
 	case KindService:
 		return ev.SysDescr != "" && containsFold(ev.SysDescr, p.Pattern)
+	case KindSysName:
+		return ev.SysName != "" && containsFold(ev.SysName, p.Pattern)
 	case KindPort:
 		want := strings.TrimSpace(p.Pattern)
 		for _, port := range ev.Ports {
@@ -103,18 +107,57 @@ func Match(ev Evidence, lib []Print) []Result {
 	return out
 }
 
+// ModelFromSysDescr pulls a product model out of an SNMP sysDescr that uses the
+// common "Vendor Product - Model, version…" shape, e.g. Extreme's
+// "…ExtremeCloud IQ Controller - VE6120 Medium, System Version 10.05…" → "VE6120
+// Medium". Returns "" when no clear model segment is present.
+func ModelFromSysDescr(d string) string {
+	d = strings.TrimSpace(d)
+	i := strings.Index(d, " - ")
+	if i < 0 {
+		return ""
+	}
+	m := strings.TrimSpace(d[i+3:])
+	if j := strings.IndexByte(m, ','); j >= 0 {
+		m = strings.TrimSpace(m[:j])
+	}
+	if m == "" || len(m) > 64 {
+		return ""
+	}
+	return m
+}
+
+// CanonicalCategory maps a fingerprint device_type token to HIMS's canonical
+// device-category string. Most tokens are already canonical category names; the
+// exceptions are the broad "wireless" → wireless_controller and "voip" → pbx.
+// An empty token returns "" (caller treats that as "no category override").
+func CanonicalCategory(deviceType string) string {
+	switch deviceType {
+	case "":
+		return ""
+	case "wireless":
+		return "wireless_controller"
+	case "voip":
+		return "pbx"
+	default:
+		return deviceType
+	}
+}
+
 func kindRank(k string) int {
 	switch k {
 	case KindOID:
 		return 0
 	case KindService:
 		return 1
-	case KindHTTP:
+	case KindSysName:
 		return 2
-	case KindSSH:
+	case KindHTTP:
 		return 3
-	default:
+	case KindSSH:
 		return 4
+	default:
+		return 5
 	}
 }
 
@@ -154,6 +197,15 @@ func itoa(n int) string {
 // (idempotent) and then extend it.
 func Library() []Print {
 	return []Print{
+		// --- Product-specific sysObjectID / sysDescr (exact identity) ---
+		// These outrank generic enterprise-PEN prefixes AND driver fingerprints: a
+		// device whose enterprise OID would otherwise read as "switch" is correctly
+		// identified by its product. Enterprise prefix → VENDOR; product OID /
+		// sysDescr → CATEGORY + MODEL (req #8: generic vendor must not force switch).
+		{KindOID, "1.3.6.1.4.1.1916.2.284", "Extreme Networks", "wireless_controller", 95}, // ExtremeCloud IQ Controller VE6120
+		{KindService, "ExtremeCloud IQ Controller", "Extreme Networks", "wireless_controller", 92},
+		{KindService, "ExtremeCloud", "Extreme Networks", "wireless_controller", 80},
+
 		// --- SNMP sysObjectID enterprise prefixes (PEN) ---
 		{KindOID, "1.3.6.1.4.1.9", "Cisco", "switch", 80},
 		{KindOID, "1.3.6.1.4.1.9.1", "Cisco", "switch", 82},

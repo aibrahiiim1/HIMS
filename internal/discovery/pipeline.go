@@ -32,6 +32,7 @@ import (
 	"github.com/coralsearesorts/hims/internal/domain"
 	"github.com/coralsearesorts/hims/internal/driver"
 	"github.com/coralsearesorts/hims/internal/driver/swsnmp"
+	"github.com/coralsearesorts/hims/internal/fingerprint"
 	"github.com/coralsearesorts/hims/internal/snmp"
 )
 
@@ -116,7 +117,11 @@ type HostResult struct {
 	// Plan is the expected-protocol decision made before credential testing.
 	Plan  ProtocolPlan
 	Facts *driver.Facts
-	Error error
+	// Vendor/Model from a matched fingerprint (canonical vendor + product model),
+	// applied over the driver's generic identity when a specific fingerprint hits.
+	Vendor string
+	Model  string
+	Error  error
 }
 
 // CandidateFetcher abstracts the DB call that assembles credentials for an IP.
@@ -167,6 +172,10 @@ type PipelineConfig struct {
 	// the live discovery board can show what is happening in real time. Must be
 	// cheap + non-blocking (the scan calls it on the hot path).
 	OnEvent func(PipelineEvent)
+	// Fingerprints is the vendor-fingerprint library (operator-defined ∪ built-in)
+	// applied to the SNMP/HTTP/SSH evidence to override the driver category and
+	// supply a canonical vendor + product model. Empty = no fingerprint overrides.
+	Fingerprints []fingerprint.Print
 }
 
 // PipelineEvent is one live stage event emitted during a host probe.
@@ -269,7 +278,11 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 			_ = cli.Close()
 			return false
 		}
-		pdus, err := cli.Get(ctx, "1.3.6.1.2.1.1.1.0", "1.3.6.1.2.1.1.2.0")
+		// Identity OIDs collected on every SNMP success: sysDescr, sysObjectID,
+		// sysName, sysContact, sysLocation. The raw values feed classification
+		// (fingerprints) + inventory; we never store only the firmware string.
+		pdus, err := cli.Get(ctx, "1.3.6.1.2.1.1.1.0", "1.3.6.1.2.1.1.2.0",
+			"1.3.6.1.2.1.1.5.0", "1.3.6.1.2.1.1.4.0", "1.3.6.1.2.1.1.6.0")
 		if err != nil || len(pdus) < 1 {
 			_ = cli.Close()
 			return false
@@ -277,6 +290,15 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 		r.Probe.SNMPSysDescr = snmp.PDUString(pdus[0])
 		if len(pdus) > 1 {
 			r.Probe.SNMPSysObjectID = snmp.PDUString(pdus[1])
+		}
+		if len(pdus) > 2 {
+			r.Probe.SNMPSysName = snmp.PDUString(pdus[2])
+		}
+		if len(pdus) > 3 {
+			r.Probe.SNMPSysContact = snmp.PDUString(pdus[3])
+		}
+		if len(pdus) > 4 {
+			r.Probe.SNMPSysLocation = snmp.PDUString(pdus[4])
 		}
 		authCli = cli
 		return true
@@ -420,6 +442,16 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 			r.Match = driver.Match{Category: cat, Confidence: 60}
 		}
 	}
+
+	// Step 5c: Vendor-fingerprint override. The fingerprint library (operator-defined
+	// ∪ built-in) is matched against the SNMP/HTTP/SSH evidence. Match() ranks exact
+	// sysObjectID > sysDescr/sysName regex > generic prefix, so a PRODUCT fingerprint
+	// (e.g. ExtremeCloud IQ Controller, OID .1916.2.284) overrides the generic Extreme
+	// enterprise-prefix "switch" + the driver. The category is overridden only when the
+	// fingerprint is at least as confident as the current classification; a specific
+	// match (≥85) also supplies the canonical vendor + product model.
+	applyFingerprints(&r, cfg.Fingerprints)
+
 	if c := string(r.Match.Category); c != "" {
 		emit("classification_updated", "", c, strconv.Itoa(r.Match.Confidence))
 	}
@@ -438,6 +470,50 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 		_ = authCli.Close()
 	}
 	return r
+}
+
+// applyFingerprints runs the fingerprint library against the host's evidence and,
+// on a match, overrides the category (when at least as confident as the current
+// classification) and sets the canonical vendor + product model (specific matches
+// only). Pure precedence lives in fingerprint.Match (exact OID > sysDescr/sysName
+// > prefix; operator prints passed first win ties).
+func applyFingerprints(r *HostResult, lib []fingerprint.Print) {
+	if len(lib) == 0 {
+		return
+	}
+	ev := fingerprint.Evidence{
+		SysObjectID: r.Probe.SNMPSysObjectID,
+		SysDescr:    r.Probe.SNMPSysDescr,
+		SysName:     r.Probe.SNMPSysName,
+		HTTPServer:  r.Probe.HTTPServer,
+		SSHBanner:   r.Probe.Hints["ssh_banner"],
+		Ports:       r.OpenPorts,
+	}
+	results := fingerprint.Match(ev, lib)
+	if len(results) == 0 {
+		return
+	}
+	top := results[0]
+	if cat := fingerprintCategory(top.DeviceType); cat != "" && top.Confidence >= r.Match.Confidence {
+		r.Match = driver.Match{Category: cat, Confidence: top.Confidence}
+	}
+	// A strong/specific match is authoritative for vendor + product model, so we
+	// record "Extreme Networks / VE6120 Medium" instead of only the firmware string.
+	if top.Confidence >= 85 {
+		if top.Vendor != "" {
+			r.Vendor = top.Vendor
+		}
+		if m := fingerprint.ModelFromSysDescr(r.Probe.SNMPSysDescr); m != "" {
+			r.Model = m
+		}
+	}
+}
+
+// fingerprintCategory maps a fingerprint device_type token to a domain device
+// category. An empty/unknown token returns "" (no category override). Delegates
+// to fingerprint.CanonicalCategory so discovery + the API reclassify path agree.
+func fingerprintCategory(dt string) domain.DeviceCategory {
+	return domain.DeviceCategory(fingerprint.CanonicalCategory(dt))
 }
 
 // intsCSV renders a port list as "22,443,8443" for an event message.

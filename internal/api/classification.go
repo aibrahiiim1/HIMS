@@ -99,6 +99,22 @@ func (s *Server) reclassifyDevice(w http.ResponseWriter, r *http.Request) {
 	}
 	res := classify.FromEvidence(evidence)
 
+	// Vendor-fingerprint override (req #5: fingerprints must affect reclassify too).
+	// Build evidence from the device's stored RAW SNMP identity facts (sysObjectID
+	// / sysDescr / sysName) and the live HTTP banner, then match the effective
+	// library (operator ∪ built-in). A product fingerprint (e.g. ExtremeCloud IQ
+	// Controller, OID .1916.2.284) overrides the generic enterprise-prefix category
+	// and supplies the canonical vendor + model — the same logic a scan applies.
+	fp := s.reclassifyFingerprint(ctx, d, obs)
+	if fp.category != "" && fp.confidence >= res.Confidence {
+		res.Category = fp.category
+		res.Confidence = fp.confidence
+		res.OSFamily = "" // a network appliance has no OS family to assert
+		res.Evidence = append(res.Evidence, domain.ClassificationEvidence{
+			Source: fp.source, Signal: fp.detail, Category: fp.category, Confidence: fp.confidence,
+		})
+	}
+
 	if res.Confidence == 0 || res.Category == string(domain.CatUnknown) {
 		// No classifying signal — do NOT downgrade an existing category.
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -106,6 +122,15 @@ func (s *Server) reclassifyDevice(w http.ResponseWriter, r *http.Request) {
 			"classification": toClassificationDTO(d),
 		})
 		return
+	}
+
+	// Persist the fingerprint's canonical vendor/model (COALESCE-enrich: blanks
+	// never clobber). Skipped when the device is locked (handled above) so this
+	// only runs on an unlocked reclassify.
+	if fp.vendor != "" || fp.model != "" {
+		_ = s.queries.UpdateDeviceHardwareInfo(ctx, db.UpdateDeviceHardwareInfoParams{
+			ID: id, Vendor: fp.vendor, Model: fp.model,
+		})
 	}
 
 	evBlob, err := domain.MarshalEvidence(res.Evidence)

@@ -1,11 +1,97 @@
 package api
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/coralsearesorts/hims/internal/fingerprint"
+	"github.com/coralsearesorts/hims/internal/osdiscovery"
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
 )
+
+// reclassifyFP is the fingerprint verdict applied during a device reclassify:
+// a category override (+ canonical vendor/model when the match is specific).
+type reclassifyFP struct {
+	category   string
+	confidence int
+	vendor     string
+	model      string
+	source     string // evidence source tag, e.g. "vendor_fingerprint:oid"
+	detail     string // human-readable rule, for the evidence trail
+}
+
+// reclassifyFingerprint builds fingerprint evidence from a device's stored RAW
+// SNMP identity facts (sysObjectID / sysDescr / sysName) plus the live probe's
+// HTTP/SSH/port signals, matches the effective library (operator ∪ built-in), and
+// returns the top fingerprint as an override (req #5: fingerprints affect
+// reclassify, not only scans). A zero value (category "") means no hit.
+func (s *Server) reclassifyFingerprint(ctx context.Context, d db.Device, obs osdiscovery.Observation) reclassifyFP {
+	facts, _ := s.queries.ListDeviceFacts(ctx, d.ID)
+	fact := func(key string) string {
+		for _, f := range facts {
+			if f.Key == key && f.Value != nil {
+				return *f.Value
+			}
+		}
+		return ""
+	}
+	sysDescr := fact("snmp.sysdescr")
+	if sysDescr == "" {
+		sysDescr = obs.SNMPSysDescr
+	}
+	if sysDescr == "" && d.OsVersion != nil {
+		sysDescr = *d.OsVersion // SNMP-only devices stash sysDescr in os_version
+	}
+	ev := fingerprint.Evidence{
+		SysObjectID: fact("snmp.sysobjectid"),
+		SysDescr:    sysDescr,
+		SysName:     fact("snmp.sysname"),
+		HTTPServer:  obs.HTTPServer,
+		SSHBanner:   obs.SSHBanner,
+		Ports:       obs.OpenTCP,
+	}
+	results := fingerprint.Match(ev, s.scanFingerprintLibrary(ctx))
+	if len(results) == 0 {
+		return reclassifyFP{}
+	}
+	top := results[0]
+	out := reclassifyFP{
+		category:   fingerprint.CanonicalCategory(top.DeviceType),
+		confidence: top.Confidence,
+		source:     "vendor_fingerprint:" + top.Kind,
+		detail:     top.Vendor + " / " + top.DeviceType + " (" + top.Kind + ":" + top.Pattern + ")",
+	}
+	if top.Confidence >= 85 {
+		out.vendor = top.Vendor
+		out.model = fingerprint.ModelFromSysDescr(sysDescr)
+	}
+	return out
+}
+
+// scanFingerprintLibrary assembles the effective fingerprint library used by a
+// scan (and by reclassify): operator-defined ENABLED prints first — so they win
+// ties over the built-ins (Match is a stable sort) — then every built-in print
+// whose (kind,pattern) the operator hasn't already stored. A DB row that exists
+// but is DISABLED therefore SUPPRESSES its built-in counterpart, honouring an
+// explicit operator opt-out. On any DB error it degrades to the built-in library
+// so classification never silently loses fingerprinting.
+func (s *Server) scanFingerprintLibrary(ctx context.Context) []fingerprint.Print {
+	rows, err := s.queries.ListVendorFingerprints(ctx)
+	if err != nil {
+		return fingerprint.Library()
+	}
+	lib := dbToPrints(rows, true) // enabled operator prints, highest precedence
+	have := make(map[string]bool, len(rows))
+	for _, r := range rows { // every stored row (incl. disabled) shadows the built-in
+		have[r.Kind+"|"+r.Pattern] = true
+	}
+	for _, p := range fingerprint.Library() {
+		if !have[p.Kind+"|"+p.Pattern] {
+			lib = append(lib, p)
+		}
+	}
+	return lib
+}
 
 // dbToPrints converts stored vendor fingerprints (enabled only) to the pure
 // matcher's Print type.
@@ -63,12 +149,9 @@ func (s *Server) matchVendorFingerprints(w http.ResponseWriter, r *http.Request)
 	if !decodeJSON(w, r, &ev) {
 		return
 	}
-	rows, err := s.queries.ListVendorFingerprints(r.Context())
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-	results := fingerprint.Match(ev, dbToPrints(rows, true))
+	// Match against the SAME effective library a scan uses (operator ∪ built-in),
+	// so the test tool's verdict is exactly what classification would decide.
+	results := fingerprint.Match(ev, s.scanFingerprintLibrary(r.Context()))
 	writeJSON(w, http.StatusOK, map[string]any{"evidence": ev, "results": results})
 }
 
@@ -94,12 +177,7 @@ func (s *Server) deviceFingerprintSuggestion(w http.ResponseWriter, r *http.Requ
 		descr = descr + " " + *dev.Vendor
 	}
 	ev := fingerprint.Evidence{SysDescr: descr}
-	rows, err := s.queries.ListVendorFingerprints(ctx)
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-	results := fingerprint.Match(ev, dbToPrints(rows, true))
+	results := fingerprint.Match(ev, s.scanFingerprintLibrary(ctx))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"device_id":      id.String(),
 		"current_vendor": derefStr(dev.Vendor),

@@ -124,10 +124,38 @@ func (a *Applier) Apply(ctx context.Context, res discovery.HostResult, locationI
 		_ = a.w.AddDeviceRole(ctx, db.AddDeviceRoleParams{DeviceID: dev.ID, Role: string(role), Source: "port"})
 	}
 
+	// Persist the RAW SNMP identity (sysDescr / sysObjectID / sysName / sysContact
+	// / sysLocation) as device facts on every SNMP-answered host — the full values,
+	// not just the firmware string a driver's Collect() distils into os_version.
+	// This feeds the fingerprint test tool and "what is this device?" without a
+	// re-probe, and runs even when no Collector matched the host.
+	a.applySNMPIdentity(ctx, dev.ID, res.Probe)
+
 	if res.Facts != nil {
 		a.applyFacts(ctx, dev.ID, res.Facts, poll)
 	}
 	return dev.ID, nil
+}
+
+// applySNMPIdentity upserts the raw SNMP system-group values as device facts.
+// Empty fields are skipped (an absent OID leaves any prior value untouched).
+func (a *Applier) applySNMPIdentity(ctx context.Context, devID uuid.UUID, p driver.Probe) {
+	idents := []struct{ key, val string }{
+		{"snmp.sysdescr", p.SNMPSysDescr},
+		{"snmp.sysobjectid", p.SNMPSysObjectID},
+		{"snmp.sysname", p.SNMPSysName},
+		{"snmp.syscontact", p.SNMPSysContact},
+		{"snmp.syslocation", p.SNMPSysLocation},
+	}
+	for _, it := range idents {
+		if it.val == "" {
+			continue
+		}
+		val := it.val
+		_ = a.w.UpsertDeviceFact(ctx, db.UpsertDeviceFactParams{
+			DeviceID: devID, Key: it.key, Value: &val, Driver: "snmp", ValueJson: nil,
+		})
+	}
 }
 
 func (a *Applier) reconcile(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, create db.CreateDeviceParams) (db.Device, error) {
@@ -454,6 +482,16 @@ func identity(res discovery.HostResult) (name string, hostname, vendor, model, s
 				model = nonEmpty(m)
 			}
 		}
+	}
+	// A specific vendor fingerprint (≥85) is the canonical PRODUCT identity and
+	// outranks the driver's generic identity: e.g. an Extreme switch driver that
+	// only knows "Extreme Networks / firmware" is corrected to the fingerprint's
+	// "Extreme Networks / VE6120 Medium" for an ExtremeCloud IQ Controller.
+	if res.Vendor != "" {
+		vendor = strptr(res.Vendor)
+	}
+	if res.Model != "" {
+		model = strptr(res.Model)
 	}
 	return
 }

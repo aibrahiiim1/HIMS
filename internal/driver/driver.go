@@ -26,6 +26,9 @@ type Probe struct {
 	OpenUDPPorts    []int
 	SNMPSysObjectID string // e.g. ".1.3.6.1.4.1.11.2.3.7.11.x" (HP)
 	SNMPSysDescr    string
+	SNMPSysName     string // sysName.0 — the host's own administrative name
+	SNMPSysContact  string // sysContact.0
+	SNMPSysLocation string // sysLocation.0
 	HTTPServer      string // Server: header / page title hint
 	Hints           map[string]string
 }
