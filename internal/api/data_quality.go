@@ -601,15 +601,22 @@ func (s *Server) addWirelessDQ(ctx context.Context, devs []db.Device, issues *[]
 		}
 		info, infoErr := s.queries.GetWLANControllerInfo(ctx, d.ID)
 		aps, _ := s.queries.ListAccessPoints(ctx, d.ID)
+		// A roster from ANY source (API, SSH CLI, or SNMP MIB) means the controller
+		// is collecting — so it does NOT need an API profile and is NOT "SNMP-only,
+		// roster unavailable". Only nudge for a collection method when there's no data.
+		hasRoster := len(aps) > 0
 
-		if !hasProf {
+		if hasProf {
+			if prof.LastTestOk != nil && !*prof.LastTestOk {
+				collFailed = append(collFailed, d)
+			}
+		} else if !hasRoster {
 			missingProfile = append(missingProfile, d)
-		} else if prof.LastTestOk != nil && !*prof.LastTestOk {
-			collFailed = append(collFailed, d)
 		}
-		// SNMP-only: no API-sourced controller info row (never collected via API).
+		// SNMP-only with no usable roster: no API-sourced info row AND no roster from
+		// any source. (A controller collected via SNMP MIB or SSH CLI has its roster.)
 		apiCollected := infoErr == nil && info.Source == "extreme_xcc_api"
-		if !apiCollected {
+		if !apiCollected && !hasRoster {
 			snmpOnly = append(snmpOnly, d)
 		}
 		if len(aps) == 0 {
@@ -686,10 +693,11 @@ func (s *Server) addMibDQ(ctx context.Context, devs []db.Device, issues *[]dqIss
 		// even when nothing maps into the wireless tables — the honest evidence.)
 		walk, _ := s.queries.ListMibWalkRows(ctx, db.ListMibWalkRowsParams{DeviceID: d.ID, Limit: 1})
 		mibRan := len(walk) > 0
-		// AP / client rosters that came specifically from the MIB source.
-		apFromMib, cliFromMib := 0, 0
+		// AP / client rosters from the MIB source, and totals across ALL sources.
+		apFromMib, cliFromMib, totalAP, totalCli := 0, 0, 0, 0
 		if aps, e := s.queries.ListAccessPoints(ctx, d.ID); e == nil {
 			for _, a := range aps {
+				totalAP++
 				if a.Source == mibSource {
 					apFromMib++
 				}
@@ -697,6 +705,7 @@ func (s *Server) addMibDQ(ctx context.Context, devs []db.Device, issues *[]dqIss
 		}
 		if cls, e := s.queries.ListWirelessClients(ctx, d.ID); e == nil {
 			for _, c := range cls {
+				totalCli++
 				if c.Source == mibSource {
 					cliFromMib++
 				}
@@ -708,11 +717,14 @@ func (s *Server) addMibDQ(ctx context.Context, devs []db.Device, issues *[]dqIss
 			// A user pack is configured but no MIB walk has run on this controller.
 			userNotApplied = append(userNotApplied, d)
 		}
+		// Only flag a SNMP-MIB roster gap when NO other source already has it: an
+		// Extreme controller whose roster comes via SSH CLI isn't "missing" AP data
+		// just because its HiPath SNMP MIB doesn't expose apTable.
 		if mibRan {
-			if apFromMib == 0 {
+			if apFromMib == 0 && totalAP-apFromMib == 0 {
 				apEmpty = append(apEmpty, d)
 			}
-			if apFromMib == 0 || cliFromMib == 0 {
+			if (apFromMib == 0 && totalAP-apFromMib == 0) || (cliFromMib == 0 && totalCli-cliFromMib == 0) {
 				partial = append(partial, d)
 			}
 		}
@@ -791,15 +803,22 @@ func (s *Server) addSSHWirelessDQ(ctx context.Context, devs []db.Device, issues 
 				}
 			}
 		}
-		switch {
-		case sshCredExists && !ran:
-			availNotUsed = append(availNotUsed, d)
-		case ran && supp == 0 && unsupp > 0:
-			noSupp = append(noSupp, d)
-		case ran && anyFail && supp == 0 && unsupp == 0:
-			failed = append(failed, d)
-		case ran && supp > 0 && sshAP == 0 && sshCli == 0:
-			partial = append(partial, d)
+		// SSH CLI is only a relevant collection path when it (or nothing else) holds
+		// the roster. A controller fully collected by another source — e.g. a Ruckus
+		// ZD via SNMP MIB — must not be flagged for a failed/unused SSH attempt that
+		// was never its collection method.
+		nonSSHRoster := (totalAP-sshAP) > 0 || (totalCli-sshCli) > 0
+		if !nonSSHRoster {
+			switch {
+			case sshCredExists && !ran:
+				availNotUsed = append(availNotUsed, d)
+			case ran && supp == 0 && unsupp > 0:
+				noSupp = append(noSupp, d)
+			case ran && anyFail && supp == 0 && unsupp == 0:
+				failed = append(failed, d)
+			case ran && supp > 0 && sshAP == 0 && sshCli == 0:
+				partial = append(partial, d)
+			}
 		}
 		if totalAP == 0 && totalCli == 0 {
 			noRoster = append(noRoster, d)

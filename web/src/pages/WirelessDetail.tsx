@@ -63,6 +63,16 @@ export function WirelessDetail() {
   const ssids = d?.ssids ?? []
   const sm = d?.summary
 
+  // AP online/offline counts. Prefer the controller-summary split (SSH CLI path);
+  // otherwise derive from the AP rows themselves, which carry per-AP status when a
+  // source exposes it (e.g. Ruckus SNMP MIB). So the Active/Non-active KPIs reflect
+  // reality for any vendor, not only the SSH-summary controllers.
+  const apRowOnline = aps.filter((a) => a.status === 'online').length
+  const apRowOffline = aps.filter((a) => a.status === 'offline').length
+  const apStatusShown = (sm?.ap_status_exposed ?? false) || apRowOnline + apRowOffline > 0
+  const apActive = sm?.ap_status_exposed ? sm.active_aps : apRowOnline
+  const apNonActive = sm?.ap_status_exposed ? sm.non_active_aps : apRowOffline
+
   // Per-SSID rollups derived from the live client roster (honest: only what we saw).
   const ssidRollup = useMemo(() => {
     const m = new Map<string, { clients: number; aps: Set<string> }>()
@@ -114,8 +124,8 @@ export function WirelessDetail() {
         return (
           <div className="kpi-grid">
             <Kpi label="Total APs (reported)" value={sm.ap_total || (c.aps ?? 0)} icon={Radio} tone={apMissing > 0 ? 'warn' : 'info'} sub={`parsed ${c.aps ?? 0} rows${apMissing > 0 ? ` · missing ${apMissing}` : ''}`} />
-            <Kpi label="Active APs" value={sm.ap_status_exposed ? sm.active_aps : '—'} icon={Radio} sub={sm.ap_status_exposed ? undefined : 'not exposed by CLI'} />
-            <Kpi label="Non-active APs" value={sm.ap_status_exposed ? sm.non_active_aps : '—'} icon={Radio} sub={sm.ap_status_exposed ? undefined : 'not exposed by CLI'} />
+            <Kpi label="Active APs" value={apStatusShown ? apActive : '—'} icon={Radio} sub={apStatusShown ? undefined : 'status not exposed'} />
+            <Kpi label="Non-active APs" value={apStatusShown ? apNonActive : '—'} icon={Radio} sub={apStatusShown ? undefined : 'status not exposed'} />
             <Kpi label="Total clients (reported)" value={sm.clients_total || (c.clients ?? 0)} icon={Users} tone={cliMissing > 0 ? 'warn' : 'info'} sub={`parsed ${c.clients ?? 0}${cliMissing > 0 ? ` · live ±${cliMissing}` : ''}`} />
             <Kpi label="SSIDs" value={c.ssids ?? 0} icon={ShieldCheck} sub="full WLAN list incl. disabled (show wlans)" />
             <Kpi label="Networks" value={sm.networks} icon={Router} sub="client-derived" />
@@ -134,7 +144,7 @@ export function WirelessDetail() {
           {sm.parsed_client_rows < sm.clients_total && (
             <div className="enc-banner warn">Controller summary reports {sm.clients_total} clients but HIMS parsed {sm.parsed_client_rows} client rows. Client counts change live.</div>
           )}
-          {!sm.ap_status_exposed && aps.length > 0 && (
+          {!apStatusShown && aps.length > 0 && (
             <div className="enc-banner info">Per-AP active/non-active status is not exposed by this controller's SSH CLI (show summary/status are rejected). Configure the Extreme XCC API for per-AP status.</div>
           )}
           {sm.ap_status_exposed && sm.non_active_aps > 0 && (
