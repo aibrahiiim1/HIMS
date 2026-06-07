@@ -72,7 +72,13 @@ func (s *Server) reclassifyFingerprint(ctx context.Context, d db.Device, obs osd
 	}
 	if top.Confidence >= 85 {
 		out.vendor = top.Vendor
-		out.model = fingerprint.ModelFromSysDescr(sysDescr)
+		// Precedence: the winning fingerprint's EXPLICIT model wins; otherwise the
+		// model is derived from sysDescr (the VE6120 built-in path).
+		if top.Model != "" {
+			out.model = top.Model
+		} else {
+			out.model = fingerprint.ModelFromSysDescr(sysDescr)
+		}
 	}
 	return out
 }
@@ -112,7 +118,7 @@ func dbToPrints(rows []db.VendorFingerprint, enabledOnly bool) []fingerprint.Pri
 		}
 		out = append(out, fingerprint.Print{
 			Kind: r.Kind, Pattern: r.Pattern, Vendor: r.Vendor,
-			DeviceType: r.DeviceType, Confidence: int(r.Confidence),
+			DeviceType: r.DeviceType, Confidence: int(r.Confidence), Model: r.Model,
 		})
 	}
 	return out
@@ -260,7 +266,6 @@ func (s *Server) testDeviceFingerprint(w http.ResponseWriter, r *http.Request) {
 	}
 	lib := s.scanFingerprintLibrary(ctx)
 	results := fingerprint.Match(ev, lib)
-	rows, _ := s.queries.ListVendorFingerprints(ctx) // for the explicit-model lookup
 
 	resp := map[string]any{
 		"device_id":        dev.ID.String(),
@@ -280,9 +285,10 @@ func (s *Server) testDeviceFingerprint(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(results) > 0 {
 		top := results[0]
-		model := fingerprint.ModelFromSysDescr(sysDescr)
-		if m := s.fpModelForRows(rows, top.Kind, top.Pattern); m != "" {
-			model = m // explicit model on the matched rule wins over the parsed one
+		// The winning rule's explicit model wins; else derive from sysDescr.
+		model := top.Model
+		if model == "" {
+			model = fingerprint.ModelFromSysDescr(sysDescr)
 		}
 		resp["top"] = map[string]any{
 			"kind":       top.Kind,
@@ -295,17 +301,6 @@ func (s *Server) testDeviceFingerprint(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
-}
-
-// fpModelFor returns the explicit model column of the stored fingerprint matching
-// (kind,pattern), or "" — used so a test result can show an operator-pinned model.
-func (s *Server) fpModelForRows(rows []db.VendorFingerprint, kind, pattern string) string {
-	for _, r := range rows {
-		if r.Kind == kind && r.Pattern == pattern {
-			return r.Model
-		}
-	}
-	return ""
 }
 
 // ---- Import / Export (req #4) ---------------------------------------------

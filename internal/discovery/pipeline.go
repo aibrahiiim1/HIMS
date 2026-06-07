@@ -499,11 +499,15 @@ func applyFingerprints(r *HostResult, lib []fingerprint.Print) {
 	}
 	// A strong/specific match is authoritative for vendor + product model, so we
 	// record "Extreme Networks / VE6120 Medium" instead of only the firmware string.
+	// Model precedence: the winning fingerprint's EXPLICIT model wins; otherwise the
+	// model is derived from the sysDescr (the VE6120 built-in path).
 	if top.Confidence >= 85 {
 		if top.Vendor != "" {
 			r.Vendor = top.Vendor
 		}
-		if m := fingerprint.ModelFromSysDescr(r.Probe.SNMPSysDescr); m != "" {
+		if top.Model != "" {
+			r.Model = top.Model
+		} else if m := fingerprint.ModelFromSysDescr(r.Probe.SNMPSysDescr); m != "" {
 			r.Model = m
 		}
 	}

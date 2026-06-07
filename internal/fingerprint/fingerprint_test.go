@@ -124,7 +124,7 @@ func TestCanonicalCategory(t *testing.T) {
 }
 
 func TestSysNameMatch(t *testing.T) {
-	lib := []Print{{KindSysName, "XIQC", "Extreme Networks", "wireless_controller", 70}}
+	lib := []Print{{Kind: KindSysName, Pattern: "XIQC", Vendor: "Extreme Networks", DeviceType: "wireless_controller", Confidence: 70}}
 	if r := Match(Evidence{SysName: "XIQC.coralsearesorts.com"}, lib); len(r) == 0 || r[0].Kind != KindSysName {
 		t.Fatalf("expected a sysName match, got %+v", r)
 	}
@@ -157,6 +157,21 @@ func TestExtendedCatalog(t *testing.T) {
 		if res[0].Vendor != c.wantVendor || res[0].DeviceType != c.wantType {
 			t.Errorf("%+v: got %s/%s, want %s/%s", c.ev, res[0].Vendor, res[0].DeviceType, c.wantVendor, c.wantType)
 		}
+	}
+}
+
+func TestExplicitModelFlowsThroughMatch(t *testing.T) {
+	// A rule with an explicit Model surfaces that model on the Result; a rule
+	// without one leaves Result.Model empty (caller falls back to sysDescr).
+	lib := []Print{
+		{Kind: KindOID, Pattern: "1.3.6.1.4.1.9999.1", Vendor: "Acme", DeviceType: "router", Confidence: 90, Model: "ACME-9000"},
+		{Kind: KindService, Pattern: "GenericThing", Vendor: "Gen", DeviceType: "server", Confidence: 70},
+	}
+	if r := Match(Evidence{SysObjectID: "1.3.6.1.4.1.9999.1.2"}, lib); len(r) == 0 || r[0].Model != "ACME-9000" {
+		t.Fatalf("expected explicit model ACME-9000, got %+v", r)
+	}
+	if r := Match(Evidence{SysDescr: "GenericThing v1"}, lib); len(r) == 0 || r[0].Model != "" {
+		t.Fatalf("expected empty model for model-less rule, got %+v", r)
 	}
 }
 

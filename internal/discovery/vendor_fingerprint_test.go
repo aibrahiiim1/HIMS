@@ -57,6 +57,44 @@ func TestApplyFingerprintsKeepsRealSwitch(t *testing.T) {
 	}
 }
 
+// TestApplyFingerprintsExplicitModelWins: when the winning fingerprint pins an
+// explicit model, it is used verbatim — NOT the sysDescr-derived one.
+func TestApplyFingerprintsExplicitModelWins(t *testing.T) {
+	r := HostResult{
+		Match: driver.Match{Category: domain.CatSwitch, Confidence: 50},
+		Probe: driver.Probe{
+			SNMPSysObjectID: "1.3.6.1.4.1.4242.1",
+			SNMPSysDescr:    "Acme Box - PARSED-MODEL, version 1", // would parse to "PARSED-MODEL"
+		},
+	}
+	lib := []fingerprint.Print{
+		{Kind: fingerprint.KindOID, Pattern: "1.3.6.1.4.1.4242.1", Vendor: "Acme", DeviceType: "router", Confidence: 96, Model: "PINNED-9000"},
+	}
+	applyFingerprints(&r, lib)
+	if r.Model != "PINNED-9000" {
+		t.Fatalf("expected explicit model PINNED-9000 to win over sysDescr-derived, got %q", r.Model)
+	}
+	if r.Vendor != "Acme" || r.Match.Category != domain.CatRouter {
+		t.Fatalf("expected Acme/router, got %q/%q", r.Vendor, r.Match.Category)
+	}
+}
+
+// TestApplyFingerprintsModelFallsBackToSysDescr: no explicit model → derive from
+// sysDescr (the VE6120 path).
+func TestApplyFingerprintsModelFallsBackToSysDescr(t *testing.T) {
+	r := HostResult{
+		Match: driver.Match{Category: domain.CatSwitch, Confidence: 90},
+		Probe: driver.Probe{
+			SNMPSysObjectID: "1.3.6.1.4.1.1916.2.284",
+			SNMPSysDescr:    "Extreme Networks ExtremeCloud IQ Controller - VE6120 Medium, System Version 10.05.04.0006",
+		},
+	}
+	applyFingerprints(&r, fingerprint.Library())
+	if r.Model != "VE6120 Medium" {
+		t.Fatalf("expected sysDescr-derived VE6120 Medium, got %q", r.Model)
+	}
+}
+
 // TestApplyFingerprintsNoEvidenceNoChange: with no SNMP evidence the override is
 // a no-op and the driver's verdict survives untouched.
 func TestApplyFingerprintsNoEvidenceNoChange(t *testing.T) {
