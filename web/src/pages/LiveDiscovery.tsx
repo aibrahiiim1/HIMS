@@ -127,6 +127,16 @@ function stageLabel(ev: ScanEvent): string {
     case 'known_recovered': return 'Recovered by retry'
     case 'known_missed': return 'Missed this run'
     case 'job_completed': return 'Scan completed'
+    // Extreme XCC SSH CLI collection.
+    case 'ssh_cli_collection_started': return 'SSH CLI: starting…'
+    case 'ssh_cli_command_started': return `SSH CLI: ${ev.command || 'command'}…`
+    case 'ssh_cli_command_supported': return `SSH CLI: ${ev.command || ''} supported`
+    case 'ssh_cli_command_unsupported': return `SSH CLI: ${ev.command || ''} unsupported`
+    case 'ssh_cli_command_failed': return `SSH CLI: ${ev.command || ''} failed`
+    case 'ssh_cli_command_parsed': return `SSH CLI: ${ev.command || ''} → ${ev.parsed_rows ?? 0} rows`
+    case 'ssh_cli_collection_success': return `SSH CLI: complete (${ev.parsed_rows ?? 0} APs)`
+    case 'ssh_cli_collection_partial': return 'SSH CLI: partial'
+    case 'ssh_cli_collection_failed': return 'SSH CLI: failed'
     default:
       if (ev.stage.endsWith('_attempt_started')) return `Trying ${p}…`
       if (ev.stage.endsWith('_success')) return `${p} authenticated`
@@ -139,7 +149,9 @@ function stageLabel(ev: ScanEvent): string {
 // its badge). An *_attempt_started with no later result for the same protocol.
 function activeProtocol(ev?: ScanEvent): string | null {
   if (!ev || !ev.protocol) return null
-  return ev.stage.endsWith('_attempt_started') || ev.stage === 'collection_started' || ev.stage === 'known_retry_started' ? ev.protocol : null
+  return ev.stage.endsWith('_attempt_started') || ev.stage === 'collection_started' || ev.stage === 'known_retry_started' ||
+    ev.stage === 'ssh_cli_collection_started' || ev.stage === 'ssh_cli_command_started'
+    ? ev.protocol : null
 }
 
 export function LiveDiscovery() {
@@ -195,7 +207,7 @@ export function LiveDiscovery() {
       setTimeline((prev) => {
         const n = new Map(prev)
         const arr = (n.get(ev.ip!) ?? []).concat(ev)
-        if (arr.length > 40) arr.splice(0, arr.length - 40)
+        if (arr.length > 160) arr.splice(0, arr.length - 160) // SSH CLI emits ~48 per-command events
         n.set(ev.ip!, arr)
         return n
       })

@@ -456,6 +456,7 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 		// Post-onboarding follow-ups for an enrolled host (best-effort).
 		enrichment := ""
 		var profRes *scanProfileResult
+		var sshSum *scanSSHSummary
 		collectedVia, agentName := "", "" // how OS inventory was/will be collected
 		if r.Facts != nil {
 			enrichment = "SNMP facts collected"
@@ -579,11 +580,26 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 					// is the path that exposes AP/client rosters on firmware where the
 					// SNMP MIB does not. Binds the SSH cred only if none is bound yet.
 					if s.cipher() != nil {
-						sctx, scancel := context.WithTimeout(ctx, 120*time.Second)
-						if sres := s.collectSSHCLI(sctx, dev, "", "", true); sres.Reachable {
-							enrichment = strings.TrimSpace(enrichment + " | SSH CLI: " + sres.Detail)
+						sctx, scancel := context.WithTimeout(ctx, 150*time.Second)
+						emit := func(stage, status, command, message string, parsed, skipped, warns int) {
+							s.publishSSHCmdEvent(jobID, ip, id, stage, status, command, message, parsed, skipped, warns)
 						}
+						sres := s.collectSSHCLI(sctx, dev, "", "", true, emit)
 						scancel()
+						if sres.Reachable {
+							enrichment = strings.TrimSpace(enrichment + " | SSH CLI: " + sres.Detail)
+							warnN := 0
+							for _, rr := range sres.Results {
+								if rr.Warnings != "" {
+									warnN++
+								}
+							}
+							sshSum = &scanSSHSummary{
+								Status: sres.Status, Supported: sres.Supported, Unsupported: sres.Unsupported,
+								APRows: sres.APs, ClientRows: sres.Clients, APTotal: sres.APTotal, ClientTotal: sres.ClientsTotal,
+								Warnings: warnN, Detail: sres.Detail,
+							}
+						}
 					}
 				} else if cat := string(r.Match.Category); (cat == string(domain.CatPBX) || cat == string(domain.CatVoiceGateway)) && s.cipher() != nil {
 					// Voice/PBX candidate — use a matching CUCM Vendor Connection Profile.
@@ -667,7 +683,7 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 					s.publishScanEvent(jobID, ip, id, "collection_failed", "", "failed", enrichment)
 				}
 			}
-			s.recordResult(hctx, jobID, ip, r, id, err, enrichment, profRes, collectedVia, agentName, disp, 0)
+			s.recordResult(hctx, jobID, ip, r, id, err, enrichment, profRes, collectedVia, agentName, disp, 0, sshSum)
 		}
 		return id, err
 	})
@@ -757,7 +773,7 @@ func (s *Server) retryMissedKnown(ctx context.Context, jobID uuid.UUID, locID *u
 				acancel()
 				s.recordResult(ctx, jobID, ip, rr, id, aerr,
 					"Recovered by Known-Device Retry (attempt "+strconv.Itoa(attempt)+" of "+strconv.Itoa(maxAttempts)+", slower targeted probe)",
-					nil, "", "", "known_recovered", attempt)
+					nil, "", "", "known_recovered", attempt, nil)
 				s.publishScanEvent(jobID, ip, dev.ID, "known_recovered", "", "success", "recovered on retry "+strconv.Itoa(attempt))
 				*recoveredCount++
 				recovered = true
@@ -812,6 +828,20 @@ type scanDetail struct {
 	//   "" (n/a) | "direct" | "relay_agent" (queued) | "agent_offline" | "agent_missing"
 	CollectedVia string `json:"collected_via,omitempty"`
 	AgentName    string `json:"agent_name,omitempty"` // relay agent the job was dispatched to
+	SSH          *scanSSHSummary `json:"ssh,omitempty"`   // Extreme XCC SSH CLI collection summary
+}
+
+// scanSSHSummary is the per-result SSH CLI collection rollup shown in Job Results.
+type scanSSHSummary struct {
+	Status      string `json:"status"` // complete|partial|summary_only|failed
+	Supported   int    `json:"supported"`
+	Unsupported int    `json:"unsupported"`
+	APRows      int    `json:"ap_rows"`
+	ClientRows  int    `json:"client_rows"`
+	APTotal     int    `json:"ap_total"`
+	ClientTotal int    `json:"client_total"`
+	Warnings    int    `json:"warnings"`
+	Detail      string `json:"detail"`
 }
 
 // scanProfileResult records how a Vendor Connection Profile was used during the
@@ -1033,7 +1063,7 @@ func scanNextActionWithPlan(category string, bound bool, boundKind string, pr *s
 // disposition tags the row for the Known-Device-Retry / scan-stability counts
 // (newly_discovered | known_seen | known_recovered); retryCount is how many
 // targeted retries were spent (0 for the main sweep).
-func (s *Server) recordResult(ctx context.Context, jobID uuid.UUID, ip netip.Addr, r discovery.HostResult, id uuid.UUID, applyErr error, enrichment string, profRes *scanProfileResult, collectedVia, agentName, disposition string, retryCount int) {
+func (s *Server) recordResult(ctx context.Context, jobID uuid.UUID, ip netip.Addr, r discovery.HostResult, id uuid.UUID, applyErr error, enrichment string, profRes *scanProfileResult, collectedVia, agentName, disposition string, retryCount int, sshSum *scanSSHSummary) {
 	// Persist with a FRESH context, independent of the caller's per-host probe
 	// deadline (hctx, 45s). A slow host whose probe+deep-collection exceeds that
 	// deadline must still get its result row — otherwise it is counted-alive but
@@ -1094,7 +1124,7 @@ func (s *Server) recordResult(ctx context.Context, jobID uuid.UUID, ip netip.Add
 		CredAttempts:           attempts, BoundCred: boundKind,
 		Enrichment: enrichment, Profile: profRes,
 		NextAction:   scanNextActionWithPlan(category, bound, boundKind, profRes, r.Plan, attempts),
-		CollectedVia: collectedVia, AgentName: agentName,
+		CollectedVia: collectedVia, AgentName: agentName, SSH: sshSum,
 	}
 	// Sharpen the next action for agent-routed Windows hosts.
 	switch collectedVia {

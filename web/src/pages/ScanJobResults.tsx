@@ -222,7 +222,19 @@ export function ScanJobResults() {
                           <div key={i}><span className={`badge badge-${a.success ? 'up' : a.category === 'auth_failed' ? 'down' : 'unknown'}`}>{a.kind}</span> <span className="muted">{a.success ? 'ok' : a.category}</span></div>
                         ))}</td>
                         <td>{p.bound_cred ? <span className="badge badge-up">{p.bound_cred}</span> : <span className="muted">—</span>}</td>
-                        <td style={{ fontSize: 11 }}><CollectedViaCell via={p.collected_via} agent={p.agent_name} /></td>
+                        <td style={{ fontSize: 11 }}>
+                          <CollectedViaCell via={p.collected_via} agent={p.agent_name} />
+                          {p.ssh && (
+                            <div style={{ marginTop: 4, fontSize: 10, lineHeight: 1.5 }}>
+                              <span className={`badge badge-${p.ssh.status === 'complete' ? 'up' : p.ssh.status === 'failed' ? 'down' : 'warning'}`}>SSH CLI {p.ssh.status}</span>
+                              <div className="muted">{p.ssh.supported} supported · {p.ssh.unsupported} unsupported cmds</div>
+                              <div className="muted">{p.ssh.ap_rows} AP rows · {p.ssh.client_rows} client rows{p.ssh.warnings ? ` · ${p.ssh.warnings} warn` : ''}</div>
+                              {(p.ssh.ap_rows < p.ssh.ap_total || p.ssh.client_rows < p.ssh.client_total) && (
+                                <div style={{ color: '#ffb74d' }}>reported {p.ssh.ap_total} APs / {p.ssh.client_total} clients</div>
+                              )}
+                            </div>
+                          )}
+                        </td>
                         <td style={{ fontSize: 12 }}>{r.error ? <span className="error-msg">{r.error}</span> : (p.next_action ?? '—')}</td>
                         <td style={{ whiteSpace: 'nowrap' }}>
                           {d && <Link className="btn btn-ghost btn-xs" to={`/devices/${d.id}`} title="Open device (test credential / bind / repair)">Open</Link>}{' '}

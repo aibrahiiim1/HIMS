@@ -606,6 +606,17 @@ export interface ScanDetail {
   // "" | "direct" | "relay_agent" (queued) | "agent_offline" | "agent_missing"
   collected_via?: string
   agent_name?: string
+  ssh?: {
+    status: string // complete|partial|summary_only|failed
+    supported: number
+    unsupported: number
+    ap_rows: number
+    client_rows: number
+    ap_total: number
+    client_total: number
+    warnings: number
+    detail: string
+  } | null
 }
 export interface DiscoveryResult {
   id: string
@@ -635,6 +646,11 @@ export interface ScanEvent {
   protocol?: string
   status?: string
   message?: string
+  // Per-command SSH CLI collection detail (ssh_cli_* stages).
+  command?: string
+  parsed_rows?: number
+  skipped_rows?: number
+  warning_count?: number
   ts: string
 }
 

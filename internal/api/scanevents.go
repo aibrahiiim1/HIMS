@@ -27,7 +27,12 @@ type ScanEvent struct {
 	Protocol string `json:"protocol,omitempty"`
 	Status   string `json:"status,omitempty"`
 	Message  string `json:"message,omitempty"`
-	TS       string `json:"ts"`
+	// Optional per-command detail (SSH CLI collection events).
+	Command      string `json:"command,omitempty"`
+	ParsedRows   int    `json:"parsed_rows,omitempty"`
+	SkippedRows  int    `json:"skipped_rows,omitempty"`
+	WarningCount int    `json:"warning_count,omitempty"`
+	TS           string `json:"ts"`
 }
 
 // scanEventHub is an in-memory pub/sub for live scan events. Per job it keeps a
@@ -122,8 +127,9 @@ func (h *scanEventHub) subscribe(jobID uuid.UUID) (<-chan ScanEvent, []ScanEvent
 // IPs) — they drive the live board but add no value to playback history, so they
 // are not written to discovery_job_events.
 var nonPersistedStages = map[string]bool{
-	"target_probe_started": true,
-	"target_queued":        true,
+	"target_probe_started":    true,
+	"target_queued":           true,
+	"ssh_cli_command_started": true, // transient "now running" pulse; live-only
 }
 
 // publishScanEvent stamps + fans out an event over the live hub and, for the
@@ -155,6 +161,45 @@ func (s *Server) publishScanEvent(jobID uuid.UUID, ip netip.Addr, devID uuid.UUI
 	defer cancel()
 	_, _ = s.queries.CreateDiscoveryJobEvent(pctx, db.CreateDiscoveryJobEventParams{
 		JobID: jobID, Ip: ipPtr, DeviceID: devPtr, Stage: stage, Protocol: protocol, Status: status, Message: message,
+	})
+}
+
+// publishSSHCmdEvent fans out (and persists, unless live-only) a per-command SSH
+// CLI collection event carrying command + parsed/skipped/warning detail.
+func (s *Server) publishSSHCmdEvent(jobID uuid.UUID, ip netip.Addr, devID uuid.UUID, stage, status, command, message string, parsed, skipped, warns int) {
+	ev := ScanEvent{
+		JobID: jobID.String(), Stage: stage, Protocol: "ssh", Status: status,
+		Command: command, Message: message, ParsedRows: parsed, SkippedRows: skipped, WarningCount: warns,
+		TS: time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	if ip.IsValid() {
+		ev.IP = ip.String()
+	}
+	if devID != uuid.Nil {
+		ev.DeviceID = devID.String()
+	}
+	s.hub().publish(ev)
+	if nonPersistedStages[stage] {
+		return
+	}
+	var ipPtr *netip.Addr
+	if ip.IsValid() {
+		ipPtr = &ip
+	}
+	var devPtr *uuid.UUID
+	if devID != uuid.Nil {
+		devPtr = &devID
+	}
+	// Persisted history table carries the base fields; the rich per-command detail
+	// is encoded into the message so playback stays informative.
+	msg := message
+	if command != "" {
+		msg = command + ": " + message
+	}
+	pctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, _ = s.queries.CreateDiscoveryJobEvent(pctx, db.CreateDiscoveryJobEventParams{
+		JobID: jobID, Ip: ipPtr, DeviceID: devPtr, Stage: stage, Protocol: "ssh", Status: status, Message: msg,
 	})
 }
 

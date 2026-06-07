@@ -236,11 +236,20 @@ func (s *Server) resolveSSHCred(ctx context.Context, dev db.Device, overUser, ov
 // collectSSHCLI runs the read-only allowlist over SSH, classifies + persists
 // command results, and (when persistWireless) maps exposed AP/SSID/client data
 // into the wireless_* tables with source=extreme_xcc_ssh.
-func (s *Server) collectSSHCLI(ctx context.Context, dev db.Device, overUser, overPass string, persistWireless bool) sshCLISummary {
+// sshEmitFn streams a per-command SSH CLI collection event (nil = no streaming,
+// e.g. the manual UI path). Used by the scan to feed the Live Discovery board.
+type sshEmitFn func(stage, status, command, message string, parsed, skipped, warns int)
+
+func (s *Server) collectSSHCLI(ctx context.Context, dev db.Device, overUser, overPass string, persistWireless bool, emit sshEmitFn) sshCLISummary {
+	if emit == nil {
+		emit = func(string, string, string, string, int, int, int) {}
+	}
+	emit("ssh_cli_collection_started", "started", "", "SSH CLI collection started", 0, 0, 0)
 	sum := sshCLISummary{}
 	creds, credID, legacy, ok, detail := s.resolveSSHCred(ctx, dev, overUser, overPass)
 	if !ok {
 		sum.Detail = "SSH CLI not run: " + detail
+		emit("ssh_cli_collection_failed", "failed", "", sum.Detail, 0, 0, 0)
 		return sum
 	}
 	sum.Reachable = true
@@ -258,6 +267,7 @@ func (s *Server) collectSSHCLI(ctx context.Context, dev db.Device, overUser, ove
 	var apN, ssidN, cliN, activeAPs, nonActiveAPs int
 	var ctrl ctrlSummary
 	for _, cmd := range xccCLICommands {
+		emit("ssh_cli_command_started", "started", cmd, "", 0, 0, 0)
 		out, err := ssh.Run(ctx, host, 22, creds, legacy, cmd, 15*time.Second)
 		res := sshCLIResult{Command: cmd}
 		switch {
@@ -351,6 +361,21 @@ func (s *Server) collectSSHCLI(ctx context.Context, dev db.Device, overUser, ove
 			OutputPreview: res.Preview, ParsedRows: int32(res.ParsedRows), ErrorMessage: res.Error,
 			LineCount: int32(res.LineCount), Headers: res.Headers, SkippedRows: int32(res.SkippedRows), Warnings: res.Warnings,
 		})
+		// Per-command outcome event for the Live Discovery timeline.
+		warnN := 0
+		if res.Warnings != "" {
+			warnN = 1
+		}
+		switch res.Status {
+		case "failed", "timeout":
+			emit("ssh_cli_command_failed", res.Status, cmd, res.Error, 0, 0, 0)
+		case "unsupported":
+			emit("ssh_cli_command_unsupported", "unsupported", cmd, "", 0, 0, 0)
+		case "parsed":
+			emit("ssh_cli_command_parsed", "parsed", cmd, "", res.ParsedRows, res.SkippedRows, warnN)
+		default: // not_parsed = ran OK, recognized, no structured rows
+			emit("ssh_cli_command_supported", "supported", cmd, "", 0, res.SkippedRows, warnN)
+		}
 		sum.Results = append(sum.Results, res)
 	}
 
@@ -397,6 +422,15 @@ func (s *Server) collectSSHCLI(ctx context.Context, dev db.Device, overUser, ove
 		ParsedApRows: int32(apN), ParsedClientRows: int32(cliN), ParsedSsidRows: int32(ssidN),
 		CollectionStatus: status, Detail: capStr(sum.Detail, 480),
 	})
+	// Final lifecycle event for the Live Discovery board.
+	switch status {
+	case "complete":
+		emit("ssh_cli_collection_success", "success", "", sum.Detail, apN, cliN, 0)
+	case "failed":
+		emit("ssh_cli_collection_failed", "failed", "", sum.Detail, 0, 0, 0)
+	default: // partial | summary_only
+		emit("ssh_cli_collection_partial", "partial", "", sum.Detail, apN, cliN, 0)
+	}
 	return sum
 }
 
@@ -838,7 +872,7 @@ func (s *Server) sshCLIHandler(w http.ResponseWriter, r *http.Request, persist b
 	}
 	var body sshCLIReq
 	_ = decodeJSONOptional(r, &body)
-	sum := s.collectSSHCLI(ctx, dev, strings.TrimSpace(body.Username), body.Password, persist)
+	sum := s.collectSSHCLI(ctx, dev, strings.TrimSpace(body.Username), body.Password, persist, nil)
 	action := "wireless.ssh_test"
 	if persist {
 		action = "wireless.ssh_collect"
