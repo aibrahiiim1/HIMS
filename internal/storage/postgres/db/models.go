@@ -325,6 +325,19 @@ type DiscoveryJob struct {
 	CreatedAt  time.Time     `json:"created_at"`
 }
 
+type DiscoveryJobEvent struct {
+	Seq       int64       `json:"seq"`
+	JobID     uuid.UUID   `json:"job_id"`
+	Ip        *netip.Addr `json:"ip"`
+	DeviceID  *uuid.UUID  `json:"device_id"`
+	Stage     string      `json:"stage"`
+	Protocol  string      `json:"protocol"`
+	Status    string      `json:"status"`
+	Message   string      `json:"message"`
+	Metadata  []byte      `json:"metadata"`
+	CreatedAt time.Time   `json:"created_at"`
+}
+
 type DiscoveryResult struct {
 	ID          uuid.UUID  `json:"id"`
 	JobID       uuid.UUID  `json:"job_id"`

@@ -1,11 +1,11 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
 import {
   Radar, ArrowLeft, Table2, RefreshCw, Pencil, KeyRound, X,
   Network, Server, Laptop, Printer, Camera, Video, Flame, HardDrive, Phone, Wifi, Boxes, HelpCircle, Cpu,
 } from 'lucide-react'
-import { api, locationPaths, type Device, type DiscoveryJob, type DiscoveryResult, type Location, type ScanJobCounts } from '../api'
+import { api, locationPaths, type Device, type DiscoveryJob, type DiscoveryResult, type Location, type ScanJobCounts, type ScanEvent } from '../api'
 import { PageHeader, EmptyState } from '../components/ui'
 import { ReachabilityBadge, ManagementBadge } from '../components/StatusBadges'
 import { EditDevice } from '../components/EditDevice'
@@ -107,6 +107,41 @@ function isMissingClass(d?: Device): boolean {
   return !d.category || d.category === 'unknown' || !d.vendor
 }
 
+// Human label for a live event stage (timeline + active-stage badge).
+function stageLabel(ev: ScanEvent): string {
+  const p = (ev.protocol || '').toUpperCase()
+  switch (ev.stage) {
+    case 'target_probe_started': return 'Probing started'
+    case 'tcp_port_found': return `Ports ${ev.message || ''}`
+    case 'snmp_attempt_started': return 'Trying SNMP…'
+    case 'snmp_success': return 'SNMP authenticated'
+    case 'snmp_failed_relevant': return 'SNMP failed'
+    case 'credential_bound': return `Bound ${p || 'credential'}`
+    case 'classification_updated': return `Classified ${ev.message ? '(' + ev.message + ')' : ''}`
+    case 'collection_started': return 'Collecting inventory…'
+    case 'collection_success': return 'Inventory collected'
+    case 'collection_failed': return 'Collection failed'
+    case 'relay_agent_job_queued': return 'Queued to Relay Agent'
+    case 'relay_agent_failed': return `Relay agent: ${ev.message || 'failed'}`
+    case 'known_retry_started': return 'Targeted retry…'
+    case 'known_recovered': return 'Recovered by retry'
+    case 'known_missed': return 'Missed this run'
+    case 'job_completed': return 'Scan completed'
+    default:
+      if (ev.stage.endsWith('_attempt_started')) return `Trying ${p}…`
+      if (ev.stage.endsWith('_success')) return `${p} authenticated`
+      if (ev.stage.endsWith('_failed')) return `${p} failed`
+      return ev.stage.replace(/_/g, ' ')
+  }
+}
+
+// activeProtocol: which protocol is mid-attempt for a device right now (animate
+// its badge). An *_attempt_started with no later result for the same protocol.
+function activeProtocol(ev?: ScanEvent): string | null {
+  if (!ev || !ev.protocol) return null
+  return ev.stage.endsWith('_attempt_started') || ev.stage === 'collection_started' || ev.stage === 'known_retry_started' ? ev.protocol : null
+}
+
 export function LiveDiscovery() {
   const { jobId } = useParams()
   const qc = useQueryClient()
@@ -132,6 +167,44 @@ export function LiveDiscovery() {
   const reclassify = useMutation({ mutationFn: (id: string) => api.post(`/devices/${id}/reclassify`, {}), onSuccess: () => { setMsg('Reclassified.'); qc.invalidateQueries({ queryKey: ['devices'] }) }, onError: (e) => setMsg((e as Error).message) })
   const testCreds = useMutation({ mutationFn: (id: string) => api.post<{ successes: number; failures: number }>('/credentials/test', { device_ids: [id] }), onSuccess: (r) => setMsg(`Credential test: ${r.successes} ok / ${r.failures} failed.`), onError: (e) => setMsg((e as Error).message) })
   const rerun = useMutation({ mutationFn: () => api.post(`/discovery/jobs/${jobId}/rerun`, {}), onSuccess: () => setMsg('Re-run launched.'), onError: (e) => setMsg((e as Error).message) })
+
+  // --- Live event stream (SSE) with automatic polling fallback ---------------
+  // SSE delivers the per-protocol play-by-play (probing → trying SSH → bound →
+  // classified) the moment it happens; the polling query above remains the
+  // authoritative source for each card's base state, so if SSE drops the board
+  // stays live via polling and simply loses the fine-grained activity overlay.
+  const [sse, setSse] = useState<'connecting' | 'live' | 'polling'>('connecting')
+  const [liveByIP, setLiveByIP] = useState<Map<string, ScanEvent>>(new Map())
+  const [timeline, setTimeline] = useState<Map<string, ScanEvent[]>>(new Map())
+
+  useEffect(() => {
+    if (!jobId) return
+    let closed = false
+    const es = new EventSource(`/api/v1/discovery/jobs/${jobId}/stream`)
+    es.onopen = () => { if (!closed) setSse('live') }
+    es.onmessage = (m) => {
+      let ev: ScanEvent
+      try { ev = JSON.parse(m.data) as ScanEvent } catch { return }
+      if (ev.stage === 'job_completed') {
+        closed = true; es.close(); setSse('polling')
+        qc.invalidateQueries({ queryKey: ['discovery-job-live', jobId] })
+        return
+      }
+      if (!ev.ip) return
+      setLiveByIP((prev) => { const n = new Map(prev); n.set(ev.ip!, ev); return n })
+      setTimeline((prev) => {
+        const n = new Map(prev)
+        const arr = (n.get(ev.ip!) ?? []).concat(ev)
+        if (arr.length > 40) arr.splice(0, arr.length - 40)
+        n.set(ev.ip!, arr)
+        return n
+      })
+    }
+    // On error EventSource auto-reconnects; flip the indicator to polling until it
+    // recovers (onopen flips back to live). Polling keeps the board fresh either way.
+    es.onerror = () => { if (!closed) setSse('polling') }
+    return () => { closed = true; es.close() }
+  }, [jobId, qc])
 
   const job = detail.data?.job
   const results = useMemo(() => detail.data?.results ?? [], [detail.data])
@@ -203,6 +276,10 @@ export function LiveDiscovery() {
       <PageHeader title="Live Discovery" icon={Radar}
         subtitle={job ? `${job.scope_cidr ?? 'import'} · ${job.status}${running ? ` · elapsed ${duration(job.started_at, null)}` : ` · ${duration(job.started_at, job.finished_at)}`}` : 'Loading…'}
         actions={<>
+          <span title={sse === 'live' ? 'Live event stream connected' : 'Streaming unavailable — polling for updates'} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, color: sse === 'live' ? '#16a34a' : '#d97706', marginRight: 4 }}>
+            <span style={{ width: 8, height: 8, borderRadius: 8, background: sse === 'live' ? '#16a34a' : '#d97706', animation: sse === 'live' && running ? 'kdrpulse 1.2s ease-in-out infinite' : 'none' }} />
+            {sse === 'live' ? 'Live (SSE)' : 'Polling'}
+          </span>
           <Link className="btn btn-ghost btn-sm" to="/discovery/jobs"><ArrowLeft size={14} /> All jobs</Link>
           <Link className="btn btn-ghost btn-sm" to={`/discovery/jobs/${jobId}/results`}><Table2 size={14} /> Table View</Link>
           {job?.scope_cidr && <button className="btn btn-sm" disabled={rerun.isPending} onClick={() => rerun.mutate()}><RefreshCw size={14} /> Re-run</button>}
@@ -237,13 +314,13 @@ export function LiveDiscovery() {
           {detail.isLoading && <div className="loading">Loading…</div>}
           {job && nodes.length === 0 && <EmptyState icon={Radar} title="No devices yet" message={running ? 'Scanning…' : 'No host results recorded for this job.'} />}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: 10 }}>
-            {filtered.map((n) => <DeviceCard key={n.ip} n={n} selected={sel === n.ip} onClick={() => setSel(n.ip)} />)}
+            {filtered.map((n) => <DeviceCard key={n.ip} n={n} live={liveByIP.get(n.ip)} selected={sel === n.ip} onClick={() => setSel(n.ip)} />)}
           </div>
         </div>
 
         {/* Detail side panel */}
         {selNode && (
-          <DetailPanel n={selNode} locPath={locPath} onClose={() => setSel(null)}
+          <DetailPanel n={selNode} locPath={locPath} events={timeline.get(selNode.ip) ?? []} onClose={() => setSel(null)}
             onEdit={() => selNode.d && setEditDev(selNode.d)}
             onRescan={() => rescanIP.mutate(selNode.ip)}
             onReclassify={() => selNode.d && reclassify.mutate(selNode.d.id)}
@@ -295,10 +372,11 @@ function protoBadges(r?: DiscoveryResult) {
   return out
 }
 
-function DeviceCard({ n, selected, onClick }: { n: Node; selected: boolean; onClick: () => void }) {
+function DeviceCard({ n, live, selected, onClick }: { n: Node; live?: ScanEvent; selected: boolean; onClick: () => void }) {
   const m = STATE_META[n.state]
   const Icon = CAT_ICON[n.d?.category ?? n.r?.category ?? 'unknown'] ?? HelpCircle
-  const probing = n.state === 'probing'
+  const active = activeProtocol(live)
+  const probing = n.state === 'probing' || !!active
   const badges = protoBadges(n.r).slice(0, 6)
   return (
     <button onClick={onClick} style={{
@@ -317,19 +395,30 @@ function DeviceCard({ n, selected, onClick }: { n: Node; selected: boolean; onCl
       <div style={{ marginTop: 6, fontSize: 11, fontWeight: 600, color: m.color }}>
         {m.label}{n.recovered ? ' · recovered' : ''}{n.newly ? ' · new' : ''}
       </div>
-      {n.state === 'managed' && n.method && <div className="muted" style={{ fontSize: 10 }}>via {n.method}</div>}
-      {(n.state === 'unmanaged' || n.state === 'needs_agent') && n.reason && <div style={{ fontSize: 10, color: m.color }}>{n.reason}</div>}
+      {/* live active stage (SSE) takes priority over static method/reason text */}
+      {active ? (
+        <div style={{ fontSize: 10, color: '#0ea5e9', fontWeight: 600, animation: 'kdrpulse 1.2s ease-in-out infinite' }}>{stageLabel(live!)}</div>
+      ) : (
+        <>
+          {n.state === 'managed' && n.method && <div className="muted" style={{ fontSize: 10 }}>via {n.method}</div>}
+          {(n.state === 'unmanaged' || n.state === 'needs_agent') && n.reason && <div style={{ fontSize: 10, color: m.color }}>{n.reason}</div>}
+          {!n.method && !n.reason && live && n.state !== 'managed' && <div className="muted" style={{ fontSize: 10 }}>{stageLabel(live)}</div>}
+        </>
+      )}
       {badges.length > 0 && (
         <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap', marginTop: 6 }}>
-          {badges.map((b, i) => <span key={i} className={`badge badge-${b.tone}`} title={b.title} style={{ fontSize: 9, padding: '1px 4px' }}>{b.kind}</span>)}
+          {badges.map((b, i) => {
+            const isActive = active && (b.kind === active || b.kind.startsWith(active))
+            return <span key={i} className={`badge badge-${b.tone}`} title={b.title} style={{ fontSize: 9, padding: '1px 4px', animation: isActive ? 'kdrpulse 0.9s ease-in-out infinite' : 'none', outline: isActive ? '1px solid #0ea5e9' : 'none' }}>{b.kind}</span>
+          })}
         </div>
       )}
     </button>
   )
 }
 
-function DetailPanel({ n, locPath, onClose, onEdit, onRescan, onReclassify, onTest, busy }: {
-  n: Node; locPath: Record<string, string>; onClose: () => void
+function DetailPanel({ n, locPath, events, onClose, onEdit, onRescan, onReclassify, onTest, busy }: {
+  n: Node; locPath: Record<string, string>; events: ScanEvent[]; onClose: () => void
   onEdit: () => void; onRescan: () => void; onReclassify: () => void; onTest: () => void; busy: boolean
 }) {
   const { r, d } = n
@@ -369,6 +458,24 @@ function DetailPanel({ n, locPath, onClose, onEdit, onRescan, onReclassify, onTe
             {(p.cred_attempts ?? []).map((a, i) => (
               <div key={i} style={{ fontSize: 11 }}><span className={`badge badge-${a.success ? 'up' : a.category === 'auth_failed' ? 'down' : 'unknown'}`}>{a.kind}</span> <span className="muted">{a.success ? 'ok' : a.category}</span></div>
             ))}
+          </div>
+        )}
+        {/* Live per-device event timeline (SSE / playback). */}
+        {events.length > 0 && (
+          <div style={{ marginTop: 10, borderTop: '1px solid var(--border)', paddingTop: 8 }}>
+            <div className="muted" style={{ fontSize: 11, marginBottom: 4 }}>Event timeline ({events.length})</div>
+            <div style={{ maxHeight: 220, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
+              {events.slice().reverse().map((ev, i) => {
+                const tone = ev.status === 'success' ? '#16a34a' : ev.status === 'failed' ? '#dc2626' : ev.status === 'started' ? '#0ea5e9' : '#64748b'
+                return (
+                  <div key={`${ev.seq}-${i}`} style={{ display: 'flex', gap: 6, fontSize: 11, alignItems: 'baseline' }}>
+                    <span style={{ width: 7, height: 7, borderRadius: 7, background: tone, flexShrink: 0, marginTop: 4 }} />
+                    <span style={{ flex: 1 }}>{stageLabel(ev)}</span>
+                    <span className="muted" style={{ fontSize: 9, whiteSpace: 'nowrap' }}>{new Date(ev.ts).toLocaleTimeString()}</span>
+                  </div>
+                )
+              })}
+            </div>
           </div>
         )}
       </div>

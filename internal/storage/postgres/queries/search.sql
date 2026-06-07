@@ -87,3 +87,14 @@ SELECT * FROM discovery_jobs ORDER BY created_at DESC LIMIT 50;
 -- name: DeleteDiscoveryJob :exec
 -- Removes a job and its results (discovery_results FK ON DELETE CASCADE).
 DELETE FROM discovery_jobs WHERE id = $1;
+
+-- name: CreateDiscoveryJobEvent :one
+-- Persist one live-discovery event for completed-job playback (the live SSE feed
+-- is served from the in-memory hub; this is the durable history).
+INSERT INTO discovery_job_events (job_id, ip, device_id, stage, protocol, status, message)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING seq;
+
+-- name: ListDiscoveryJobEvents :many
+SELECT seq, job_id, ip, device_id, stage, protocol, status, message, created_at
+FROM discovery_job_events WHERE job_id = $1 ORDER BY seq ASC LIMIT 5000;

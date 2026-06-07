@@ -612,6 +612,20 @@ export interface DiscoveryResult {
   retry_count?: number
 }
 
+// One live/replayed discovery event (SSE /discovery/jobs/:id/stream + the
+// persisted /events history). The play-by-play behind the result rows.
+export interface ScanEvent {
+  seq: number
+  job_id: string
+  ip?: string
+  device_id?: string
+  stage: string
+  protocol?: string
+  status?: string
+  message?: string
+  ts: string
+}
+
 // Separated, honest per-job scan counts (found_count is NOT the stable inventory
 // count). Returned alongside {job, results} from GET /discovery/jobs/:id.
 export interface ScanJobCounts {

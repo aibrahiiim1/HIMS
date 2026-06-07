@@ -20,6 +20,7 @@ import (
 	"net/netip"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -162,6 +163,18 @@ type PipelineConfig struct {
 	// last-known open ports here so a host listening only on a non-standard port
 	// is still re-detected on the targeted retry.
 	ExtraPorts []int
+	// OnEvent, if set, is called with a play-by-play event at each probe stage so
+	// the live discovery board can show what is happening in real time. Must be
+	// cheap + non-blocking (the scan calls it on the hot path).
+	OnEvent func(PipelineEvent)
+}
+
+// PipelineEvent is one live stage event emitted during a host probe.
+type PipelineEvent struct {
+	Stage    string // e.g. target_probe_started, tcp_port_found, snmp_success, credential_bound
+	Protocol string // snmp | ssh | winrm | onvif | wmi | http_basic | ...
+	Status   string // started | success | failed
+	Message  string
 }
 
 // explicitTierSpecificity ranks operator-selected groups above subnet (2) and
@@ -173,6 +186,12 @@ const explicitTierSpecificity = 100
 // are recorded in result.Error but do not abort the pipeline.
 func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg PipelineConfig) HostResult { //nolint:gocritic
 	r := HostResult{IP: ip}
+	emit := func(stage, proto, status, msg string) {
+		if cfg.OnEvent != nil {
+			cfg.OnEvent(PipelineEvent{Stage: stage, Protocol: proto, Status: status, Message: msg})
+		}
+	}
+	emit("target_probe_started", "", "started", "")
 
 	// Step 1: TCP port scan — management ports for every device class (switches/
 	// servers via SSH/SNMP-mgmt, Windows via SMB/RPC/WinRM/RDP, cameras via
@@ -188,6 +207,9 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 	}
 	r.OpenPorts = scanPorts(ctx, ip, ports, cfg.PortTimeout)
 	r.Probe = driver.Probe{IP: ip, OpenTCPPorts: r.OpenPorts}
+	if len(r.OpenPorts) > 0 {
+		emit("tcp_port_found", "", "found", intsCSV(r.OpenPorts))
+	}
 
 	// Step 2: Resolve credential candidates (scope-bound + operator-selected /
 	// all-stored, the latter injected by the scan as ExtraGroups).
@@ -282,15 +304,19 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 		if cand.Kind == domain.CredSNMPv3 && dec.V3 != nil {
 			tgt = snmp.Target{Addr: ip, Version: snmp.V3, V3: dec.V3, Timeout: cfg.SNMPTimeout}
 		}
+		emit("snmp_attempt_started", "snmp", "started", "")
 		if probe(tgt) {
 			r.CredAttempts = append(r.CredAttempts, snmpAttempt(cand, true)) // success always recorded → proven
 			c := cand
 			r.BoundCred = &c // bind-on-success, then stop trying further communities
+			emit("snmp_success", "snmp", "success", r.Probe.SNMPSysDescr)
+			emit("credential_bound", "snmp", "success", "")
 			break
 		}
 		if snmpRelevant {
 			// Surface the SNMP failure only when SNMP was expected for this candidate.
 			r.CredAttempts = append(r.CredAttempts, snmpAttempt(cand, false))
+			emit("snmp_failed_relevant", "snmp", "failed", "")
 		}
 	}
 	if authCli == nil && snmpRelevant { // default-community fallback only when SNMP is expected
@@ -324,6 +350,7 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 			if derr != nil || dec.Community == "" {
 				continue
 			}
+			emit(string(cand.Kind)+"_attempt_started", string(cand.Kind), "started", "")
 			out := credtest.Test(ctx, string(cand.Kind), dec.Community, ip.String(), credtest.Options{})
 			r.CredAttempts = append(r.CredAttempts, CredAttempt{
 				CredentialID: cand.ID, Kind: cand.Kind, Protocol: out.Protocol,
@@ -333,8 +360,11 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 				c := cand
 				r.BoundCred = &c // bind-on-success
 				authedKind = cand.Kind
+				emit(string(cand.Kind)+"_success", string(cand.Kind), "success", out.Detail)
+				emit("credential_bound", string(cand.Kind), "success", "")
 				break
 			}
+			emit(string(cand.Kind)+"_failed", string(cand.Kind), "failed", out.Category)
 		}
 	}
 
@@ -390,6 +420,9 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 			r.Match = driver.Match{Category: cat, Confidence: 60}
 		}
 	}
+	if c := string(r.Match.Category); c != "" {
+		emit("classification_updated", "", c, strconv.Itoa(r.Match.Confidence))
+	}
 
 	// Step 6: Deep collection — only when a driver matched AND we hold a live
 	// authenticated SNMP session.
@@ -405,6 +438,15 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 		_ = authCli.Close()
 	}
 	return r
+}
+
+// intsCSV renders a port list as "22,443,8443" for an event message.
+func intsCSV(xs []int) string {
+	parts := make([]string, len(xs))
+	for i, x := range xs {
+		parts[i] = strconv.Itoa(x)
+	}
+	return strings.Join(parts, ",")
 }
 
 // snmpAttempt records one SNMP credential probe outcome for credential-test

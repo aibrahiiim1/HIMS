@@ -72,6 +72,9 @@ type Querier interface {
 	CreateDevice(ctx context.Context, arg CreateDeviceParams) (Device, error)
 	CreateDeviceTemplate(ctx context.Context, arg CreateDeviceTemplateParams) (DeviceTemplate, error)
 	CreateDiscoveryJob(ctx context.Context, arg CreateDiscoveryJobParams) (DiscoveryJob, error)
+	// Persist one live-discovery event for completed-job playback (the live SSE feed
+	// is served from the in-memory hub; this is the durable history).
+	CreateDiscoveryJobEvent(ctx context.Context, arg CreateDiscoveryJobEventParams) (int64, error)
 	CreateDiscoveryResult(ctx context.Context, arg CreateDiscoveryResultParams) (DiscoveryResult, error)
 	CreateLocation(ctx context.Context, arg CreateLocationParams) (Location, error)
 	CreateLookup(ctx context.Context, arg CreateLookupParams) (Lookup, error)
@@ -302,6 +305,7 @@ type Querier interface {
 	ListDevicesNeedingDefaultCheck(ctx context.Context) ([]ListDevicesNeedingDefaultCheckRow, error)
 	// Credentialed device classes (server/endpoint) that have never been OS-inventoried.
 	ListDevicesWithoutOSInventory(ctx context.Context) ([]ListDevicesWithoutOSInventoryRow, error)
+	ListDiscoveryJobEvents(ctx context.Context, jobID uuid.UUID) ([]ListDiscoveryJobEventsRow, error)
 	ListDiscoveryJobs(ctx context.Context) ([]DiscoveryJob, error)
 	ListDiscoveryResults(ctx context.Context, jobID uuid.UUID) ([]DiscoveryResult, error)
 	// A check is due when enabled and either never run or its interval elapsed.

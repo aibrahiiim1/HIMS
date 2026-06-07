@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -39,6 +40,9 @@ type Server struct {
 	flow       *flowCollector // nil until StartFlowCollector binds the UDP listener
 	flowAddr   string         // NetFlow collector listen address ("" = disabled)
 	authActive atomic.Bool    // true once any user has a password (enforce auth); false = open bootstrap mode
+
+	scanHub     *scanEventHub // live scan event fan-out (SSE); lazily created
+	scanHubOnce sync.Once
 }
 
 // cipher returns the active credential cipher, or nil when no key is loaded.
@@ -174,6 +178,8 @@ func (s *Server) routes() {
 		r.Get("/discovery/jobs/{id}", s.getDiscoveryJob)
 		r.Delete("/discovery/jobs/{id}", s.deleteDiscoveryJob)
 		r.Post("/discovery/jobs/{id}/rerun", s.rerunDiscoveryJob)
+		r.Get("/discovery/jobs/{id}/events", s.listScanEvents) // persisted history (playback)
+		r.Get("/discovery/jobs/{id}/stream", s.streamScanEvents) // live SSE event stream
 
 		// --- Devices --------------------------------------------------
 		r.Get("/devices", s.listDevices)

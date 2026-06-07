@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/netip"
 	"strconv"
@@ -444,7 +445,9 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 	res := scan.Scope(ctx, hosts, concurrency, func(ctx context.Context, ip netip.Addr) (uuid.UUID, error) {
 		hctx, hcancel := context.WithTimeout(ctx, 45*time.Second)
 		defer hcancel()
-		r := discovery.Run(hctx, ip, locID, cfg)
+		hcfg := cfg
+		hcfg.OnEvent = s.pipelineEventEmitter(jobID, ip) // live per-stage events for this host
+		r := discovery.Run(hctx, ip, locID, hcfg)
 		id, err := applier.Apply(hctx, r, locID)
 		// Post-onboarding follow-ups for an enrolled host (best-effort).
 		enrichment := ""
@@ -478,6 +481,7 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 				}
 				boundOS := r.BoundCred != nil && (r.BoundCred.Kind == domain.CredWinRM || r.BoundCred.Kind == domain.CredSSH)
 				if s.cipher() != nil && (boundOS || legacyWSMan) {
+					s.publishScanEvent(jobID, ip, id, "collection_started", "", "started", "deep OS inventory")
 					cctx, ccancel := context.WithTimeout(ctx, 2*time.Minute)
 					oc := s.runOSCollection(cctx, dev)
 					ccancel()
@@ -610,6 +614,20 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 			}
 			seenAlive[ip] = true
 			seenMu.Unlock()
+			switch collectedVia {
+			case "direct":
+				s.publishScanEvent(jobID, ip, id, "collection_success", "", "success", enrichment)
+			case "relay_agent":
+				s.publishScanEvent(jobID, ip, id, "relay_agent_job_queued", "", "queued", agentName)
+			case "agent_offline":
+				s.publishScanEvent(jobID, ip, id, "relay_agent_failed", "", "failed", "site Relay Agent offline")
+			case "agent_missing":
+				s.publishScanEvent(jobID, ip, id, "relay_agent_failed", "", "failed", "no Relay Agent for this site")
+			default:
+				if strings.HasPrefix(enrichment, "OS collection incomplete") {
+					s.publishScanEvent(jobID, ip, id, "collection_failed", "", "failed", enrichment)
+				}
+			}
 			s.recordResult(hctx, jobID, ip, r, id, err, enrichment, profRes, collectedVia, agentName, disp, 0)
 		}
 		return id, err
@@ -633,6 +651,8 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 	_ = s.queries.UpdateDiscoveryJobStatus(context.Background(), db.UpdateDiscoveryJobStatusParams{
 		ID: jobID, Status: status, HostCount: int32(len(hosts)), FoundCount: int32(found), Error: errMsg,
 	})
+	s.publishScanEvent(jobID, netip.Addr{}, uuid.Nil, "job_completed", "", status,
+		fmt.Sprintf("%d found · %d new · %d known · %d recovered · %d missed", found, newCount, knownSeenCount, recoveredCount, missedCount))
 	_ = res // per-IP aggregate retained for potential future telemetry
 }
 
@@ -665,6 +685,8 @@ func (s *Server) retryMissedKnown(ctx context.Context, jobID uuid.UUID, locID *u
 		dev := knownByIP[ip]
 		rcfg := retryCfg
 		rcfg.ExtraPorts = s.lastKnownOpenPorts(ctx, dev.ID) // last successful open ports
+		rcfg.OnEvent = s.pipelineEventEmitter(jobID, ip)
+		s.publishScanEvent(jobID, ip, dev.ID, "known_retry_started", "", "started", "missed in main sweep — targeted retry")
 		recovered := false
 		attempt := 0
 		for attempt = 1; attempt <= maxAttempts; attempt++ {
@@ -685,6 +707,7 @@ func (s *Server) retryMissedKnown(ctx context.Context, jobID uuid.UUID, locID *u
 				s.recordResult(ctx, jobID, ip, rr, id, aerr,
 					"Recovered by Known-Device Retry (attempt "+strconv.Itoa(attempt)+" of "+strconv.Itoa(maxAttempts)+", slower targeted probe)",
 					nil, "", "", "known_recovered", attempt)
+				s.publishScanEvent(jobID, ip, dev.ID, "known_recovered", "", "success", "recovered on retry "+strconv.Itoa(attempt))
 				*recoveredCount++
 				recovered = true
 				break
@@ -693,6 +716,7 @@ func (s *Server) retryMissedKnown(ctx context.Context, jobID uuid.UUID, locID *u
 		}
 		if !recovered {
 			s.recordMissed(ctx, jobID, ip, dev, discovery.HostResult{}, maxAttempts)
+			s.publishScanEvent(jobID, ip, dev.ID, "known_missed", "", "failed", "unreachable after "+strconv.Itoa(maxAttempts)+" retries")
 			*missedCount++
 		}
 	}

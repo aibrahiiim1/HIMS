@@ -45,6 +45,39 @@ func (q *Queries) CreateDiscoveryJob(ctx context.Context, arg CreateDiscoveryJob
 	return i, err
 }
 
+const createDiscoveryJobEvent = `-- name: CreateDiscoveryJobEvent :one
+INSERT INTO discovery_job_events (job_id, ip, device_id, stage, protocol, status, message)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING seq
+`
+
+type CreateDiscoveryJobEventParams struct {
+	JobID    uuid.UUID   `json:"job_id"`
+	Ip       *netip.Addr `json:"ip"`
+	DeviceID *uuid.UUID  `json:"device_id"`
+	Stage    string      `json:"stage"`
+	Protocol string      `json:"protocol"`
+	Status   string      `json:"status"`
+	Message  string      `json:"message"`
+}
+
+// Persist one live-discovery event for completed-job playback (the live SSE feed
+// is served from the in-memory hub; this is the durable history).
+func (q *Queries) CreateDiscoveryJobEvent(ctx context.Context, arg CreateDiscoveryJobEventParams) (int64, error) {
+	row := q.db.QueryRow(ctx, createDiscoveryJobEvent,
+		arg.JobID,
+		arg.Ip,
+		arg.DeviceID,
+		arg.Stage,
+		arg.Protocol,
+		arg.Status,
+		arg.Message,
+	)
+	var seq int64
+	err := row.Scan(&seq)
+	return seq, err
+}
+
 const createDiscoveryResult = `-- name: CreateDiscoveryResult :one
 INSERT INTO discovery_results (job_id, ip, outcome, probe_data)
 VALUES ($1, $2, $3, $4)
@@ -129,6 +162,53 @@ func (q *Queries) LatestDeviceProbeData(ctx context.Context, deviceID *uuid.UUID
 	var probe_data []byte
 	err := row.Scan(&probe_data)
 	return probe_data, err
+}
+
+const listDiscoveryJobEvents = `-- name: ListDiscoveryJobEvents :many
+SELECT seq, job_id, ip, device_id, stage, protocol, status, message, created_at
+FROM discovery_job_events WHERE job_id = $1 ORDER BY seq ASC LIMIT 5000
+`
+
+type ListDiscoveryJobEventsRow struct {
+	Seq       int64       `json:"seq"`
+	JobID     uuid.UUID   `json:"job_id"`
+	Ip        *netip.Addr `json:"ip"`
+	DeviceID  *uuid.UUID  `json:"device_id"`
+	Stage     string      `json:"stage"`
+	Protocol  string      `json:"protocol"`
+	Status    string      `json:"status"`
+	Message   string      `json:"message"`
+	CreatedAt time.Time   `json:"created_at"`
+}
+
+func (q *Queries) ListDiscoveryJobEvents(ctx context.Context, jobID uuid.UUID) ([]ListDiscoveryJobEventsRow, error) {
+	rows, err := q.db.Query(ctx, listDiscoveryJobEvents, jobID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListDiscoveryJobEventsRow{}
+	for rows.Next() {
+		var i ListDiscoveryJobEventsRow
+		if err := rows.Scan(
+			&i.Seq,
+			&i.JobID,
+			&i.Ip,
+			&i.DeviceID,
+			&i.Stage,
+			&i.Protocol,
+			&i.Status,
+			&i.Message,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listDiscoveryJobs = `-- name: ListDiscoveryJobs :many
