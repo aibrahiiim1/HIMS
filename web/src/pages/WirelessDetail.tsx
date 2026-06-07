@@ -1,501 +1,383 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
-import { Wifi, Router, Users, Radio, ShieldCheck, Activity, AlertTriangle, Plug, FlaskConical, DownloadCloud, Layers, FileSearch, Terminal } from 'lucide-react'
-import { api, type WirelessDetailResp, type MibWalkRow, type MibExplorerResp, type SSHCliSummary, type SSHCliRow } from '../api'
+import { Wifi, Router, Users, Radio, ShieldCheck, Activity, Plug, FlaskConical, DownloadCloud, Terminal, Layers, FileSearch, Pencil } from 'lucide-react'
+import { api, type WirelessDetailResp, type MibWalkRow, type MibExplorerResp, type SSHCliSummary, type SSHCliRow, type AccessPoint, type WirelessClient } from '../api'
 import { DeviceHeader } from '../components/DeviceHeader'
 import { Panel, Kpi, DefList, EmptyState, StatusPill } from '../components/ui'
+import { DataTable, type DataCol, type DataFilter } from '../components/DataTable'
 
-const apStatus = (s: string) => (s === 'online' ? 'up' : s === 'offline' ? 'down' : 'unknown')
-const sevTone = (s: string) => (s === 'critical' ? 'down' : s === 'warning' ? 'warning' : 'info')
-
-// Wireless Controller detail. Identity + "managed via SNMP" always show (from the
-// device's stored SNMP facts). The AP/SSID/client/radio rosters come from a
-// roster-capable collector (Extreme XCC API profile); until one runs, the page is
-// honest about what's missing and points at the exact next action.
+// Wireless Controller — operator dashboard. Honest about which source produced
+// which data (SNMP identity / SNMP MIB / SSH CLI / XCC API), never presents
+// partial collection as complete, and never invents AP status the source did
+// not expose. Rosters are paginated/searchable/sortable client-side.
 export function WirelessDetail() {
   const { id } = useParams<{ id: string }>()
   const qc = useQueryClient()
   const q = useQuery({ queryKey: ['wireless', id], queryFn: () => api.get<WirelessDetailResp>(`/devices/${id}/wireless`) })
   const d = q.data
   const c = d?.counts ?? {}
-  const apiNeeded = !!d && !d.collection.has_api_profile
-  const [actionMsg, setActionMsg] = useState('')
+  const refetch = () => qc.invalidateQueries({ queryKey: ['wireless', id] })
+  const [msg, setMsg] = useState('')
 
   const pid = d?.collection.profile_id
-  const refetch = () => qc.invalidateQueries({ queryKey: ['wireless', id] })
   const test = useMutation({
     mutationFn: () => api.post<{ ok: boolean; detail: string }>(`/vendor-profiles/${pid}/test`, {}),
-    onSuccess: (r) => { setActionMsg((r.ok ? '✓ ' : '✗ ') + r.detail); refetch() },
-    onError: (e) => setActionMsg((e as Error).message),
+    onSuccess: (r) => { setMsg((r.ok ? '✓ ' : '✗ ') + r.detail); refetch() },
+    onError: (e) => setMsg('✗ ' + (e as Error).message),
   })
-  const run = useMutation({
+  const runApi = useMutation({
     mutationFn: () => api.post<{ collected: boolean; detail: string }>(`/vendor-profiles/${pid}/run-collection`, { device_id: id }),
-    onSuccess: (r) => { setActionMsg((r.collected ? '✓ ' : '⚠ ') + r.detail); refetch() },
-    onError: (e) => setActionMsg((e as Error).message),
+    onSuccess: (r) => { setMsg((r.collected ? '✓ ' : '⚠ ') + r.detail); refetch() },
+    onError: (e) => setMsg('✗ ' + (e as Error).message),
   })
-
-  // SNMP Wireless MIB collection (independent of the REST API path).
-  const [mibMsg, setMibMsg] = useState('')
-  const [showRaw, setShowRaw] = useState(false)
   const runMib = useMutation({
     mutationFn: () => api.post<{ collected: boolean; detail: string }>(`/devices/${id}/collect-wireless-mib`, {}),
-    onSuccess: (r) => { setMibMsg((r.collected ? '✓ ' : '⚠ ') + r.detail); refetch() },
-    onError: (e) => setMibMsg((e as Error).message),
+    onSuccess: (r) => { setMsg((r.collected ? '✓ ' : '⚠ ') + 'SNMP MIB: ' + r.detail); refetch() },
+    onError: (e) => setMsg('✗ ' + (e as Error).message),
   })
-  const rawRows = useQuery({
-    queryKey: ['mib-rows', id], queryFn: () => api.get<MibWalkRow[]>(`/devices/${id}/mib-rows`), enabled: showRaw,
-  })
-  const [showExplorer, setShowExplorer] = useState(false)
-  const explorer = useQuery({
-    queryKey: ['mib-explorer', id], queryFn: () => api.get<MibExplorerResp>(`/devices/${id}/mib-explorer`), enabled: showExplorer,
-  })
-
-  // Extreme XCC SSH CLI collection.
-  const [sshMsg, setSshMsg] = useState('')
-  const [showSshResults, setShowSshResults] = useState(false)
   const runSsh = useMutation({
     mutationFn: () => api.post<SSHCliSummary>(`/devices/${id}/collect-ssh-cli`, {}),
-    onSuccess: (r) => { setSshMsg((r.ok ? '✓ ' : '⚠ ') + r.detail); refetch() },
-    onError: (e) => setSshMsg('✗ ' + (e as Error).message),
+    onSuccess: (r) => { setMsg((r.ok ? '✓ ' : '⚠ ') + 'SSH CLI: ' + r.detail); refetch() },
+    onError: (e) => setMsg('✗ ' + (e as Error).message),
   })
   const testSsh = useMutation({
     mutationFn: () => api.post<SSHCliSummary>(`/devices/${id}/test-ssh-cli`, {}),
-    onSuccess: (r) => { setSshMsg((r.ok ? '✓ ' : '⚠ ') + r.detail); refetch() },
-    onError: (e) => setSshMsg('✗ ' + (e as Error).message),
+    onSuccess: (r) => { setMsg((r.ok ? '✓ ' : '⚠ ') + 'SSH test: ' + r.detail); refetch() },
+    onError: (e) => setMsg('✗ ' + (e as Error).message),
   })
-  const sshResults = useQuery({
-    queryKey: ['ssh-cli-results', id], queryFn: () => api.get<SSHCliRow[]>(`/devices/${id}/ssh-cli-results`), enabled: showSshResults,
-  })
+
+  // Collapsible advanced sections (lazy-loaded).
+  const [showDiag, setShowDiag] = useState(false)
+  const [showRaw, setShowRaw] = useState(false)
+  const sshResults = useQuery({ queryKey: ['ssh-cli-results', id], queryFn: () => api.get<SSHCliRow[]>(`/devices/${id}/ssh-cli-results`), enabled: showDiag })
+  const explorer = useQuery({ queryKey: ['mib-explorer', id], queryFn: () => api.get<MibExplorerResp>(`/devices/${id}/mib-explorer`), enabled: showRaw })
+  const rawRows = useQuery({ queryKey: ['mib-rows', id], queryFn: () => api.get<MibWalkRow[]>(`/devices/${id}/mib-rows`), enabled: showRaw })
+
   const configureHref = d
     ? `/vendor-profiles?create=1&vendor_type=extreme_xcc&device_id=${id}&target_url=${encodeURIComponent(`https://${d.identity.ip}:8443`)}`
     : '/vendor-profiles'
+
+  const aps = d?.aps ?? []
+  const clients = d?.clients ?? []
+  const ssids = d?.ssids ?? []
+  const sm = d?.summary
+
+  // Per-SSID rollups derived from the live client roster (honest: only what we saw).
+  const ssidRollup = useMemo(() => {
+    const m = new Map<string, { clients: number; aps: Set<string> }>()
+    for (const cl of (d?.clients ?? [])) {
+      if (!cl.ssid) continue
+      const e = m.get(cl.ssid) ?? { clients: 0, aps: new Set() }
+      e.clients++; if (cl.ap_name) e.aps.add(cl.ap_name)
+      m.set(cl.ssid, e)
+    }
+    return m
+  }, [d])
+
+  const busy = test.isPending || runApi.isPending || runMib.isPending || runSsh.isPending || testSsh.isPending
+  const managedVia = d ? ['SNMP', ...(d.ssh.status === 'collected' || d.ssh.status === 'partial' ? ['SSH'] : []), ...(d.collection.has_api_profile ? ['API'] : [])] : []
 
   return (
     <div>
       <DeviceHeader deviceId={id!} icon={Wifi} />
 
-      {d && (() => {
-        const sm = d.summary
-        const apReported = sm.has && sm.ap_total > 0 ? sm.ap_total : (c.aps ?? 0)
-        const cliReported = sm.has && sm.clients_total > 0 ? sm.clients_total : (c.clients ?? 0)
-        const apMissing = Math.max(0, apReported - (c.aps ?? 0))
-        const cliMissing = Math.max(0, cliReported - (c.clients ?? 0))
+      {/* Action toolbar + identity. */}
+      <Panel title="Controller" icon={Router}>
+        {d && (
+          <>
+            <DefList items={[
+              { label: 'Vendor / Product', value: `${d.identity.vendor || '—'}${d.identity.product ? ' · ' + d.identity.product : ''}` },
+              { label: 'Model / Firmware', value: `${d.identity.model || '—'}${d.identity.firmware ? ' · ' + d.identity.firmware : ''}` },
+              { label: 'Status / Managed via', value: `${cap(d.identity.status)} · Managed via ${managedVia.join(' + ') || 'SNMP'}` },
+              { label: 'Last collection', value: d.summary.collected_at ? `${new Date(d.summary.collected_at).toLocaleString()} (${dataAge(d.summary.collected_at)})` : (d.collection.collected_at ? new Date(d.collection.collected_at).toLocaleString() : '—') },
+            ]} />
+            <div className="row" style={{ gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+              <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => { setMsg(''); runSsh.mutate() }}><DownloadCloud size={14} /> {runSsh.isPending ? 'Collecting…' : 'Run SSH Collection'}</button>
+              <button className="btn btn-ghost btn-sm" disabled={busy || !d.mib.has_pack} onClick={() => { setMsg(''); runMib.mutate() }}><DownloadCloud size={14} /> {runMib.isPending ? 'Walking…' : 'Run SNMP MIB Collection'}</button>
+              <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => { setMsg(''); testSsh.mutate() }}><FlaskConical size={14} /> {testSsh.isPending ? 'Probing…' : 'Test SSH'}</button>
+              <Link className="btn btn-ghost btn-sm" to={d.mib.pack_id ? `/mibs?pack=${d.mib.pack_id}` : '/mibs'}><FlaskConical size={14} /> Test MIB Pack</Link>
+              {d.collection.has_api_profile
+                ? <button className="btn btn-ghost btn-sm" disabled={busy || !pid} onClick={() => { setMsg(''); runApi.mutate() }}><Plug size={14} /> Run XCC API</button>
+                : <Link className="btn btn-ghost btn-sm" to={configureHref}><Plug size={14} /> Configure API Profile</Link>}
+              <Link className="btn btn-ghost btn-sm" to={`/devices/${id}`}><Pencil size={14} /> Edit Device</Link>
+            </div>
+            {msg && <div className={'enc-banner ' + (msg.startsWith('✗') ? 'crit' : 'info')} style={{ marginTop: 10, whiteSpace: 'pre-wrap' }}>{msg}</div>}
+          </>
+        )}
+      </Panel>
+
+      {/* KPI cards — controller-reported vs parsed, never overstated. */}
+      {d && sm && (() => {
+        const apMissing = Math.max(0, sm.ap_total - (c.aps ?? 0))
+        const cliMissing = Math.max(0, sm.clients_total - (c.clients ?? 0))
         return (
           <div className="kpi-grid">
-            <Kpi label="Access Points (reported)" value={apReported} icon={Radio}
-              tone={apMissing > 0 ? 'warn' : 'info'} sub={`parsed ${c.aps ?? 0} rows${apMissing > 0 ? ` · missing ${apMissing}` : ''}`} />
-            <Kpi label="Active / Non-active APs" value={sm.ap_status_exposed ? `${sm.active_aps} / ${sm.non_active_aps}` : '—'} icon={Radio}
-              sub={sm.ap_status_exposed ? undefined : 'not exposed via SSH CLI'} />
-            <Kpi label="Clients (reported)" value={cliReported} icon={Users}
-              tone={cliMissing > 0 ? 'warn' : 'info'} sub={`parsed ${c.clients ?? 0} rows${cliMissing > 0 ? ` · missing ${cliMissing}` : ''}`} />
-            <Kpi label="Collection status" value={(sm.has ? sm.collection_status : 'not run')} icon={Activity}
-              tone={collStatusKpiTone(sm.has ? sm.collection_status : '')} sub={d.ssh.last_run ? new Date(d.ssh.last_run).toLocaleString() : undefined} />
-            <Kpi label="SSIDs" value={c.ssids ?? 0} icon={ShieldCheck} sub={sm.has ? `${sm.networks} network(s) seen` : undefined} />
-            <Kpi label="Networks" value={sm.has ? sm.networks : '—'} icon={Router} sub="client-derived; CLI may not list all" />
-            <Kpi label="Switches" value={sm.has ? sm.switches : '—'} icon={Router} sub={sm.has ? 'reported' : undefined} />
-            <Kpi label="Controller" value={d.identity.vendor || '—'} icon={Router} tone="info" sub={d.identity.product || undefined} />
+            <Kpi label="Total APs (reported)" value={sm.ap_total || (c.aps ?? 0)} icon={Radio} tone={apMissing > 0 ? 'warn' : 'info'} sub={`parsed ${c.aps ?? 0} rows${apMissing > 0 ? ` · missing ${apMissing}` : ''}`} />
+            <Kpi label="Active APs" value={sm.ap_status_exposed ? sm.active_aps : '—'} icon={Radio} sub={sm.ap_status_exposed ? undefined : 'not exposed by CLI'} />
+            <Kpi label="Non-active APs" value={sm.ap_status_exposed ? sm.non_active_aps : '—'} icon={Radio} sub={sm.ap_status_exposed ? undefined : 'not exposed by CLI'} />
+            <Kpi label="Total clients (reported)" value={sm.clients_total || (c.clients ?? 0)} icon={Users} tone={cliMissing > 0 ? 'warn' : 'info'} sub={`parsed ${c.clients ?? 0}${cliMissing > 0 ? ` · live ±${cliMissing}` : ''}`} />
+            <Kpi label="SSIDs" value={c.ssids ?? 0} icon={ShieldCheck} />
+            <Kpi label="Networks" value={sm.networks} icon={Router} sub="client-derived" />
+            <Kpi label="Switches" value={sm.switches} icon={Router} />
+            <Kpi label="Collection status" value={collStatusLabelShort(sm.collection_status)} icon={Activity} tone={collStatusKpiTone(sm.collection_status)} sub={sm.collected_at ? dataAge(sm.collected_at) + ' ago' : undefined} />
           </div>
         )
       })()}
 
-      {/* Controller summary (SSH) vs parsed roster — never present partial as complete. */}
-      {d && d.summary.has && (
-        <Panel title="Controller Summary (SSH CLI)" icon={Activity}>
-          <DefList items={[
-            { label: 'Collection status', value: collStatusLabel(d.summary.collection_status) },
-            { label: 'Access Points', value: `controller reports ${d.summary.ap_total} · HIMS parsed ${d.summary.parsed_ap_rows} rows` },
-            { label: 'Clients', value: `controller reports ${d.summary.clients_total} · HIMS parsed ${d.summary.parsed_client_rows} rows` },
-            { label: 'Active / Non-active APs', value: d.summary.ap_status_exposed ? `${d.summary.active_aps} / ${d.summary.non_active_aps}` : 'not exposed by the supported SSH CLI commands' },
-            { label: 'Networks / Switches', value: `${d.summary.networks} / ${d.summary.switches} (networks are client-derived)` },
-            { label: 'Adoption (primary / backup)', value: (d.summary.adoption_primary || d.summary.adoption_backup) ? `${d.summary.adoption_primary} / ${d.summary.adoption_backup}` : 'not exposed' },
-          ]} />
-          {d.summary.parsed_ap_rows < d.summary.ap_total && (
-            <div className="enc-banner warn" style={{ marginTop: 10 }}>
-              Controller summary reports {d.summary.ap_total} APs but HIMS parsed {d.summary.parsed_ap_rows} AP rows from SSH CLI. Collection is partial — parser/command coverage needs review.
-            </div>
+      {/* Mismatch / partial / not-exposed warnings — front and centre, never buried. */}
+      {d && sm && (
+        <>
+          {sm.parsed_ap_rows < sm.ap_total && (
+            <div className="enc-banner warn">Controller summary reports {sm.ap_total} APs but HIMS parsed {sm.parsed_ap_rows} AP rows from SSH CLI. Collection is partial — review parser/command coverage.</div>
           )}
-          {d.summary.parsed_client_rows < d.summary.clients_total && (
-            <div className="enc-banner warn" style={{ marginTop: 8 }}>
-              Controller summary reports {d.summary.clients_total} clients but HIMS parsed {d.summary.parsed_client_rows} client rows from SSH CLI. Collection is partial.
-            </div>
+          {sm.parsed_client_rows < sm.clients_total && (
+            <div className="enc-banner warn">Controller summary reports {sm.clients_total} clients but HIMS parsed {sm.parsed_client_rows} client rows. Client counts change live.</div>
           )}
-          {!d.summary.ap_status_exposed && (
-            <div className="enc-banner info" style={{ marginTop: 8 }}>
-              Active/Non-active AP split and the full network list are not exposed by this controller's restricted SSH CLI (show summary/status/network are rejected). Configure the Extreme XCC API for the controller dashboard summary.
-            </div>
+          {!sm.ap_status_exposed && aps.length > 0 && (
+            <div className="enc-banner info">Per-AP active/non-active status is not exposed by this controller's SSH CLI (show summary/status are rejected). Configure the Extreme XCC API for per-AP status.</div>
           )}
-        </Panel>
+          {sm.ap_status_exposed && sm.non_active_aps > 0 && (
+            <div className="enc-banner warn">Controller reports {sm.non_active_aps} non-active AP(s), but the current source does not expose which individual APs are non-active.</div>
+          )}
+        </>
       )}
 
-      {/* Controller identity — always available from SNMP. */}
-      <Panel title="Controller Identity" icon={Router}>
+      {/* Collection sources — one honest row per source. */}
+      <Panel title="Collection Sources" icon={Layers}>
         {d && (
-          <DefList items={[
-            { label: 'Name', value: d.identity.name || '—' },
-            { label: 'Vendor', value: d.identity.vendor || '—' },
-            { label: 'Product', value: d.identity.product || '—' },
-            { label: 'Model', value: d.identity.model || '—' },
-            { label: 'Firmware / Version', value: d.identity.firmware || '—' },
-            { label: 'Serial', value: d.identity.serial || '—' },
-            { label: 'sysName', value: d.identity.sysname || '—' },
-            { label: 'sysObjectID', value: d.identity.sysobjectid || '—' },
-            { label: 'sysDescr', value: d.identity.sysdescr || '—' },
-            { label: 'Managed via', value: (d.identity.managed_via ?? []).join(', ').toUpperCase() || '—' },
-          ]} />
-        )}
-      </Panel>
-
-      {/* Collection status + next action. */}
-      <Panel title="Wireless Collection" icon={Activity}>
-        {d && (
-          <>
-            <DefList items={[
-              { label: 'Source', value: collLabel(d.collection.source) },
-              { label: 'Last collected', value: d.collection.collected_at ? new Date(d.collection.collected_at).toLocaleString() : '—' },
-              { label: 'API profile', value: d.collection.has_api_profile ? `configured${d.collection.profile_status ? ` (${d.collection.profile_status})` : ''}` : 'not configured' },
-              ...(d.collection.last_detail ? [{ label: 'Last result', value: d.collection.last_detail }] : []),
-            ]} />
-            {apiNeeded && (
-              <div className="enc-banner info" style={{ marginTop: 10 }}>
-                <strong>Deep wireless data: API profile required.</strong> {d.collection.next_action}
-              </div>
-            )}
-            {!apiNeeded && d.collection.next_action && (
-              <div className="enc-banner info" style={{ marginTop: 10 }}>{d.collection.next_action}</div>
-            )}
-            <div className="row" style={{ gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
-              {apiNeeded
-                ? <Link className="btn btn-primary btn-sm" to={configureHref}><Plug size={14} /> Configure Extreme XCC Profile</Link>
-                : <>
-                    <button className="btn btn-ghost btn-sm" disabled={!pid || test.isPending} onClick={() => { setActionMsg(''); test.mutate() }}><FlaskConical size={14} /> {test.isPending ? 'Testing…' : 'Test Connection'}</button>
-                    <button className="btn btn-primary btn-sm" disabled={!pid || run.isPending} onClick={() => { setActionMsg(''); run.mutate() }}><DownloadCloud size={14} /> {run.isPending ? 'Collecting…' : 'Run Collection'}</button>
-                    <Link className="btn btn-ghost btn-sm" to="/vendor-profiles"><Plug size={14} /> Manage Profile</Link>
-                  </>}
-            </div>
-            {actionMsg && <div className={'enc-banner ' + (actionMsg.startsWith('✗') ? 'crit' : 'info')} style={{ marginTop: 10, whiteSpace: 'pre-wrap' }}>{actionMsg}</div>}
-          </>
-        )}
-      </Panel>
-
-      {/* SNMP Wireless MIB — built-in/user MIB pack collection over SNMP. */}
-      <Panel title="SNMP Wireless MIB" icon={Layers}>
-        {d && (
-          <>
-            {(() => {
-              const tablesWithRows = d.mib.walked_tables.filter((t) => t.rows > 0)
-              const rawTotal = d.mib.walked_tables.reduce((n, t) => n + t.rows, 0)
-              return (
-                <DefList items={[
-                  { label: 'Applicable MIB pack', value: d.mib.has_pack ? `${d.mib.pack_name} (${d.mib.pack_source})` : 'none — no enabled pack matches this controller' },
-                  { label: 'Supported tables (responded)', value: tablesWithRows.length
-                    ? tablesWithRows.map((t) => `${t.table} (${t.rows} rows)`).join(', ')
-                    : 'none responded with rows' },
-                  { label: 'Raw MIB rows captured', value: rawTotal ? `${rawTotal}` : '0 — run a collection' },
-                  { label: 'Mapped into wireless tables', value: mappedSummary(d) },
-                ]} />
-              )
-            })()}
-            {!d.mib.has_pack && (
-              <div className="enc-banner info" style={{ marginTop: 10 }}>
-                No MIB pack applies. Upload or enable a pack whose applies-to matches this controller in <Link to="/mibs">MIB Management</Link> — the built-in Extreme/HiPath pack is a fallback.
-              </div>
-            )}
-            <div className="row" style={{ gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
-              <button className="btn btn-primary btn-sm" disabled={!d.mib.has_pack || runMib.isPending} onClick={() => { setMibMsg(''); runMib.mutate() }}>
-                <DownloadCloud size={14} /> {runMib.isPending ? 'Collecting…' : 'Run SNMP Wireless Collection'}
-              </button>
-              <button className="btn btn-ghost btn-sm" onClick={() => setShowExplorer((v) => !v)}><Layers size={14} /> {showExplorer ? 'Hide MIB Explorer' : 'Open MIB Explorer'}</button>
-              <Link className="btn btn-ghost btn-sm" to={d.mib.pack_id ? `/mibs?pack=${d.mib.pack_id}` : '/mibs'}><FlaskConical size={14} /> Test MIB Pack</Link>
-              <Link className="btn btn-ghost btn-sm" to={d.mib.pack_id ? `/mibs?pack=${d.mib.pack_id}` : '/mibs'}><Plug size={14} /> Create mapping</Link>
-              <button className="btn btn-ghost btn-sm" onClick={() => setShowRaw((v) => !v)}><FileSearch size={14} /> {showRaw ? 'Hide Raw MIB Rows' : 'View Raw MIB Rows'}</button>
-            </div>
-            {mibMsg && <div className={'enc-banner ' + (mibMsg.startsWith('✗') ? 'crit' : 'info')} style={{ marginTop: 10, whiteSpace: 'pre-wrap' }}>{mibMsg}</div>}
-            {showExplorer && (
-              <div style={{ marginTop: 12 }}>
-                {explorer.isLoading && <div className="muted">Loading MIB explorer…</div>}
-                {explorer.data && explorer.data.total_rows === 0 && <EmptyState icon={Layers} title="Nothing captured yet" message="Run an SNMP MIB collection (or test the pack) to populate the explorer." />}
-                {explorer.data && explorer.data.total_rows > 0 && (
-                  <>
-                    <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>{explorer.data.total_rows} distinct OIDs · {explorer.data.groups.length} columns/subtrees. Subtrees the bundled MIB documents are named; firmware-specific objects show their nearest known parent.</div>
-                    <table className="data-table">
-                      <thead><tr><th>Column OID</th><th>Name</th><th>Type</th><th>Rows</th><th>Maps to</th><th>Sample (index → value)</th></tr></thead>
-                      <tbody>
-                        {explorer.data.groups.slice(0, 120).map((g) => (
-                          <tr key={g.column_oid}>
-                            <td className="mono" style={{ fontSize: 11 }}>{g.column_oid}</td>
-                            <td>{g.name || <span className="muted">(undocumented)</span>}</td>
-                            <td>{g.value_type}</td>
-                            <td>{g.rows}</td>
-                            <td>{g.field ? <span className="badge badge-success">{g.purpose}.{g.field}</span> : <Link to={mapLink(d.mib.pack_id, g)}>map…</Link>}</td>
-                            <td className="mono" style={{ fontSize: 10, maxWidth: 280, overflow: 'hidden' }}>
-                              {g.samples.slice(0, 3).map((s, i) => <div key={i}>{s.index} → {s.value}</div>)}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                    {explorer.data.groups.length > 120 && <div className="muted" style={{ marginTop: 6 }}>Showing first 120 of {explorer.data.groups.length} columns.</div>}
-                  </>
-                )}
-              </div>
-            )}
-            {showRaw && (
-              <div style={{ marginTop: 12 }}>
-                {rawRows.isLoading && <div className="muted">Loading raw rows…</div>}
-                {rawRows.data && rawRows.data.length === 0 && <EmptyState icon={FileSearch} title="No raw MIB rows" message="Run a collection or test against this device to capture raw walk rows." />}
-                {rawRows.data && rawRows.data.length > 0 && (
-                  <table className="data-table">
-                    <thead><tr><th>Table</th><th>OID</th><th>Index</th><th>Value</th></tr></thead>
-                    <tbody>
-                      {rawRows.data.slice(0, 300).map((rw) => (
-                        <tr key={rw.id}>
-                          <td>{rw.table_name}</td>
-                          <td className="mono" style={{ fontSize: 11 }}>{rw.oid}</td>
-                          <td className="mono">{rw.idx}</td>
-                          <td style={{ fontSize: 12 }}>{rw.raw_value}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-                {rawRows.data && rawRows.data.length > 300 && <div className="muted" style={{ marginTop: 6 }}>Showing first 300 of {rawRows.data.length} rows.</div>}
-              </div>
-            )}
-          </>
-        )}
-      </Panel>
-
-      {/* Extreme XCC SSH CLI — read-only CLI roster collection. */}
-      <Panel title="SSH CLI (Extreme XCC)" icon={Terminal}>
-        {d && (
-          <>
-            <DefList items={[
-              { label: 'Collection sources', value: collectionSourcesLine(d) },
-              { label: 'SSH CLI status', value: sshStatusLabel(d.ssh.status) + (d.ssh.last_run ? ` · last run ${new Date(d.ssh.last_run).toLocaleString()}` : '') },
-              { label: 'Supported commands', value: d.ssh.supported.length ? d.ssh.supported.join(', ') : '— none yet' },
-              { label: 'Unsupported commands', value: d.ssh.unsupported.length ? d.ssh.unsupported.join(', ') : '—' },
-              { label: 'Mapped via SSH', value: (d.ssh.aps || d.ssh.clients) ? `${d.ssh.aps} APs, ${d.ssh.clients} clients, ${d.ssh.parsed_rows} parsed rows` : `${d.ssh.parsed_rows} parsed rows (no AP/client roster)` },
-            ]} />
-            {d.ssh.status === 'unsupported' && (
-              <div className="enc-banner info" style={{ marginTop: 10 }}>SSH CLI does not expose AP/SSID/client roster using supported commands on this controller's restricted CLI.</div>
-            )}
-            {(d.ssh.status === 'partial') && (d.ssh.aps + d.ssh.clients === 0) && (
-              <div className="enc-banner info" style={{ marginTop: 10 }}>SSH CLI ran but does not expose AP/SSID/client roster using the supported commands; identity/operational/log output captured.</div>
-            )}
-            <div className="row" style={{ gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
-              <button className="btn btn-primary btn-sm" disabled={runSsh.isPending} onClick={() => { setSshMsg(''); runSsh.mutate() }}>
-                <DownloadCloud size={14} /> {runSsh.isPending ? 'Collecting…' : 'Run SSH CLI Collection'}
-              </button>
-              <button className="btn btn-ghost btn-sm" disabled={testSsh.isPending} onClick={() => { setSshMsg(''); testSsh.mutate() }}>
-                <FlaskConical size={14} /> {testSsh.isPending ? 'Probing…' : 'Test SSH CLI Commands'}
-              </button>
-              <button className="btn btn-ghost btn-sm" onClick={() => setShowSshResults((v) => !v)}>
-                <Terminal size={14} /> {showSshResults ? 'Hide SSH Command Results' : 'View SSH Command Results'}
-              </button>
-            </div>
-            {sshMsg && <div className={'enc-banner ' + (sshMsg.startsWith('✗') ? 'crit' : 'info')} style={{ marginTop: 10, whiteSpace: 'pre-wrap' }}>{sshMsg}</div>}
-            {showSshResults && (
-              <div style={{ marginTop: 12 }}>
-                {sshResults.isLoading && <div className="muted">Loading command results…</div>}
-                {sshResults.data && sshResults.data.length === 0 && <EmptyState icon={Terminal} title="No SSH command results" message="Run or test SSH CLI collection to probe the controller's read-only commands." />}
-                {sshResults.data && sshResults.data.length > 0 && (
-                  <table className="data-table">
-                    <thead><tr><th>Command</th><th>Status</th><th>Lines</th><th>Parsed</th><th>Skipped</th><th>Headers / warnings</th><th>Output preview (redacted)</th></tr></thead>
-                    <tbody>
-                      {sshResults.data.map((r) => (
-                        <tr key={r.id}>
-                          <td className="mono">{r.command}</td>
-                          <td><StatusPill status={sshTone(r.status)} label={r.status} /></td>
-                          <td>{r.line_count || 0}</td>
-                          <td>{r.parsed_rows || 0}</td>
-                          <td>{r.skipped_rows ? <span className="badge badge-warning">{r.skipped_rows}</span> : 0}</td>
-                          <td style={{ fontSize: 10, maxWidth: 220 }}>
-                            {r.headers && <div className="mono" style={{ opacity: 0.8 }}>{r.headers.slice(0, 80)}</div>}
-                            {r.warnings && <div style={{ color: '#ffb74d' }}>{r.warnings}</div>}
-                          </td>
-                          <td style={{ fontFamily: 'monospace', fontSize: 10, maxWidth: 380, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                            {r.error_message ? <span style={{ color: '#ef9a9a' }}>{r.error_message}</span> : (r.output_preview || '—').slice(0, 300)}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-            )}
-          </>
+          <table className="data-table">
+            <thead><tr><th>Source</th><th>Status</th><th>Rows / detail</th><th>Last run</th><th></th></tr></thead>
+            <tbody>
+              <tr>
+                <td><strong>SNMP Identity</strong></td>
+                <td><StatusPill status={(d.identity.sysobjectid || d.identity.sysdescr) ? 'up' : 'unknown'} label={(d.identity.sysobjectid || d.identity.sysdescr) ? 'collected' : '—'} /></td>
+                <td style={{ fontSize: 12 }}>{d.identity.product || d.identity.vendor || '—'}</td>
+                <td className="muted" style={{ fontSize: 11 }}>from scan</td>
+                <td><Link className="btn btn-ghost btn-xs" to={`/devices/${id}`}>Device</Link></td>
+              </tr>
+              <tr>
+                <td><strong>SNMP Wireless MIB</strong></td>
+                <td><StatusPill status={d.mib.has_pack ? 'warning' : 'unknown'} label={d.mib.has_pack ? 'operational only' : 'no pack'} /></td>
+                <td style={{ fontSize: 12 }}>{d.mib.has_pack ? `${d.mib.walked_tables.filter(t => t.rows > 0).length} table(s) responded · no AP roster on this firmware` : 'no applicable pack'}</td>
+                <td className="muted" style={{ fontSize: 11 }}>—</td>
+                <td><button className="btn btn-ghost btn-xs" disabled={busy || !d.mib.has_pack} onClick={() => { setMsg(''); runMib.mutate() }}>Run</button></td>
+              </tr>
+              <tr>
+                <td><strong>SSH CLI (Extreme XCC)</strong></td>
+                <td><StatusPill status={sshTone2(d.ssh.status)} label={d.ssh.status} /></td>
+                <td style={{ fontSize: 12 }}>{d.ssh.aps} APs · {d.ssh.clients} clients · {d.ssh.supported.length} supported / {d.ssh.unsupported.length} unsupported cmds</td>
+                <td className="muted" style={{ fontSize: 11 }}>{d.ssh.last_run ? new Date(d.ssh.last_run).toLocaleString() : '—'}</td>
+                <td><button className="btn btn-ghost btn-xs" disabled={busy} onClick={() => { setMsg(''); runSsh.mutate() }}>Run</button></td>
+              </tr>
+              <tr>
+                <td><strong>Extreme XCC API</strong></td>
+                <td><StatusPill status={d.collection.has_api_profile ? (d.collection.ap_data_known ? 'up' : 'warning') : 'unknown'} label={d.collection.has_api_profile ? (d.collection.profile_status || 'configured') : 'not configured'} /></td>
+                <td style={{ fontSize: 12 }}>{d.collection.has_api_profile ? (d.collection.last_detail || 'profile configured') : 'no JSON API profile'}</td>
+                <td className="muted" style={{ fontSize: 11 }}>—</td>
+                <td>{d.collection.has_api_profile ? <button className="btn btn-ghost btn-xs" disabled={busy || !pid} onClick={() => { setMsg(''); runApi.mutate() }}>Run</button> : <Link className="btn btn-ghost btn-xs" to={configureHref}>Setup</Link>}</td>
+              </tr>
+            </tbody>
+          </table>
         )}
       </Panel>
 
       {/* Access Points. */}
-      <Panel title="Access Points" icon={Radio} subtitle={d?.collection.ap_data_known ? `${c.aps_online}/${c.aps} online` : undefined} pad={false}>
-        {d && d.aps.length === 0 && (
-          <EmptyState icon={Radio} title="No AP inventory yet"
-            message={apiNeeded
-              ? 'Per-AP detail (model, serial, firmware, clients, status) requires the controller API. Configure an Extreme XCC profile, then Run Collection.'
-              : 'No access points reported by the last collection.'} />
-        )}
-        {d && d.aps.length > 0 && (
-          <table className="data-table">
-            <thead><tr><th>Display name</th><th>Model</th><th>IP</th><th>MAC</th><th>Serial</th><th>Clients</th><th>Status</th><th>Source</th></tr></thead>
-            <tbody>
-              {d.aps.slice(0, 500).map((a) => (
-                <tr key={a.id}>
-                  <td className="cell-name">
-                    {a.name}
-                    {a.serial && a.name === a.serial && <span className="badge badge-muted" title="No friendly name exposed by the CLI; display name derived from serial" style={{ marginLeft: 6 }}>serial</span>}
-                  </td>
-                  <td>{a.model || '—'}</td>
-                  <td className="mono">{a.ip || '—'}</td>
-                  <td className="mono">{a.mac || '—'}</td>
-                  <td className="mono">{a.serial || '—'}</td>
-                  <td>{a.client_count}</td>
-                  <td><StatusPill status={apStatus(a.status)} label={a.status} /></td>
-                  <td>{srcLabel(a.source)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-        {d && d.aps.length > 500 && <div className="muted" style={{ padding: 8 }}>Showing first 500 of {d.aps.length} APs.</div>}
-      </Panel>
-
-      {/* SSIDs. */}
-      <Panel title="SSIDs / WLANs" icon={ShieldCheck} subtitle={d?.ssids.length ? `${d.ssids.length}` : undefined} pad={false}>
-        {d && d.ssids.length === 0 && (
-          <EmptyState icon={ShieldCheck} title="No SSIDs yet"
-            message={apiNeeded ? 'SSID/WLAN services come from the controller API. Configure an Extreme XCC profile to collect them.' : 'No SSIDs reported by the last collection.'} />
-        )}
-        {d && d.ssids.length > 0 && (
-          <table className="data-table">
-            <thead><tr><th>SSID</th><th>Status</th><th>Security</th><th>Band</th><th>VLAN</th><th>Clients</th></tr></thead>
-            <tbody>
-              {d.ssids.map((s) => (
-                <tr key={s.id}>
-                  <td className="cell-name">{s.name}</td>
-                  <td><StatusPill status={s.status === 'enabled' ? 'up' : s.status === 'disabled' ? 'down' : 'unknown'} label={s.status} /></td>
-                  <td>{s.security || '—'}</td>
-                  <td>{s.band || '—'}</td>
-                  <td>{s.vlan || '—'}</td>
-                  <td>{s.client_count}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      <Panel title={`Access Points${aps.length ? ` (${aps.length})` : ''}`} icon={Radio}>
+        {d && aps.length === 0 && <EmptyState icon={Radio} title="No AP inventory" message="Run SSH Collection to pull the AP roster, or configure the Extreme XCC API." />}
+        {d && aps.length > 0 && (
+          <DataTable<AccessPoint>
+            rows={aps}
+            getKey={(a) => a.id}
+            searchText={(a) => `${a.serial || ''} ${a.name} ${a.ip || ''} ${a.mac || ''} ${a.model || ''}`}
+            searchPlaceholder="Search serial / name / IP / MAC / model…"
+            filters={apFilters(aps)}
+            cols={apCols(sm?.ap_status_exposed ?? false)}
+          />
         )}
       </Panel>
 
       {/* Clients. */}
-      <Panel title="Clients" icon={Users} subtitle={d?.clients.length ? `${d.clients.length}` : undefined} pad={false}>
-        {d && d.clients.length === 0 && (
-          <EmptyState icon={Users} title="No client roster"
-            message={apiNeeded ? 'Associated clients (MAC/IP/AP/SSID/RSSI) require the controller API. Some firmware/APIs do not expose clients — that will be shown honestly after collection.' : 'No clients reported by the last collection.'} />
+      <Panel title={`Clients${clients.length ? ` (${clients.length})` : ''}`} icon={Users}
+        subtitle={sm && sm.clients_total ? `controller reports ${sm.clients_total}` : undefined}>
+        {d && clients.length === 0 && <EmptyState icon={Users} title="No client roster" message="Run SSH Collection to pull associated clients. Client counts change live." />}
+        {d && clients.length > 0 && (
+          <DataTable<WirelessClient>
+            rows={clients}
+            getKey={(cl) => cl.id}
+            searchText={(cl) => `${cl.mac} ${cl.ip || ''} ${cl.hostname || ''} ${cl.ssid || ''} ${cl.ap_name || ''}`}
+            searchPlaceholder="Search MAC / IP / hostname / SSID / AP…"
+            filters={clientFilters(clients)}
+            cols={clientCols}
+          />
         )}
-        {d && d.clients.length > 0 && (
-          <table className="data-table">
-            <thead><tr><th>MAC</th><th>IP</th><th>Hostname / user</th><th>AP (serial)</th><th>SSID</th><th>RSSI</th><th>Band</th><th>Source</th></tr></thead>
-            <tbody>
-              {d.clients.slice(0, 400).map((cl) => (
-                <tr key={cl.id}>
-                  <td className="mono">{cl.mac}</td>
-                  <td className="mono">{cl.ip || '—'}</td>
-                  <td>{cl.hostname || '—'}</td>
-                  <td className="mono">{cl.ap_name || '—'}</td>
-                  <td>{cl.ssid || '—'}</td>
-                  <td>{cl.rssi != null ? `${cl.rssi} dBm` : '—'}</td>
-                  <td>{cl.band || '—'}</td>
-                  <td>{srcLabel(cl.source)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-        {d && d.clients.length > 400 && <div className="muted" style={{ padding: 8 }}>Showing first 400 of {d.clients.length} clients.</div>}
       </Panel>
 
-      {/* Radios (only when present). */}
-      {d && d.radios.length > 0 && (
-        <Panel title="Radios" icon={Radio} subtitle={`${d.radios.length}`} pad={false}>
-          <table className="data-table">
-            <thead><tr><th>AP</th><th>Radio</th><th>Band</th><th>Channel</th><th>Power</th><th>Clients</th></tr></thead>
-            <tbody>
-              {d.radios.map((rd) => (
-                <tr key={rd.id}>
-                  <td className="cell-name">{rd.ap_name}</td>
-                  <td>{rd.radio || '—'}</td>
-                  <td>{rd.band || '—'}</td>
-                  <td>{rd.channel ?? '—'}</td>
-                  <td>{rd.power_dbm != null ? `${rd.power_dbm} dBm` : '—'}</td>
-                  <td>{rd.client_count}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </Panel>
-      )}
-
-      {/* Events / alarms. */}
-      <Panel title="Recent Events / Alarms" icon={AlertTriangle} subtitle={d?.events.length ? `${d.events.length}` : undefined} pad={false}>
-        {d && d.events.length === 0 && (
-          <EmptyState icon={AlertTriangle} title="No events" message={apiNeeded ? 'Controller events/alarms come from the API once a profile is configured.' : 'No recent events reported.'} />
+      {/* SSIDs / WLANs. */}
+      <Panel title={`SSIDs / WLANs${ssids.length ? ` (${ssids.length})` : ''}`} icon={ShieldCheck}>
+        {d && ssids.length === 0 && <EmptyState icon={ShieldCheck} title="No SSIDs" message="SSIDs are derived from active client associations or the controller API." />}
+        {d && ssids.length > 0 && (
+          <DataTable
+            rows={ssids}
+            getKey={(s) => s.id}
+            searchText={(s) => `${s.name} ${s.security || ''} ${s.band || ''}`}
+            searchPlaceholder="Search SSID…"
+            pageSizeDefault={25}
+            cols={[
+              { key: 'name', label: 'SSID', render: (s) => <strong>{s.name}</strong>, sortVal: (s) => s.name },
+              { key: 'status', label: 'Status', render: (s) => <StatusPill status={s.status === 'active' || s.status === 'enabled' ? 'up' : s.status === 'disabled' ? 'down' : 'unknown'} label={s.status || 'unknown'} /> },
+              { key: 'security', label: 'Security', render: (s) => s.security || '—' },
+              { key: 'band', label: 'Band', render: (s) => s.band || '—' },
+              { key: 'net', label: 'Network/VLAN', render: (s) => s.vlan || '—' },
+              { key: 'aps', label: 'APs (seen)', render: (s) => ssidRollup.get(s.name)?.aps.size ?? 0, sortVal: (s) => ssidRollup.get(s.name)?.aps.size ?? 0 },
+              { key: 'clients', label: 'Clients (seen)', render: (s) => ssidRollup.get(s.name)?.clients ?? 0, sortVal: (s) => ssidRollup.get(s.name)?.clients ?? 0 },
+              { key: 'source', label: 'Source', render: (s) => srcLabel(s.source) },
+            ]}
+          />
         )}
-        {d && d.events.length > 0 && (
-          <table className="data-table">
-            <thead><tr><th>When</th><th>Severity</th><th>Category</th><th>Message</th></tr></thead>
-            <tbody>
-              {d.events.map((e) => (
-                <tr key={e.id}>
-                  <td>{new Date(e.at).toLocaleString()}</td>
-                  <td><StatusPill status={sevTone(e.severity)} label={e.severity} /></td>
-                  <td>{e.category || '—'}</td>
-                  <td>{e.message || '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      </Panel>
+
+      {/* Diagnostics — collapsible. */}
+      <Panel title="Diagnostics — SSH command results" icon={Terminal}>
+        <button className="btn btn-ghost btn-sm" onClick={() => setShowDiag((v) => !v)}>{showDiag ? 'Hide' : 'Show'} command diagnostics</button>
+        {showDiag && (
+          <div style={{ marginTop: 12 }}>
+            {sshResults.isLoading && <div className="muted">Loading…</div>}
+            {sshResults.data && sshResults.data.length === 0 && <EmptyState icon={Terminal} title="No command results" message="Run or test SSH collection first." />}
+            {sshResults.data && sshResults.data.length > 0 && (
+              <DataTable
+                rows={sshResults.data}
+                getKey={(r) => r.id}
+                searchText={(r) => `${r.command} ${r.status}`}
+                searchPlaceholder="Search command…"
+                filters={[{ key: 'status', label: 'Status', options: ['parsed', 'not_parsed', 'unsupported', 'failed', 'timeout'].map((v) => ({ value: v, label: v })), match: (r, v) => r.status === v }]}
+                cols={[
+                  { key: 'command', label: 'Command', render: (r) => r.command, mono: true, sortVal: (r) => r.command },
+                  { key: 'status', label: 'Status', render: (r) => <StatusPill status={sshTone(r.status)} label={r.status} />, sortVal: (r) => r.status },
+                  { key: 'lines', label: 'Lines', render: (r) => r.line_count || 0, sortVal: (r) => r.line_count || 0 },
+                  { key: 'parsed', label: 'Parsed', render: (r) => r.parsed_rows || 0, sortVal: (r) => r.parsed_rows || 0 },
+                  { key: 'skipped', label: 'Skipped', render: (r) => r.skipped_rows ? <span className="badge badge-warning">{r.skipped_rows}</span> : 0 },
+                  { key: 'diag', label: 'Headers / warnings', render: (r) => <div style={{ fontSize: 10, maxWidth: 200 }}>{r.headers && <div className="mono" style={{ opacity: .8 }}>{r.headers.slice(0, 70)}</div>}{r.warnings && <div style={{ color: '#ffb74d' }}>{r.warnings}</div>}</div> },
+                  { key: 'out', label: 'Output (redacted)', render: (r) => <span style={{ fontFamily: 'monospace', fontSize: 10 }}>{r.error_message ? <span style={{ color: '#ef9a9a' }}>{r.error_message}</span> : (r.output_preview || '—').slice(0, 200)}</span> },
+                ]}
+              />
+            )}
+          </div>
+        )}
+      </Panel>
+
+      {/* Advanced / Raw MIB — collapsible. */}
+      <Panel title="Advanced — Raw MIB Explorer" icon={FileSearch}>
+        <button className="btn btn-ghost btn-sm" onClick={() => setShowRaw((v) => !v)}>{showRaw ? 'Hide' : 'Show'} raw MIB</button>
+        {showRaw && (
+          <div style={{ marginTop: 12 }}>
+            {explorer.isLoading && <div className="muted">Loading…</div>}
+            {explorer.data && explorer.data.total_rows === 0 && <EmptyState icon={FileSearch} title="Nothing captured" message="Run an SNMP MIB collection to populate the explorer." />}
+            {explorer.data && explorer.data.total_rows > 0 && (
+              <>
+                <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>{explorer.data.total_rows} distinct OIDs · {explorer.data.groups.length} columns/subtrees ({rawRows.data?.length ?? 0} raw rows loaded)</div>
+                <DataTable
+                  rows={explorer.data.groups}
+                  getKey={(g) => g.column_oid}
+                  searchText={(g) => `${g.column_oid} ${g.name} ${g.table} ${g.samples.map(s => s.value).join(' ')}`}
+                  searchPlaceholder="Search OID / name / value…"
+                  filters={[{ key: 'mapped', label: 'Mapped', options: [{ value: 'yes', label: 'mapped' }, { value: 'no', label: 'unmapped' }], match: (g, v) => (v === 'yes') === g.mapped }]}
+                  cols={[
+                    { key: 'oid', label: 'Column OID', render: (g) => g.column_oid, mono: true },
+                    { key: 'name', label: 'Name', render: (g) => g.name || <span className="muted">(undocumented)</span>, sortVal: (g) => g.name },
+                    { key: 'type', label: 'Type', render: (g) => g.value_type, sortVal: (g) => g.value_type },
+                    { key: 'rows', label: 'Rows', render: (g) => g.rows, sortVal: (g) => g.rows },
+                    { key: 'maps', label: 'Maps to', render: (g) => g.field ? <span className="badge badge-success">{g.purpose}.{g.field}</span> : <span className="muted">—</span> },
+                    { key: 'sample', label: 'Sample', render: (g) => <span style={{ fontFamily: 'monospace', fontSize: 10 }}>{g.samples.slice(0, 2).map((s, i) => <div key={i}>{s.index} → {s.value.slice(0, 40)}</div>)}</span> },
+                  ]}
+                />
+              </>
+            )}
+          </div>
         )}
       </Panel>
     </div>
   )
 }
 
-// mappedSummary describes what the SNMP MIB source actually populated (honest:
-// names the rosters that this firmware did not expose).
-function mappedSummary(d: WirelessDetailResp): string {
-  const mib = (xs: { source?: string }[]) => xs.filter((x) => x.source === 'snmp_wireless_mib').length
-  const aps = mib(d.aps), ssids = mib(d.ssids), clients = mib(d.clients)
-  const parts: string[] = []
-  if (clients) parts.push(`${clients} clients`)
-  if (aps) parts.push(`${aps} APs`)
-  if (ssids) parts.push(`${ssids} SSIDs`)
-  if (parts.length === 0) return 'nothing yet — AP/SSID/client tables not exposed by this firmware on the mapped OIDs'
-  return parts.join(', ') + ' (source: SNMP MIB)'
+// ---- AP/client column + filter builders ------------------------------------
+
+function apStatusCell(a: AccessPoint, exposed: boolean) {
+  if (a.status === 'online') return <StatusPill status="up" label="active" />
+  if (a.status === 'offline') return <StatusPill status="down" label="non-active" />
+  if (!exposed) return <span className="muted" title="Source did not expose per-AP status">status not exposed</span>
+  return <StatusPill status="unknown" label={a.status || 'unknown'} />
 }
 
-// mapLink builds a deep link into MIB Management's mapping editor, prefilled
-// from an explorer subtree (derives the table root from the column OID).
-function mapLink(packId: string | undefined, g: { column_oid: string; table: string; purpose?: string }): string {
-  if (!packId) return '/mibs'
-  const m = g.column_oid.match(/^(.*)\.1\.\d+$/) // <tableRoot>.1.<col>
-  const root = m ? m[1] : g.column_oid
-  const params = new URLSearchParams({ pack: packId, root, table: g.table })
-  if (g.purpose) params.set('purpose', g.purpose)
-  return `/mibs?${params.toString()}`
+function apCols(exposed: boolean): DataCol<AccessPoint>[] {
+  return [
+    { key: 'status', label: 'Status', render: (a) => apStatusCell(a, exposed) },
+    { key: 'serial', label: 'Serial', render: (a) => a.serial || '—', mono: true, sortVal: (a) => a.serial || '' },
+    {
+      key: 'name', label: 'Display name', render: (a) => (
+        <span>{a.name}{a.serial && a.name === a.serial && <span className="badge badge-muted" title="No friendly name exposed by the CLI; derived from serial" style={{ marginLeft: 6 }}>derived from serial</span>}</span>
+      ), sortVal: (a) => a.name,
+    },
+    { key: 'model', label: 'Model', render: (a) => a.model || '—', sortVal: (a) => a.model || '' },
+    { key: 'ip', label: 'IP', render: (a) => a.ip || '—', mono: true },
+    { key: 'mac', label: 'MAC', render: (a) => a.mac || '—', mono: true },
+    { key: 'net', label: 'Network/Site', render: () => <span className="muted">—</span> },
+    { key: 'adoption', label: 'Adoption', render: () => <span className="muted">—</span> },
+    { key: 'clients', label: 'Clients', render: (a) => a.client_count, sortVal: (a) => a.client_count },
+    { key: 'seen', label: 'Last seen', render: (a) => tsShort(a.collected_at || a.last_seen_at), sortVal: (a) => a.collected_at || '' },
+    { key: 'source', label: 'Source', render: (a) => srcLabel(a.source) },
+  ]
 }
 
-// collectionSourcesLine summarizes all four collection paths at a glance.
-function collectionSourcesLine(d: WirelessDetailResp): string {
-  const identity = (d.identity.sysobjectid || d.identity.sysdescr) ? 'collected' : '—'
-  let mib = 'no pack'
-  if (d.mib.has_pack) {
-    const withRows = d.mib.walked_tables.filter((t) => t.rows > 0).length
-    mib = withRows > 0 ? 'applied (no AP roster)' : 'applied (no rows)'
-  }
-  const api = d.collection.has_api_profile ? `configured${d.collection.profile_status ? ` (${d.collection.profile_status})` : ''}` : 'not configured'
-  return `SNMP Identity: ${identity} · SNMP MIB: ${mib} · Extreme XCC API: ${api} · SSH CLI: ${sshStatusLabel(d.ssh.status)}`
+function apFilters(aps: AccessPoint[]): DataFilter<AccessPoint>[] {
+  const models = uniq(aps.map((a) => a.model || '').filter(Boolean))
+  const sources = uniq(aps.map((a) => a.source || '').filter(Boolean))
+  return [
+    { key: 'status', label: 'Status', options: [{ value: 'online', label: 'active' }, { value: 'offline', label: 'non-active' }, { value: 'unknown', label: 'unknown' }], match: (a, v) => (a.status || 'unknown') === v },
+    { key: 'clients', label: 'Clients', options: [{ value: 'has', label: 'has clients' }, { value: 'none', label: 'no clients' }], match: (a, v) => (v === 'has' ? a.client_count > 0 : a.client_count === 0) },
+    { key: 'model', label: 'Model', options: models.map((m) => ({ value: m, label: m })), match: (a, v) => a.model === v },
+    { key: 'source', label: 'Source', options: sources.map((s) => ({ value: s, label: srcLabel(s) })), match: (a, v) => a.source === v },
+  ]
 }
 
+const clientCols: DataCol<WirelessClient>[] = [
+  { key: 'mac', label: 'Client MAC', render: (c) => c.mac, mono: true, sortVal: (c) => c.mac },
+  { key: 'ip', label: 'IP', render: (c) => c.ip || '—', mono: true, sortVal: (c) => c.ip },
+  { key: 'host', label: 'Hostname / user', render: (c) => c.hostname || '—', sortVal: (c) => c.hostname },
+  { key: 'ssid', label: 'SSID', render: (c) => c.ssid || '—', sortVal: (c) => c.ssid },
+  { key: 'ap', label: 'AP (serial)', render: (c) => c.ap_name || '—', mono: true, sortVal: (c) => c.ap_name },
+  { key: 'rssi', label: 'RSSI', render: (c) => (c.rssi != null ? `${c.rssi} dBm` : '—'), sortVal: (c) => c.rssi ?? 0 },
+  { key: 'band', label: 'Band', render: (c) => c.band || '—' },
+  { key: 'seen', label: 'Last seen', render: (c) => tsShort(c.collected_at), sortVal: (c) => c.collected_at || '' },
+  { key: 'source', label: 'Source', render: (c) => srcLabel(c.source) },
+]
+
+function clientFilters(clients: WirelessClient[]): DataFilter<WirelessClient>[] {
+  const ssidOpts = uniq(clients.map((c) => c.ssid || '').filter(Boolean))
+  const bands = uniq(clients.map((c) => c.band || '').filter(Boolean))
+  return [
+    { key: 'ssid', label: 'SSID', options: ssidOpts.map((s) => ({ value: s, label: s })), match: (c, v) => c.ssid === v },
+    { key: 'band', label: 'Band', options: bands.map((b) => ({ value: b, label: b })), match: (c, v) => c.band === v },
+    { key: 'ip', label: 'IP', options: [{ value: 'has', label: 'has IP' }, { value: 'no', label: 'no IP' }], match: (c, v) => (v === 'has' ? !!c.ip : !c.ip) },
+    { key: 'host', label: 'Hostname', options: [{ value: 'missing', label: 'missing hostname' }], match: (c, v) => (v === 'missing' ? !c.hostname : true) },
+  ]
+}
+
+// ---- small helpers ---------------------------------------------------------
+
+function uniq(xs: string[]): string[] { return Array.from(new Set(xs)).sort() }
+function cap(s: string): string { return s ? s.charAt(0).toUpperCase() + s.slice(1) : '—' }
+function tsShort(ts?: string): string { return ts ? new Date(ts).toLocaleString() : '—' }
+function dataAge(ts?: string): string {
+  if (!ts) return '—'
+  const ms = Date.now() - new Date(ts).getTime()
+  const m = Math.floor(ms / 60000)
+  if (m < 1) return 'just now'
+  if (m < 60) return `${m}m`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h}h`
+  return `${Math.floor(h / 24)}d`
+}
 function srcLabel(s?: string): string {
   switch (s) {
     case 'extreme_xcc_ssh': return 'SSH CLI'
@@ -505,53 +387,15 @@ function srcLabel(s?: string): string {
     default: return s || '—'
   }
 }
-
-// collStatusKpiTone maps to the Kpi tone vocabulary ('ok'|'warn'|'crit'|'info').
 function collStatusKpiTone(s: string): 'ok' | 'warn' | 'crit' | 'info' | 'default' {
-  switch (s) {
-    case 'complete': return 'ok'
-    case 'partial': return 'warn'
-    case 'summary_only': return 'warn'
-    case 'failed': return 'crit'
-    default: return 'default'
-  }
+  switch (s) { case 'complete': return 'ok'; case 'partial': case 'summary_only': return 'warn'; case 'failed': return 'crit'; default: return 'default' }
 }
-function collStatusLabel(s: string): string {
-  switch (s) {
-    case 'complete': return 'complete — parsed rows match controller summary'
-    case 'partial': return 'partial — parsed rows fewer than controller summary'
-    case 'summary_only': return 'summary only — counts collected, detailed roster unavailable'
-    case 'failed': return 'failed'
-    default: return s || '—'
-  }
+function collStatusLabelShort(s: string): string {
+  switch (s) { case 'complete': return 'Complete'; case 'partial': return 'Partial'; case 'summary_only': return 'Summary only'; case 'failed': return 'Failed'; default: return 'Not run' }
 }
-
-function sshStatusLabel(s: string): string {
-  switch (s) {
-    case 'collected': return 'collected'
-    case 'partial': return 'partial'
-    case 'unsupported': return 'unsupported (restricted CLI)'
-    case 'failed': return 'failed'
-    default: return 'not run'
-  }
-}
-
 function sshTone(s: string): 'up' | 'down' | 'warning' | 'info' {
-  switch (s) {
-    case 'parsed': return 'up'
-    case 'unsupported': return 'warning'
-    case 'failed': case 'timeout': return 'down'
-    default: return 'info'
-  }
+  switch (s) { case 'parsed': return 'up'; case 'unsupported': return 'warning'; case 'failed': case 'timeout': return 'down'; default: return 'info' }
 }
-
-function collLabel(s: string): string {
-  switch (s) {
-    case 'extreme_xcc_api': return 'Extreme XCC API'
-    case 'cloud_xiq': return 'ExtremeCloud IQ (cloud)'
-    case 'snmp_baseline': return 'SNMP baseline (identity only)'
-    case 'snmp_wireless_mib': return 'SNMP Wireless MIB'
-    case 'unifi': case 'omada': case 'ruckus': return s
-    default: return s || '—'
-  }
+function sshTone2(s: string): 'up' | 'down' | 'warning' | 'info' | 'unknown' {
+  switch (s) { case 'collected': return 'up'; case 'partial': return 'warning'; case 'failed': return 'down'; case 'not_run': return 'unknown'; default: return 'info' }
 }
