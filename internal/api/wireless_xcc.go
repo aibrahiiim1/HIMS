@@ -137,16 +137,41 @@ func (s *Server) collectXCCProfile(ctx context.Context, p db.VendorConnectionPro
 		_, _ = s.queries.UpsertAccessPoint(ctx, db.UpsertAccessPointParams{
 			ControllerDeviceID: dev.ID, Name: name, Mac: nzPtr(a.MAC), Model: nzPtr(a.Model),
 			Ip: ip, Status: nz(a.Status, "unknown"), ClientCount: a.ClientCount,
-			Serial: a.Serial, Firmware: a.Firmware, Source: xccSource,
+			Serial: a.Serial, Firmware: a.Firmware, Site: a.Site, Uptime: a.Uptime, Source: xccSource,
 		})
+	}
+	// Derive each SSID's live client count + in-use band from the stations (the
+	// services config carries neither) — mirrors the desktop tool's ClientLinking.
+	ssidClientN := map[string]int32{}
+	ssidBands := map[string]map[string]bool{}
+	for _, st := range res.Stations {
+		key := strings.ToLower(strings.TrimSpace(st.SSID))
+		if key == "" {
+			continue
+		}
+		ssidClientN[key]++
+		if b := wirelessBandFromChannel(st.Channel); b != "" {
+			if ssidBands[key] == nil {
+				ssidBands[key] = map[string]bool{}
+			}
+			ssidBands[key][b] = true
+		}
 	}
 	for _, ss := range res.SSIDs {
 		if ss.Name == "" {
 			continue
 		}
+		key := strings.ToLower(strings.TrimSpace(ss.Name))
+		cc, band := ss.ClientCount, ss.Band
+		if cc == 0 {
+			cc = ssidClientN[key]
+		}
+		if band == "" {
+			band = joinBandSet(ssidBands[key])
+		}
 		_, _ = s.queries.UpsertWirelessSSID(ctx, db.UpsertWirelessSSIDParams{
 			ControllerDeviceID: dev.ID, Name: ss.Name, Status: nz(ss.Status, "unknown"),
-			Security: ss.Security, Band: ss.Band, Vlan: ss.VLAN, ClientCount: ss.ClientCount, Source: xccSource,
+			Security: ss.Security, Band: band, Vlan: ss.VLAN, ClientCount: cc, Source: xccSource,
 		})
 	}
 	for _, st := range res.Stations {
@@ -155,8 +180,20 @@ func (s *Server) collectXCCProfile(ctx context.Context, p db.VendorConnectionPro
 		}
 		_, _ = s.queries.UpsertWirelessClient(ctx, db.UpsertWirelessClientParams{
 			ControllerDeviceID: dev.ID, Mac: st.MAC, Ip: st.IP, Hostname: st.Hostname,
-			ApName: st.APName, Ssid: st.SSID, Rssi: st.RSSI, Band: st.Band, Source: xccSource,
+			ApName: st.APName, Ssid: st.SSID, Rssi: st.RSSI, Snr: st.SNR,
+			RxBytes: st.RxBytes, TxBytes: st.TxBytes, ConnectedSince: st.ConnectedSince,
+			Band: st.Band, Source: xccSource,
 		})
+	}
+	// Controller events (last 24h) — replace the window for this source.
+	if len(res.Events) > 0 {
+		_ = s.queries.DeleteWirelessEventsForSource(ctx, db.DeleteWirelessEventsForSourceParams{ControllerDeviceID: dev.ID, Source: xccSource})
+		for _, ev := range res.Events {
+			_ = s.queries.InsertWirelessEvent(ctx, db.InsertWirelessEventParams{
+				ControllerDeviceID: dev.ID, At: ev.At, Severity: nz(ev.Severity, "info"),
+				Category: ev.Category, Message: ev.Message, Source: xccSource,
+			})
+		}
 	}
 	// Prune rows from this source not refreshed this run.
 	_ = s.queries.DeleteStaleAccessPoints(ctx, db.DeleteStaleAccessPointsParams{ControllerDeviceID: dev.ID, Source: xccSource, CollectedAt: poll})
@@ -193,4 +230,39 @@ func nzPtr(s string) *string {
 		return nil
 	}
 	return &s
+}
+
+// wirelessBandFromChannel maps a Wi-Fi channel to its band ("2.4"/"5"/"6"); "" if
+// nil/out-of-range. Used to derive an SSID's in-use band from its clients.
+func wirelessBandFromChannel(ch *int32) string {
+	if ch == nil {
+		return ""
+	}
+	switch n := *ch; {
+	case n >= 1 && n <= 14:
+		return "2.4"
+	case n >= 32 && n <= 196:
+		return "5"
+	case n > 196:
+		return "6"
+	default:
+		return ""
+	}
+}
+
+// joinBandSet renders the in-use bands as "2.4/5 GHz" (fixed low→high order), or "".
+func joinBandSet(set map[string]bool) string {
+	if len(set) == 0 {
+		return ""
+	}
+	var parts []string
+	for _, b := range []string{"2.4", "5", "6"} {
+		if set[b] {
+			parts = append(parts, b)
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, "/") + " GHz"
 }

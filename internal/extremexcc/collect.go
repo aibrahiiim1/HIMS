@@ -2,10 +2,12 @@ package extremexcc
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // AP is one access point from the XCC API (flexibly parsed).
@@ -18,6 +20,8 @@ type AP struct {
 	Firmware    string
 	Status      string
 	ClientCount int32
+	Site        string
+	Uptime      string
 }
 
 // SSID is one WLAN service.
@@ -37,8 +41,24 @@ type Station struct {
 	Hostname string
 	APName   string
 	SSID     string
-	RSSI     *int32
+	RSSI     *int32 // signal in dBm (rss)
+	SNR      *int32 // computed: rss − AP-radio noise floor (no direct SNR field)
 	Band     string
+	RxBytes  *int64
+	TxBytes  *int64
+	// ConnectedSince is Not Available on this firmware (station record carries
+	// only lastSeen, never an association/connect time).
+	ConnectedSince string
+	// Channel drives the SSID in-use-band derivation (apply layer); not persisted.
+	Channel *int32
+}
+
+// Event is one controller log event (platformmanager logging endpoint).
+type Event struct {
+	At       time.Time
+	Severity string
+	Category string
+	Message  string
 }
 
 // EndpointOutcome records what happened for one roster endpoint (for honest UI).
@@ -61,6 +81,7 @@ type CollectResult struct {
 	APs           []AP
 	SSIDs         []SSID
 	Stations      []Station
+	Events        []Event
 	Endpoints     []EndpointOutcome
 	Partial       bool
 }
@@ -85,43 +106,74 @@ func (c *Client) Collect(ctx context.Context) (CollectResult, error) {
 		}
 	}
 
-	// APs.
-	apRows, apOut := c.fetch(ctx, "aps", base, []string{"/aps", "/devices"})
+	// APs — the runtime query view first: it carries the real operational `status`
+	// (InService/critical/OutOfService …) + per-radio noise for client SNR, which
+	// the plain /aps list omits. On BridgedAtAp deployments only …/query is rich.
+	radioNoise := map[string]int32{} // "serial|channel" -> noise floor (dBm)
+	apRows, apOut := c.fetch(ctx, "aps", base, []string{"/aps/query", "/aps", "/devices"})
 	out.Endpoints = append(out.Endpoints, apOut)
 	for _, m := range apRows {
-		out.APs = append(out.APs, AP{
-			Name: pick(m, "name", "hostname", "apName"), MAC: pick(m, "macAddress", "mac", "baseMac"),
-			IP: pick(m, "ipAddress", "ip", "mgtIp"), Model: pick(m, "model", "hardwareType", "productType"),
-			Serial: pick(m, "serialNumber", "serial"), Firmware: pick(m, "softwareVersion", "firmware", "version"),
-			Status: normStatus(pick(m, "status", "state", "connectionState", "adminState")),
-			ClientCount: pickInt(m, "clientCount", "numClients", "stationCount"),
-		})
+		ap := AP{
+			Name: pick(m, "apName", "name", "hostname", "deviceName"), MAC: pick(m, "macAddress", "mac", "baseMac", "apMac"),
+			IP: pick(m, "ipAddress", "ipAddr", "ip", "mgmtIp"), Model: pick(m, "platformName", "hardwareType", "model", "productType"),
+			Serial: pick(m, "serialNumber", "serial", "sn"), Firmware: pick(m, "softwareVersion", "swVersion", "firmware", "version"),
+			Status:      prettyAPStatus(pick(m, "status", "apStatus", "operationalStatus")),
+			ClientCount: pickInt(m, "clientCount", "numClients", "stationCount", "associatedClients"),
+			Site:        pick(m, "hostSite", "siteName", "site", "zone", "location"),
+			Uptime:      pick(m, "sysUptime", "uptime", "upTime"),
+		}
+		indexRadioNoise(m, ap.Serial, radioNoise)
+		out.APs = append(out.APs, ap)
 	}
 
-	// SSIDs / WLAN services.
+	// SSIDs / WLAN services (config — no live client-count/band; derived in apply).
 	ssidRows, ssidOut := c.fetch(ctx, "ssids", base, []string{"/services", "/wlans", "/ssids"})
 	out.Endpoints = append(out.Endpoints, ssidOut)
 	for _, m := range ssidRows {
 		out.SSIDs = append(out.SSIDs, SSID{
-			Name: pick(m, "ssid", "name", "serviceName"), Status: normEnabled(m, "enabled", "status", "state"),
-			Security: pick(m, "security", "privacy", "authType"), Band: pick(m, "band", "radioBand"),
-			VLAN: pick(m, "vlan", "vlanId"), ClientCount: pickInt(m, "clientCount", "numClients", "stationCount"),
+			Name: pick(m, "ssid", "serviceName", "name", "ssidName"), Status: normEnabled(m, "enabled", "status", "adminState", "active"),
+			Security: readPrivacy(m), Band: pick(m, "band", "radio", "allowedRadios"),
+			VLAN: pick(m, "vlanId", "vlan", "defaultVlan", "dot1dPortNumber"), ClientCount: pickInt(m, "clientCount", "numClients", "stationCount"),
 		})
 	}
 
-	// Clients / stations.
-	stRows, stOut := c.fetch(ctx, "clients", base, []string{"/stations", "/clients"})
+	// Clients / stations — …/query first (the plain /stations is empty under
+	// BridgedAtAp forwarding). SNR is computed from the AP radio noise floor.
+	stRows, stOut := c.fetch(ctx, "clients", base, []string{"/stations/query", "/stations", "/clients"})
 	out.Endpoints = append(out.Endpoints, stOut)
 	for _, m := range stRows {
 		st := Station{
-			MAC: pick(m, "macAddress", "mac"), IP: pick(m, "ipAddress", "ip"),
-			Hostname: pick(m, "hostname", "deviceName", "name"), APName: pick(m, "apName", "ap", "apSerialNumber"),
-			SSID: pick(m, "ssid", "serviceName"), Band: pick(m, "band", "radioBand"),
+			MAC: pick(m, "macAddress", "mac", "stationMac"), IP: pick(m, "ipAddress", "ipAddr", "ip", "ipv4"),
+			Hostname: pick(m, "dhcpHostName", "hostname", "userName", "deviceType", "deviceFamily", "name"),
+			APName:   pick(m, "accessPointName", "accessPointSerialNumber", "apName", "apSerialNumber"),
+			SSID:     pick(m, "serviceName", "ssid", "ssidName", "wlan"), Band: pick(m, "protocol", "channel", "band", "radioBand"),
 		}
-		if v := pickInt(m, "rss", "rssi", "signal"); v != 0 {
-			st.RSSI = &v
+		if v := pickIntPtr(m, "rss", "rssi", "signal", "signalStrength"); v != nil {
+			st.RSSI = v
 		}
+		st.Channel = pickIntPtr(m, "channel")
+		st.RxBytes = pickInt64Ptr(m, "inBytes", "rxBytes", "bytesReceived")
+		st.TxBytes = pickInt64Ptr(m, "outBytes", "txBytes", "bytesSent")
+		if snr, ok := computeSNR(m, st.RSSI, radioNoise); ok {
+			st.SNR = &snr
+		}
+		// ConnectedSince: Not Available (station record exposes only lastSeen).
 		out.Stations = append(out.Stations, st)
+	}
+
+	// Events — separate root (platformmanager); requires an explicit epoch-ms range
+	// (omitting it → 422). Best-effort: a failure here doesn't fail the collection.
+	if evs, ok := c.fetchEvents(ctx); ok {
+		out.Events = evs
+	}
+
+	// Identity: controller Version ← most-common AP firmware (no version endpoint);
+	// Serial ← JWT `iss` suffix when present. Model/Uptime stay Not Available.
+	out.Version = mostCommonFirmware(out.APs)
+	if iss := decodeJWTIss(c.bearer); iss != "" {
+		if dot := strings.IndexByte(iss, '.'); dot > 0 {
+			out.Serial = iss[dot+1:]
+		}
 	}
 
 	for _, e := range out.Endpoints {
@@ -130,6 +182,39 @@ func (c *Client) Collect(ctx context.Context) (CollectResult, error) {
 		}
 	}
 	return out, nil
+}
+
+// fetchEvents pulls the last 24h of controller events from the platformmanager
+// logging endpoint (absolute path, not under the inventory API base).
+func (c *Client) fetchEvents(ctx context.Context) ([]Event, bool) {
+	endMs := time.Now().UTC().UnixMilli()
+	startMs := time.Now().UTC().Add(-24 * time.Hour).UnixMilli()
+	path := "/platformmanager/v1/logging/events?startTime=" + atoiStr(startMs) + "&endTime=" + atoiStr(endMs)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+path, nil)
+	if err != nil {
+		return nil, false
+	}
+	req.Header.Set("Accept", "application/json")
+	c.applyAuth(req)
+	resp, err := c.Doer.Do(req)
+	if err != nil {
+		return nil, false
+	}
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil, false
+	}
+	var evs []Event
+	for _, m := range extractRows(raw) {
+		evs = append(evs, Event{
+			At:       parseEpochMillis(m["timestamp"]),
+			Severity: pick(m, "severity", "level", "logLevel", "type"),
+			Category: pick(m, "component", "category", "eventType", "module"),
+			Message:  pick(m, "description", "message", "text", "event", "msg", "detail"),
+		})
+	}
+	return evs, true
 }
 
 // fetch tries the given paths under base until one returns JSON 200, returning
@@ -243,6 +328,219 @@ func pickInt(m map[string]any, keys ...string) int32 {
 		}
 	}
 	return 0
+}
+
+// pickIntPtr returns a pointer to the first present numeric value (nil if absent),
+// so a legitimate 0/negative (e.g. RSSI dBm) is distinguishable from "not reported".
+func pickIntPtr(m map[string]any, keys ...string) *int32 {
+	for _, k := range keys {
+		if v, ok := m[k]; ok {
+			switch t := v.(type) {
+			case float64:
+				n := int32(t)
+				return &n
+			case string:
+				if t != "" {
+					n := int32(atoiSafe(t))
+					return &n
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func pickInt64Ptr(m map[string]any, keys ...string) *int64 {
+	for _, k := range keys {
+		if v, ok := m[k]; ok {
+			switch t := v.(type) {
+			case float64:
+				n := int64(t)
+				return &n
+			case string:
+				if t != "" {
+					n := atoiSafe(t)
+					return &n
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// applyAuth sets the bearer/basic header per the established login method.
+func (c *Client) applyAuth(req *http.Request) {
+	switch c.loginMethod {
+	case "bearer", "token":
+		if c.bearer != "" {
+			req.Header.Set("Authorization", "Bearer "+c.bearer)
+		}
+	case "basic":
+		if c.Username != "" {
+			req.SetBasicAuth(c.Username, c.Password)
+		}
+	}
+}
+
+// prettyAPStatus maps the controller's operational AP status to a stable label,
+// keeping critical/major/minor verbatim (never collapsing to "unknown") and never
+// deriving status from proxied/adoptedBy. Mirrors the desktop PrettyApStatus.
+func prettyAPStatus(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "":
+		return "unknown"
+	case "inservice", "in-service", "in service":
+		return "In Service"
+	case "outofservice", "out-of-service", "out of service":
+		return "Out of Service"
+	case "critical":
+		return "Critical"
+	case "major":
+		return "Major"
+	case "minor":
+		return "Minor"
+	case "disconnected":
+		return "Disconnected"
+	case "connected":
+		return "Connected"
+	default:
+		return raw
+	}
+}
+
+// indexRadioNoise records each radio's noise floor keyed by "serial|channel" for
+// later client-SNR computation (the station record carries no SNR field).
+func indexRadioNoise(m map[string]any, serial string, dst map[string]int32) {
+	if serial == "" {
+		return
+	}
+	radios, ok := m["radios"].([]any)
+	if !ok {
+		return
+	}
+	for _, r := range radios {
+		rm, ok := r.(map[string]any)
+		if !ok {
+			continue
+		}
+		ch := pickIntPtr(rm, "opChannel", "channel")
+		noise := pickIntPtr(rm, "noise", "noiseFloor")
+		if ch != nil && noise != nil {
+			dst[serial+"|"+atoiStr(int64(*ch))] = *noise
+		}
+	}
+}
+
+// computeSNR derives client SNR (dB) = RSS (dBm) − the AP radio's noise floor. Uses
+// a direct snr field when present, else the per-radio noise indexed by serial|channel.
+func computeSNR(m map[string]any, rss *int32, radioNoise map[string]int32) (int32, bool) {
+	if v := pickIntPtr(m, "snr"); v != nil {
+		return *v, true
+	}
+	serial := pick(m, "accessPointSerialNumber", "accessPointName")
+	ch := pickIntPtr(m, "channel")
+	if rss != nil && serial != "" && ch != nil {
+		if noise, ok := radioNoise[serial+"|"+atoiStr(int64(*ch))]; ok {
+			return *rss - noise, true
+		}
+	}
+	return 0, false
+}
+
+// readPrivacy renders the SSID security TYPE from the nested `privacy` object's key
+// (+ its mode) WITHOUT surfacing the preshared key; falls back to flat fields.
+func readPrivacy(m map[string]any) string {
+	if priv, ok := m["privacy"].(map[string]any); ok {
+		for name, val := range priv {
+			sec := prettySecurity(name)
+			if obj, ok := val.(map[string]any); ok {
+				if mode, ok := obj["mode"].(string); ok && mode != "" {
+					return sec + " (" + mode + ")"
+				}
+			}
+			return sec
+		}
+	}
+	return pick(m, "security", "authType", "authentication", "securityMode")
+}
+
+func prettySecurity(raw string) string {
+	key := strings.ReplaceAll(raw, "Element", "")
+	switch key {
+	case "WpaPsk", "WpaPsk2", "Wpa2Psk":
+		return "WPA/WPA2 PSK"
+	case "Wpa3Psk", "Wpa3":
+		return "WPA3"
+	case "Wpa2", "Wpa2Enterprise", "Dot1x":
+		return "WPA2 Enterprise (802.1X)"
+	case "Wep":
+		return "WEP"
+	case "None", "Open", "":
+		return "Open"
+	default:
+		return key
+	}
+}
+
+// mostCommonFirmware returns the predominant AP softwareVersion (the controller
+// shares the AP release; no controller version endpoint exists on this firmware).
+func mostCommonFirmware(aps []AP) string {
+	counts := map[string]int{}
+	best, bestN := "", 0
+	for _, a := range aps {
+		if a.Firmware == "" {
+			continue
+		}
+		counts[a.Firmware]++
+		if counts[a.Firmware] > bestN {
+			best, bestN = a.Firmware, counts[a.Firmware]
+		}
+	}
+	return best
+}
+
+// decodeJWTIss returns the `iss` claim of a JWT bearer (base64url payload), or "".
+func decodeJWTIss(token string) string {
+	parts := strings.Split(token, ".")
+	if len(parts) < 2 {
+		return ""
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		s := strings.NewReplacer("-", "+", "_", "/").Replace(parts[1])
+		for len(s)%4 != 0 {
+			s += "="
+		}
+		if payload, err = base64.StdEncoding.DecodeString(s); err != nil {
+			return ""
+		}
+	}
+	var claims map[string]any
+	if json.Unmarshal(payload, &claims) != nil {
+		return ""
+	}
+	if iss, ok := claims["iss"].(string); ok {
+		return iss
+	}
+	return ""
+}
+
+// parseEpochMillis converts an epoch-ms (or -s) timestamp to time; zero on failure.
+func parseEpochMillis(v any) time.Time {
+	var n int64
+	switch t := v.(type) {
+	case float64:
+		n = int64(t)
+	case string:
+		n = atoiSafe(t)
+	}
+	if n <= 0 {
+		return time.Time{}
+	}
+	if n < 1_000_000_000_000 { // epoch seconds, not ms
+		return time.Unix(n, 0).UTC()
+	}
+	return time.UnixMilli(n).UTC()
 }
 
 func normStatus(s string) string {

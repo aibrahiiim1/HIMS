@@ -61,6 +61,54 @@ func TestCollectParsesRosters(t *testing.T) {
 	}
 }
 
+// TestCollectXIQCRichFields exercises the proven XIQC field mappings: aps/query
+// real status, per-radio noise → computed client SNR, stations/query byte counters,
+// privacy-type security (no PSK), and version backfill from AP firmware.
+func TestCollectXIQCRichFields(t *testing.T) {
+	doer := fakeDoer{routes: map[string]string{
+		"/aps/query":      `[{"apName":"AP-1","serialNumber":"SN1","platformName":"AP410C","macAddress":"aa:bb:cc:00:11:22","ipAddress":"172.21.96.150","softwareVersion":"10.5.4.0-002R","status":"InService","hostSite":"Aqua Club","radios":[{"opChannel":36,"noise":-95}]}]`,
+		"/stations/query": `[{"macAddress":"de:ad:be:ef:00:01","ipAddress":"10.0.0.5","dhcpHostName":"phone","accessPointSerialNumber":"SN1","accessPointName":"AP-1","serviceName":"Corp","protocol":"802.11ac","rss":-60,"channel":36,"inBytes":1000,"outBytes":2000}]`,
+		"/services":       `[{"ssid":"Corp","status":"enabled","privacy":{"WpaPsk2Element":{"mode":"aesOnly"}},"dot1dPortNumber":10}]`,
+	}}
+	c := NewClient("https://ctrl:5825", "/management/v1", "admin", "pw", "", doer)
+	res, err := c.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	if len(res.APs) != 1 {
+		t.Fatalf("APs: %+v", res.APs)
+	}
+	ap := res.APs[0]
+	if ap.Status != "In Service" {
+		t.Errorf("AP status = %q, want In Service", ap.Status)
+	}
+	if ap.Site != "Aqua Club" {
+		t.Errorf("AP site = %q", ap.Site)
+	}
+	if res.Version != "10.5.4.0-002R" {
+		t.Errorf("controller version backfill = %q", res.Version)
+	}
+	if len(res.Stations) != 1 {
+		t.Fatalf("stations: %+v", res.Stations)
+	}
+	st := res.Stations[0]
+	if st.RSSI == nil || *st.RSSI != -60 {
+		t.Errorf("RSSI = %v, want -60", st.RSSI)
+	}
+	if st.SNR == nil || *st.SNR != 35 { // -60 − (−95) = 35
+		t.Errorf("SNR = %v, want 35", st.SNR)
+	}
+	if st.RxBytes == nil || *st.RxBytes != 1000 || st.TxBytes == nil || *st.TxBytes != 2000 {
+		t.Errorf("bytes rx=%v tx=%v", st.RxBytes, st.TxBytes)
+	}
+	if st.ConnectedSince != "" {
+		t.Errorf("ConnectedSince should be N/A for XIQC, got %q", st.ConnectedSince)
+	}
+	if len(res.SSIDs) != 1 || res.SSIDs[0].Security != "WPA/WPA2 PSK (aesOnly)" {
+		t.Errorf("SSID security = %+v (PSK must never leak)", res.SSIDs)
+	}
+}
+
 func TestNormStatus(t *testing.T) {
 	for in, want := range map[string]string{"up": "online", "Connected": "online", "down": "offline", "": "unknown", "weird": "unknown"} {
 		if got := normStatus(in); got != want {
