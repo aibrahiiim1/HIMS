@@ -16,14 +16,15 @@ func TestParseCLIAPRows(t *testing.T) {
 	if aps[0].Serial != "03052207160281" {
 		t.Errorf("serial = %q, want 03052207160281", aps[0].Serial)
 	}
-	if aps[0].Name != "AP305C-1-EG" {
-		t.Errorf("name = %q, want AP305C-1-EG", aps[0].Name)
+	// AP is named by its (unique) serial; the trailing token is the model.
+	if aps[0].Name != "03052207160281" {
+		t.Errorf("name = %q, want serial 03052207160281 (model token is not unique)", aps[0].Name)
 	}
-	if aps[0].Model != "AP305C" {
-		t.Errorf("model = %q, want AP305C", aps[0].Model)
+	if aps[0].Model != "AP305C-1-EG" {
+		t.Errorf("model = %q, want AP305C-1-EG", aps[0].Model)
 	}
-	if aps[2].Model != "AP410C" {
-		t.Errorf("ap[2] model = %q, want AP410C", aps[2].Model)
+	if aps[2].Model != "AP410C-2-LOBBY" {
+		t.Errorf("ap[2] model = %q, want AP410C-2-LOBBY", aps[2].Model)
 	}
 }
 

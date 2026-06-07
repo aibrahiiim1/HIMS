@@ -354,12 +354,15 @@ func parseCLIAPRows(out string) []cliAP {
 	for _, ln := range strings.Split(out, "\n") {
 		f := strings.Fields(ln)
 		if len(f) >= 2 && strings.EqualFold(f[0], "serial") && reSerial15.MatchString(f[1]) {
-			ap := cliAP{Serial: f[1]}
-			ap.Name = f[len(f)-1]
-			if ap.Name == ap.Serial && len(f) >= 3 {
-				ap.Name = f[2]
+			// "serial <serial> <serial> <model>". The serial is the unique AP
+			// identity (clients reference their AP by serial); the trailing token
+			// is the hardware model designation (e.g. AP305C-1-EG), NOT a per-AP
+			// name — naming by it would collapse every AP into one row.
+			ap := cliAP{Serial: f[1], Name: f[1]}
+			ap.Model = f[len(f)-1]
+			if ap.Model == ap.Serial {
+				ap.Model = reAPModel.FindString(ln)
 			}
-			ap.Model = reAPModel.FindString(ln)
 			aps = append(aps, ap)
 			continue
 		}
