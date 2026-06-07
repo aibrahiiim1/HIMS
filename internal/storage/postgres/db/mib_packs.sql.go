@@ -41,6 +41,17 @@ func (q *Queries) CountMibPacksBySource(ctx context.Context) ([]CountMibPacksByS
 	return items, nil
 }
 
+const countMibWalkRows = `-- name: CountMibWalkRows :one
+SELECT count(*) FROM mib_walk_rows WHERE device_id=$1
+`
+
+func (q *Queries) CountMibWalkRows(ctx context.Context, deviceID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countMibWalkRows, deviceID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createMibPack = `-- name: CreateMibPack :one
 INSERT INTO mib_packs (name, vendor, category, source, enabled, priority, version, description, applies_to, parse_meta)
 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
@@ -94,6 +105,15 @@ func (q *Queries) CreateMibPack(ctx context.Context, arg CreateMibPackParams) (M
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const deleteAllMibWalkRows = `-- name: DeleteAllMibWalkRows :exec
+DELETE FROM mib_walk_rows WHERE device_id=$1
+`
+
+func (q *Queries) DeleteAllMibWalkRows(ctx context.Context, deviceID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteAllMibWalkRows, deviceID)
+	return err
 }
 
 const deleteMibPack = `-- name: DeleteMibPack :exec
@@ -192,8 +212,8 @@ func (q *Queries) InsertMibPackFile(ctx context.Context, arg InsertMibPackFilePa
 
 const insertMibWalkRow = `-- name: InsertMibWalkRow :exec
 
-INSERT INTO mib_walk_rows (device_id, pack_id, table_name, oid, idx, raw_value)
-VALUES ($1,$2,$3,$4,$5,$6)
+INSERT INTO mib_walk_rows (device_id, pack_id, table_name, oid, idx, raw_value, val_type)
+VALUES ($1,$2,$3,$4,$5,$6,$7)
 `
 
 type InsertMibWalkRowParams struct {
@@ -203,6 +223,7 @@ type InsertMibWalkRowParams struct {
 	Oid       string     `json:"oid"`
 	Idx       string     `json:"idx"`
 	RawValue  string     `json:"raw_value"`
+	ValType   string     `json:"val_type"`
 }
 
 // ===== Raw walk rows =====
@@ -214,6 +235,7 @@ func (q *Queries) InsertMibWalkRow(ctx context.Context, arg InsertMibWalkRowPara
 		arg.Oid,
 		arg.Idx,
 		arg.RawValue,
+		arg.ValType,
 	)
 	return err
 }
@@ -339,7 +361,7 @@ func (q *Queries) ListMibPacks(ctx context.Context) ([]MibPack, error) {
 }
 
 const listMibWalkRows = `-- name: ListMibWalkRows :many
-SELECT id, device_id, pack_id, table_name, oid, idx, raw_value, collected_at FROM mib_walk_rows WHERE device_id=$1 ORDER BY table_name, oid LIMIT $2
+SELECT id, device_id, pack_id, table_name, oid, idx, raw_value, collected_at, val_type FROM mib_walk_rows WHERE device_id=$1 ORDER BY table_name, oid LIMIT $2
 `
 
 type ListMibWalkRowsParams struct {
@@ -365,6 +387,7 @@ func (q *Queries) ListMibWalkRows(ctx context.Context, arg ListMibWalkRowsParams
 			&i.Idx,
 			&i.RawValue,
 			&i.CollectedAt,
+			&i.ValType,
 		); err != nil {
 			return nil, err
 		}

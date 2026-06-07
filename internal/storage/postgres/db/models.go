@@ -562,6 +562,7 @@ type MibWalkRow struct {
 	Idx         string     `json:"idx"`
 	RawValue    string     `json:"raw_value"`
 	CollectedAt time.Time  `json:"collected_at"`
+	ValType     string     `json:"val_type"`
 }
 
 type MonitoringCheck struct {

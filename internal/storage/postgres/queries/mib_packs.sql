@@ -64,11 +64,17 @@ DELETE FROM mib_pack_tables WHERE id=$1;
 -- ===== Raw walk rows =====
 
 -- name: InsertMibWalkRow :exec
-INSERT INTO mib_walk_rows (device_id, pack_id, table_name, oid, idx, raw_value)
-VALUES ($1,$2,$3,$4,$5,$6);
+INSERT INTO mib_walk_rows (device_id, pack_id, table_name, oid, idx, raw_value, val_type)
+VALUES ($1,$2,$3,$4,$5,$6,$7);
 
 -- name: DeleteMibWalkRows :exec
 DELETE FROM mib_walk_rows WHERE device_id=$1 AND table_name=$2;
 
+-- name: DeleteAllMibWalkRows :exec
+DELETE FROM mib_walk_rows WHERE device_id=$1;
+
 -- name: ListMibWalkRows :many
 SELECT * FROM mib_walk_rows WHERE device_id=$1 ORDER BY table_name, oid LIMIT $2;
+
+-- name: CountMibWalkRows :one
+SELECT count(*) FROM mib_walk_rows WHERE device_id=$1;

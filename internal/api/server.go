@@ -225,6 +225,7 @@ func (s *Server) routes() {
 		r.Get("/devices/{id}/wireless", s.deviceWireless) // consolidated wireless detail (identity + rosters)
 		r.Post("/devices/{id}/collect-wireless-mib", s.runWirelessMibCollection) // SNMP MIB-pack wireless collection
 		r.Get("/devices/{id}/mib-rows", s.listMibWalkRows)                       // raw walked MIB rows
+		r.Get("/devices/{id}/mib-explorer", s.mibExplorer)                       // grouped OID-tree explorer
 		r.Get("/devices/{id}/bmc", s.deviceBMC)
 		r.Get("/devices/{id}/bmc-sensors", s.deviceBMCSensors)
 		r.Get("/devices/{id}/printer-supplies", s.devicePrinterSupplies)

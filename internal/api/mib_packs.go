@@ -70,8 +70,11 @@ func builtinHiPathTables() []builtinTable {
 		{"wlanTable", "1.3.6.1.4.1.5624.1.2.3.4.4", "ssids",
 			map[string]int{"ssid_name": 4, "ssid_ssid": 5, "ssid_status": 7}},
 		{"wlanStatsTable", "1.3.6.1.4.1.5624.1.2.3.4.5", "stats", map[string]int{}},
+		// muTable (mobileUnits.2) — the documented client roster, indexed by MAC.
+		// Columns per muEntry: 1=MAC 2=IP 3=user 6=SSID 12=AP-name 19=BSSID.
+		// Empty on fw 10.05 (reported honestly); correct for firmware that exposes it.
 		{"muTable", "1.3.6.1.4.1.5624.1.2.6.2", "clients",
-			map[string]int{"client_mac": 0, "client_ip": 2, "client_ssid": 6, "client_ap": 12}},
+			map[string]int{"client_mac": 1, "client_ip": 2, "client_hostname": 3, "client_ssid": 6, "client_ap": 12}},
 		{"assocTable", "1.3.6.1.4.1.5624.1.2.7.2", "clients",
 			map[string]int{"client_mac": 0}},
 		{"topologyTable", "1.3.6.1.4.1.5624.1.2.4.1.1", "operational", map[string]int{}},

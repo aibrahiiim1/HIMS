@@ -60,6 +60,7 @@ type Querier interface {
 	// Failed jobs for one agent (for the agent detail page + Data Quality count).
 	CountFailedAgentJobs(ctx context.Context, agentID uuid.UUID) (int64, error)
 	CountMibPacksBySource(ctx context.Context) ([]CountMibPacksBySourceRow, error)
+	CountMibWalkRows(ctx context.Context, deviceID uuid.UUID) (int64, error)
 	CountOpenAlerts(ctx context.Context) (int64, error)
 	CountOpenWorkOrders(ctx context.Context) (int64, error)
 	// Blobs sealed under a key id other than the one currently loaded.
@@ -108,6 +109,7 @@ type Querier interface {
 	// Whether a group is already bound to a location (guards duplicate binds).
 	CredentialGroupLocationBound(ctx context.Context, arg CredentialGroupLocationBoundParams) (bool, error)
 	DeleteAlertRule(ctx context.Context, id uuid.UUID) error
+	DeleteAllMibWalkRows(ctx context.Context, deviceID uuid.UUID) error
 	// Removing a credential un-binds it from devices (FK ON DELETE SET NULL) and
 	// drops its group memberships (FK ON DELETE CASCADE).
 	DeleteCredential(ctx context.Context, id uuid.UUID) error

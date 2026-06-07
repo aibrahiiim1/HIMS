@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   api, type MibFile, type MibObject, type OIDMapping,
@@ -23,7 +24,19 @@ const tab = (active: boolean): React.CSSProperties => ({
   background: 'transparent', color: active ? '#1565c0' : '#90a4ae', cursor: 'pointer', fontWeight: 600, fontSize: 14,
 })
 
-const PURPOSES = ['aps', 'ssids', 'clients', 'radios', 'operational', 'stats']
+const PURPOSES = ['clients', 'aps', 'ssids', 'radios', 'events', 'operational', 'stats']
+
+// Domain fields each purpose can map a column to (the mapping assistant). column
+// 0 means "use the row index" (MAC fields render the index as a MAC address).
+const FIELD_HINTS: Record<string, string[]> = {
+  clients: ['client_mac', 'client_ip', 'client_hostname', 'client_ap', 'client_ssid', 'client_rssi', 'client_band'],
+  aps: ['ap_name', 'ap_mac', 'ap_ip', 'ap_model', 'ap_serial', 'ap_firmware', 'ap_status'],
+  ssids: ['ssid_name', 'ssid_ssid', 'ssid_status', 'ssid_security', 'ssid_band', 'ssid_vlan'],
+  radios: ['radio_ap', 'radio_name', 'radio_band', 'radio_channel', 'radio_power'],
+  events: ['event_message', 'event_severity', 'event_time'],
+  operational: ['operational_status'],
+  stats: [],
+}
 
 function statusBadge(status: string) {
   const map: Record<string, string> = {
@@ -58,7 +71,11 @@ export function Mibs() {
 
 function PacksTab() {
   const qc = useQueryClient()
-  const [selID, setSelID] = useState<string | null>(null)
+  const [sp] = useSearchParams()
+  const [selID, setSelID] = useState<string | null>(sp.get('pack'))
+  const prefill = sp.get('root') || sp.get('table') || sp.get('purpose')
+    ? { table: sp.get('table') ?? undefined, root: sp.get('root') ?? undefined, purpose: sp.get('purpose') ?? undefined }
+    : undefined
   const packs = useQuery({ queryKey: ['mib-packs'], queryFn: () => api.get<MibPack[]>('/mib-packs') })
 
   const toggle = useMutation({
@@ -128,7 +145,7 @@ function PacksTab() {
         )}
       </div>
 
-      {selID && <PackDetail id={selID} onClose={() => setSelID(null)} />}
+      {selID && <PackDetail id={selID} onClose={() => setSelID(null)} prefill={prefill} />}
     </>
   )
 }
@@ -182,7 +199,7 @@ function UploadCard({ onDone }: { onDone: () => void }) {
   )
 }
 
-function PackDetail({ id, onClose }: { id: string; onClose: () => void }) {
+function PackDetail({ id, onClose, prefill }: { id: string; onClose: () => void; prefill?: { table?: string; root?: string; purpose?: string } }) {
   const qc = useQueryClient()
   const detail = useQuery({ queryKey: ['mib-pack', id], queryFn: () => api.get<MibPackDetail>(`/mib-packs/${id}`) })
   const d = detail.data
@@ -227,18 +244,27 @@ function PackDetail({ id, onClose }: { id: string; onClose: () => void }) {
         </details>
       )}
 
-      <MappingEditor packId={id} tables={d.tables} onDone={() => qc.invalidateQueries({ queryKey: ['mib-pack', id] })} />
+      <MappingEditor packId={id} tables={d.tables} prefill={prefill} onDone={() => qc.invalidateQueries({ queryKey: ['mib-pack', id] })} />
       <TestAgainstDevice packId={id} />
     </div>
   )
 }
 
-function MappingEditor({ packId, tables, onDone }: { packId: string; tables: MibPackTable[]; onDone: () => void }) {
-  const [tableName, setTableName] = useState('')
-  const [rootOid, setRootOid] = useState('')
-  const [purpose, setPurpose] = useState('aps')
+function MappingEditor({ packId, tables, onDone, prefill }: { packId: string; tables: MibPackTable[]; onDone: () => void; prefill?: { table?: string; root?: string; purpose?: string } }) {
+  const [tableName, setTableName] = useState(prefill?.table ?? '')
+  const [rootOid, setRootOid] = useState(prefill?.root ?? '')
+  const [purpose, setPurpose] = useState(prefill?.purpose && PURPOSES.includes(prefill.purpose) ? prefill.purpose : 'clients')
   const [colMap, setColMap] = useState('{}')
   const [err, setErr] = useState<string | null>(null)
+
+  // Insert a field hint into the column_map JSON (placeholder column 0) so the
+  // operator just edits the column number after clicking.
+  const addField = (field: string) => {
+    let m: Record<string, number> = {}
+    try { m = JSON.parse(colMap || '{}') } catch { /* keep editing */ }
+    if (!(field in m)) m[field] = 0
+    setColMap(JSON.stringify(m))
+  }
 
   const save = useMutation({
     mutationFn: () => {
@@ -286,8 +312,16 @@ function MappingEditor({ packId, tables, onDone }: { packId: string; tables: Mib
           {PURPOSES.map((p) => <option key={p} value={p}>{p}</option>)}
         </select>
       </div>
+      {(FIELD_HINTS[purpose] ?? []).length > 0 && (
+        <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+          <span className="muted" style={{ fontSize: 11 }}>Fields for <strong>{purpose}</strong> (click to add):</span>
+          {FIELD_HINTS[purpose].map((f) => (
+            <button key={f} style={{ ...ghost, fontSize: 11, padding: '2px 8px' }} onClick={() => addField(f)}>+ {f}</button>
+          ))}
+        </div>
+      )}
       <textarea style={{ ...input, marginTop: 8, fontFamily: 'monospace', minHeight: 54 }}
-        placeholder='column_map e.g. {"ap_name":2,"ap_serial":4,"ap_mac":13,"ap_ip":14}'
+        placeholder='column_map e.g. {"client_mac":1,"client_ip":2,"client_ssid":6,"client_ap":12}'
         value={colMap} onChange={(e) => setColMap(e.target.value)} />
       <div style={{ marginTop: 8 }}>
         <button style={btn} disabled={!tableName || !rootOid || save.isPending} onClick={() => save.mutate()}>

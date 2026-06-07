@@ -6,6 +6,82 @@ import (
 	"strings"
 )
 
+// PDUTypeName returns a short, stable label for a PDU type (used by the MIB
+// Explorer to show the value type of each walked row).
+func PDUTypeName(t PDUType) string {
+	switch t {
+	case TypeInt:
+		return "Integer"
+	case TypeUInt32:
+		return "Unsigned32"
+	case TypeCounter32:
+		return "Counter32"
+	case TypeCounter64:
+		return "Counter64"
+	case TypeGauge32:
+		return "Gauge32"
+	case TypeTimeTicks:
+		return "TimeTicks"
+	case TypeOctetString:
+		return "OctetString"
+	case TypeOIDValue:
+		return "OID"
+	case TypeIPAddress:
+		return "IpAddress"
+	case TypeNoSuchObject:
+		return "noSuchObject"
+	case TypeNoSuchInstance:
+		return "noSuchInstance"
+	case TypeEndOfMIBView:
+		return "endOfMibView"
+	}
+	return "other"
+}
+
+// PDUDisplay renders a PDU value for human inspection, choosing the most useful
+// representation: a 6-byte OctetString → MAC; an all-printable OctetString →
+// text; any other binary → hex; IpAddress → dotted quad; numbers as decimal.
+// This is what makes a raw MIB walk legible (MAC / IP / hex) without guessing.
+func PDUDisplay(p PDU) string {
+	if b, ok := p.Value.([]byte); ok {
+		if p.Type == TypeOctetString || p.Type == TypeOther {
+			if len(b) == 6 && !allPrintable(b) {
+				return macHex(b)
+			}
+			if len(b) > 0 && allPrintable(b) {
+				return string(b)
+			}
+			if len(b) == 0 {
+				return ""
+			}
+			return "0x" + bytesHex(b)
+		}
+	}
+	return PDUString(p)
+}
+
+func allPrintable(b []byte) bool {
+	for _, c := range b {
+		if c < 0x20 || c >= 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+func macHex(b []byte) string {
+	return fmt.Sprintf("%02x:%02x:%02x:%02x:%02x:%02x", b[0], b[1], b[2], b[3], b[4], b[5])
+}
+
+func bytesHex(b []byte) string {
+	const h = "0123456789abcdef"
+	out := make([]byte, 0, len(b)*2)
+	for _, c := range b {
+		out = append(out, h[c>>4], h[c&0x0f])
+	}
+	return string(out)
+}
+
 // PDUString extracts a printable string from OctetString / IPAddress PDUs.
 func PDUString(p PDU) string {
 	switch v := p.Value.(type) {
@@ -82,7 +158,7 @@ func PDUMACAddress(p PDU) string {
 func TrimOIDPrefix(oid, prefix string) ([]uint32, bool) {
 	prefix = strings.TrimPrefix(prefix, ".")
 	oid = strings.TrimPrefix(oid, ".")
-	if !strings.HasPrefix(oid, prefix) {
+	if !oidPrefixMatch(oid, prefix) {
 		return nil, false
 	}
 	rest := strings.TrimPrefix(oid[len(prefix):], ".")
@@ -112,9 +188,24 @@ func ColumnAndIndex(oid, entryRoot string) (column uint32, index []uint32, ok bo
 }
 
 // HasOIDPrefix reports whether oid starts with root (either way, with or
-// without leading dots).
+// without leading dots). The match is component-boundary aware: root
+// "1.3.6.1.2.6.1" matches "...6.1" and "...6.1.x" but NOT the sibling "...6.12".
 func HasOIDPrefix(oid, root string) bool {
 	oid = strings.TrimPrefix(oid, ".")
 	root = strings.TrimPrefix(root, ".")
-	return strings.HasPrefix(oid, root)
+	return oidPrefixMatch(oid, root)
+}
+
+// oidPrefixMatch reports whether prefix is a sub-identifier-aligned prefix of
+// oid: either equal, or prefix is immediately followed by a '.' in oid. This is
+// what callers actually mean by "OID under this subtree" — a plain string
+// HasPrefix wrongly treats ".6.1" as a prefix of the sibling ".6.12".
+func oidPrefixMatch(oid, prefix string) bool {
+	if prefix == "" {
+		return true
+	}
+	if !strings.HasPrefix(oid, prefix) {
+		return false
+	}
+	return len(oid) == len(prefix) || oid[len(prefix)] == '.'
 }

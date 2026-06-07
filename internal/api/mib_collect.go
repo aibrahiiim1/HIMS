@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/netip"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -25,14 +26,15 @@ var (
 
 // tableResult is the honest per-table outcome surfaced to the operator.
 type tableResult struct {
-	Table   string            `json:"table"`
-	RootOID string            `json:"root_oid"`
-	Purpose string            `json:"purpose"`
-	Status  string            `json:"status"` // supported|empty|timeout|no_such_object|error
-	Count   int               `json:"count"`
-	Sample  []map[string]any  `json:"sample,omitempty"` // first few rows (col→value), preview only
-	Mapped  int               `json:"mapped"`           // rows persisted into a wireless_* table
-	Detail  string            `json:"detail,omitempty"`
+	Table   string           `json:"table"`
+	RootOID string           `json:"root_oid"`
+	Purpose string           `json:"purpose"`
+	Status  string           `json:"status"` // supported|empty|timeout|no_such_object|error
+	Count   int              `json:"count"`  // interpreted table rows (distinct indices)
+	RawVars int              `json:"raw_vars"` // raw varbinds captured under the root
+	Sample  []map[string]any `json:"sample,omitempty"` // first few rows (col→value), preview only
+	Mapped  int              `json:"mapped"`           // rows persisted into a wireless_* table
+	Detail  string           `json:"detail,omitempty"`
 }
 
 // resolveMibTarget resolves a device + community for a MIB walk from request body.
@@ -64,26 +66,39 @@ func (s *Server) resolveMibTarget(ctx context.Context, deviceID, ip, community s
 func (s *Server) walkTables(ctx context.Context, dev db.Device, c snmp.Client, packID uuid.UUID, tables []db.MibPackTable, maxRows int, persist bool) []tableResult {
 	poll := time.Now().UTC()
 	var out []tableResult
-	var apN, ssidN, cliN, radioN int
+	var apN, ssidN, cliN, radioN, evtN int
 	pid := packID
+	eventsCleared := false
+	const rawCap = 20000 // bound raw capture per table (sparse counter trees can be huge)
 	for _, t := range tables {
 		if !t.Enabled {
 			continue
 		}
-		res := mibpack.WalkTable(ctx, c, t.RootOid, maxRows)
-		tr := tableResult{Table: t.TableName, RootOID: t.RootOid, Purpose: t.Purpose, Status: string(res.Status), Count: res.Count, Detail: res.Detail}
-		// Raw rows (always) — replace prior capture for this device+table.
+		// One raw subtree walk per table: capture every varbind faithfully (the
+		// Explorer's source of truth), then interpret it as a table for mapping.
+		vars, status, detail := mibpack.RawWalk(ctx, c, t.RootOid, 0)
+		tr := tableResult{Table: t.TableName, RootOID: t.RootOid, Purpose: t.Purpose, Status: string(status), RawVars: len(vars), Detail: detail}
+
+		// Raw rows (always; honest capture even when nothing maps) — replace the
+		// prior capture for this device+table, then store each varbind with type.
 		_ = s.queries.DeleteMibWalkRows(ctx, db.DeleteMibWalkRowsParams{DeviceID: dev.ID, TableName: t.TableName})
+		for i, v := range vars {
+			if i >= rawCap {
+				break
+			}
+			_ = s.queries.InsertMibWalkRow(ctx, db.InsertMibWalkRowParams{
+				DeviceID: dev.ID, PackID: &pid, TableName: t.TableName, Oid: v.OID,
+				Idx: mibpack.OIDSuffix(v.OID, t.RootOid), RawValue: truncStr(v.Value, 512), ValType: v.Type,
+			})
+		}
+
+		// Interpret the varbinds as a table (boundary-correct column/index split).
+		rows := mibpack.GroupRows(vars, t.RootOid, maxRows)
+		tr.Count = len(rows)
 		cm := parseColMap(t.ColumnMap)
-		for i, row := range res.Rows {
+		for i, row := range rows {
 			if i < 5 {
 				tr.Sample = append(tr.Sample, rowPreview(row))
-			}
-			for col, oid := range row.OIDs {
-				_ = s.queries.InsertMibWalkRow(ctx, db.InsertMibWalkRowParams{
-					DeviceID: dev.ID, PackID: &pid, TableName: t.TableName, Oid: oid,
-					Idx: row.Index, RawValue: truncStr(row.Cols[col], 512),
-				})
 			}
 			if !persist {
 				continue
@@ -155,9 +170,23 @@ func (s *Server) walkTables(ctx context.Context, dev db.Device, c snmp.Client, p
 					Band: colVal(row, cm, "radio_band"), Channel: ch, PowerDbm: pw, Source: mibSource,
 				})
 				radioN++
+			case "events":
+				msg := colVal(row, cm, "event_message")
+				if msg == "" {
+					continue
+				}
+				if !eventsCleared { // replace the MIB-sourced event set once per run
+					_ = s.queries.DeleteWirelessEventsForSource(ctx, db.DeleteWirelessEventsForSourceParams{ControllerDeviceID: dev.ID, Source: mibSource})
+					eventsCleared = true
+				}
+				_ = s.queries.InsertWirelessEvent(ctx, db.InsertWirelessEventParams{
+					ControllerDeviceID: dev.ID, At: poll, Severity: nz(colVal(row, cm, "event_severity"), "info"),
+					Category: t.TableName, Message: truncStr(msg, 480), Source: mibSource,
+				})
+				evtN++
 			}
 		}
-		tr.Mapped = map[string]int{"aps": apN, "ssids": ssidN, "clients": cliN, "radios": radioN}[t.Purpose]
+		tr.Mapped = map[string]int{"aps": apN, "ssids": ssidN, "clients": cliN, "radios": radioN, "events": evtN}[t.Purpose]
 		out = append(out, tr)
 	}
 	if persist {
@@ -288,6 +317,133 @@ func (s *Server) collectWirelessMib(ctx context.Context, dev db.Device, communit
 		detail += " No AP/SSID/client rows exposed by this firmware on the mapped tables — recorded honestly as raw rows; use Test/View Raw Rows + the mapping editor to target the tables this device populates."
 	}
 	return results, detail, supported > 0
+}
+
+// ---- MIB Explorer ----------------------------------------------------------
+
+type explorerSample struct {
+	Index string `json:"index"`
+	Value string `json:"value"`
+}
+
+type explorerGroup struct {
+	ColumnOID     string           `json:"column_oid"`
+	Name          string           `json:"name"`              // documented MIB name (or nearest), "" if unknown
+	Table         string           `json:"table"`             // pack table this subtree was captured under
+	Purpose       string           `json:"purpose,omitempty"` // mapped purpose, if any
+	Field         string           `json:"field,omitempty"`   // domain field this column maps to, if any
+	Mapped        bool             `json:"mapped"`
+	ValueType     string           `json:"value_type"`
+	Rows          int              `json:"rows"`
+	LastCollected string           `json:"last_collected,omitempty"`
+	Samples       []explorerSample `json:"samples"`
+}
+
+type explorerResp struct {
+	DeviceID  string          `json:"device_id"`
+	TotalRows int             `json:"total_rows"`
+	Groups    []explorerGroup `json:"groups"`
+}
+
+// mibColumnKey returns the column OID (group key) + index label for a walked
+// OID. When the OID sits under a known table entry (rootOID.1) it splits into
+// the true SNMP column + index; otherwise it falls back to "OID minus the last
+// sub-identifier" so scalars and undocumented subtrees still group sensibly.
+func mibColumnKey(oid, rootOID string) (key, idx string) {
+	if rootOID != "" {
+		entryRoot := strings.TrimSuffix(rootOID, ".") + ".1"
+		if col, ix, ok := snmp.ColumnAndIndex(oid, entryRoot); ok {
+			parts := make([]string, len(ix))
+			for i, v := range ix {
+				parts[i] = strconv.FormatUint(uint64(v), 10)
+			}
+			return entryRoot + "." + strconv.FormatUint(uint64(col), 10), strings.Join(parts, ".")
+		}
+	}
+	if i := strings.LastIndexByte(oid, '.'); i >= 0 {
+		return oid[:i], oid[i+1:]
+	}
+	return oid, ""
+}
+
+// mibExplorer handles GET /devices/{id}/mib-explorer — the OID-tree grouping of
+// a device's captured raw rows: column OID, documented name (where known), pack
+// table, mapped domain field, value type, row count, and sample rows.
+func (s *Server) mibExplorer(w http.ResponseWriter, r *http.Request) {
+	ctx, id, ok := pathDevice(w, r)
+	if !ok {
+		return
+	}
+	rows, err := s.queries.ListMibWalkRows(ctx, db.ListMibWalkRowsParams{DeviceID: id, Limit: 20000})
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+
+	// Build table_name → root and columnOID → (purpose, field) from the packs
+	// that produced these rows, so groups can show which domain field they feed.
+	rootByTable := map[string]string{}
+	type fieldInfo struct{ purpose, field string }
+	colField := map[string]fieldInfo{}
+	seenPack := map[uuid.UUID]bool{}
+	for _, rw := range rows {
+		if rw.PackID == nil || seenPack[*rw.PackID] {
+			continue
+		}
+		seenPack[*rw.PackID] = true
+		ts, _ := s.queries.ListMibPackTables(ctx, *rw.PackID)
+		for _, t := range ts {
+			rootByTable[t.TableName] = t.RootOid
+			entryRoot := strings.TrimSuffix(t.RootOid, ".") + ".1"
+			for field, col := range parseColMap(t.ColumnMap) {
+				if col <= 0 {
+					continue // col 0 = row index, not a distinct column OID
+				}
+				colField[entryRoot+"."+strconv.Itoa(col)] = fieldInfo{t.Purpose, field}
+			}
+		}
+	}
+
+	groups := map[string]*explorerGroup{}
+	var order []string
+	seenOID := map[string]bool{}
+	total := 0
+	for _, rw := range rows {
+		if seenOID[rw.Oid] { // the same OID may be captured under overlapping table roots
+			continue
+		}
+		seenOID[rw.Oid] = true
+		total++
+		key, idx := mibColumnKey(rw.Oid, rootByTable[rw.TableName])
+		g := groups[key]
+		if g == nil {
+			g = &explorerGroup{
+				ColumnOID: key, Name: mibOIDName(key), Table: rw.TableName, ValueType: rw.ValType,
+				LastCollected: rw.CollectedAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
+			}
+			if fi, ok := colField[key]; ok {
+				g.Purpose, g.Field, g.Mapped = fi.purpose, fi.field, true
+			}
+			groups[key] = g
+			order = append(order, key)
+		}
+		g.Rows++
+		if len(g.Samples) < 5 {
+			g.Samples = append(g.Samples, explorerSample{Index: idx, Value: rw.RawValue})
+		}
+	}
+
+	out := make([]explorerGroup, 0, len(order))
+	for _, k := range order {
+		out = append(out, *groups[k])
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Rows != out[j].Rows {
+			return out[i].Rows > out[j].Rows
+		}
+		return out[i].ColumnOID < out[j].ColumnOID
+	})
+	writeJSON(w, http.StatusOK, explorerResp{DeviceID: id.String(), TotalRows: total, Groups: out})
 }
 
 // listMibWalkRows handles GET /devices/{id}/mib-rows.

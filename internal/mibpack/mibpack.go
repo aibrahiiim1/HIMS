@@ -94,48 +94,17 @@ type WalkResult struct {
 
 // WalkTable walks an SNMP table root (the table OID; the entry OID is rootOID.1)
 // and groups the returned varbinds into rows by their index suffix. maxRows caps
-// the result (0 = no cap). Pure: takes a connected snmp.Client.
+// the number of rows (0 = no cap). Pure: takes a connected snmp.Client. It is a
+// thin wrapper over RawWalk + GroupRows so raw capture and table interpretation
+// share one walk + one (boundary-correct) parser.
 func WalkTable(ctx context.Context, c snmp.Client, rootOID string, maxRows int) WalkResult {
 	res := WalkResult{RootOID: rootOID}
-	entryRoot := strings.TrimSuffix(rootOID, ".") + ".1" // tables have an Entry node at .1
-	byIndex := map[string]*Row{}
-	order := []string{}
-	n := 0
-	err := c.BulkWalk(ctx, rootOID, func(p snmp.PDU) error {
-		col, idx, ok := snmp.ColumnAndIndex(p.OID, entryRoot)
-		if !ok {
-			return nil
-		}
-		idxStr := joinUint(idx)
-		r := byIndex[idxStr]
-		if r == nil {
-			if maxRows > 0 && len(order) >= maxRows {
-				return nil
-			}
-			r = &Row{Index: idxStr, Cols: map[uint32]string{}, OIDs: map[uint32]string{}}
-			byIndex[idxStr] = r
-			order = append(order, idxStr)
-		}
-		r.Cols[col] = snmp.PDUString(p)
-		r.OIDs[col] = p.OID
-		n++
-		return nil
-	})
-	if err != nil {
-		res.Detail = err.Error()
-		switch {
-		case strings.Contains(strings.ToLower(err.Error()), "timeout"):
-			res.Status = StatusTimeout
-		case strings.Contains(strings.ToLower(err.Error()), "no such") || strings.Contains(strings.ToLower(err.Error()), "nosuch"):
-			res.Status = StatusNoSuchObject
-		default:
-			res.Status = StatusError
-		}
+	vars, status, detail := RawWalk(ctx, c, rootOID, 0)
+	if status == StatusTimeout || status == StatusNoSuchObject || status == StatusError {
+		res.Status, res.Detail = status, detail
 		return res
 	}
-	for _, k := range order {
-		res.Rows = append(res.Rows, *byIndex[k])
-	}
+	res.Rows = GroupRows(vars, rootOID, maxRows)
 	res.Count = len(res.Rows)
 	if res.Count == 0 {
 		res.Status = StatusEmpty
@@ -143,6 +112,95 @@ func WalkTable(ctx context.Context, c snmp.Client, rootOID string, maxRows int) 
 		res.Status = StatusSupported
 	}
 	return res
+}
+
+// GroupRows interprets raw varbinds as an SNMP table: it splits each OID into
+// (column, index) at the entry node (rootOID + ".1") and groups columns by
+// index into rows. Varbinds that don't sit under the entry (sibling subtrees)
+// are ignored — correct now that ColumnAndIndex matches on sub-id boundaries.
+// maxRows caps distinct rows (0 = no cap). Cell values are the rendered display
+// strings from RawWalk (MAC / IP / hex / int / string).
+func GroupRows(vars []RawVar, rootOID string, maxRows int) []Row {
+	entryRoot := strings.TrimSuffix(rootOID, ".") + ".1"
+	byIndex := map[string]*Row{}
+	var order []string
+	for _, v := range vars {
+		col, idx, ok := snmp.ColumnAndIndex(v.OID, entryRoot)
+		if !ok {
+			continue
+		}
+		idxStr := joinUint(idx)
+		r := byIndex[idxStr]
+		if r == nil {
+			if maxRows > 0 && len(order) >= maxRows {
+				continue
+			}
+			r = &Row{Index: idxStr, Cols: map[uint32]string{}, OIDs: map[uint32]string{}}
+			byIndex[idxStr] = r
+			order = append(order, idxStr)
+		}
+		r.Cols[col] = v.Value
+		r.OIDs[col] = v.OID
+	}
+	out := make([]Row, 0, len(order))
+	for _, k := range order {
+		out = append(out, *byIndex[k])
+	}
+	return out
+}
+
+// OIDSuffix returns the sub-identifiers of oid below root as a dotted string
+// ("" if oid is not under root). Used to label raw rows with their index.
+func OIDSuffix(oid, root string) string {
+	suffix, ok := snmp.TrimOIDPrefix(oid, root)
+	if !ok {
+		return ""
+	}
+	return joinUint(suffix)
+}
+
+// RawVar is one varbind captured by a raw subtree walk (no table assumption).
+type RawVar struct {
+	OID   string `json:"oid"`
+	Type  string `json:"type"`
+	Value string `json:"value"`
+}
+
+// RawWalk walks the ENTIRE subtree under root and returns every varbind with
+// its SNMP type and a human-rendered value (MAC / IP / hex / int / string).
+// Unlike WalkTable it makes no table/entry/column/index assumption, so it
+// faithfully captures whatever a given firmware exposes — the basis of the MIB
+// Explorer and of honest raw capture. maxRows caps the result (0 = no cap).
+func RawWalk(ctx context.Context, c snmp.Client, root string, maxRows int) (vars []RawVar, status TableStatus, detail string) {
+	n := 0
+	err := c.BulkWalk(ctx, root, func(p snmp.PDU) error {
+		if maxRows > 0 && n >= maxRows {
+			return nil
+		}
+		vars = append(vars, RawVar{OID: p.OID, Type: snmp.PDUTypeName(p.Type), Value: snmp.PDUDisplay(p)})
+		n++
+		return nil
+	})
+	if err != nil {
+		return vars, classifyWalkErr(err), err.Error()
+	}
+	if len(vars) == 0 {
+		return vars, StatusEmpty, ""
+	}
+	return vars, StatusSupported, ""
+}
+
+// classifyWalkErr maps a walk error to an honest table status.
+func classifyWalkErr(err error) TableStatus {
+	low := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(low, "timeout"):
+		return StatusTimeout
+	case strings.Contains(low, "no such") || strings.Contains(low, "nosuch"):
+		return StatusNoSuchObject
+	default:
+		return StatusError
+	}
 }
 
 func joinUint(a []uint32) string {

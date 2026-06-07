@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
 import { Wifi, Router, Users, Radio, ShieldCheck, Activity, AlertTriangle, Plug, FlaskConical, DownloadCloud, Layers, FileSearch } from 'lucide-react'
-import { api, type WirelessDetailResp, type MibWalkRow } from '../api'
+import { api, type WirelessDetailResp, type MibWalkRow, type MibExplorerResp } from '../api'
 import { DeviceHeader } from '../components/DeviceHeader'
 import { Panel, Kpi, DefList, EmptyState, StatusPill } from '../components/ui'
 
@@ -45,6 +45,10 @@ export function WirelessDetail() {
   })
   const rawRows = useQuery({
     queryKey: ['mib-rows', id], queryFn: () => api.get<MibWalkRow[]>(`/devices/${id}/mib-rows`), enabled: showRaw,
+  })
+  const [showExplorer, setShowExplorer] = useState(false)
+  const explorer = useQuery({
+    queryKey: ['mib-explorer', id], queryFn: () => api.get<MibExplorerResp>(`/devices/${id}/mib-explorer`), enabled: showExplorer,
   })
   const configureHref = d
     ? `/vendor-profiles?create=1&vendor_type=extreme_xcc&device_id=${id}&target_url=${encodeURIComponent(`https://${d.identity.ip}:8443`)}`
@@ -117,12 +121,20 @@ export function WirelessDetail() {
       <Panel title="SNMP Wireless MIB" icon={Layers}>
         {d && (
           <>
-            <DefList items={[
-              { label: 'Applicable MIB pack', value: d.mib.has_pack ? `${d.mib.pack_name} (${d.mib.pack_source})` : 'none — no enabled pack matches this controller' },
-              { label: 'Tables with rows (last walk)', value: d.mib.walked_tables.length
-                ? d.mib.walked_tables.map((t) => `${t.table} (${t.rows})`).join(', ')
-                : 'none walked yet' },
-            ]} />
+            {(() => {
+              const tablesWithRows = d.mib.walked_tables.filter((t) => t.rows > 0)
+              const rawTotal = d.mib.walked_tables.reduce((n, t) => n + t.rows, 0)
+              return (
+                <DefList items={[
+                  { label: 'Applicable MIB pack', value: d.mib.has_pack ? `${d.mib.pack_name} (${d.mib.pack_source})` : 'none — no enabled pack matches this controller' },
+                  { label: 'Supported tables (responded)', value: tablesWithRows.length
+                    ? tablesWithRows.map((t) => `${t.table} (${t.rows} rows)`).join(', ')
+                    : 'none responded with rows' },
+                  { label: 'Raw MIB rows captured', value: rawTotal ? `${rawTotal}` : '0 — run a collection' },
+                  { label: 'Mapped into wireless tables', value: mappedSummary(d) },
+                ]} />
+              )
+            })()}
             {!d.mib.has_pack && (
               <div className="enc-banner info" style={{ marginTop: 10 }}>
                 No MIB pack applies. Upload or enable a pack whose applies-to matches this controller in <Link to="/mibs">MIB Management</Link> — the built-in Extreme/HiPath pack is a fallback.
@@ -132,10 +144,41 @@ export function WirelessDetail() {
               <button className="btn btn-primary btn-sm" disabled={!d.mib.has_pack || runMib.isPending} onClick={() => { setMibMsg(''); runMib.mutate() }}>
                 <DownloadCloud size={14} /> {runMib.isPending ? 'Collecting…' : 'Run SNMP Wireless Collection'}
               </button>
+              <button className="btn btn-ghost btn-sm" onClick={() => setShowExplorer((v) => !v)}><Layers size={14} /> {showExplorer ? 'Hide MIB Explorer' : 'Open MIB Explorer'}</button>
               <Link className="btn btn-ghost btn-sm" to={d.mib.pack_id ? `/mibs?pack=${d.mib.pack_id}` : '/mibs'}><FlaskConical size={14} /> Test MIB Pack</Link>
+              <Link className="btn btn-ghost btn-sm" to={d.mib.pack_id ? `/mibs?pack=${d.mib.pack_id}` : '/mibs'}><Plug size={14} /> Create mapping</Link>
               <button className="btn btn-ghost btn-sm" onClick={() => setShowRaw((v) => !v)}><FileSearch size={14} /> {showRaw ? 'Hide Raw MIB Rows' : 'View Raw MIB Rows'}</button>
             </div>
             {mibMsg && <div className={'enc-banner ' + (mibMsg.startsWith('✗') ? 'crit' : 'info')} style={{ marginTop: 10, whiteSpace: 'pre-wrap' }}>{mibMsg}</div>}
+            {showExplorer && (
+              <div style={{ marginTop: 12 }}>
+                {explorer.isLoading && <div className="muted">Loading MIB explorer…</div>}
+                {explorer.data && explorer.data.total_rows === 0 && <EmptyState icon={Layers} title="Nothing captured yet" message="Run an SNMP MIB collection (or test the pack) to populate the explorer." />}
+                {explorer.data && explorer.data.total_rows > 0 && (
+                  <>
+                    <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>{explorer.data.total_rows} distinct OIDs · {explorer.data.groups.length} columns/subtrees. Subtrees the bundled MIB documents are named; firmware-specific objects show their nearest known parent.</div>
+                    <table className="data-table">
+                      <thead><tr><th>Column OID</th><th>Name</th><th>Type</th><th>Rows</th><th>Maps to</th><th>Sample (index → value)</th></tr></thead>
+                      <tbody>
+                        {explorer.data.groups.slice(0, 120).map((g) => (
+                          <tr key={g.column_oid}>
+                            <td className="mono" style={{ fontSize: 11 }}>{g.column_oid}</td>
+                            <td>{g.name || <span className="muted">(undocumented)</span>}</td>
+                            <td>{g.value_type}</td>
+                            <td>{g.rows}</td>
+                            <td>{g.field ? <span className="badge badge-success">{g.purpose}.{g.field}</span> : <Link to={mapLink(d.mib.pack_id, g)}>map…</Link>}</td>
+                            <td className="mono" style={{ fontSize: 10, maxWidth: 280, overflow: 'hidden' }}>
+                              {g.samples.slice(0, 3).map((s, i) => <div key={i}>{s.index} → {s.value}</div>)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {explorer.data.groups.length > 120 && <div className="muted" style={{ marginTop: 6 }}>Showing first 120 of {explorer.data.groups.length} columns.</div>}
+                  </>
+                )}
+              </div>
+            )}
             {showRaw && (
               <div style={{ marginTop: 12 }}>
                 {rawRows.isLoading && <div className="muted">Loading raw rows…</div>}
@@ -286,6 +329,30 @@ export function WirelessDetail() {
       </Panel>
     </div>
   )
+}
+
+// mappedSummary describes what the SNMP MIB source actually populated (honest:
+// names the rosters that this firmware did not expose).
+function mappedSummary(d: WirelessDetailResp): string {
+  const mib = (xs: { source?: string }[]) => xs.filter((x) => x.source === 'snmp_wireless_mib').length
+  const aps = mib(d.aps), ssids = mib(d.ssids), clients = mib(d.clients)
+  const parts: string[] = []
+  if (clients) parts.push(`${clients} clients`)
+  if (aps) parts.push(`${aps} APs`)
+  if (ssids) parts.push(`${ssids} SSIDs`)
+  if (parts.length === 0) return 'nothing yet — AP/SSID/client tables not exposed by this firmware on the mapped OIDs'
+  return parts.join(', ') + ' (source: SNMP MIB)'
+}
+
+// mapLink builds a deep link into MIB Management's mapping editor, prefilled
+// from an explorer subtree (derives the table root from the column OID).
+function mapLink(packId: string | undefined, g: { column_oid: string; table: string; purpose?: string }): string {
+  if (!packId) return '/mibs'
+  const m = g.column_oid.match(/^(.*)\.1\.\d+$/) // <tableRoot>.1.<col>
+  const root = m ? m[1] : g.column_oid
+  const params = new URLSearchParams({ pack: packId, root, table: g.table })
+  if (g.purpose) params.set('purpose', g.purpose)
+  return `/mibs?${params.toString()}`
 }
 
 function collLabel(s: string): string {

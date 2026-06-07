@@ -711,6 +711,7 @@ export interface AccessPoint {
   serial?: string
   firmware?: string
   band?: string
+  source?: string
 }
 
 // Consolidated Wireless Controller detail (GET /devices/{id}/wireless).
@@ -799,10 +800,30 @@ export interface MibTableResult {
   root_oid: string
   purpose: string
   status: string // supported|empty|timeout|no_such_object|error
-  count: number
+  count: number      // interpreted table rows
+  raw_vars: number   // raw varbinds captured under the root
   sample?: Record<string, unknown>[]
   mapped: number
   detail?: string
+}
+
+// MIB Explorer — grouped OID tree for a collected device.
+export interface MibExplorerGroup {
+  column_oid: string
+  name: string            // documented MIB name (or nearest), "" if unknown
+  table: string           // pack table this subtree was captured under
+  purpose?: string
+  field?: string          // domain field this column maps to, if any
+  mapped: boolean
+  value_type: string
+  rows: number
+  last_collected?: string
+  samples: { index: string; value: string }[]
+}
+export interface MibExplorerResp {
+  device_id: string
+  total_rows: number
+  groups: MibExplorerGroup[]
 }
 
 export interface MibTestResult {
