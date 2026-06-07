@@ -720,7 +720,7 @@ export interface WirelessRadio { id: string; ap_name: string; radio: string; ban
 export interface WirelessEvent { id: string; at: string; severity: string; category: string; message: string; source: string }
 export interface WirelessDetailResp {
   identity: {
-    name: string; vendor: string; product: string; model: string; serial: string; firmware: string
+    name: string; ip: string; vendor: string; product: string; model: string; serial: string; firmware: string
     category: string; status: string; sysobjectid: string; sysdescr: string; sysname: string; managed_via: string[]
   }
   collection: {

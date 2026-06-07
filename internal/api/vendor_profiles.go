@@ -40,6 +40,9 @@ type vpConfig struct {
 	APIBase      string `json:"api_base,omitempty"`
 	Version      string `json:"version,omitempty"`
 	Insecure     bool   `json:"insecure,omitempty"`
+	// SSLVerify (extreme_xcc): when true, validate the controller's TLS cert.
+	// Default false (mgmt-LAN appliances ship self-signed certs).
+	SSLVerify bool `json:"ssl_verify,omitempty"`
 }
 
 func parseVPConfig(b []byte) vpConfig {
@@ -292,6 +295,11 @@ func (s *Server) vendorProfileTest(ctx context.Context, p db.VendorConnectionPro
 		}
 		aps, _ := c.ListAPs(cctx)
 		return true, "Extreme authenticated — " + itoaN(len(aps)) + " AP(s)"
+	case "extreme_xcc":
+		// SAFE DISCOVERY (Phase 3): authenticate if possible + probe a small list
+		// of read-only API endpoints, reporting status/content-type only — never
+		// secrets or bodies. Saves the discovered API base into the profile config.
+		return s.exploreXCC(ctx, p, cfg, base, user, pass)
 	case "wireless_aruba":
 		return false, "Aruba controller integration not implemented yet — profile saved; detection + classification active, deep collection pending"
 	case "cucm":
@@ -362,6 +370,9 @@ func (s *Server) runVendorProfileCollection(w http.ResponseWriter, r *http.Reque
 		_ = s.queries.SetVendorProfileTest(ctx, db.SetVendorProfileTestParams{ID: id, LastTestOk: &res.AuthOK, LastTestDetail: detail})
 	case "wireless_unifi", "wireless_omada", "wireless_ruckus", "wireless_extreme":
 		ok, detail = s.collectWirelessProfile(ctx, p, dev)
+		_ = s.queries.SetVendorProfileTest(ctx, db.SetVendorProfileTestParams{ID: id, LastTestOk: &ok, LastTestDetail: detail})
+	case "extreme_xcc":
+		ok, detail = s.collectXCCProfile(ctx, p, dev)
 		_ = s.queries.SetVendorProfileTest(ctx, db.SetVendorProfileTestParams{ID: id, LastTestOk: &ok, LastTestDetail: detail})
 	case "cucm":
 		ok, detail = s.collectCUCMProfile(ctx, p, dev)
@@ -548,7 +559,7 @@ func (s *Server) resolveScanProfile(ctx context.Context, category string, devID 
 	case string(domain.CatCamera), string(domain.CatNVR):
 		vendorTypes = []string{"cctv"}
 	case string(domain.CatWirelessController), string(domain.CatAccessPoint):
-		vendorTypes = []string{"wireless_unifi", "wireless_omada", "wireless_ruckus", "wireless_extreme", "wireless_aruba"}
+		vendorTypes = []string{"extreme_xcc", "wireless_unifi", "wireless_omada", "wireless_ruckus", "wireless_extreme", "wireless_aruba"}
 	case string(domain.CatPBX), string(domain.CatVoiceGateway), string(domain.CatIPPhone):
 		vendorTypes = []string{"cucm", "alcatel"}
 	}

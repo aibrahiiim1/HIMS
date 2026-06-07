@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/coralsearesorts/hims/internal/domain"
 	"github.com/coralsearesorts/hims/internal/fingerprint"
 	"github.com/coralsearesorts/hims/internal/osinv"
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
@@ -164,6 +165,9 @@ func (s *Server) dataQuality(w http.ResponseWriter, r *http.Request) {
 	// device that an operator's own (user) fingerprint would re-classify but which
 	// hasn't been re-scanned since the rule was added.
 	s.addFingerprintDQ(ctx, devs, &issues)
+
+	// --- Wireless controller collection quality (WC-P5) ----------------------
+	s.addWirelessDQ(ctx, devs, &issues, staleBefore)
 
 	// Servers/endpoints that have never had a deep OS inventory collected.
 	if rows, err := s.queries.ListDevicesWithoutOSInventory(ctx); err == nil && len(rows) > 0 {
@@ -551,6 +555,78 @@ func toDQ(d db.Device) dqDevice {
 // the agent detail page; Note carries the human cause.
 func agentDQ(a db.RelayAgent, note string) dqDevice {
 	return dqDevice{ID: a.ID.String(), Name: a.Name, PrimaryIP: a.Ip, Category: "relay_agent", Note: note}
+}
+
+// addWirelessDQ appends the five wireless-controller collection-quality issues.
+func (s *Server) addWirelessDQ(ctx context.Context, devs []db.Device, issues *[]dqIssue, staleBefore time.Time) {
+	var controllers []db.Device
+	for _, d := range devs {
+		if d.Category == string(domain.CatWirelessController) {
+			controllers = append(controllers, d)
+		}
+	}
+	if len(controllers) == 0 {
+		return
+	}
+	// Wireless API profiles by bound device + location (any wireless vendor type).
+	wirelessVT := map[string]bool{"extreme_xcc": true, "wireless_unifi": true, "wireless_omada": true, "wireless_ruckus": true, "wireless_extreme": true, "wireless_aruba": true}
+	profByDev := map[uuid.UUID]db.VendorConnectionProfile{}
+	profByLoc := map[uuid.UUID]db.VendorConnectionProfile{}
+	if profs, err := s.queries.ListVendorProfiles(ctx); err == nil {
+		for _, p := range profs {
+			if !wirelessVT[p.VendorType] {
+				continue
+			}
+			if p.DeviceID != nil {
+				profByDev[*p.DeviceID] = p
+			} else if p.LocationID != nil {
+				profByLoc[*p.LocationID] = p
+			}
+		}
+	}
+
+	var missingProfile, snmpOnly, apMissing, collFailed, stale []db.Device
+	for _, d := range controllers {
+		prof, hasProf := profByDev[d.ID]
+		if !hasProf && d.LocationID != nil {
+			prof, hasProf = profByLoc[*d.LocationID]
+		}
+		info, infoErr := s.queries.GetWLANControllerInfo(ctx, d.ID)
+		aps, _ := s.queries.ListAccessPoints(ctx, d.ID)
+
+		if !hasProf {
+			missingProfile = append(missingProfile, d)
+		} else if prof.LastTestOk != nil && !*prof.LastTestOk {
+			collFailed = append(collFailed, d)
+		}
+		// SNMP-only: no API-sourced controller info row (never collected via API).
+		apiCollected := infoErr == nil && info.Source == "extreme_xcc_api"
+		if !apiCollected {
+			snmpOnly = append(snmpOnly, d)
+		}
+		if len(aps) == 0 {
+			apMissing = append(apMissing, d)
+		} else if infoErr == nil && info.CollectedAt.Before(staleBefore) {
+			stale = append(stale, d)
+		}
+	}
+
+	add := func(key, label, desc, sev string, list []db.Device) {
+		if len(list) == 0 {
+			return
+		}
+		*issues = append(*issues, dqIssue{Key: key, Label: label, Description: desc, Severity: sev, Count: len(list), Devices: sampleDevices(list)})
+	}
+	add("wireless_controller_missing_api_profile", "Wireless controller: no API profile",
+		"Wireless controllers with no Vendor Connection Profile. SNMP identity is captured, but AP/SSID/client data needs a controller API profile (e.g. Extreme XCC).", "warning", missingProfile)
+	add("wireless_controller_snmp_only", "Wireless controller: SNMP-only",
+		"Wireless controllers managed via SNMP only — no API collection has run, so the AP/SSID/client roster is not available. Configure + run an API profile.", "info", snmpOnly)
+	add("wireless_controller_ap_data_missing", "Wireless controller: no AP inventory",
+		"Wireless controllers with zero access points collected. Run an API collection; if the API exposes no APs on this firmware, that is surfaced honestly.", "warning", apMissing)
+	add("wireless_controller_collection_failed", "Wireless controller: collection failed",
+		"Wireless controllers whose last API profile test/collection failed. Open the controller and use Test Connection to see the exact reason.", "critical", collFailed)
+	add("wireless_ap_inventory_stale", "Wireless AP inventory stale",
+		"Wireless controllers whose AP inventory has not been refreshed recently. Re-run collection to update AP/client status.", "info", stale)
 }
 
 func sampleDevices(list []db.Device) []dqDevice {

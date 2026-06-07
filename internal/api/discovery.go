@@ -537,7 +537,13 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 					// Profile (controller URL + site) if the operator configured one.
 					if prof, found := s.resolveScanProfile(ctx, cat, dev.ID, dev.LocationID); found {
 						cctx, ccancel := context.WithTimeout(ctx, 90*time.Second)
-						ok, detail := s.collectWirelessProfile(cctx, prof, dev)
+						var ok bool
+						var detail string
+						if prof.VendorType == "extreme_xcc" {
+							ok, detail = s.collectXCCProfile(cctx, prof, dev)
+						} else {
+							ok, detail = s.collectWirelessProfile(cctx, prof, dev)
+						}
 						ccancel()
 						_ = s.queries.SetVendorProfileCollection(ctx, db.SetVendorProfileCollectionParams{ID: prof.ID, LastCollectionDetail: detail})
 						_ = s.queries.SetVendorProfileTest(ctx, db.SetVendorProfileTestParams{ID: prof.ID, LastTestOk: &ok, LastTestDetail: detail})
@@ -548,7 +554,12 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 						}
 					} else {
 						profRes = &scanProfileResult{Resolved: false}
-						enrichment = "Wireless controller — add a Vendor Connection Profile (Discovery → Vendor Profiles) to onboard"
+						// Extreme on-prem controllers (XCC) get a specific next action.
+						if isExtremeXCC(r) {
+							enrichment = "Configure Extreme XCC profile to collect AP/SSID/client data (SNMP identity already captured)"
+						} else {
+							enrichment = "Wireless controller — add a Vendor Connection Profile (Discovery → Vendor Profiles) to onboard"
+						}
 					}
 				} else if cat := string(r.Match.Category); (cat == string(domain.CatPBX) || cat == string(domain.CatVoiceGateway)) && s.cipher() != nil {
 					// Voice/PBX candidate — use a matching CUCM Vendor Connection Profile.

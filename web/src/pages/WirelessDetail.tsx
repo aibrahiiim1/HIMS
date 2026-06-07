@@ -1,6 +1,7 @@
-import { useQuery } from '@tanstack/react-query'
-import { useParams } from 'react-router-dom'
-import { Wifi, Router, Users, Radio, ShieldCheck, Activity, AlertTriangle } from 'lucide-react'
+import { useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Link, useParams } from 'react-router-dom'
+import { Wifi, Router, Users, Radio, ShieldCheck, Activity, AlertTriangle, Plug, FlaskConical, DownloadCloud } from 'lucide-react'
 import { api, type WirelessDetailResp } from '../api'
 import { DeviceHeader } from '../components/DeviceHeader'
 import { Panel, Kpi, DefList, EmptyState, StatusPill } from '../components/ui'
@@ -14,10 +15,28 @@ const sevTone = (s: string) => (s === 'critical' ? 'down' : s === 'warning' ? 'w
 // honest about what's missing and points at the exact next action.
 export function WirelessDetail() {
   const { id } = useParams<{ id: string }>()
+  const qc = useQueryClient()
   const q = useQuery({ queryKey: ['wireless', id], queryFn: () => api.get<WirelessDetailResp>(`/devices/${id}/wireless`) })
   const d = q.data
   const c = d?.counts ?? {}
   const apiNeeded = !!d && !d.collection.has_api_profile
+  const [actionMsg, setActionMsg] = useState('')
+
+  const pid = d?.collection.profile_id
+  const refetch = () => qc.invalidateQueries({ queryKey: ['wireless', id] })
+  const test = useMutation({
+    mutationFn: () => api.post<{ ok: boolean; detail: string }>(`/vendor-profiles/${pid}/test`, {}),
+    onSuccess: (r) => { setActionMsg((r.ok ? '✓ ' : '✗ ') + r.detail); refetch() },
+    onError: (e) => setActionMsg((e as Error).message),
+  })
+  const run = useMutation({
+    mutationFn: () => api.post<{ collected: boolean; detail: string }>(`/vendor-profiles/${pid}/run-collection`, { device_id: id }),
+    onSuccess: (r) => { setActionMsg((r.collected ? '✓ ' : '⚠ ') + r.detail); refetch() },
+    onError: (e) => setActionMsg((e as Error).message),
+  })
+  const configureHref = d
+    ? `/vendor-profiles?create=1&vendor_type=extreme_xcc&device_id=${id}&target_url=${encodeURIComponent(`https://${d.identity.ip}:8443`)}`
+    : '/vendor-profiles'
 
   return (
     <div>
@@ -63,12 +82,21 @@ export function WirelessDetail() {
             {apiNeeded && (
               <div className="enc-banner info" style={{ marginTop: 10 }}>
                 <strong>Deep wireless data: API profile required.</strong> {d.collection.next_action}
-                {' '}Configure an Extreme XCC profile from the device actions to collect AP/SSID/client data.
               </div>
             )}
             {!apiNeeded && d.collection.next_action && (
               <div className="enc-banner info" style={{ marginTop: 10 }}>{d.collection.next_action}</div>
             )}
+            <div className="row" style={{ gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+              {apiNeeded
+                ? <Link className="btn btn-primary btn-sm" to={configureHref}><Plug size={14} /> Configure Extreme XCC Profile</Link>
+                : <>
+                    <button className="btn btn-ghost btn-sm" disabled={!pid || test.isPending} onClick={() => { setActionMsg(''); test.mutate() }}><FlaskConical size={14} /> {test.isPending ? 'Testing…' : 'Test Connection'}</button>
+                    <button className="btn btn-primary btn-sm" disabled={!pid || run.isPending} onClick={() => { setActionMsg(''); run.mutate() }}><DownloadCloud size={14} /> {run.isPending ? 'Collecting…' : 'Run Collection'}</button>
+                    <Link className="btn btn-ghost btn-sm" to="/vendor-profiles"><Plug size={14} /> Manage Profile</Link>
+                  </>}
+            </div>
+            {actionMsg && <div className={'enc-banner ' + (actionMsg.startsWith('✗') ? 'crit' : 'info')} style={{ marginTop: 10, whiteSpace: 'pre-wrap' }}>{actionMsg}</div>}
           </>
         )}
       </Panel>

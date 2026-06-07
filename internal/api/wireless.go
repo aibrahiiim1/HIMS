@@ -17,6 +17,7 @@ import (
 
 type wirelessIdentity struct {
 	Name        string   `json:"name"`
+	IP          string   `json:"ip"`
 	Vendor      string   `json:"vendor"`
 	Product     string   `json:"product"` // e.g. "ExtremeCloud IQ Controller" (from sysDescr)
 	Model       string   `json:"model"`
@@ -79,8 +80,13 @@ func (s *Server) deviceWireless(w http.ResponseWriter, r *http.Request) {
 		sysDescr = ""
 	}
 
+	ip := ""
+	if dev.PrimaryIp != nil && dev.PrimaryIp.IsValid() {
+		ip = dev.PrimaryIp.String()
+	}
 	ident := wirelessIdentity{
 		Name:        dev.Name,
+		IP:          ip,
 		Vendor:      derefStr(dev.Vendor),
 		Product:     productFromSysDescr(fact("snmp.sysdescr"), derefStr(dev.Vendor)),
 		Model:       derefStr(dev.Model),
