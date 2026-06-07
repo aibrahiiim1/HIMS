@@ -647,7 +647,19 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 	}
 	// found_count = devices present this run (new + known-seen + recovered). It is
 	// NOT the stable inventory count — the Job Results API splits the dispositions.
-	found := newCount + knownSeenCount + recoveredCount
+	// found_count = devices actually RECORDED present this run, counted from the
+	// persisted rows — never the in-flight counters, which can diverge from the
+	// rows if a slow host's write missed its deadline. This guarantees the jobs
+	// list / KPI always matches the result rows + the API counts.
+	found := newCount + knownSeenCount + recoveredCount // fallback if the row query fails
+	if rows, rerr := s.queries.ListDiscoveryResults(context.Background(), jobID); rerr == nil {
+		found = 0
+		for _, rr := range rows {
+			if rr.Outcome != "missed" {
+				found++
+			}
+		}
+	}
 	_ = s.queries.UpdateDiscoveryJobStatus(context.Background(), db.UpdateDiscoveryJobStatusParams{
 		ID: jobID, Status: status, HostCount: int32(len(hosts)), FoundCount: int32(found), Error: errMsg,
 	})
@@ -983,6 +995,13 @@ func scanNextActionWithPlan(category string, bound bool, boundKind string, pr *s
 // (newly_discovered | known_seen | known_recovered); retryCount is how many
 // targeted retries were spent (0 for the main sweep).
 func (s *Server) recordResult(ctx context.Context, jobID uuid.UUID, ip netip.Addr, r discovery.HostResult, id uuid.UUID, applyErr error, enrichment string, profRes *scanProfileResult, collectedVia, agentName, disposition string, retryCount int) {
+	// Persist with a FRESH context, independent of the caller's per-host probe
+	// deadline (hctx, 45s). A slow host whose probe+deep-collection exceeds that
+	// deadline must still get its result row — otherwise it is counted-alive but
+	// row-less (it silently vanishes from the job even though it was found).
+	_ = ctx
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
 	outcome := "alive"
 	switch {
 	case applyErr != nil:
@@ -1081,6 +1100,9 @@ func (s *Server) recordResult(ctx context.Context, jobID uuid.UUID, ip netip.Add
 // a known managed device must never silently vanish from a scan result. outcome
 // is 'missed', disposition 'known_unreachable'.
 func (s *Server) recordMissed(ctx context.Context, jobID uuid.UUID, ip netip.Addr, dev db.Device, last discovery.HostResult, retryCount int) {
+	_ = ctx // persist with a fresh context (see recordResult) so a missed-known row always lands
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
 	row, err := s.queries.CreateDiscoveryResult(ctx, db.CreateDiscoveryResultParams{
 		JobID: jobID, Ip: ip, Outcome: "missed", ProbeData: []byte("{}"),
 	})
