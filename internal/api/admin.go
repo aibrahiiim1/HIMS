@@ -493,6 +493,10 @@ func (s *Server) createVendorFingerprint(w http.ResponseWriter, r *http.Request)
 		Confidence: conf, Enabled: enabled, Model: req.Model, Priority: prio, Source: "user",
 	})
 	if err != nil {
+		if isUniqueViolation(err) {
+			http.Error(w, "A "+req.Kind+" fingerprint with pattern \""+req.Pattern+"\" already exists — edit the existing rule instead.", http.StatusConflict)
+			return
+		}
 		writeErr(w, err)
 		return
 	}
@@ -531,6 +535,10 @@ func (s *Server) updateVendorFingerprint(w http.ResponseWriter, r *http.Request)
 		Confidence: conf, Enabled: enabled, Model: req.Model, Priority: prio,
 	})
 	if err != nil {
+		if isUniqueViolation(err) {
+			http.Error(w, "Another "+req.Kind+" fingerprint already uses pattern \""+req.Pattern+"\".", http.StatusConflict)
+			return
+		}
 		writeErr(w, err)
 		return
 	}

@@ -460,3 +460,15 @@ func derefStr(s *string) string {
 	}
 	return *s
 }
+
+// isUniqueViolation reports whether err is a Postgres unique-constraint violation
+// (SQLSTATE 23505) — e.g. inserting a vendor fingerprint whose (kind,pattern)
+// already exists. Surfaced so handlers can return a clear 409 instead of a bare
+// 500. Matches on the pgx error string (which carries "SQLSTATE 23505").
+func isUniqueViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "23505") || strings.Contains(s, "duplicate key value")
+}
