@@ -27,8 +27,8 @@ SELECT * FROM access_points WHERE controller_device_id = $1 ORDER BY name;
 -- name: UpsertAccessPoint :one
 INSERT INTO access_points
     (controller_device_id, name, mac, model, ip, status, client_count,
-     serial, firmware, band, source, collected_at)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now())
+     serial, firmware, band, site, uptime, source, collected_at)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, now())
 ON CONFLICT (controller_device_id, name) DO UPDATE SET
     mac = EXCLUDED.mac,
     model = EXCLUDED.model,
@@ -38,6 +38,8 @@ ON CONFLICT (controller_device_id, name) DO UPDATE SET
     serial = EXCLUDED.serial,
     firmware = EXCLUDED.firmware,
     band = EXCLUDED.band,
+    site = EXCLUDED.site,
+    uptime = EXCLUDED.uptime,
     source = EXCLUDED.source,
     collected_at = now(),
     last_seen_at = now()
@@ -71,14 +73,19 @@ WHERE controller_device_id = $1 AND source = $2 AND collected_at < $3;
 
 -- name: UpsertWirelessClient :one
 INSERT INTO wireless_clients
-    (controller_device_id, mac, ip, hostname, ap_name, ssid, rssi, band, source, collected_at)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, now())
+    (controller_device_id, mac, ip, hostname, ap_name, ssid, rssi, snr,
+     rx_bytes, tx_bytes, connected_since, band, source, collected_at)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, now())
 ON CONFLICT (controller_device_id, mac) DO UPDATE SET
     ip = EXCLUDED.ip,
     hostname = EXCLUDED.hostname,
     ap_name = EXCLUDED.ap_name,
     ssid = EXCLUDED.ssid,
     rssi = EXCLUDED.rssi,
+    snr = EXCLUDED.snr,
+    rx_bytes = EXCLUDED.rx_bytes,
+    tx_bytes = EXCLUDED.tx_bytes,
+    connected_since = EXCLUDED.connected_since,
     band = EXCLUDED.band,
     source = EXCLUDED.source,
     collected_at = now()

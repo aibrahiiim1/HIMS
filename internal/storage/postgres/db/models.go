@@ -26,6 +26,8 @@ type AccessPoint struct {
 	Band               string      `json:"band"`
 	Source             string      `json:"source"`
 	CollectedAt        time.Time   `json:"collected_at"`
+	Site               string      `json:"site"`
+	Uptime             string      `json:"uptime"`
 }
 
 type AgentJob struct {
@@ -1058,6 +1060,10 @@ type WirelessClient struct {
 	Band               string    `json:"band"`
 	Source             string    `json:"source"`
 	CollectedAt        time.Time `json:"collected_at"`
+	Snr                *int32    `json:"snr"`
+	RxBytes            *int64    `json:"rx_bytes"`
+	TxBytes            *int64    `json:"tx_bytes"`
+	ConnectedSince     string    `json:"connected_since"`
 }
 
 type WirelessControllerSummary struct {

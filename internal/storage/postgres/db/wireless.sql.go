@@ -145,7 +145,7 @@ func (q *Queries) InsertWirelessEvent(ctx context.Context, arg InsertWirelessEve
 }
 
 const listAccessPoints = `-- name: ListAccessPoints :many
-SELECT id, controller_device_id, name, mac, model, ip, status, client_count, last_seen_at, serial, firmware, band, source, collected_at FROM access_points WHERE controller_device_id = $1 ORDER BY name
+SELECT id, controller_device_id, name, mac, model, ip, status, client_count, last_seen_at, serial, firmware, band, source, collected_at, site, uptime FROM access_points WHERE controller_device_id = $1 ORDER BY name
 `
 
 func (q *Queries) ListAccessPoints(ctx context.Context, controllerDeviceID uuid.UUID) ([]AccessPoint, error) {
@@ -172,6 +172,8 @@ func (q *Queries) ListAccessPoints(ctx context.Context, controllerDeviceID uuid.
 			&i.Band,
 			&i.Source,
 			&i.CollectedAt,
+			&i.Site,
+			&i.Uptime,
 		); err != nil {
 			return nil, err
 		}
@@ -184,7 +186,7 @@ func (q *Queries) ListAccessPoints(ctx context.Context, controllerDeviceID uuid.
 }
 
 const listWirelessClients = `-- name: ListWirelessClients :many
-SELECT id, controller_device_id, mac, ip, hostname, ap_name, ssid, rssi, band, source, collected_at FROM wireless_clients WHERE controller_device_id = $1 ORDER BY ap_name, mac
+SELECT id, controller_device_id, mac, ip, hostname, ap_name, ssid, rssi, band, source, collected_at, snr, rx_bytes, tx_bytes, connected_since FROM wireless_clients WHERE controller_device_id = $1 ORDER BY ap_name, mac
 `
 
 func (q *Queries) ListWirelessClients(ctx context.Context, controllerDeviceID uuid.UUID) ([]WirelessClient, error) {
@@ -208,6 +210,10 @@ func (q *Queries) ListWirelessClients(ctx context.Context, controllerDeviceID uu
 			&i.Band,
 			&i.Source,
 			&i.CollectedAt,
+			&i.Snr,
+			&i.RxBytes,
+			&i.TxBytes,
+			&i.ConnectedSince,
 		); err != nil {
 			return nil, err
 		}
@@ -330,8 +336,8 @@ func (q *Queries) ListWirelessSSIDs(ctx context.Context, controllerDeviceID uuid
 const upsertAccessPoint = `-- name: UpsertAccessPoint :one
 INSERT INTO access_points
     (controller_device_id, name, mac, model, ip, status, client_count,
-     serial, firmware, band, source, collected_at)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now())
+     serial, firmware, band, site, uptime, source, collected_at)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, now())
 ON CONFLICT (controller_device_id, name) DO UPDATE SET
     mac = EXCLUDED.mac,
     model = EXCLUDED.model,
@@ -341,10 +347,12 @@ ON CONFLICT (controller_device_id, name) DO UPDATE SET
     serial = EXCLUDED.serial,
     firmware = EXCLUDED.firmware,
     band = EXCLUDED.band,
+    site = EXCLUDED.site,
+    uptime = EXCLUDED.uptime,
     source = EXCLUDED.source,
     collected_at = now(),
     last_seen_at = now()
-RETURNING id, controller_device_id, name, mac, model, ip, status, client_count, last_seen_at, serial, firmware, band, source, collected_at
+RETURNING id, controller_device_id, name, mac, model, ip, status, client_count, last_seen_at, serial, firmware, band, source, collected_at, site, uptime
 `
 
 type UpsertAccessPointParams struct {
@@ -358,6 +366,8 @@ type UpsertAccessPointParams struct {
 	Serial             string      `json:"serial"`
 	Firmware           string      `json:"firmware"`
 	Band               string      `json:"band"`
+	Site               string      `json:"site"`
+	Uptime             string      `json:"uptime"`
 	Source             string      `json:"source"`
 }
 
@@ -373,6 +383,8 @@ func (q *Queries) UpsertAccessPoint(ctx context.Context, arg UpsertAccessPointPa
 		arg.Serial,
 		arg.Firmware,
 		arg.Band,
+		arg.Site,
+		arg.Uptime,
 		arg.Source,
 	)
 	var i AccessPoint
@@ -391,6 +403,8 @@ func (q *Queries) UpsertAccessPoint(ctx context.Context, arg UpsertAccessPointPa
 		&i.Band,
 		&i.Source,
 		&i.CollectedAt,
+		&i.Site,
+		&i.Uptime,
 	)
 	return i, err
 }
@@ -465,18 +479,23 @@ func (q *Queries) UpsertWLANControllerInfo(ctx context.Context, arg UpsertWLANCo
 
 const upsertWirelessClient = `-- name: UpsertWirelessClient :one
 INSERT INTO wireless_clients
-    (controller_device_id, mac, ip, hostname, ap_name, ssid, rssi, band, source, collected_at)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, now())
+    (controller_device_id, mac, ip, hostname, ap_name, ssid, rssi, snr,
+     rx_bytes, tx_bytes, connected_since, band, source, collected_at)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, now())
 ON CONFLICT (controller_device_id, mac) DO UPDATE SET
     ip = EXCLUDED.ip,
     hostname = EXCLUDED.hostname,
     ap_name = EXCLUDED.ap_name,
     ssid = EXCLUDED.ssid,
     rssi = EXCLUDED.rssi,
+    snr = EXCLUDED.snr,
+    rx_bytes = EXCLUDED.rx_bytes,
+    tx_bytes = EXCLUDED.tx_bytes,
+    connected_since = EXCLUDED.connected_since,
     band = EXCLUDED.band,
     source = EXCLUDED.source,
     collected_at = now()
-RETURNING id, controller_device_id, mac, ip, hostname, ap_name, ssid, rssi, band, source, collected_at
+RETURNING id, controller_device_id, mac, ip, hostname, ap_name, ssid, rssi, band, source, collected_at, snr, rx_bytes, tx_bytes, connected_since
 `
 
 type UpsertWirelessClientParams struct {
@@ -487,6 +506,10 @@ type UpsertWirelessClientParams struct {
 	ApName             string    `json:"ap_name"`
 	Ssid               string    `json:"ssid"`
 	Rssi               *int32    `json:"rssi"`
+	Snr                *int32    `json:"snr"`
+	RxBytes            *int64    `json:"rx_bytes"`
+	TxBytes            *int64    `json:"tx_bytes"`
+	ConnectedSince     string    `json:"connected_since"`
 	Band               string    `json:"band"`
 	Source             string    `json:"source"`
 }
@@ -500,6 +523,10 @@ func (q *Queries) UpsertWirelessClient(ctx context.Context, arg UpsertWirelessCl
 		arg.ApName,
 		arg.Ssid,
 		arg.Rssi,
+		arg.Snr,
+		arg.RxBytes,
+		arg.TxBytes,
+		arg.ConnectedSince,
 		arg.Band,
 		arg.Source,
 	)
@@ -516,6 +543,10 @@ func (q *Queries) UpsertWirelessClient(ctx context.Context, arg UpsertWirelessCl
 		&i.Band,
 		&i.Source,
 		&i.CollectedAt,
+		&i.Snr,
+		&i.RxBytes,
+		&i.TxBytes,
+		&i.ConnectedSince,
 	)
 	return i, err
 }

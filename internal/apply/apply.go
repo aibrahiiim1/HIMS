@@ -15,6 +15,8 @@ package apply
 import (
 	"context"
 	"net/netip"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -311,19 +313,32 @@ func (a *Applier) applyFacts(ctx context.Context, devID uuid.UUID, f *driver.Fac
 			_, _ = a.w.UpsertAccessPoint(ctx, db.UpsertAccessPointParams{
 				ControllerDeviceID: devID, Name: ap.Name, Mac: nonEmpty(ap.MAC), Model: nonEmpty(ap.Model),
 				Ip: parseIP(ap.IP), Status: orDefaultAPStatus(ap.Status), ClientCount: ap.ClientCount,
-				Serial: ap.Serial, Firmware: ap.Firmware, Band: ap.Band, Source: src,
+				Serial: ap.Serial, Firmware: ap.Firmware, Band: ap.Band, Site: ap.Site, Uptime: ap.Uptime, Source: src,
 			})
 		}
+		// Derive each SSID's live client count + in-use band(s) from the station list —
+		// the controller WLAN config carries neither. Shared by all vendor collectors
+		// (mirrors the desktop tool's ClientLinking.PopulateSsidClientCounts).
+		ssidClients, ssidBands := deriveSSIDStats(f.Stations)
 		for _, ss := range f.SSIDs {
+			cc, band := ss.ClientCount, ss.Band
+			if cc == 0 {
+				cc = ssidClients[strings.ToLower(ss.Name)]
+			}
+			if band == "" {
+				band = ssidBands[strings.ToLower(ss.Name)]
+			}
 			_, _ = a.w.UpsertWirelessSSID(ctx, db.UpsertWirelessSSIDParams{
 				ControllerDeviceID: devID, Name: ss.Name, Status: orDefault(ss.Status, "unknown"),
-				Security: ss.Security, Band: ss.Band, Vlan: ss.VLAN, ClientCount: ss.ClientCount, Source: src,
+				Security: ss.Security, Band: band, Vlan: ss.VLAN, ClientCount: cc, Source: src,
 			})
 		}
 		for _, c := range f.Stations {
 			_, _ = a.w.UpsertWirelessClient(ctx, db.UpsertWirelessClientParams{
 				ControllerDeviceID: devID, Mac: c.MAC, Ip: c.IP, Hostname: c.Hostname,
-				ApName: c.APName, Ssid: c.SSID, Rssi: c.RSSI, Band: c.Band, Source: src,
+				ApName: c.APName, Ssid: c.SSID, Rssi: c.RSSI, Snr: c.SNR,
+				RxBytes: c.RxBytes, TxBytes: c.TxBytes, ConnectedSince: c.ConnectedSince,
+				Band: c.Band, Source: src,
 			})
 		}
 		for _, rd := range f.Radios {
@@ -426,6 +441,59 @@ func orDefaultAPStatus(s string) string {
 		return s
 	default:
 		return "unknown"
+	}
+}
+
+// deriveSSIDStats counts live stations per SSID and derives each SSID's in-use
+// band(s) from its stations' channels — neither is in the controller WLAN config.
+// Keys are lowercased SSID names. Band is e.g. "2.4/5 GHz" (empty when no clients
+// expose a parseable channel). Mirrors the desktop tool's ClientLinking.
+func deriveSSIDStats(stations []driver.WirelessClientSnap) (counts map[string]int32, bands map[string]string) {
+	counts = map[string]int32{}
+	bandSets := map[string]map[string]bool{}
+	for _, c := range stations {
+		key := strings.ToLower(strings.TrimSpace(c.SSID))
+		if key == "" {
+			continue
+		}
+		counts[key]++
+		if b := bandFromChannel(c.Channel); b != "" {
+			if bandSets[key] == nil {
+				bandSets[key] = map[string]bool{}
+			}
+			bandSets[key][b] = true
+		}
+	}
+	bands = make(map[string]string, len(bandSets))
+	for key, set := range bandSets {
+		parts := make([]string, 0, len(set))
+		for b := range set {
+			parts = append(parts, b)
+		}
+		sort.Strings(parts)
+		if len(parts) > 0 {
+			bands[key] = strings.Join(parts, "/") + " GHz"
+		}
+	}
+	return counts, bands
+}
+
+// bandFromChannel maps a Wi-Fi channel number to its band: 1–14→2.4, 32–196→5,
+// >196→6. Returns "" when ch is nil or out of range.
+func bandFromChannel(ch *int32) string {
+	if ch == nil {
+		return ""
+	}
+	n := *ch
+	switch {
+	case n >= 1 && n <= 14:
+		return "2.4"
+	case n >= 32 && n <= 196:
+		return "5"
+	case n > 196:
+		return "6"
+	default:
+		return ""
 	}
 }
 

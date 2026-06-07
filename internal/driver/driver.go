@@ -165,6 +165,8 @@ type APSnap struct {
 	Serial      string
 	Firmware    string
 	Band        string
+	Site        string // controller-reported site/zone (XIQC hostSite; ZD location/group)
+	Uptime      string // AP uptime string when the controller exposes it
 }
 
 // SSIDSnap is one SSID / WLAN service advertised by a controller.
@@ -184,8 +186,17 @@ type WirelessClientSnap struct {
 	Hostname string
 	APName   string
 	SSID     string
-	RSSI     *int32
+	RSSI     *int32 // signal in dBm (negative, e.g. -60)
+	SNR      *int32 // signal-to-noise ratio in dB (XIQC: rss−noise; ZD: rssi field)
 	Band     string
+	RxBytes  *int64
+	TxBytes  *int64
+	// ConnectedSince is a pre-formatted local time string (ZD first-assoc); empty
+	// when the controller exposes no association time (XIQC station record).
+	ConnectedSince string
+	// Channel is the radio channel the station is on; used only to derive each
+	// SSID's in-use band (not persisted). nil when unknown.
+	Channel *int32
 }
 
 // RadioSnap is one AP radio's operating status.
