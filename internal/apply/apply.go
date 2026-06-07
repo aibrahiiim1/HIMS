@@ -66,6 +66,15 @@ type Writer interface {
 	UpsertCameraInfo(ctx context.Context, arg db.UpsertCameraInfoParams) (db.CameraInfo, error)
 	UpsertWLANControllerInfo(ctx context.Context, arg db.UpsertWLANControllerInfoParams) (db.WlanControllerInfo, error)
 	UpsertAccessPoint(ctx context.Context, arg db.UpsertAccessPointParams) (db.AccessPoint, error)
+	DeleteStaleAccessPoints(ctx context.Context, arg db.DeleteStaleAccessPointsParams) error
+	UpsertWirelessSSID(ctx context.Context, arg db.UpsertWirelessSSIDParams) (db.WirelessSsid, error)
+	DeleteStaleWirelessSSIDs(ctx context.Context, arg db.DeleteStaleWirelessSSIDsParams) error
+	UpsertWirelessClient(ctx context.Context, arg db.UpsertWirelessClientParams) (db.WirelessClient, error)
+	DeleteStaleWirelessClients(ctx context.Context, arg db.DeleteStaleWirelessClientsParams) error
+	UpsertWirelessRadio(ctx context.Context, arg db.UpsertWirelessRadioParams) (db.WirelessRadioStatus, error)
+	DeleteStaleWirelessRadios(ctx context.Context, arg db.DeleteStaleWirelessRadiosParams) error
+	InsertWirelessEvent(ctx context.Context, arg db.InsertWirelessEventParams) error
+	DeleteWirelessEventsForSource(ctx context.Context, arg db.DeleteWirelessEventsForSourceParams) error
 	UpsertPrinterSupply(ctx context.Context, arg db.UpsertPrinterSupplyParams) error
 	DeleteStalePrinterSupplies(ctx context.Context, arg db.DeleteStalePrinterSuppliesParams) error
 	UpsertPbxPhone(ctx context.Context, arg db.UpsertPbxPhoneParams) error
@@ -267,18 +276,59 @@ func (a *Applier) applyFacts(ctx context.Context, devID uuid.UUID, f *driver.Fac
 	a.applyFirewall(ctx, devID, f, poll)
 	a.applyBMC(ctx, devID, f, poll)
 
-	// Wireless controller + APs (vendor REST).
+	// Wireless controller + APs/SSIDs/clients/radios/events. `source` records how
+	// each row was collected so the UI can be honest about coverage; rows of the
+	// same source not refreshed this run are pruned (they left the controller).
 	if f.WLAN != nil {
+		src := f.WLAN.Source
 		_, _ = a.w.UpsertWLANControllerInfo(ctx, db.UpsertWLANControllerInfoParams{
 			DeviceID: devID, Vendor: nonEmpty(f.WLAN.Vendor), Version: nonEmpty(f.WLAN.Version),
-			ApCount: f.WLAN.APCount, ClientCount: f.WLAN.ClientCount,
+			ApCount: f.WLAN.APCount, ClientCount: f.WLAN.ClientCount, Source: orDefault(src, "unknown"),
+			ControllerName: f.WLAN.ControllerName, Model: f.WLAN.Model, Serial: f.WLAN.Serial,
+			SsidCount: f.WLAN.SSIDCount,
 		})
-	}
-	for _, ap := range f.APs {
-		_, _ = a.w.UpsertAccessPoint(ctx, db.UpsertAccessPointParams{
-			ControllerDeviceID: devID, Name: ap.Name, Mac: nonEmpty(ap.MAC), Model: nonEmpty(ap.Model),
-			Ip: parseIP(ap.IP), Status: orDefaultAPStatus(ap.Status), ClientCount: ap.ClientCount,
-		})
+		for _, ap := range f.APs {
+			_, _ = a.w.UpsertAccessPoint(ctx, db.UpsertAccessPointParams{
+				ControllerDeviceID: devID, Name: ap.Name, Mac: nonEmpty(ap.MAC), Model: nonEmpty(ap.Model),
+				Ip: parseIP(ap.IP), Status: orDefaultAPStatus(ap.Status), ClientCount: ap.ClientCount,
+				Serial: ap.Serial, Firmware: ap.Firmware, Band: ap.Band, Source: src,
+			})
+		}
+		for _, ss := range f.SSIDs {
+			_, _ = a.w.UpsertWirelessSSID(ctx, db.UpsertWirelessSSIDParams{
+				ControllerDeviceID: devID, Name: ss.Name, Status: orDefault(ss.Status, "unknown"),
+				Security: ss.Security, Band: ss.Band, Vlan: ss.VLAN, ClientCount: ss.ClientCount, Source: src,
+			})
+		}
+		for _, c := range f.Stations {
+			_, _ = a.w.UpsertWirelessClient(ctx, db.UpsertWirelessClientParams{
+				ControllerDeviceID: devID, Mac: c.MAC, Ip: c.IP, Hostname: c.Hostname,
+				ApName: c.APName, Ssid: c.SSID, Rssi: c.RSSI, Band: c.Band, Source: src,
+			})
+		}
+		for _, rd := range f.Radios {
+			_, _ = a.w.UpsertWirelessRadio(ctx, db.UpsertWirelessRadioParams{
+				ControllerDeviceID: devID, ApName: rd.APName, Radio: rd.Radio, Band: rd.Band,
+				Channel: rd.Channel, PowerDbm: rd.PowerDBm, ClientCount: rd.ClientCount, Source: src,
+			})
+		}
+		// Prune rows of this source not refreshed this collection (left the fleet).
+		if src != "" {
+			_ = a.w.DeleteStaleAccessPoints(ctx, db.DeleteStaleAccessPointsParams{ControllerDeviceID: devID, Source: src, CollectedAt: poll})
+			_ = a.w.DeleteStaleWirelessSSIDs(ctx, db.DeleteStaleWirelessSSIDsParams{ControllerDeviceID: devID, Source: src, CollectedAt: poll})
+			_ = a.w.DeleteStaleWirelessClients(ctx, db.DeleteStaleWirelessClientsParams{ControllerDeviceID: devID, Source: src, CollectedAt: poll})
+			_ = a.w.DeleteStaleWirelessRadios(ctx, db.DeleteStaleWirelessRadiosParams{ControllerDeviceID: devID, Source: src, CollectedAt: poll})
+		}
+		// Events: replace the current window for this source.
+		if len(f.WLANEvents) > 0 && src != "" {
+			_ = a.w.DeleteWirelessEventsForSource(ctx, db.DeleteWirelessEventsForSourceParams{ControllerDeviceID: devID, Source: src})
+			for _, ev := range f.WLANEvents {
+				_ = a.w.InsertWirelessEvent(ctx, db.InsertWirelessEventParams{
+					ControllerDeviceID: devID, At: ev.At, Severity: orDefault(ev.Severity, "info"),
+					Category: ev.Category, Message: ev.Message, Source: src,
+				})
+			}
+		}
 	}
 
 	// Printer marker supplies (Printer-MIB).
@@ -444,6 +494,13 @@ func f64ptr(v float64) *float64 { return &v }
 func orUnknown(s string) string {
 	if s == "" {
 		return "unknown"
+	}
+	return s
+}
+
+func orDefault(s, def string) string {
+	if s == "" {
+		return def
 	}
 	return s
 }

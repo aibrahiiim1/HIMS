@@ -222,6 +222,7 @@ func (s *Server) routes() {
 		r.Get("/devices/{id}/nvr-channels", s.deviceNVRChannels)
 		r.Get("/devices/{id}/wlan", s.deviceWLAN)
 		r.Get("/devices/{id}/access-points", s.deviceAccessPoints)
+		r.Get("/devices/{id}/wireless", s.deviceWireless) // consolidated wireless detail (identity + rosters)
 		r.Get("/devices/{id}/bmc", s.deviceBMC)
 		r.Get("/devices/{id}/bmc-sensors", s.deviceBMCSensors)
 		r.Get("/devices/{id}/printer-supplies", s.devicePrinterSupplies)

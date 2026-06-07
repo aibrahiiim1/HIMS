@@ -13,6 +13,7 @@ package driver
 import (
 	"net/netip"
 	"sort"
+	"time"
 
 	"github.com/coralsearesorts/hims/internal/domain"
 )
@@ -97,9 +98,13 @@ type Facts struct {
 	VMs []VMSnap
 	// Camera inventory (ONVIF).
 	Camera *CameraSnap
-	// Wireless controller + AP inventory (vendor REST: UniFi/Omada/Ruckus).
-	WLAN *WLANSnap
-	APs  []APSnap
+	// Wireless controller + AP inventory (vendor REST: UniFi/Omada/Ruckus/Extreme).
+	WLAN     *WLANSnap
+	APs      []APSnap
+	SSIDs    []SSIDSnap
+	Stations []WirelessClientSnap
+	Radios   []RadioSnap
+	WLANEvents []WirelessEventSnap
 	// Printer marker supplies (Printer-MIB).
 	PrinterSupplies []PrinterSupplySnap
 	// UPS status (UPS-MIB).
@@ -135,12 +140,18 @@ type PrinterSupplySnap struct {
 	Pct         *int32 // nil when the device reports unknown/some-remaining
 }
 
-// WLANSnap is a wireless controller summary.
+// WLANSnap is a wireless controller summary. Source records HOW it was collected
+// (e.g. extreme_xcc_api, cloud_xiq, unifi) so the UI can be honest about coverage.
 type WLANSnap struct {
-	Vendor      string
-	Version     string
-	APCount     int32
-	ClientCount int32
+	Vendor         string
+	Version        string
+	ControllerName string
+	Model          string
+	Serial         string
+	APCount        int32
+	ClientCount    int32
+	SSIDCount      int32
+	Source         string
 }
 
 // APSnap is one access point under a controller.
@@ -151,6 +162,48 @@ type APSnap struct {
 	IP          string
 	Status      string // online | offline | unknown
 	ClientCount int32
+	Serial      string
+	Firmware    string
+	Band        string
+}
+
+// SSIDSnap is one SSID / WLAN service advertised by a controller.
+type SSIDSnap struct {
+	Name        string
+	Status      string // enabled | disabled | unknown
+	Security    string
+	Band        string
+	VLAN        string
+	ClientCount int32
+}
+
+// WirelessClientSnap is one associated station.
+type WirelessClientSnap struct {
+	MAC      string
+	IP       string
+	Hostname string
+	APName   string
+	SSID     string
+	RSSI     *int32
+	Band     string
+}
+
+// RadioSnap is one AP radio's operating status.
+type RadioSnap struct {
+	APName      string
+	Radio       string
+	Band        string
+	Channel     *int32
+	PowerDBm    *int32
+	ClientCount int32
+}
+
+// WirelessEventSnap is one controller event / alarm.
+type WirelessEventSnap struct {
+	At       time.Time
+	Severity string // info | warning | critical
+	Category string
+	Message  string
 }
 
 // CameraSnap is an IP camera's ONVIF inventory (one row per device).

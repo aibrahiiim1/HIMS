@@ -708,6 +708,31 @@ export interface AccessPoint {
   ip?: string | null
   status: string
   client_count: number
+  serial?: string
+  firmware?: string
+  band?: string
+}
+
+// Consolidated Wireless Controller detail (GET /devices/{id}/wireless).
+export interface WirelessSSID { id: string; name: string; status: string; security: string; band: string; vlan: string; client_count: number; source: string }
+export interface WirelessClient { id: string; mac: string; ip: string; hostname: string; ap_name: string; ssid: string; rssi?: number | null; band: string; source: string }
+export interface WirelessRadio { id: string; ap_name: string; radio: string; band: string; channel?: number | null; power_dbm?: number | null; client_count: number; source: string }
+export interface WirelessEvent { id: string; at: string; severity: string; category: string; message: string; source: string }
+export interface WirelessDetailResp {
+  identity: {
+    name: string; vendor: string; product: string; model: string; serial: string; firmware: string
+    category: string; status: string; sysobjectid: string; sysdescr: string; sysname: string; managed_via: string[]
+  }
+  collection: {
+    source: string; collected_at?: string | null; has_api_profile: boolean; profile_id?: string
+    profile_status?: string; last_detail?: string; ap_data_known: boolean; next_action: string
+  }
+  counts: Record<string, number>
+  aps: AccessPoint[]
+  ssids: WirelessSSID[]
+  clients: WirelessClient[]
+  radios: WirelessRadio[]
+  events: WirelessEvent[]
 }
 
 export interface CameraInfo {

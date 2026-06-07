@@ -138,6 +138,33 @@ func (f *fakeWriter) UpsertWLANControllerInfo(_ context.Context, _ db.UpsertWLAN
 func (f *fakeWriter) UpsertAccessPoint(_ context.Context, _ db.UpsertAccessPointParams) (db.AccessPoint, error) {
 	return db.AccessPoint{}, nil
 }
+func (f *fakeWriter) DeleteStaleAccessPoints(_ context.Context, _ db.DeleteStaleAccessPointsParams) error {
+	return nil
+}
+func (f *fakeWriter) UpsertWirelessSSID(_ context.Context, _ db.UpsertWirelessSSIDParams) (db.WirelessSsid, error) {
+	return db.WirelessSsid{}, nil
+}
+func (f *fakeWriter) DeleteStaleWirelessSSIDs(_ context.Context, _ db.DeleteStaleWirelessSSIDsParams) error {
+	return nil
+}
+func (f *fakeWriter) UpsertWirelessClient(_ context.Context, _ db.UpsertWirelessClientParams) (db.WirelessClient, error) {
+	return db.WirelessClient{}, nil
+}
+func (f *fakeWriter) DeleteStaleWirelessClients(_ context.Context, _ db.DeleteStaleWirelessClientsParams) error {
+	return nil
+}
+func (f *fakeWriter) UpsertWirelessRadio(_ context.Context, _ db.UpsertWirelessRadioParams) (db.WirelessRadioStatus, error) {
+	return db.WirelessRadioStatus{}, nil
+}
+func (f *fakeWriter) DeleteStaleWirelessRadios(_ context.Context, _ db.DeleteStaleWirelessRadiosParams) error {
+	return nil
+}
+func (f *fakeWriter) InsertWirelessEvent(_ context.Context, _ db.InsertWirelessEventParams) error {
+	return nil
+}
+func (f *fakeWriter) DeleteWirelessEventsForSource(_ context.Context, _ db.DeleteWirelessEventsForSourceParams) error {
+	return nil
+}
 func (f *fakeWriter) UpsertPrinterSupply(_ context.Context, _ db.UpsertPrinterSupplyParams) error {
 	return nil
 }

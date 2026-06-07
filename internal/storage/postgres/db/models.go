@@ -21,6 +21,11 @@ type AccessPoint struct {
 	Status             string      `json:"status"`
 	ClientCount        int32       `json:"client_count"`
 	LastSeenAt         time.Time   `json:"last_seen_at"`
+	Serial             string      `json:"serial"`
+	Firmware           string      `json:"firmware"`
+	Band               string      `json:"band"`
+	Source             string      `json:"source"`
+	CollectedAt        time.Time   `json:"collected_at"`
 }
 
 type AgentJob struct {
@@ -969,13 +974,71 @@ type Vlan struct {
 	LastSeenAt       time.Time `json:"last_seen_at"`
 }
 
+type WirelessClient struct {
+	ID                 uuid.UUID `json:"id"`
+	ControllerDeviceID uuid.UUID `json:"controller_device_id"`
+	Mac                string    `json:"mac"`
+	Ip                 string    `json:"ip"`
+	Hostname           string    `json:"hostname"`
+	ApName             string    `json:"ap_name"`
+	Ssid               string    `json:"ssid"`
+	Rssi               *int32    `json:"rssi"`
+	Band               string    `json:"band"`
+	Source             string    `json:"source"`
+	CollectedAt        time.Time `json:"collected_at"`
+}
+
+type WirelessEvent struct {
+	ID                 uuid.UUID `json:"id"`
+	ControllerDeviceID uuid.UUID `json:"controller_device_id"`
+	At                 time.Time `json:"at"`
+	Severity           string    `json:"severity"`
+	Category           string    `json:"category"`
+	Message            string    `json:"message"`
+	Source             string    `json:"source"`
+	CollectedAt        time.Time `json:"collected_at"`
+}
+
+type WirelessRadioStatus struct {
+	ID                 uuid.UUID `json:"id"`
+	ControllerDeviceID uuid.UUID `json:"controller_device_id"`
+	ApName             string    `json:"ap_name"`
+	Radio              string    `json:"radio"`
+	Band               string    `json:"band"`
+	Channel            *int32    `json:"channel"`
+	PowerDbm           *int32    `json:"power_dbm"`
+	ClientCount        int32     `json:"client_count"`
+	Source             string    `json:"source"`
+	CollectedAt        time.Time `json:"collected_at"`
+}
+
+type WirelessSsid struct {
+	ID                 uuid.UUID `json:"id"`
+	ControllerDeviceID uuid.UUID `json:"controller_device_id"`
+	Name               string    `json:"name"`
+	Status             string    `json:"status"`
+	Security           string    `json:"security"`
+	Band               string    `json:"band"`
+	Vlan               string    `json:"vlan"`
+	ClientCount        int32     `json:"client_count"`
+	Source             string    `json:"source"`
+	CollectedAt        time.Time `json:"collected_at"`
+}
+
 type WlanControllerInfo struct {
-	DeviceID    uuid.UUID `json:"device_id"`
-	Vendor      *string   `json:"vendor"`
-	Version     *string   `json:"version"`
-	ApCount     int32     `json:"ap_count"`
-	ClientCount int32     `json:"client_count"`
-	LastSeenAt  time.Time `json:"last_seen_at"`
+	DeviceID       uuid.UUID  `json:"device_id"`
+	Vendor         *string    `json:"vendor"`
+	Version        *string    `json:"version"`
+	ApCount        int32      `json:"ap_count"`
+	ClientCount    int32      `json:"client_count"`
+	LastSeenAt     time.Time  `json:"last_seen_at"`
+	Source         string     `json:"source"`
+	ProfileID      *uuid.UUID `json:"profile_id"`
+	ControllerName string     `json:"controller_name"`
+	Model          string     `json:"model"`
+	Serial         string     `json:"serial"`
+	SsidCount      int32      `json:"ssid_count"`
+	CollectedAt    time.Time  `json:"collected_at"`
 }
 
 type WorkOrder struct {

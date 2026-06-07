@@ -8,12 +8,93 @@ package db
 import (
 	"context"
 	"net/netip"
+	"time"
 
 	"github.com/google/uuid"
 )
 
+const deleteStaleAccessPoints = `-- name: DeleteStaleAccessPoints :exec
+DELETE FROM access_points
+WHERE controller_device_id = $1 AND source = $2 AND collected_at < $3
+`
+
+type DeleteStaleAccessPointsParams struct {
+	ControllerDeviceID uuid.UUID `json:"controller_device_id"`
+	Source             string    `json:"source"`
+	CollectedAt        time.Time `json:"collected_at"`
+}
+
+// Prune APs for a controller not refreshed in the latest collection of a source.
+func (q *Queries) DeleteStaleAccessPoints(ctx context.Context, arg DeleteStaleAccessPointsParams) error {
+	_, err := q.db.Exec(ctx, deleteStaleAccessPoints, arg.ControllerDeviceID, arg.Source, arg.CollectedAt)
+	return err
+}
+
+const deleteStaleWirelessClients = `-- name: DeleteStaleWirelessClients :exec
+DELETE FROM wireless_clients
+WHERE controller_device_id = $1 AND source = $2 AND collected_at < $3
+`
+
+type DeleteStaleWirelessClientsParams struct {
+	ControllerDeviceID uuid.UUID `json:"controller_device_id"`
+	Source             string    `json:"source"`
+	CollectedAt        time.Time `json:"collected_at"`
+}
+
+func (q *Queries) DeleteStaleWirelessClients(ctx context.Context, arg DeleteStaleWirelessClientsParams) error {
+	_, err := q.db.Exec(ctx, deleteStaleWirelessClients, arg.ControllerDeviceID, arg.Source, arg.CollectedAt)
+	return err
+}
+
+const deleteStaleWirelessRadios = `-- name: DeleteStaleWirelessRadios :exec
+DELETE FROM wireless_radio_status
+WHERE controller_device_id = $1 AND source = $2 AND collected_at < $3
+`
+
+type DeleteStaleWirelessRadiosParams struct {
+	ControllerDeviceID uuid.UUID `json:"controller_device_id"`
+	Source             string    `json:"source"`
+	CollectedAt        time.Time `json:"collected_at"`
+}
+
+func (q *Queries) DeleteStaleWirelessRadios(ctx context.Context, arg DeleteStaleWirelessRadiosParams) error {
+	_, err := q.db.Exec(ctx, deleteStaleWirelessRadios, arg.ControllerDeviceID, arg.Source, arg.CollectedAt)
+	return err
+}
+
+const deleteStaleWirelessSSIDs = `-- name: DeleteStaleWirelessSSIDs :exec
+DELETE FROM wireless_ssids
+WHERE controller_device_id = $1 AND source = $2 AND collected_at < $3
+`
+
+type DeleteStaleWirelessSSIDsParams struct {
+	ControllerDeviceID uuid.UUID `json:"controller_device_id"`
+	Source             string    `json:"source"`
+	CollectedAt        time.Time `json:"collected_at"`
+}
+
+func (q *Queries) DeleteStaleWirelessSSIDs(ctx context.Context, arg DeleteStaleWirelessSSIDsParams) error {
+	_, err := q.db.Exec(ctx, deleteStaleWirelessSSIDs, arg.ControllerDeviceID, arg.Source, arg.CollectedAt)
+	return err
+}
+
+const deleteWirelessEventsForSource = `-- name: DeleteWirelessEventsForSource :exec
+DELETE FROM wireless_events WHERE controller_device_id = $1 AND source = $2
+`
+
+type DeleteWirelessEventsForSourceParams struct {
+	ControllerDeviceID uuid.UUID `json:"controller_device_id"`
+	Source             string    `json:"source"`
+}
+
+// Replace an event set for a source (collectors re-publish the current window).
+func (q *Queries) DeleteWirelessEventsForSource(ctx context.Context, arg DeleteWirelessEventsForSourceParams) error {
+	_, err := q.db.Exec(ctx, deleteWirelessEventsForSource, arg.ControllerDeviceID, arg.Source)
+	return err
+}
+
 const getWLANControllerInfo = `-- name: GetWLANControllerInfo :one
-SELECT device_id, vendor, version, ap_count, client_count, last_seen_at FROM wlan_controller_info WHERE device_id = $1
+SELECT device_id, vendor, version, ap_count, client_count, last_seen_at, source, profile_id, controller_name, model, serial, ssid_count, collected_at FROM wlan_controller_info WHERE device_id = $1
 `
 
 func (q *Queries) GetWLANControllerInfo(ctx context.Context, deviceID uuid.UUID) (WlanControllerInfo, error) {
@@ -26,12 +107,45 @@ func (q *Queries) GetWLANControllerInfo(ctx context.Context, deviceID uuid.UUID)
 		&i.ApCount,
 		&i.ClientCount,
 		&i.LastSeenAt,
+		&i.Source,
+		&i.ProfileID,
+		&i.ControllerName,
+		&i.Model,
+		&i.Serial,
+		&i.SsidCount,
+		&i.CollectedAt,
 	)
 	return i, err
 }
 
+const insertWirelessEvent = `-- name: InsertWirelessEvent :exec
+INSERT INTO wireless_events (controller_device_id, at, severity, category, message, source)
+VALUES ($1,$2,$3,$4,$5,$6)
+`
+
+type InsertWirelessEventParams struct {
+	ControllerDeviceID uuid.UUID `json:"controller_device_id"`
+	At                 time.Time `json:"at"`
+	Severity           string    `json:"severity"`
+	Category           string    `json:"category"`
+	Message            string    `json:"message"`
+	Source             string    `json:"source"`
+}
+
+func (q *Queries) InsertWirelessEvent(ctx context.Context, arg InsertWirelessEventParams) error {
+	_, err := q.db.Exec(ctx, insertWirelessEvent,
+		arg.ControllerDeviceID,
+		arg.At,
+		arg.Severity,
+		arg.Category,
+		arg.Message,
+		arg.Source,
+	)
+	return err
+}
+
 const listAccessPoints = `-- name: ListAccessPoints :many
-SELECT id, controller_device_id, name, mac, model, ip, status, client_count, last_seen_at FROM access_points WHERE controller_device_id = $1 ORDER BY name
+SELECT id, controller_device_id, name, mac, model, ip, status, client_count, last_seen_at, serial, firmware, band, source, collected_at FROM access_points WHERE controller_device_id = $1 ORDER BY name
 `
 
 func (q *Queries) ListAccessPoints(ctx context.Context, controllerDeviceID uuid.UUID) ([]AccessPoint, error) {
@@ -53,6 +167,155 @@ func (q *Queries) ListAccessPoints(ctx context.Context, controllerDeviceID uuid.
 			&i.Status,
 			&i.ClientCount,
 			&i.LastSeenAt,
+			&i.Serial,
+			&i.Firmware,
+			&i.Band,
+			&i.Source,
+			&i.CollectedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listWirelessClients = `-- name: ListWirelessClients :many
+SELECT id, controller_device_id, mac, ip, hostname, ap_name, ssid, rssi, band, source, collected_at FROM wireless_clients WHERE controller_device_id = $1 ORDER BY ap_name, mac
+`
+
+func (q *Queries) ListWirelessClients(ctx context.Context, controllerDeviceID uuid.UUID) ([]WirelessClient, error) {
+	rows, err := q.db.Query(ctx, listWirelessClients, controllerDeviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []WirelessClient{}
+	for rows.Next() {
+		var i WirelessClient
+		if err := rows.Scan(
+			&i.ID,
+			&i.ControllerDeviceID,
+			&i.Mac,
+			&i.Ip,
+			&i.Hostname,
+			&i.ApName,
+			&i.Ssid,
+			&i.Rssi,
+			&i.Band,
+			&i.Source,
+			&i.CollectedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listWirelessEvents = `-- name: ListWirelessEvents :many
+SELECT id, controller_device_id, at, severity, category, message, source, collected_at FROM wireless_events WHERE controller_device_id = $1 ORDER BY at DESC LIMIT $2
+`
+
+type ListWirelessEventsParams struct {
+	ControllerDeviceID uuid.UUID `json:"controller_device_id"`
+	Limit              int32     `json:"limit"`
+}
+
+func (q *Queries) ListWirelessEvents(ctx context.Context, arg ListWirelessEventsParams) ([]WirelessEvent, error) {
+	rows, err := q.db.Query(ctx, listWirelessEvents, arg.ControllerDeviceID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []WirelessEvent{}
+	for rows.Next() {
+		var i WirelessEvent
+		if err := rows.Scan(
+			&i.ID,
+			&i.ControllerDeviceID,
+			&i.At,
+			&i.Severity,
+			&i.Category,
+			&i.Message,
+			&i.Source,
+			&i.CollectedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listWirelessRadios = `-- name: ListWirelessRadios :many
+SELECT id, controller_device_id, ap_name, radio, band, channel, power_dbm, client_count, source, collected_at FROM wireless_radio_status WHERE controller_device_id = $1 ORDER BY ap_name, radio
+`
+
+func (q *Queries) ListWirelessRadios(ctx context.Context, controllerDeviceID uuid.UUID) ([]WirelessRadioStatus, error) {
+	rows, err := q.db.Query(ctx, listWirelessRadios, controllerDeviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []WirelessRadioStatus{}
+	for rows.Next() {
+		var i WirelessRadioStatus
+		if err := rows.Scan(
+			&i.ID,
+			&i.ControllerDeviceID,
+			&i.ApName,
+			&i.Radio,
+			&i.Band,
+			&i.Channel,
+			&i.PowerDbm,
+			&i.ClientCount,
+			&i.Source,
+			&i.CollectedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listWirelessSSIDs = `-- name: ListWirelessSSIDs :many
+SELECT id, controller_device_id, name, status, security, band, vlan, client_count, source, collected_at FROM wireless_ssids WHERE controller_device_id = $1 ORDER BY name
+`
+
+func (q *Queries) ListWirelessSSIDs(ctx context.Context, controllerDeviceID uuid.UUID) ([]WirelessSsid, error) {
+	rows, err := q.db.Query(ctx, listWirelessSSIDs, controllerDeviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []WirelessSsid{}
+	for rows.Next() {
+		var i WirelessSsid
+		if err := rows.Scan(
+			&i.ID,
+			&i.ControllerDeviceID,
+			&i.Name,
+			&i.Status,
+			&i.Security,
+			&i.Band,
+			&i.Vlan,
+			&i.ClientCount,
+			&i.Source,
+			&i.CollectedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -65,16 +328,23 @@ func (q *Queries) ListAccessPoints(ctx context.Context, controllerDeviceID uuid.
 }
 
 const upsertAccessPoint = `-- name: UpsertAccessPoint :one
-INSERT INTO access_points (controller_device_id, name, mac, model, ip, status, client_count)
-VALUES ($1,$2,$3,$4,$5,$6,$7)
+INSERT INTO access_points
+    (controller_device_id, name, mac, model, ip, status, client_count,
+     serial, firmware, band, source, collected_at)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now())
 ON CONFLICT (controller_device_id, name) DO UPDATE SET
     mac = EXCLUDED.mac,
     model = EXCLUDED.model,
     ip = EXCLUDED.ip,
     status = EXCLUDED.status,
     client_count = EXCLUDED.client_count,
+    serial = EXCLUDED.serial,
+    firmware = EXCLUDED.firmware,
+    band = EXCLUDED.band,
+    source = EXCLUDED.source,
+    collected_at = now(),
     last_seen_at = now()
-RETURNING id, controller_device_id, name, mac, model, ip, status, client_count, last_seen_at
+RETURNING id, controller_device_id, name, mac, model, ip, status, client_count, last_seen_at, serial, firmware, band, source, collected_at
 `
 
 type UpsertAccessPointParams struct {
@@ -85,6 +355,10 @@ type UpsertAccessPointParams struct {
 	Ip                 *netip.Addr `json:"ip"`
 	Status             string      `json:"status"`
 	ClientCount        int32       `json:"client_count"`
+	Serial             string      `json:"serial"`
+	Firmware           string      `json:"firmware"`
+	Band               string      `json:"band"`
+	Source             string      `json:"source"`
 }
 
 func (q *Queries) UpsertAccessPoint(ctx context.Context, arg UpsertAccessPointParams) (AccessPoint, error) {
@@ -96,6 +370,10 @@ func (q *Queries) UpsertAccessPoint(ctx context.Context, arg UpsertAccessPointPa
 		arg.Ip,
 		arg.Status,
 		arg.ClientCount,
+		arg.Serial,
+		arg.Firmware,
+		arg.Band,
+		arg.Source,
 	)
 	var i AccessPoint
 	err := row.Scan(
@@ -108,28 +386,48 @@ func (q *Queries) UpsertAccessPoint(ctx context.Context, arg UpsertAccessPointPa
 		&i.Status,
 		&i.ClientCount,
 		&i.LastSeenAt,
+		&i.Serial,
+		&i.Firmware,
+		&i.Band,
+		&i.Source,
+		&i.CollectedAt,
 	)
 	return i, err
 }
 
 const upsertWLANControllerInfo = `-- name: UpsertWLANControllerInfo :one
-INSERT INTO wlan_controller_info (device_id, vendor, version, ap_count, client_count)
-VALUES ($1,$2,$3,$4,$5)
+INSERT INTO wlan_controller_info
+    (device_id, vendor, version, ap_count, client_count, source, profile_id,
+     controller_name, model, serial, ssid_count, collected_at)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now())
 ON CONFLICT (device_id) DO UPDATE SET
     vendor = EXCLUDED.vendor,
     version = EXCLUDED.version,
     ap_count = EXCLUDED.ap_count,
     client_count = EXCLUDED.client_count,
+    source = EXCLUDED.source,
+    profile_id = EXCLUDED.profile_id,
+    controller_name = EXCLUDED.controller_name,
+    model = EXCLUDED.model,
+    serial = EXCLUDED.serial,
+    ssid_count = EXCLUDED.ssid_count,
+    collected_at = now(),
     last_seen_at = now()
-RETURNING device_id, vendor, version, ap_count, client_count, last_seen_at
+RETURNING device_id, vendor, version, ap_count, client_count, last_seen_at, source, profile_id, controller_name, model, serial, ssid_count, collected_at
 `
 
 type UpsertWLANControllerInfoParams struct {
-	DeviceID    uuid.UUID `json:"device_id"`
-	Vendor      *string   `json:"vendor"`
-	Version     *string   `json:"version"`
-	ApCount     int32     `json:"ap_count"`
-	ClientCount int32     `json:"client_count"`
+	DeviceID       uuid.UUID  `json:"device_id"`
+	Vendor         *string    `json:"vendor"`
+	Version        *string    `json:"version"`
+	ApCount        int32      `json:"ap_count"`
+	ClientCount    int32      `json:"client_count"`
+	Source         string     `json:"source"`
+	ProfileID      *uuid.UUID `json:"profile_id"`
+	ControllerName string     `json:"controller_name"`
+	Model          string     `json:"model"`
+	Serial         string     `json:"serial"`
+	SsidCount      int32      `json:"ssid_count"`
 }
 
 func (q *Queries) UpsertWLANControllerInfo(ctx context.Context, arg UpsertWLANControllerInfoParams) (WlanControllerInfo, error) {
@@ -139,6 +437,12 @@ func (q *Queries) UpsertWLANControllerInfo(ctx context.Context, arg UpsertWLANCo
 		arg.Version,
 		arg.ApCount,
 		arg.ClientCount,
+		arg.Source,
+		arg.ProfileID,
+		arg.ControllerName,
+		arg.Model,
+		arg.Serial,
+		arg.SsidCount,
 	)
 	var i WlanControllerInfo
 	err := row.Scan(
@@ -148,6 +452,175 @@ func (q *Queries) UpsertWLANControllerInfo(ctx context.Context, arg UpsertWLANCo
 		&i.ApCount,
 		&i.ClientCount,
 		&i.LastSeenAt,
+		&i.Source,
+		&i.ProfileID,
+		&i.ControllerName,
+		&i.Model,
+		&i.Serial,
+		&i.SsidCount,
+		&i.CollectedAt,
+	)
+	return i, err
+}
+
+const upsertWirelessClient = `-- name: UpsertWirelessClient :one
+INSERT INTO wireless_clients
+    (controller_device_id, mac, ip, hostname, ap_name, ssid, rssi, band, source, collected_at)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, now())
+ON CONFLICT (controller_device_id, mac) DO UPDATE SET
+    ip = EXCLUDED.ip,
+    hostname = EXCLUDED.hostname,
+    ap_name = EXCLUDED.ap_name,
+    ssid = EXCLUDED.ssid,
+    rssi = EXCLUDED.rssi,
+    band = EXCLUDED.band,
+    source = EXCLUDED.source,
+    collected_at = now()
+RETURNING id, controller_device_id, mac, ip, hostname, ap_name, ssid, rssi, band, source, collected_at
+`
+
+type UpsertWirelessClientParams struct {
+	ControllerDeviceID uuid.UUID `json:"controller_device_id"`
+	Mac                string    `json:"mac"`
+	Ip                 string    `json:"ip"`
+	Hostname           string    `json:"hostname"`
+	ApName             string    `json:"ap_name"`
+	Ssid               string    `json:"ssid"`
+	Rssi               *int32    `json:"rssi"`
+	Band               string    `json:"band"`
+	Source             string    `json:"source"`
+}
+
+func (q *Queries) UpsertWirelessClient(ctx context.Context, arg UpsertWirelessClientParams) (WirelessClient, error) {
+	row := q.db.QueryRow(ctx, upsertWirelessClient,
+		arg.ControllerDeviceID,
+		arg.Mac,
+		arg.Ip,
+		arg.Hostname,
+		arg.ApName,
+		arg.Ssid,
+		arg.Rssi,
+		arg.Band,
+		arg.Source,
+	)
+	var i WirelessClient
+	err := row.Scan(
+		&i.ID,
+		&i.ControllerDeviceID,
+		&i.Mac,
+		&i.Ip,
+		&i.Hostname,
+		&i.ApName,
+		&i.Ssid,
+		&i.Rssi,
+		&i.Band,
+		&i.Source,
+		&i.CollectedAt,
+	)
+	return i, err
+}
+
+const upsertWirelessRadio = `-- name: UpsertWirelessRadio :one
+INSERT INTO wireless_radio_status
+    (controller_device_id, ap_name, radio, band, channel, power_dbm, client_count, source, collected_at)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8, now())
+ON CONFLICT (controller_device_id, ap_name, radio) DO UPDATE SET
+    band = EXCLUDED.band,
+    channel = EXCLUDED.channel,
+    power_dbm = EXCLUDED.power_dbm,
+    client_count = EXCLUDED.client_count,
+    source = EXCLUDED.source,
+    collected_at = now()
+RETURNING id, controller_device_id, ap_name, radio, band, channel, power_dbm, client_count, source, collected_at
+`
+
+type UpsertWirelessRadioParams struct {
+	ControllerDeviceID uuid.UUID `json:"controller_device_id"`
+	ApName             string    `json:"ap_name"`
+	Radio              string    `json:"radio"`
+	Band               string    `json:"band"`
+	Channel            *int32    `json:"channel"`
+	PowerDbm           *int32    `json:"power_dbm"`
+	ClientCount        int32     `json:"client_count"`
+	Source             string    `json:"source"`
+}
+
+func (q *Queries) UpsertWirelessRadio(ctx context.Context, arg UpsertWirelessRadioParams) (WirelessRadioStatus, error) {
+	row := q.db.QueryRow(ctx, upsertWirelessRadio,
+		arg.ControllerDeviceID,
+		arg.ApName,
+		arg.Radio,
+		arg.Band,
+		arg.Channel,
+		arg.PowerDbm,
+		arg.ClientCount,
+		arg.Source,
+	)
+	var i WirelessRadioStatus
+	err := row.Scan(
+		&i.ID,
+		&i.ControllerDeviceID,
+		&i.ApName,
+		&i.Radio,
+		&i.Band,
+		&i.Channel,
+		&i.PowerDbm,
+		&i.ClientCount,
+		&i.Source,
+		&i.CollectedAt,
+	)
+	return i, err
+}
+
+const upsertWirelessSSID = `-- name: UpsertWirelessSSID :one
+INSERT INTO wireless_ssids
+    (controller_device_id, name, status, security, band, vlan, client_count, source, collected_at)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8, now())
+ON CONFLICT (controller_device_id, name) DO UPDATE SET
+    status = EXCLUDED.status,
+    security = EXCLUDED.security,
+    band = EXCLUDED.band,
+    vlan = EXCLUDED.vlan,
+    client_count = EXCLUDED.client_count,
+    source = EXCLUDED.source,
+    collected_at = now()
+RETURNING id, controller_device_id, name, status, security, band, vlan, client_count, source, collected_at
+`
+
+type UpsertWirelessSSIDParams struct {
+	ControllerDeviceID uuid.UUID `json:"controller_device_id"`
+	Name               string    `json:"name"`
+	Status             string    `json:"status"`
+	Security           string    `json:"security"`
+	Band               string    `json:"band"`
+	Vlan               string    `json:"vlan"`
+	ClientCount        int32     `json:"client_count"`
+	Source             string    `json:"source"`
+}
+
+func (q *Queries) UpsertWirelessSSID(ctx context.Context, arg UpsertWirelessSSIDParams) (WirelessSsid, error) {
+	row := q.db.QueryRow(ctx, upsertWirelessSSID,
+		arg.ControllerDeviceID,
+		arg.Name,
+		arg.Status,
+		arg.Security,
+		arg.Band,
+		arg.Vlan,
+		arg.ClientCount,
+		arg.Source,
+	)
+	var i WirelessSsid
+	err := row.Scan(
+		&i.ID,
+		&i.ControllerDeviceID,
+		&i.Name,
+		&i.Status,
+		&i.Security,
+		&i.Band,
+		&i.Vlan,
+		&i.ClientCount,
+		&i.Source,
+		&i.CollectedAt,
 	)
 	return i, err
 }
