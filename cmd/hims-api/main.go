@@ -180,6 +180,9 @@ func run(ctx context.Context, serviceMode, logPath string) error {
 		slog.Error("admin bootstrap failed", "error", err)
 	}
 	srv.StartSessionGC(ctx, time.Hour)
+	if err := srv.SeedBuiltinMibPacks(ctx); err != nil {
+		slog.Warn("built-in MIB pack seed failed", "error", err)
+	}
 	srv.StartReportScheduler(ctx, 5*time.Minute)
 	flowFlush := time.Minute
 	if v := os.Getenv("HIMS_NETFLOW_FLUSH"); v != "" {

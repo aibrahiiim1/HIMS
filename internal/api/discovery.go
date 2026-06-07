@@ -561,6 +561,19 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 							enrichment = "Wireless controller — add a Vendor Connection Profile (Discovery → Vendor Profiles) to onboard"
 						}
 					}
+					// SNMP wireless MIB collection: independent of the REST API path.
+					// If an enabled MIB pack applies to this controller, walk its mapped
+					// tables over the bound SNMP credential and persist what's exposed
+					// (honest partial). Runs whenever SNMP is proven for the device.
+					if dev.CredentialID != nil {
+						mctx, mcancel := context.WithTimeout(ctx, 60*time.Second)
+						if _, mdetail, mok := s.collectWirelessMib(mctx, dev, ""); mdetail != "" {
+							if enrichment == "" || mok {
+								enrichment = strings.TrimSpace(enrichment + " | SNMP MIB: " + mdetail)
+							}
+						}
+						mcancel()
+					}
 				} else if cat := string(r.Match.Category); (cat == string(domain.CatPBX) || cat == string(domain.CatVoiceGateway)) && s.cipher() != nil {
 					// Voice/PBX candidate — use a matching CUCM Vendor Connection Profile.
 					if prof, found := s.resolveScanProfile(ctx, cat, dev.ID, dev.LocationID); found {

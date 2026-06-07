@@ -42,10 +42,24 @@ type wirelessCollection struct {
 	NextAction    string  `json:"next_action"`
 }
 
+type wirelessMibStatus struct {
+	HasPack     bool             `json:"has_pack"`
+	PackName    string           `json:"pack_name,omitempty"`
+	PackSource  string           `json:"pack_source,omitempty"`
+	PackID      string           `json:"pack_id,omitempty"`
+	WalkedTables []wirelessMibTable `json:"walked_tables"`
+}
+
+type wirelessMibTable struct {
+	Table string `json:"table"`
+	Rows  int    `json:"rows"`
+}
+
 type wirelessDTO struct {
 	Identity   wirelessIdentity       `json:"identity"`
 	Collection wirelessCollection     `json:"collection"`
 	Counts     map[string]int         `json:"counts"`
+	MIB        wirelessMibStatus      `json:"mib"`
 	APs        []db.AccessPoint       `json:"aps"`
 	SSIDs      []db.WirelessSsid      `json:"ssids"`
 	Clients    []db.WirelessClient    `json:"clients"`
@@ -164,6 +178,29 @@ func (s *Server) deviceWireless(w http.ResponseWriter, r *http.Request) {
 		"ssids":       len(dto.SSIDs),
 		"clients":     len(dto.Clients),
 		"events":      len(dto.Events),
+	}
+
+	// MIB pack status: which pack applies (if any), and which tables actually
+	// returned rows on the last SNMP walk (distinct table_name in mib_walk_rows).
+	if pack, ok := s.matchMibPack(ctx, dev); ok {
+		dto.MIB.HasPack = true
+		dto.MIB.PackName = pack.Name
+		dto.MIB.PackSource = pack.Source
+		dto.MIB.PackID = pack.ID.String()
+	}
+	dto.MIB.WalkedTables = []wirelessMibTable{}
+	if rows, e := s.queries.ListMibWalkRows(ctx, db.ListMibWalkRowsParams{DeviceID: id, Limit: 5000}); e == nil {
+		byTable := map[string]int{}
+		var order []string
+		for _, rw := range rows {
+			if _, seen := byTable[rw.TableName]; !seen {
+				order = append(order, rw.TableName)
+			}
+			byTable[rw.TableName]++
+		}
+		for _, t := range order {
+			dto.MIB.WalkedTables = append(dto.MIB.WalkedTables, wirelessMibTable{Table: t, Rows: byTable[t]})
+		}
 	}
 
 	// Next action: honest guidance when the rich roster isn't collected.

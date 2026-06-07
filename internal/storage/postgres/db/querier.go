@@ -59,6 +59,7 @@ type Querier interface {
 	CountExpiringSystems(ctx context.Context) (int64, error)
 	// Failed jobs for one agent (for the agent detail page + Data Quality count).
 	CountFailedAgentJobs(ctx context.Context, agentID uuid.UUID) (int64, error)
+	CountMibPacksBySource(ctx context.Context) ([]CountMibPacksBySourceRow, error)
 	CountOpenAlerts(ctx context.Context) (int64, error)
 	CountOpenWorkOrders(ctx context.Context) (int64, error)
 	// Blobs sealed under a key id other than the one currently loaded.
@@ -81,6 +82,7 @@ type Querier interface {
 	// ---- Maintenance windows (alert suppression) ------------------------------
 	CreateMaintenanceWindow(ctx context.Context, arg CreateMaintenanceWindowParams) (MaintenanceWindow, error)
 	CreateMibFile(ctx context.Context, arg CreateMibFileParams) (MibFile, error)
+	CreateMibPack(ctx context.Context, arg CreateMibPackParams) (MibPack, error)
 	// ---- Notification channels ------------------------------------------------
 	CreateNotificationChannel(ctx context.Context, arg CreateNotificationChannelParams) (NotificationChannel, error)
 	CreateOIDMapping(ctx context.Context, arg CreateOIDMappingParams) (OidMapping, error)
@@ -125,6 +127,9 @@ type Querier interface {
 	DeleteLocation(ctx context.Context, id uuid.UUID) error
 	DeleteLookup(ctx context.Context, id uuid.UUID) error
 	DeleteMaintenanceWindow(ctx context.Context, id uuid.UUID) error
+	DeleteMibPack(ctx context.Context, id uuid.UUID) error
+	DeleteMibPackTable(ctx context.Context, id uuid.UUID) error
+	DeleteMibWalkRows(ctx context.Context, arg DeleteMibWalkRowsParams) error
 	DeleteMonitoringCheck(ctx context.Context, id uuid.UUID) error
 	DeleteNotificationChannel(ctx context.Context, id uuid.UUID) error
 	DeleteOIDMapping(ctx context.Context, id uuid.UUID) error
@@ -136,6 +141,8 @@ type Querier interface {
 	DeleteSession(ctx context.Context, tokenHash string) error
 	DeleteSparePart(ctx context.Context, id uuid.UUID) error
 	DeleteStaleARP(ctx context.Context, arg DeleteStaleARPParams) error
+	// Prune APs for a controller not refreshed in the latest collection of a source.
+	DeleteStaleAccessPoints(ctx context.Context, arg DeleteStaleAccessPointsParams) error
 	DeleteStaleBMCSensors(ctx context.Context, arg DeleteStaleBMCSensorsParams) error
 	DeleteStaleHAMembers(ctx context.Context, arg DeleteStaleHAMembersParams) error
 	DeleteStaleInterfaces(ctx context.Context, arg DeleteStaleInterfacesParams) error
@@ -156,12 +163,17 @@ type Querier interface {
 	DeleteStaleTopologyLinks(ctx context.Context, lastSeenAt time.Time) (int64, error)
 	DeleteStaleVlans(ctx context.Context, arg DeleteStaleVlansParams) error
 	DeleteStaleVpnTunnels(ctx context.Context, arg DeleteStaleVpnTunnelsParams) error
+	DeleteStaleWirelessClients(ctx context.Context, arg DeleteStaleWirelessClientsParams) error
+	DeleteStaleWirelessRadios(ctx context.Context, arg DeleteStaleWirelessRadiosParams) error
+	DeleteStaleWirelessSSIDs(ctx context.Context, arg DeleteStaleWirelessSSIDsParams) error
 	DeleteSubnet(ctx context.Context, id uuid.UUID) error
 	DeleteSystem(ctx context.Context, id uuid.UUID) error
 	DeleteUser(ctx context.Context, id uuid.UUID) error
 	DeleteUserSessions(ctx context.Context, userID uuid.UUID) error
 	DeleteVendorFingerprint(ctx context.Context, id uuid.UUID) error
 	DeleteVendorProfile(ctx context.Context, id uuid.UUID) error
+	// Replace an event set for a source (collectors re-publish the current window).
+	DeleteWirelessEventsForSource(ctx context.Context, arg DeleteWirelessEventsForSourceParams) error
 	DeviceCountByCategory(ctx context.Context) ([]DeviceCountByCategoryRow, error)
 	DeviceCountByStatus(ctx context.Context) ([]DeviceCountByStatusRow, error)
 	// Mark open, unacknowledged, not-yet-escalated alerts as escalated once they
@@ -197,6 +209,7 @@ type Querier interface {
 	// Drift lookup: the most recent backup's hash for this device.
 	GetLatestConfigBackup(ctx context.Context, deviceID uuid.UUID) (GetLatestConfigBackupRow, error)
 	GetLocation(ctx context.Context, id uuid.UUID) (Location, error)
+	GetMibPack(ctx context.Context, id uuid.UUID) (MibPack, error)
 	GetMonitoringCheck(ctx context.Context, id uuid.UUID) (MonitoringCheck, error)
 	GetNotificationChannel(ctx context.Context, id uuid.UUID) (NotificationChannel, error)
 	// Deep OS Inventory queries. The 1:1 summary is upserted per device; the 1:N
@@ -225,11 +238,16 @@ type Querier interface {
 	InsertCredentialTestRun(ctx context.Context, arg InsertCredentialTestRunParams) (CredentialTestRun, error)
 	InsertFlowRecord(ctx context.Context, arg InsertFlowRecordParams) error
 	InsertMibObject(ctx context.Context, arg InsertMibObjectParams) error
+	// ===== Pack files =====
+	InsertMibPackFile(ctx context.Context, arg InsertMibPackFileParams) error
+	// ===== Raw walk rows =====
+	InsertMibWalkRow(ctx context.Context, arg InsertMibWalkRowParams) error
 	InsertMonitoringSample(ctx context.Context, arg InsertMonitoringSampleParams) error
 	// ---- Delivery log ---------------------------------------------------------
 	// The unique index idx_notif_once makes a duplicate 'sent' for the same
 	// (channel, alert) a no-op, so RETURNING yields a row only on a real insert.
 	InsertNotificationLog(ctx context.Context, arg InsertNotificationLogParams) (NotificationLog, error)
+	InsertWirelessEvent(ctx context.Context, arg InsertWirelessEventParams) error
 	LastSuccessfulBackup(ctx context.Context) (BackupRun, error)
 	// The most recent result per (device, credential-kind). This is the read model
 	// behind Management Access Coverage's test-result source, the unmanaged reasons
@@ -335,6 +353,10 @@ type Querier interface {
 	ListMaintenanceWindows(ctx context.Context) ([]MaintenanceWindow, error)
 	ListMibFiles(ctx context.Context) ([]MibFile, error)
 	ListMibObjects(ctx context.Context, mibFileID uuid.UUID) ([]MibObject, error)
+	ListMibPackFiles(ctx context.Context, packID uuid.UUID) ([]ListMibPackFilesRow, error)
+	ListMibPackTables(ctx context.Context, packID uuid.UUID) ([]MibPackTable, error)
+	ListMibPacks(ctx context.Context) ([]MibPack, error)
+	ListMibWalkRows(ctx context.Context, arg ListMibWalkRowsParams) ([]MibWalkRow, error)
 	ListMonitoringChecks(ctx context.Context) ([]MonitoringCheck, error)
 	ListMonitoringChecksByDevice(ctx context.Context, deviceID uuid.UUID) ([]MonitoringCheck, error)
 	ListMonitoringSamplesByCheck(ctx context.Context, arg ListMonitoringSamplesByCheckParams) ([]MonitoringSample, error)
@@ -372,6 +394,10 @@ type Querier interface {
 	ListReportSchedules(ctx context.Context) ([]ReportSchedule, error)
 	ListRoles(ctx context.Context) ([]Role, error)
 	ListRootLocations(ctx context.Context) ([]Location, error)
+	// Bulk fetch of the raw SNMP system-group identity facts across ALL devices, for
+	// Data Quality checks that re-evaluate fingerprints against stored evidence
+	// without re-probing. Only the identity keys, not the full fact set.
+	ListSNMPIdentityFacts(ctx context.Context) ([]ListSNMPIdentityFactsRow, error)
 	// (channel_id, alert_id) pairs already delivered, so the dispatcher skips them.
 	ListSentNotificationPairs(ctx context.Context) ([]ListSentNotificationPairsRow, error)
 	ListServerStorage(ctx context.Context, deviceID uuid.UUID) ([]ServerStorage, error)
@@ -385,10 +411,17 @@ type Querier interface {
 	ListUsers(ctx context.Context) ([]User, error)
 	ListVMsByHost(ctx context.Context, hostDeviceID uuid.UUID) ([]VirtualMachine, error)
 	// ===== Vendor fingerprints =================================================
+	// Ordered so the matching engine's stable sort favours, among equal-confidence
+	// ties: user rules over builtin (source asc: 'builtin'<'user' → invert), then
+	// the operator's priority (lower first). Display reads the same order.
 	ListVendorFingerprints(ctx context.Context) ([]VendorFingerprint, error)
 	ListVendorProfiles(ctx context.Context) ([]VendorConnectionProfile, error)
 	ListVlans(ctx context.Context, deviceID uuid.UUID) ([]Vlan, error)
 	ListVpnTunnels(ctx context.Context, deviceID uuid.UUID) ([]FirewallVpnTunnel, error)
+	ListWirelessClients(ctx context.Context, controllerDeviceID uuid.UUID) ([]WirelessClient, error)
+	ListWirelessEvents(ctx context.Context, arg ListWirelessEventsParams) ([]WirelessEvent, error)
+	ListWirelessRadios(ctx context.Context, controllerDeviceID uuid.UUID) ([]WirelessRadioStatus, error)
+	ListWirelessSSIDs(ctx context.Context, controllerDeviceID uuid.UUID) ([]WirelessSsid, error)
 	ListWorkOrderEvents(ctx context.Context, workOrderID uuid.UUID) ([]WorkOrderEvent, error)
 	ListWorkOrderParts(ctx context.Context, workOrderID uuid.UUID) ([]WorkOrderPart, error)
 	ListWorkOrders(ctx context.Context) ([]WorkOrder, error)
@@ -462,6 +495,10 @@ type Querier interface {
 	SetDeviceCredential(ctx context.Context, arg SetDeviceCredentialParams) error
 	// Stores the scan spec (mode/targets/creds) so the job can be re-run as-is.
 	SetDiscoveryJobMetadata(ctx context.Context, arg SetDiscoveryJobMetadataParams) error
+	SetMibPackCollected(ctx context.Context, arg SetMibPackCollectedParams) error
+	SetMibPackEnabled(ctx context.Context, arg SetMibPackEnabledParams) error
+	SetMibPackParseMeta(ctx context.Context, arg SetMibPackParseMetaParams) error
+	SetMibPackTested(ctx context.Context, arg SetMibPackTestedParams) error
 	SetMonitoringCheckEnabled(ctx context.Context, arg SetMonitoringCheckEnabledParams) (MonitoringCheck, error)
 	SetNotificationChannelEnabled(ctx context.Context, arg SetNotificationChannelEnabledParams) (NotificationChannel, error)
 	SetRelayAgentEnabled(ctx context.Context, arg SetRelayAgentEnabledParams) error
@@ -511,6 +548,7 @@ type Querier interface {
 	UpdateDiscoveryJobStatus(ctx context.Context, arg UpdateDiscoveryJobStatusParams) error
 	UpdateDiscoveryResult(ctx context.Context, arg UpdateDiscoveryResultParams) error
 	UpdateLocation(ctx context.Context, arg UpdateLocationParams) (Location, error)
+	UpdateMibPack(ctx context.Context, arg UpdateMibPackParams) (MibPack, error)
 	UpdateRelayAgentIdentity(ctx context.Context, arg UpdateRelayAgentIdentityParams) error
 	UpdateSparePart(ctx context.Context, arg UpdateSparePartParams) (SparePart, error)
 	UpdateSystem(ctx context.Context, arg UpdateSystemParams) (System, error)
@@ -535,6 +573,8 @@ type Querier interface {
 	UpsertLicense(ctx context.Context, arg UpsertLicenseParams) error
 	// ---- MAC address table ---------------------------------------------------
 	UpsertMAC(ctx context.Context, arg UpsertMACParams) error
+	// ===== Pack tables (mappings) =====
+	UpsertMibPackTable(ctx context.Context, arg UpsertMibPackTableParams) (MibPackTable, error)
 	// Idempotent registration: re-registering the same (device, kind, port)
 	// updates the schedule knobs without resetting the live status counters.
 	UpsertMonitoringCheck(ctx context.Context, arg UpsertMonitoringCheckParams) (MonitoringCheck, error)
@@ -558,10 +598,16 @@ type Querier interface {
 	UpsertUPSStatus(ctx context.Context, arg UpsertUPSStatusParams) error
 	// Upsert keyed on (host, name): re-collecting refreshes state without dups.
 	UpsertVM(ctx context.Context, arg UpsertVMParams) (VirtualMachine, error)
+	// Import path: idempotent by (kind, pattern). Re-importing updates the existing
+	// rule's vendor/type/confidence/model/priority/source rather than duplicating it.
+	UpsertVendorFingerprint(ctx context.Context, arg UpsertVendorFingerprintParams) (VendorFingerprint, error)
 	// ---- VLANs ----------------------------------------------------------------
 	UpsertVlan(ctx context.Context, arg UpsertVlanParams) (Vlan, error)
 	UpsertVpnTunnel(ctx context.Context, arg UpsertVpnTunnelParams) error
 	UpsertWLANControllerInfo(ctx context.Context, arg UpsertWLANControllerInfoParams) (WlanControllerInfo, error)
+	UpsertWirelessClient(ctx context.Context, arg UpsertWirelessClientParams) (WirelessClient, error)
+	UpsertWirelessRadio(ctx context.Context, arg UpsertWirelessRadioParams) (WirelessRadioStatus, error)
+	UpsertWirelessSSID(ctx context.Context, arg UpsertWirelessSSIDParams) (WirelessSsid, error)
 }
 
 var _ Querier = (*Queries)(nil)

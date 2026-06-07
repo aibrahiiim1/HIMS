@@ -728,11 +728,99 @@ export interface WirelessDetailResp {
     profile_status?: string; last_detail?: string; ap_data_known: boolean; next_action: string
   }
   counts: Record<string, number>
+  mib: {
+    has_pack: boolean
+    pack_name?: string
+    pack_source?: string
+    pack_id?: string
+    walked_tables: { table: string; rows: number }[]
+  }
   aps: AccessPoint[]
   ssids: WirelessSSID[]
   clients: WirelessClient[]
   radios: WirelessRadio[]
   events: WirelessEvent[]
+}
+
+// ---- MIB packs (operator-managed SNMP MIB → collection) --------------------
+// A pack = metadata + raw files + table mappings (table → root OID → purpose →
+// column map). Built-in ∪ user; user wins by priority; applies-to matches a
+// device by sysObjectID prefix / sysDescr substring / category.
+export interface MibPack {
+  id: string
+  name: string
+  vendor: string
+  category: string
+  source: 'builtin' | 'user'
+  enabled: boolean
+  priority: number
+  version: string
+  description: string
+  applies_to: unknown
+  parse_meta: unknown
+  last_tested_at?: string | null
+  last_test_detail: string
+  last_matched_device?: string | null
+  last_collected_at?: string | null
+  created_at: string
+  updated_at: string
+  table_count: number
+  file_count: number
+}
+
+export interface MibPackFile {
+  id: string
+  pack_id: string
+  filename: string
+  module_name: string
+  size_bytes: number
+  parse_status: string
+  parse_detail: string
+}
+
+export interface MibPackTable {
+  id: string
+  pack_id: string
+  table_name: string
+  root_oid: string
+  purpose: string
+  column_map: unknown
+  enabled: boolean
+}
+
+export interface MibPackDetail {
+  pack: MibPack
+  files: MibPackFile[]
+  tables: MibPackTable[]
+}
+
+export interface MibTableResult {
+  table: string
+  root_oid: string
+  purpose: string
+  status: string // supported|empty|timeout|no_such_object|error
+  count: number
+  sample?: Record<string, unknown>[]
+  mapped: number
+  detail?: string
+}
+
+export interface MibTestResult {
+  ok: boolean
+  device?: string
+  detail: string
+  results?: MibTableResult[]
+}
+
+export interface MibWalkRow {
+  id: string
+  device_id: string
+  pack_id?: string | null
+  table_name: string
+  oid: string
+  idx: string
+  raw_value: string
+  collected_at: string
 }
 
 export interface CameraInfo {

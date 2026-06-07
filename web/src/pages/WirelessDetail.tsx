@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
-import { Wifi, Router, Users, Radio, ShieldCheck, Activity, AlertTriangle, Plug, FlaskConical, DownloadCloud } from 'lucide-react'
-import { api, type WirelessDetailResp } from '../api'
+import { Wifi, Router, Users, Radio, ShieldCheck, Activity, AlertTriangle, Plug, FlaskConical, DownloadCloud, Layers, FileSearch } from 'lucide-react'
+import { api, type WirelessDetailResp, type MibWalkRow } from '../api'
 import { DeviceHeader } from '../components/DeviceHeader'
 import { Panel, Kpi, DefList, EmptyState, StatusPill } from '../components/ui'
 
@@ -33,6 +33,18 @@ export function WirelessDetail() {
     mutationFn: () => api.post<{ collected: boolean; detail: string }>(`/vendor-profiles/${pid}/run-collection`, { device_id: id }),
     onSuccess: (r) => { setActionMsg((r.collected ? '✓ ' : '⚠ ') + r.detail); refetch() },
     onError: (e) => setActionMsg((e as Error).message),
+  })
+
+  // SNMP Wireless MIB collection (independent of the REST API path).
+  const [mibMsg, setMibMsg] = useState('')
+  const [showRaw, setShowRaw] = useState(false)
+  const runMib = useMutation({
+    mutationFn: () => api.post<{ collected: boolean; detail: string }>(`/devices/${id}/collect-wireless-mib`, {}),
+    onSuccess: (r) => { setMibMsg((r.collected ? '✓ ' : '⚠ ') + r.detail); refetch() },
+    onError: (e) => setMibMsg((e as Error).message),
+  })
+  const rawRows = useQuery({
+    queryKey: ['mib-rows', id], queryFn: () => api.get<MibWalkRow[]>(`/devices/${id}/mib-rows`), enabled: showRaw,
   })
   const configureHref = d
     ? `/vendor-profiles?create=1&vendor_type=extreme_xcc&device_id=${id}&target_url=${encodeURIComponent(`https://${d.identity.ip}:8443`)}`
@@ -97,6 +109,55 @@ export function WirelessDetail() {
                   </>}
             </div>
             {actionMsg && <div className={'enc-banner ' + (actionMsg.startsWith('✗') ? 'crit' : 'info')} style={{ marginTop: 10, whiteSpace: 'pre-wrap' }}>{actionMsg}</div>}
+          </>
+        )}
+      </Panel>
+
+      {/* SNMP Wireless MIB — built-in/user MIB pack collection over SNMP. */}
+      <Panel title="SNMP Wireless MIB" icon={Layers}>
+        {d && (
+          <>
+            <DefList items={[
+              { label: 'Applicable MIB pack', value: d.mib.has_pack ? `${d.mib.pack_name} (${d.mib.pack_source})` : 'none — no enabled pack matches this controller' },
+              { label: 'Tables with rows (last walk)', value: d.mib.walked_tables.length
+                ? d.mib.walked_tables.map((t) => `${t.table} (${t.rows})`).join(', ')
+                : 'none walked yet' },
+            ]} />
+            {!d.mib.has_pack && (
+              <div className="enc-banner info" style={{ marginTop: 10 }}>
+                No MIB pack applies. Upload or enable a pack whose applies-to matches this controller in <Link to="/mibs">MIB Management</Link> — the built-in Extreme/HiPath pack is a fallback.
+              </div>
+            )}
+            <div className="row" style={{ gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+              <button className="btn btn-primary btn-sm" disabled={!d.mib.has_pack || runMib.isPending} onClick={() => { setMibMsg(''); runMib.mutate() }}>
+                <DownloadCloud size={14} /> {runMib.isPending ? 'Collecting…' : 'Run SNMP Wireless Collection'}
+              </button>
+              <Link className="btn btn-ghost btn-sm" to={d.mib.pack_id ? `/mibs?pack=${d.mib.pack_id}` : '/mibs'}><FlaskConical size={14} /> Test MIB Pack</Link>
+              <button className="btn btn-ghost btn-sm" onClick={() => setShowRaw((v) => !v)}><FileSearch size={14} /> {showRaw ? 'Hide Raw MIB Rows' : 'View Raw MIB Rows'}</button>
+            </div>
+            {mibMsg && <div className={'enc-banner ' + (mibMsg.startsWith('✗') ? 'crit' : 'info')} style={{ marginTop: 10, whiteSpace: 'pre-wrap' }}>{mibMsg}</div>}
+            {showRaw && (
+              <div style={{ marginTop: 12 }}>
+                {rawRows.isLoading && <div className="muted">Loading raw rows…</div>}
+                {rawRows.data && rawRows.data.length === 0 && <EmptyState icon={FileSearch} title="No raw MIB rows" message="Run a collection or test against this device to capture raw walk rows." />}
+                {rawRows.data && rawRows.data.length > 0 && (
+                  <table className="data-table">
+                    <thead><tr><th>Table</th><th>OID</th><th>Index</th><th>Value</th></tr></thead>
+                    <tbody>
+                      {rawRows.data.slice(0, 300).map((rw) => (
+                        <tr key={rw.id}>
+                          <td>{rw.table_name}</td>
+                          <td className="mono" style={{ fontSize: 11 }}>{rw.oid}</td>
+                          <td className="mono">{rw.idx}</td>
+                          <td style={{ fontSize: 12 }}>{rw.raw_value}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+                {rawRows.data && rawRows.data.length > 300 && <div className="muted" style={{ marginTop: 6 }}>Showing first 300 of {rawRows.data.length} rows.</div>}
+              </div>
+            )}
           </>
         )}
       </Panel>
@@ -232,6 +293,7 @@ function collLabel(s: string): string {
     case 'extreme_xcc_api': return 'Extreme XCC API'
     case 'cloud_xiq': return 'ExtremeCloud IQ (cloud)'
     case 'snmp_baseline': return 'SNMP baseline (identity only)'
+    case 'snmp_wireless_mib': return 'SNMP Wireless MIB'
     case 'unifi': case 'omada': case 'ruckus': return s
     default: return s || '—'
   }

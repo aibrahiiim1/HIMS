@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"sort"
 	"strconv"
@@ -168,6 +169,9 @@ func (s *Server) dataQuality(w http.ResponseWriter, r *http.Request) {
 
 	// --- Wireless controller collection quality (WC-P5) ----------------------
 	s.addWirelessDQ(ctx, devs, &issues, staleBefore)
+
+	// --- MIB pack quality (MWC) ----------------------------------------------
+	s.addMibDQ(ctx, devs, &issues)
 
 	// Servers/endpoints that have never had a deep OS inventory collected.
 	if rows, err := s.queries.ListDevicesWithoutOSInventory(ctx); err == nil && len(rows) > 0 {
@@ -627,6 +631,109 @@ func (s *Server) addWirelessDQ(ctx context.Context, devs []db.Device, issues *[]
 		"Wireless controllers whose last API profile test/collection failed. Open the controller and use Test Connection to see the exact reason.", "critical", collFailed)
 	add("wireless_ap_inventory_stale", "Wireless AP inventory stale",
 		"Wireless controllers whose AP inventory has not been refreshed recently. Re-run collection to update AP/client status.", "info", stale)
+}
+
+// addMibDQ appends MIB-pack + SNMP-MIB-collection data-quality issues.
+func (s *Server) addMibDQ(ctx context.Context, devs []db.Device, issues *[]dqIssue) {
+	packs, _ := s.queries.ListMibPacks(ctx)
+	var uploadedUnused, mappingMissing, parseErrors, noTablesSupported []dqDevice
+	for _, p := range packs {
+		row := dqDevice{ID: p.ID.String(), Name: p.Name, Category: "mib_pack"}
+		if p.Source == "user" && p.LastTestedAt == nil && p.LastCollectedAt == nil {
+			r := row
+			r.Note = "uploaded but never tested or used"
+			uploadedUnused = append(uploadedUnused, r)
+		}
+		if ts, _ := s.queries.ListMibPackTables(ctx, p.ID); len(ts) == 0 {
+			r := row
+			r.Note = "no table → OID mappings defined"
+			mappingMissing = append(mappingMissing, r)
+		}
+		var meta struct {
+			Warnings []string `json:"warnings"`
+		}
+		_ = json.Unmarshal(p.ParseMeta, &meta)
+		if len(meta.Warnings) > 0 {
+			r := row
+			r.Note = strconv.Itoa(len(meta.Warnings)) + " parse warning(s)"
+			parseErrors = append(parseErrors, r)
+		}
+		if strings.HasPrefix(p.LastTestDetail, "0/") {
+			r := row
+			r.Note = "matched a device but no tables responded"
+			noTablesSupported = append(noTablesSupported, r)
+		}
+	}
+
+	var missingPack, userNotApplied, apEmpty, partial []db.Device
+	userPackExists := false
+	for _, p := range packs {
+		if p.Source == "user" && p.Enabled {
+			userPackExists = true
+			break
+		}
+	}
+	for _, d := range devs {
+		if d.Category != string(domain.CatWirelessController) {
+			continue
+		}
+		_, hasPack := s.matchMibPack(ctx, d)
+		// Did an SNMP MIB walk actually run on this device? (raw rows are captured
+		// even when nothing maps into the wireless tables — the honest evidence.)
+		walk, _ := s.queries.ListMibWalkRows(ctx, db.ListMibWalkRowsParams{DeviceID: d.ID, Limit: 1})
+		mibRan := len(walk) > 0
+		// AP / client rosters that came specifically from the MIB source.
+		apFromMib, cliFromMib := 0, 0
+		if aps, e := s.queries.ListAccessPoints(ctx, d.ID); e == nil {
+			for _, a := range aps {
+				if a.Source == mibSource {
+					apFromMib++
+				}
+			}
+		}
+		if cls, e := s.queries.ListWirelessClients(ctx, d.ID); e == nil {
+			for _, c := range cls {
+				if c.Source == mibSource {
+					cliFromMib++
+				}
+			}
+		}
+		if !hasPack {
+			missingPack = append(missingPack, d)
+		} else if userPackExists && !mibRan {
+			// A user pack is configured but no MIB walk has run on this controller.
+			userNotApplied = append(userNotApplied, d)
+		}
+		if mibRan {
+			if apFromMib == 0 {
+				apEmpty = append(apEmpty, d)
+			}
+			if apFromMib == 0 || cliFromMib == 0 {
+				partial = append(partial, d)
+			}
+		}
+	}
+
+	addDev := func(key, label, desc, sev string, list []db.Device) {
+		if len(list) == 0 {
+			return
+		}
+		*issues = append(*issues, dqIssue{Key: key, Label: label, Description: desc, Severity: sev, Count: len(list), Devices: sampleDevices(list)})
+	}
+	addRows := func(key, label, desc, sev string, list []dqDevice) {
+		if len(list) == 0 {
+			return
+		}
+		*issues = append(*issues, dqIssue{Key: key, Label: label, Description: desc, Severity: sev, Count: len(list), Devices: list})
+	}
+	addRows("mib_pack_uploaded_not_used", "MIB pack uploaded, not used", "Uploaded MIB packs that have never been tested or run against a device. Test the pack against a controller to start using it.", "info", uploadedUnused)
+	addRows("mib_mapping_missing", "MIB pack mapping missing", "MIB packs with no table → OID → purpose mappings. Add mappings (or they cannot drive collection).", "warning", mappingMissing)
+	addRows("mib_parse_errors", "MIB parse warnings", "Uploaded MIB files that produced parse warnings. Review the files; collection still works via mappings.", "info", parseErrors)
+	addRows("mib_pack_matched_but_no_tables_supported", "MIB pack matched, no tables supported", "MIB packs that matched a device but none of the mapped tables responded on that firmware. Re-map to tables the device exposes.", "warning", noTablesSupported)
+	addDev("wireless_controller_missing_mib_pack", "Wireless controller: no MIB pack", "Wireless controllers with no applicable MIB pack. Upload/enable a pack whose applies-to matches this vendor/sysObjectID.", "warning", missingPack)
+	addDev("user_defined_mib_not_applied", "User MIB pack not applied", "A user-defined MIB pack is configured but these controllers have no MIB-sourced collection yet. Run SNMP Wireless Collection.", "info", userNotApplied)
+	addDev("wireless_snmp_ap_table_empty", "SNMP MIB: AP table empty", "Controllers collected via SNMP MIB whose AP table returned no rows (firmware does not expose apTable). Use the API profile or another mapped table for AP data.", "info", apEmpty)
+	addDev("wireless_snmp_mib_partial", "SNMP MIB: partial collection", "Controllers where SNMP MIB collection ran but some rosters (APs/clients) were empty — partial, honest coverage.", "info", partial)
 }
 
 func sampleDevices(list []db.Device) []dqDevice {

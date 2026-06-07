@@ -223,6 +223,8 @@ func (s *Server) routes() {
 		r.Get("/devices/{id}/wlan", s.deviceWLAN)
 		r.Get("/devices/{id}/access-points", s.deviceAccessPoints)
 		r.Get("/devices/{id}/wireless", s.deviceWireless) // consolidated wireless detail (identity + rosters)
+		r.Post("/devices/{id}/collect-wireless-mib", s.runWirelessMibCollection) // SNMP MIB-pack wireless collection
+		r.Get("/devices/{id}/mib-rows", s.listMibWalkRows)                       // raw walked MIB rows
 		r.Get("/devices/{id}/bmc", s.deviceBMC)
 		r.Get("/devices/{id}/bmc-sensors", s.deviceBMCSensors)
 		r.Get("/devices/{id}/printer-supplies", s.devicePrinterSupplies)
@@ -412,6 +414,16 @@ func (s *Server) routes() {
 		r.Post("/vendor-fingerprints/import", s.importVendorFingerprints)
 		r.Patch("/vendor-fingerprints/{id}", s.updateVendorFingerprint)
 		r.Delete("/vendor-fingerprints/{id}", s.deleteVendorFingerprint)
+
+		// --- MIB packs: operator-managed SNMP MIB bundles that drive collection ---
+		r.Get("/mib-packs", s.listMibPacks)
+		r.Post("/mib-packs", s.createMibPack)
+		r.Post("/mib-packs/upload", s.uploadMibPack)
+		r.Get("/mib-packs/{id}", s.getMibPack)
+		r.Patch("/mib-packs/{id}", s.updateMibPack)
+		r.Delete("/mib-packs/{id}", s.deleteMibPack)
+		r.Post("/mib-packs/{id}/tables", s.upsertMibPackTable)
+		r.Post("/mib-packs/{id}/test-device", s.testMibPackDevice)
 
 		r.Get("/audit-log", s.listAuditLog)
 		r.Get("/audit-log/facets", s.auditFacets)

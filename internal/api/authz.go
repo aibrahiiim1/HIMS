@@ -94,11 +94,11 @@ func requiredPermission(method, path string) string {
 			return "devices.write"
 		}
 		return ""
-	case "device-templates", "vendor-fingerprints":
+	case "device-templates", "vendor-fingerprints", "mib-packs":
 		if write {
 			return "templates.manage"
 		}
-		return "" // viewing templates/fingerprints is open to any authenticated user
+		return "" // viewing templates/fingerprints/MIB packs is open to any authenticated user
 	case "alerts", "maintenance-windows", "notification-channels":
 		if write {
 			if strings.Contains(p, "/ack") || strings.Contains(p, "/resolve") || strings.Contains(p, "/note") {

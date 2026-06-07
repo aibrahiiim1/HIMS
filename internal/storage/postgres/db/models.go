@@ -510,6 +510,60 @@ type MibObject struct {
 	Unresolved bool      `json:"unresolved"`
 }
 
+type MibPack struct {
+	ID                uuid.UUID  `json:"id"`
+	Name              string     `json:"name"`
+	Vendor            string     `json:"vendor"`
+	Category          string     `json:"category"`
+	Source            string     `json:"source"`
+	Enabled           bool       `json:"enabled"`
+	Priority          int32      `json:"priority"`
+	Version           string     `json:"version"`
+	Description       string     `json:"description"`
+	AppliesTo         []byte     `json:"applies_to"`
+	ParseMeta         []byte     `json:"parse_meta"`
+	LastTestedAt      *time.Time `json:"last_tested_at"`
+	LastTestDetail    string     `json:"last_test_detail"`
+	LastMatchedDevice *uuid.UUID `json:"last_matched_device"`
+	LastCollectedAt   *time.Time `json:"last_collected_at"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
+}
+
+type MibPackFile struct {
+	ID          uuid.UUID `json:"id"`
+	PackID      uuid.UUID `json:"pack_id"`
+	Filename    string    `json:"filename"`
+	ModuleName  string    `json:"module_name"`
+	Content     []byte    `json:"content"`
+	SizeBytes   int32     `json:"size_bytes"`
+	ParseStatus string    `json:"parse_status"`
+	ParseDetail string    `json:"parse_detail"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+type MibPackTable struct {
+	ID        uuid.UUID `json:"id"`
+	PackID    uuid.UUID `json:"pack_id"`
+	TableName string    `json:"table_name"`
+	RootOid   string    `json:"root_oid"`
+	Purpose   string    `json:"purpose"`
+	ColumnMap []byte    `json:"column_map"`
+	Enabled   bool      `json:"enabled"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type MibWalkRow struct {
+	ID          int64      `json:"id"`
+	DeviceID    uuid.UUID  `json:"device_id"`
+	PackID      *uuid.UUID `json:"pack_id"`
+	TableName   string     `json:"table_name"`
+	Oid         string     `json:"oid"`
+	Idx         string     `json:"idx"`
+	RawValue    string     `json:"raw_value"`
+	CollectedAt time.Time  `json:"collected_at"`
+}
+
 type MonitoringCheck struct {
 	ID                  uuid.UUID  `json:"id"`
 	DeviceID            uuid.UUID  `json:"device_id"`
