@@ -208,6 +208,11 @@ func Library() []Print {
 	p := func(kind, pattern, vendor, dtype string, conf int) Print {
 		return Print{Kind: kind, Pattern: pattern, Vendor: vendor, DeviceType: dtype, Confidence: conf}
 	}
+	// pm is p with an explicit product Model — used when the winning print should
+	// pin vendor + model (confidence ≥85), not derive the model from sysDescr.
+	pm := func(kind, pattern, vendor, dtype, model string, conf int) Print {
+		return Print{Kind: kind, Pattern: pattern, Vendor: vendor, DeviceType: dtype, Confidence: conf, Model: model}
+	}
 	return []Print{
 		// --- Product-specific sysObjectID / sysDescr (exact identity) ---
 		// These outrank generic enterprise-PEN prefixes AND driver fingerprints: a
@@ -219,6 +224,13 @@ func Library() []Print {
 		p(KindOID, "1.3.6.1.4.1.1916.2.284", "Extreme Networks", "wireless_controller", 95), // ExtremeCloud IQ Controller VE6120
 		p(KindService, "ExtremeCloud IQ Controller", "Extreme Networks", "wireless_controller", 92),
 		p(KindService, "ExtremeCloud", "Extreme Networks", "wireless_controller", 80),
+
+		// Ruckus ZoneDirector — product OID + sysDescr pin VENDOR + CATEGORY + MODEL
+		// (the generic Ruckus PEN 25053 below only yields vendor + the wireless
+		// category). sysObjectID 25053.3.1.x is the ruckusProducts ZoneDirector tree;
+		// .3.1.5.3 is the ZD3050 observed live. sysDescr reads "Ruckus Wireless zd3050".
+		pm(KindOID, "1.3.6.1.4.1.25053.3.1.5.3", "Ruckus Wireless", "wireless_controller", "ZoneDirector 3050", 96),
+		pm(KindService, "zd3050", "Ruckus Wireless", "wireless_controller", "ZoneDirector 3050", 92),
 
 		// --- SNMP sysObjectID enterprise prefixes (PEN) ---
 		p(KindOID, "1.3.6.1.4.1.9", "Cisco", "switch", 80),
@@ -250,7 +262,7 @@ func Library() []Print {
 		p(KindOID, "1.3.6.1.4.1.13885", "Polycom", "voip", 78),
 
 		// --- Extended vendor catalog (FP-ext): real IANA PENs ---
-		p(KindOID, "1.3.6.1.4.1.25053", "Ruckus", "wireless", 80),                 // Ruckus Wireless
+		p(KindOID, "1.3.6.1.4.1.25053", "Ruckus Wireless", "wireless", 80),        // Ruckus Wireless (generic PEN; ZD product prints above pin model)
 		p(KindOID, "1.3.6.1.4.1.534", "Eaton", "ups", 82),                         // Eaton / Powerware UPS
 		p(KindOID, "1.3.6.1.4.1.24681", "QNAP", "server", 78),                     // QNAP NAS
 		p(KindOID, "1.3.6.1.4.1.10642", "Zebra", "printer", 80),                   // Zebra label printers
@@ -293,9 +305,9 @@ func Library() []Print {
 		// vendor when only a truncated sysDescr is known, and cover vendors whose
 		// PEN we don't pin above (Dahua, Yealink).
 		p(KindService, "OmniSwitch", "Alcatel-Lucent Enterprise", "switch", 80),
-		p(KindService, "Ruckus", "Ruckus", "wireless", 70),
-		p(KindService, "ZoneDirector", "Ruckus", "wireless_controller", 82),
-		p(KindService, "SmartZone", "Ruckus", "wireless_controller", 82),
+		p(KindService, "Ruckus", "Ruckus Wireless", "wireless", 70),
+		pm(KindService, "ZoneDirector", "Ruckus Wireless", "wireless_controller", "ZoneDirector", 88),
+		p(KindService, "SmartZone", "Ruckus Wireless", "wireless_controller", 82),
 		p(KindService, "Eaton", "Eaton", "ups", 70),
 		p(KindService, "QNAP", "QNAP", "server", 70),
 		p(KindService, "Zebra", "Zebra", "printer", 70),

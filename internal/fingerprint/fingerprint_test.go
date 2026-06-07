@@ -94,6 +94,36 @@ func TestExtremeCloudBySysDescrAlone(t *testing.T) {
 	}
 }
 
+func TestRuckusZoneDirectorFingerprint(t *testing.T) {
+	// Live evidence from a ZD3050: the product OID print must win and pin
+	// vendor + wireless_controller + the explicit model (≥85 so reclassify applies
+	// vendor/model). The generic 25053 PEN print is still present but ranks below.
+	ev := Evidence{
+		SysObjectID: ".1.3.6.1.4.1.25053.3.1.5.3",
+		SysDescr:    "Ruckus Wireless zd3050",
+		SysName:     "CSHV-ZD",
+	}
+	res := Match(ev, Library())
+	if len(res) == 0 {
+		t.Fatal("expected matches for Ruckus ZD evidence")
+	}
+	top := res[0]
+	if top.Vendor != "Ruckus Wireless" || top.DeviceType != "wireless_controller" {
+		t.Fatalf("expected Ruckus Wireless / wireless_controller, got %+v", top)
+	}
+	if top.Model != "ZoneDirector 3050" {
+		t.Errorf("expected model ZoneDirector 3050, got %q", top.Model)
+	}
+	if top.Confidence < 85 {
+		t.Errorf("expected high confidence (>=85) so vendor/model apply, got %d", top.Confidence)
+	}
+	// sysDescr-only fallback (no OID) still resolves to Ruckus Wireless controller.
+	r2 := Match(Evidence{SysDescr: "Ruckus Wireless zd3050"}, Library())
+	if len(r2) == 0 || r2[0].Vendor != "Ruckus Wireless" || r2[0].DeviceType != "wireless_controller" {
+		t.Fatalf("expected Ruckus Wireless/wireless_controller from sysDescr alone, got %+v", r2)
+	}
+}
+
 func TestModelFromSysDescr(t *testing.T) {
 	cases := map[string]string{
 		"Extreme Networks ExtremeCloud IQ Controller - VE6120 Medium, System Version 10.05.04.0006": "VE6120 Medium",
@@ -140,11 +170,11 @@ func TestExtendedCatalog(t *testing.T) {
 		wantVendor string
 		wantType   string
 	}{
-		{Evidence{SysObjectID: "1.3.6.1.4.1.25053.1.2"}, "Ruckus", "wireless"},
+		{Evidence{SysObjectID: "1.3.6.1.4.1.25053.1.2"}, "Ruckus Wireless", "wireless"},
 		{Evidence{SysObjectID: "1.3.6.1.4.1.534.10"}, "Eaton", "ups"},
 		{Evidence{SysObjectID: "1.3.6.1.4.1.24681.1"}, "QNAP", "server"},
 		{Evidence{SysObjectID: "1.3.6.1.4.1.21342.3"}, "Grandstream", "voip"},
-		{Evidence{SysDescr: "Ruckus ZoneDirector 1200"}, "Ruckus", "wireless_controller"},
+		{Evidence{SysDescr: "Ruckus ZoneDirector 1200"}, "Ruckus Wireless", "wireless_controller"},
 		{Evidence{SysDescr: "Alcatel-Lucent OmniSwitch 6450"}, "Alcatel-Lucent Enterprise", "switch"},
 		{Evidence{SysDescr: "Yealink SIP-T46G"}, "Yealink", "voip"},
 	}
