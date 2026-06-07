@@ -736,6 +736,15 @@ export interface WirelessDetailResp {
     pack_id?: string
     walked_tables: { table: string; rows: number }[]
   }
+  ssh: {
+    status: string // not_run | collected | partial | unsupported | failed
+    supported: string[]
+    unsupported: string[]
+    parsed_rows: number
+    aps: number
+    clients: number
+    last_run?: string | null
+  }
   aps: AccessPoint[]
   ssids: WirelessSSID[]
   clients: WirelessClient[]
@@ -841,6 +850,39 @@ export interface MibWalkRow {
   oid: string
   idx: string
   raw_value: string
+  collected_at: string
+}
+
+// ---- Extreme XCC SSH CLI collector -----------------------------------------
+export interface SSHCliCmdResult {
+  command: string
+  status: string // parsed | not_parsed | unsupported | failed | timeout
+  parsed_rows: number
+  output_preview: string
+  error_message?: string
+}
+export interface SSHCliSummary {
+  ok: boolean
+  reachable: boolean
+  detail: string
+  supported: number
+  unsupported: number
+  parsed_rows: number
+  aps: number
+  ssids: number
+  clients: number
+  roster_exposed: boolean
+  results?: SSHCliCmdResult[]
+}
+export interface SSHCliRow {
+  id: string
+  device_id: string
+  source: string
+  command: string
+  status: string
+  output_preview: string
+  parsed_rows: number
+  error_message: string
   collected_at: string
 }
 

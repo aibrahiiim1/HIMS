@@ -63,6 +63,7 @@ type Querier interface {
 	CountMibWalkRows(ctx context.Context, deviceID uuid.UUID) (int64, error)
 	CountOpenAlerts(ctx context.Context) (int64, error)
 	CountOpenWorkOrders(ctx context.Context) (int64, error)
+	CountSSHCliBySource(ctx context.Context, deviceID uuid.UUID) ([]CountSSHCliBySourceRow, error)
 	// Blobs sealed under a key id other than the one currently loaded.
 	CountUndecryptableCredentials(ctx context.Context, keyID string) (int64, error)
 	CountUsersWithPassword(ctx context.Context) (int64, error)
@@ -140,6 +141,7 @@ type Querier interface {
 	DeleteRelayAgent(ctx context.Context, id uuid.UUID) error
 	DeleteReportSchedule(ctx context.Context, id uuid.UUID) error
 	DeleteRole(ctx context.Context, id uuid.UUID) error
+	DeleteSSHCliResultsForSource(ctx context.Context, arg DeleteSSHCliResultsForSourceParams) error
 	DeleteSession(ctx context.Context, tokenHash string) error
 	DeleteSparePart(ctx context.Context, id uuid.UUID) error
 	DeleteStaleARP(ctx context.Context, arg DeleteStaleARPParams) error
@@ -400,6 +402,7 @@ type Querier interface {
 	// Data Quality checks that re-evaluate fingerprints against stored evidence
 	// without re-probing. Only the identity keys, not the full fact set.
 	ListSNMPIdentityFacts(ctx context.Context) ([]ListSNMPIdentityFactsRow, error)
+	ListSSHCliResults(ctx context.Context, deviceID uuid.UUID) ([]SshCliResult, error)
 	// (channel_id, alert_id) pairs already delivered, so the dispatcher skips them.
 	ListSentNotificationPairs(ctx context.Context) ([]ListSentNotificationPairsRow, error)
 	ListServerStorage(ctx context.Context, deviceID uuid.UUID) ([]ServerStorage, error)
@@ -593,6 +596,7 @@ type Querier interface {
 	UpsertPbxPhone(ctx context.Context, arg UpsertPbxPhoneParams) error
 	UpsertPortVlan(ctx context.Context, arg UpsertPortVlanParams) error
 	UpsertPrinterSupply(ctx context.Context, arg UpsertPrinterSupplyParams) error
+	UpsertSSHCliResult(ctx context.Context, arg UpsertSSHCliResultParams) error
 	UpsertServerStorage(ctx context.Context, arg UpsertServerStorageParams) error
 	UpsertSetting(ctx context.Context, arg UpsertSettingParams) error
 	// ---- Topology links ------------------------------------------------------

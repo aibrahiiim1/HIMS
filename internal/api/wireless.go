@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
 )
@@ -55,11 +56,23 @@ type wirelessMibTable struct {
 	Rows  int    `json:"rows"`
 }
 
+// wirelessSSHStatus summarizes the Extreme XCC SSH CLI collection source.
+type wirelessSSHStatus struct {
+	Status      string   `json:"status"` // not_run | collected | partial | unsupported | failed
+	Supported   []string `json:"supported"`
+	Unsupported []string `json:"unsupported"`
+	ParsedRows  int      `json:"parsed_rows"`
+	APs         int      `json:"aps"`
+	Clients     int      `json:"clients"`
+	LastRun     *string  `json:"last_run"`
+}
+
 type wirelessDTO struct {
 	Identity   wirelessIdentity       `json:"identity"`
 	Collection wirelessCollection     `json:"collection"`
 	Counts     map[string]int         `json:"counts"`
 	MIB        wirelessMibStatus      `json:"mib"`
+	SSH        wirelessSSHStatus      `json:"ssh"`
 	APs        []db.AccessPoint       `json:"aps"`
 	SSIDs      []db.WirelessSsid      `json:"ssids"`
 	Clients    []db.WirelessClient    `json:"clients"`
@@ -200,6 +213,55 @@ func (s *Server) deviceWireless(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, t := range order {
 			dto.MIB.WalkedTables = append(dto.MIB.WalkedTables, wirelessMibTable{Table: t, Rows: byTable[t]})
+		}
+	}
+
+	// SSH CLI status: per-command support + what mapped, derived from stored results.
+	dto.SSH = wirelessSSHStatus{Status: "not_run", Supported: []string{}, Unsupported: []string{}}
+	if rows, e := s.queries.ListSSHCliResults(ctx, id); e == nil && len(rows) > 0 {
+		var last time.Time
+		anyRan, anyFail := false, false
+		for _, rw := range rows {
+			if rw.Source != sshCLISource {
+				continue
+			}
+			if rw.CollectedAt.After(last) {
+				last = rw.CollectedAt
+			}
+			switch rw.Status {
+			case "parsed", "not_parsed":
+				dto.SSH.Supported = append(dto.SSH.Supported, rw.Command)
+				dto.SSH.ParsedRows += int(rw.ParsedRows)
+				anyRan = true
+			case "unsupported":
+				dto.SSH.Unsupported = append(dto.SSH.Unsupported, rw.Command)
+			case "failed", "timeout":
+				anyFail = true
+			}
+		}
+		for _, a := range dto.APs {
+			if a.Source == sshCLISource {
+				dto.SSH.APs++
+			}
+		}
+		for _, c := range dto.Clients {
+			if c.Source == sshCLISource {
+				dto.SSH.Clients++
+			}
+		}
+		switch {
+		case dto.SSH.APs > 0 || dto.SSH.Clients > 0:
+			dto.SSH.Status = "collected"
+		case anyRan:
+			dto.SSH.Status = "partial"
+		case len(dto.SSH.Unsupported) > 0:
+			dto.SSH.Status = "unsupported"
+		case anyFail:
+			dto.SSH.Status = "failed"
+		}
+		if !last.IsZero() {
+			ts := last.UTC().Format("2006-01-02T15:04:05Z07:00")
+			dto.SSH.LastRun = &ts
 		}
 	}
 

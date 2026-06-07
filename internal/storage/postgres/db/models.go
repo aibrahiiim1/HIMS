@@ -908,6 +908,18 @@ type SparePart struct {
 	UpdatedAt   time.Time  `json:"updated_at"`
 }
 
+type SshCliResult struct {
+	ID            uuid.UUID `json:"id"`
+	DeviceID      uuid.UUID `json:"device_id"`
+	Source        string    `json:"source"`
+	Command       string    `json:"command"`
+	Status        string    `json:"status"`
+	OutputPreview string    `json:"output_preview"`
+	ParsedRows    int32     `json:"parsed_rows"`
+	ErrorMessage  string    `json:"error_message"`
+	CollectedAt   time.Time `json:"collected_at"`
+}
+
 type Subnet struct {
 	ID         uuid.UUID    `json:"id"`
 	LocationID uuid.UUID    `json:"location_id"`

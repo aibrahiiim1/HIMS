@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
-import { Wifi, Router, Users, Radio, ShieldCheck, Activity, AlertTriangle, Plug, FlaskConical, DownloadCloud, Layers, FileSearch } from 'lucide-react'
-import { api, type WirelessDetailResp, type MibWalkRow, type MibExplorerResp } from '../api'
+import { Wifi, Router, Users, Radio, ShieldCheck, Activity, AlertTriangle, Plug, FlaskConical, DownloadCloud, Layers, FileSearch, Terminal } from 'lucide-react'
+import { api, type WirelessDetailResp, type MibWalkRow, type MibExplorerResp, type SSHCliSummary, type SSHCliRow } from '../api'
 import { DeviceHeader } from '../components/DeviceHeader'
 import { Panel, Kpi, DefList, EmptyState, StatusPill } from '../components/ui'
 
@@ -49,6 +49,23 @@ export function WirelessDetail() {
   const [showExplorer, setShowExplorer] = useState(false)
   const explorer = useQuery({
     queryKey: ['mib-explorer', id], queryFn: () => api.get<MibExplorerResp>(`/devices/${id}/mib-explorer`), enabled: showExplorer,
+  })
+
+  // Extreme XCC SSH CLI collection.
+  const [sshMsg, setSshMsg] = useState('')
+  const [showSshResults, setShowSshResults] = useState(false)
+  const runSsh = useMutation({
+    mutationFn: () => api.post<SSHCliSummary>(`/devices/${id}/collect-ssh-cli`, {}),
+    onSuccess: (r) => { setSshMsg((r.ok ? '✓ ' : '⚠ ') + r.detail); refetch() },
+    onError: (e) => setSshMsg('✗ ' + (e as Error).message),
+  })
+  const testSsh = useMutation({
+    mutationFn: () => api.post<SSHCliSummary>(`/devices/${id}/test-ssh-cli`, {}),
+    onSuccess: (r) => { setSshMsg((r.ok ? '✓ ' : '⚠ ') + r.detail); refetch() },
+    onError: (e) => setSshMsg('✗ ' + (e as Error).message),
+  })
+  const sshResults = useQuery({
+    queryKey: ['ssh-cli-results', id], queryFn: () => api.get<SSHCliRow[]>(`/devices/${id}/ssh-cli-results`), enabled: showSshResults,
   })
   const configureHref = d
     ? `/vendor-profiles?create=1&vendor_type=extreme_xcc&device_id=${id}&target_url=${encodeURIComponent(`https://${d.identity.ip}:8443`)}`
@@ -205,6 +222,62 @@ export function WirelessDetail() {
         )}
       </Panel>
 
+      {/* Extreme XCC SSH CLI — read-only CLI roster collection. */}
+      <Panel title="SSH CLI (Extreme XCC)" icon={Terminal}>
+        {d && (
+          <>
+            <DefList items={[
+              { label: 'Collection sources', value: collectionSourcesLine(d) },
+              { label: 'SSH CLI status', value: sshStatusLabel(d.ssh.status) + (d.ssh.last_run ? ` · last run ${new Date(d.ssh.last_run).toLocaleString()}` : '') },
+              { label: 'Supported commands', value: d.ssh.supported.length ? d.ssh.supported.join(', ') : '— none yet' },
+              { label: 'Unsupported commands', value: d.ssh.unsupported.length ? d.ssh.unsupported.join(', ') : '—' },
+              { label: 'Mapped via SSH', value: (d.ssh.aps || d.ssh.clients) ? `${d.ssh.aps} APs, ${d.ssh.clients} clients, ${d.ssh.parsed_rows} parsed rows` : `${d.ssh.parsed_rows} parsed rows (no AP/client roster)` },
+            ]} />
+            {d.ssh.status === 'unsupported' && (
+              <div className="enc-banner info" style={{ marginTop: 10 }}>SSH CLI does not expose AP/SSID/client roster using supported commands on this controller's restricted CLI.</div>
+            )}
+            {(d.ssh.status === 'partial') && (d.ssh.aps + d.ssh.clients === 0) && (
+              <div className="enc-banner info" style={{ marginTop: 10 }}>SSH CLI ran but does not expose AP/SSID/client roster using the supported commands; identity/operational/log output captured.</div>
+            )}
+            <div className="row" style={{ gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+              <button className="btn btn-primary btn-sm" disabled={runSsh.isPending} onClick={() => { setSshMsg(''); runSsh.mutate() }}>
+                <DownloadCloud size={14} /> {runSsh.isPending ? 'Collecting…' : 'Run SSH CLI Collection'}
+              </button>
+              <button className="btn btn-ghost btn-sm" disabled={testSsh.isPending} onClick={() => { setSshMsg(''); testSsh.mutate() }}>
+                <FlaskConical size={14} /> {testSsh.isPending ? 'Probing…' : 'Test SSH CLI Commands'}
+              </button>
+              <button className="btn btn-ghost btn-sm" onClick={() => setShowSshResults((v) => !v)}>
+                <Terminal size={14} /> {showSshResults ? 'Hide SSH Command Results' : 'View SSH Command Results'}
+              </button>
+            </div>
+            {sshMsg && <div className={'enc-banner ' + (sshMsg.startsWith('✗') ? 'crit' : 'info')} style={{ marginTop: 10, whiteSpace: 'pre-wrap' }}>{sshMsg}</div>}
+            {showSshResults && (
+              <div style={{ marginTop: 12 }}>
+                {sshResults.isLoading && <div className="muted">Loading command results…</div>}
+                {sshResults.data && sshResults.data.length === 0 && <EmptyState icon={Terminal} title="No SSH command results" message="Run or test SSH CLI collection to probe the controller's read-only commands." />}
+                {sshResults.data && sshResults.data.length > 0 && (
+                  <table className="data-table">
+                    <thead><tr><th>Command</th><th>Status</th><th>Rows</th><th>Output preview (redacted)</th></tr></thead>
+                    <tbody>
+                      {sshResults.data.map((r) => (
+                        <tr key={r.id}>
+                          <td className="mono">{r.command}</td>
+                          <td><StatusPill status={sshTone(r.status)} label={r.status} /></td>
+                          <td>{r.parsed_rows || (r.error_message ? '—' : 0)}</td>
+                          <td style={{ fontFamily: 'monospace', fontSize: 10, maxWidth: 460, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                            {r.error_message ? <span style={{ color: '#ef9a9a' }}>{r.error_message}</span> : (r.output_preview || '—').slice(0, 400)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            )}
+          </>
+        )}
+      </Panel>
+
       {/* Access Points. */}
       <Panel title="Access Points" icon={Radio} subtitle={d?.collection.ap_data_known ? `${c.aps_online}/${c.aps} online` : undefined} pad={false}>
         {d && d.aps.length === 0 && (
@@ -353,6 +426,37 @@ function mapLink(packId: string | undefined, g: { column_oid: string; table: str
   const params = new URLSearchParams({ pack: packId, root, table: g.table })
   if (g.purpose) params.set('purpose', g.purpose)
   return `/mibs?${params.toString()}`
+}
+
+// collectionSourcesLine summarizes all four collection paths at a glance.
+function collectionSourcesLine(d: WirelessDetailResp): string {
+  const identity = (d.identity.sysobjectid || d.identity.sysdescr) ? 'collected' : '—'
+  let mib = 'no pack'
+  if (d.mib.has_pack) {
+    const withRows = d.mib.walked_tables.filter((t) => t.rows > 0).length
+    mib = withRows > 0 ? 'applied (no AP roster)' : 'applied (no rows)'
+  }
+  const api = d.collection.has_api_profile ? `configured${d.collection.profile_status ? ` (${d.collection.profile_status})` : ''}` : 'not configured'
+  return `SNMP Identity: ${identity} · SNMP MIB: ${mib} · Extreme XCC API: ${api} · SSH CLI: ${sshStatusLabel(d.ssh.status)}`
+}
+
+function sshStatusLabel(s: string): string {
+  switch (s) {
+    case 'collected': return 'collected'
+    case 'partial': return 'partial'
+    case 'unsupported': return 'unsupported (restricted CLI)'
+    case 'failed': return 'failed'
+    default: return 'not run'
+  }
+}
+
+function sshTone(s: string): 'up' | 'down' | 'warning' | 'info' {
+  switch (s) {
+    case 'parsed': return 'up'
+    case 'unsupported': return 'warning'
+    case 'failed': case 'timeout': return 'down'
+    default: return 'info'
+  }
 }
 
 function collLabel(s: string): string {

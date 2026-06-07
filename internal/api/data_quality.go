@@ -173,6 +173,9 @@ func (s *Server) dataQuality(w http.ResponseWriter, r *http.Request) {
 	// --- MIB pack quality (MWC) ----------------------------------------------
 	s.addMibDQ(ctx, devs, &issues)
 
+	// --- Extreme XCC SSH CLI quality (SSH) ------------------------------------
+	s.addSSHWirelessDQ(ctx, devs, &issues)
+
 	// Servers/endpoints that have never had a deep OS inventory collected.
 	if rows, err := s.queries.ListDevicesWithoutOSInventory(ctx); err == nil && len(rows) > 0 {
 		devs := make([]dqDevice, 0, len(rows))
@@ -734,6 +737,84 @@ func (s *Server) addMibDQ(ctx context.Context, devs []db.Device, issues *[]dqIss
 	addDev("user_defined_mib_not_applied", "User MIB pack not applied", "A user-defined MIB pack is configured but these controllers have no MIB-sourced collection yet. Run SNMP Wireless Collection.", "info", userNotApplied)
 	addDev("wireless_snmp_ap_table_empty", "SNMP MIB: AP table empty", "Controllers collected via SNMP MIB whose AP table returned no rows (firmware does not expose apTable). Use the API profile or another mapped table for AP data.", "info", apEmpty)
 	addDev("wireless_snmp_mib_partial", "SNMP MIB: partial collection", "Controllers where SNMP MIB collection ran but some rosters (APs/clients) were empty — partial, honest coverage.", "info", partial)
+}
+
+// addSSHWirelessDQ appends Extreme XCC SSH-CLI collection data-quality issues.
+func (s *Server) addSSHWirelessDQ(ctx context.Context, devs []db.Device, issues *[]dqIssue) {
+	sshCredExists := false
+	if creds, e := s.queries.ListCredentials(ctx); e == nil {
+		for _, c := range creds {
+			if c.Kind == string(domain.CredSSH) {
+				sshCredExists = true
+				break
+			}
+		}
+	}
+	var availNotUsed, failed, partial, noSupp, noRoster []db.Device
+	for _, d := range devs {
+		if d.Category != string(domain.CatWirelessController) {
+			continue
+		}
+		results, _ := s.queries.ListSSHCliResults(ctx, d.ID)
+		ran := false
+		supp, unsupp, anyFail := 0, 0, false
+		for _, r := range results {
+			if r.Source != sshCLISource {
+				continue
+			}
+			ran = true
+			switch r.Status {
+			case "parsed", "not_parsed":
+				supp++
+			case "unsupported":
+				unsupp++
+			case "failed", "timeout":
+				anyFail = true
+			}
+		}
+		// Roster presence by source.
+		sshAP, sshCli, totalAP, totalCli := 0, 0, 0, 0
+		if aps, e := s.queries.ListAccessPoints(ctx, d.ID); e == nil {
+			totalAP = len(aps)
+			for _, a := range aps {
+				if a.Source == sshCLISource {
+					sshAP++
+				}
+			}
+		}
+		if cls, e := s.queries.ListWirelessClients(ctx, d.ID); e == nil {
+			totalCli = len(cls)
+			for _, c := range cls {
+				if c.Source == sshCLISource {
+					sshCli++
+				}
+			}
+		}
+		switch {
+		case sshCredExists && !ran:
+			availNotUsed = append(availNotUsed, d)
+		case ran && supp == 0 && unsupp > 0:
+			noSupp = append(noSupp, d)
+		case ran && anyFail && supp == 0 && unsupp == 0:
+			failed = append(failed, d)
+		case ran && supp > 0 && sshAP == 0 && sshCli == 0:
+			partial = append(partial, d)
+		}
+		if totalAP == 0 && totalCli == 0 {
+			noRoster = append(noRoster, d)
+		}
+	}
+	add := func(key, label, desc, sev string, list []db.Device) {
+		if len(list) == 0 {
+			return
+		}
+		*issues = append(*issues, dqIssue{Key: key, Label: label, Description: desc, Severity: sev, Count: len(list), Devices: sampleDevices(list)})
+	}
+	add("wireless_ssh_available_not_used", "Wireless: SSH available, not used", "Wireless controllers with SSH credentials on file but no SSH CLI collection has run. Run SSH CLI collection — it may expose AP/client rosters SNMP does not.", "info", availNotUsed)
+	add("wireless_ssh_no_supported_commands", "Wireless: SSH CLI — no supported commands", "SSH connected but the controller's restricted CLI rejected every probed read-only command. Identity stays via SNMP.", "info", noSupp)
+	add("wireless_ssh_collection_failed", "Wireless: SSH CLI collection failed", "SSH CLI commands failed/timed out on these controllers. Check the SSH credential and reachability.", "warning", failed)
+	add("wireless_ssh_collection_partial", "Wireless: SSH CLI partial", "SSH CLI ran with supported commands but exposed no AP/client roster via the supported commands.", "info", partial)
+	add("wireless_no_roster_from_snmp_or_ssh", "Wireless: no roster from SNMP or SSH", "Wireless controllers with no AP/SSID/client roster from any source (SNMP MIB, SSH CLI, or API). Configure the Extreme XCC API profile or map a CLI/MIB roster.", "warning", noRoster)
 }
 
 func sampleDevices(list []db.Device) []dqDevice {

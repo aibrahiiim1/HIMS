@@ -574,6 +574,17 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 						}
 						mcancel()
 					}
+					// Extreme XCC SSH CLI collection: read-only CLI roster collection
+					// when a working SSH credential resolves (bound or auto-tried). This
+					// is the path that exposes AP/client rosters on firmware where the
+					// SNMP MIB does not. Binds the SSH cred only if none is bound yet.
+					if s.cipher() != nil {
+						sctx, scancel := context.WithTimeout(ctx, 120*time.Second)
+						if sres := s.collectSSHCLI(sctx, dev, "", "", true); sres.Reachable {
+							enrichment = strings.TrimSpace(enrichment + " | SSH CLI: " + sres.Detail)
+						}
+						scancel()
+					}
 				} else if cat := string(r.Match.Category); (cat == string(domain.CatPBX) || cat == string(domain.CatVoiceGateway)) && s.cipher() != nil {
 					// Voice/PBX candidate — use a matching CUCM Vendor Connection Profile.
 					if prof, found := s.resolveScanProfile(ctx, cat, dev.ID, dev.LocationID); found {

@@ -226,6 +226,9 @@ func (s *Server) routes() {
 		r.Post("/devices/{id}/collect-wireless-mib", s.runWirelessMibCollection) // SNMP MIB-pack wireless collection
 		r.Get("/devices/{id}/mib-rows", s.listMibWalkRows)                       // raw walked MIB rows
 		r.Get("/devices/{id}/mib-explorer", s.mibExplorer)                       // grouped OID-tree explorer
+		r.Post("/devices/{id}/collect-ssh-cli", s.runSSHCLICollection)           // Extreme XCC SSH CLI collection
+		r.Post("/devices/{id}/test-ssh-cli", s.testSSHCLICommands)               // SSH CLI command probe (no persistence)
+		r.Get("/devices/{id}/ssh-cli-results", s.listSSHCliResults)              // per-command SSH CLI results
 		r.Get("/devices/{id}/bmc", s.deviceBMC)
 		r.Get("/devices/{id}/bmc-sensors", s.deviceBMCSensors)
 		r.Get("/devices/{id}/printer-supplies", s.devicePrinterSupplies)
