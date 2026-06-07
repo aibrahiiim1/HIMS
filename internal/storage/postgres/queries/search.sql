@@ -39,12 +39,18 @@ UPDATE discovery_jobs SET metadata = $2 WHERE id = $1;
 -- name: UpdateDiscoveryJobStatus :exec
 UPDATE discovery_jobs
 SET status = $2,
-    started_at   = CASE WHEN $2 = 'running' THEN now() ELSE started_at END,
-    finished_at  = CASE WHEN $2 IN ('completed','failed','cancelled') THEN now() ELSE finished_at END,
-    host_count   = COALESCE($3, host_count),
-    found_count  = COALESCE($4, found_count),
-    error        = $5
+    started_at    = CASE WHEN $2 = 'running' THEN now() ELSE started_at END,
+    finished_at   = CASE WHEN $2 IN ('completed','failed','cancelled') THEN now() ELSE finished_at END,
+    host_count    = COALESCE($3, host_count),
+    found_count   = COALESCE($4, found_count),
+    scanned_count = COALESCE($6, scanned_count),
+    error         = $5
 WHERE id = $1;
+
+-- name: IncrDiscoveryJobScanned :exec
+-- Atomically bump the per-host scan progress counter (safe under the concurrent
+-- per-host workers). Drives the running-scan 0→100% progress bar.
+UPDATE discovery_jobs SET scanned_count = scanned_count + 1 WHERE id = $1;
 
 -- name: CreateDiscoveryResult :one
 INSERT INTO discovery_results (job_id, ip, outcome, probe_data)

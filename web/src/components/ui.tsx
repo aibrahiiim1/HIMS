@@ -161,6 +161,32 @@ export function Legend({ data, total }: { data: { label: string; value: number; 
   )
 }
 
+/* ---- Progress bar (0–100%) ------------------------------------------------ */
+// A labelled determinate progress bar — used for live scan progress (hosts
+// scanned of total). `pulse` adds a subtle pulse while the work is in flight.
+export function ProgressBar({ value, label, sublabel, tone = 'var(--brand)', pulse = false }: {
+  value: number; label?: string; sublabel?: string; tone?: string; pulse?: boolean
+}) {
+  const pct = Math.max(0, Math.min(100, Math.round(value)))
+  return (
+    <div style={{ width: '100%' }}>
+      {(label || sublabel) && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 5, fontSize: 12 }}>
+          <span style={{ fontWeight: 600 }}>{label}{sublabel ? <span className="muted" style={{ fontWeight: 400 }}> · {sublabel}</span> : null}</span>
+          <span className="mono" style={{ color: tone }}>{pct}%</span>
+        </div>
+      )}
+      <div style={{ height: 9, borderRadius: 6, background: 'var(--border, #2a3947)', overflow: 'hidden' }}>
+        <div style={{
+          height: '100%', borderRadius: 6, background: tone, width: `${pct}%`,
+          transition: 'width .5s ease',
+          animation: pulse && pct < 100 ? 'kdrpulse 1.4s ease-in-out infinite' : 'none',
+        }} />
+      </div>
+    </div>
+  )
+}
+
 /* ---- Horizontal bar list -------------------------------------------------- */
 export function BarList({ rows, color = 'var(--brand)', max }: {
   rows: { label: string; value: number; color?: string; to?: string }[]

@@ -316,18 +316,19 @@ type DeviceTemplate struct {
 }
 
 type DiscoveryJob struct {
-	ID         uuid.UUID     `json:"id"`
-	LocationID *uuid.UUID    `json:"location_id"`
-	SubnetID   *uuid.UUID    `json:"subnet_id"`
-	ScopeCidr  *netip.Prefix `json:"scope_cidr"`
-	Status     string        `json:"status"`
-	StartedAt  *time.Time    `json:"started_at"`
-	FinishedAt *time.Time    `json:"finished_at"`
-	HostCount  int32         `json:"host_count"`
-	FoundCount int32         `json:"found_count"`
-	Error      *string       `json:"error"`
-	Metadata   []byte        `json:"metadata"`
-	CreatedAt  time.Time     `json:"created_at"`
+	ID           uuid.UUID     `json:"id"`
+	LocationID   *uuid.UUID    `json:"location_id"`
+	SubnetID     *uuid.UUID    `json:"subnet_id"`
+	ScopeCidr    *netip.Prefix `json:"scope_cidr"`
+	Status       string        `json:"status"`
+	StartedAt    *time.Time    `json:"started_at"`
+	FinishedAt   *time.Time    `json:"finished_at"`
+	HostCount    int32         `json:"host_count"`
+	FoundCount   int32         `json:"found_count"`
+	Error        *string       `json:"error"`
+	Metadata     []byte        `json:"metadata"`
+	CreatedAt    time.Time     `json:"created_at"`
+	ScannedCount int32         `json:"scanned_count"`
 }
 
 type DiscoveryJobEvent struct {

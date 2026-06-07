@@ -233,6 +233,9 @@ type Querier interface {
 	GetWLANControllerInfo(ctx context.Context, deviceID uuid.UUID) (WlanControllerInfo, error)
 	GetWirelessControllerSummary(ctx context.Context, deviceID uuid.UUID) (WirelessControllerSummary, error)
 	GetWorkOrder(ctx context.Context, id uuid.UUID) (WorkOrder, error)
+	// Atomically bump the per-host scan progress counter (safe under the concurrent
+	// per-host workers). Drives the running-scan 0→100% progress bar.
+	IncrDiscoveryJobScanned(ctx context.Context, id uuid.UUID) error
 	// ===== Audit log ===========================================================
 	InsertAuditLog(ctx context.Context, arg InsertAuditLogParams) error
 	InsertBackupRun(ctx context.Context, arg InsertBackupRunParams) (BackupRun, error)

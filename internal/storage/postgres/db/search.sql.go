@@ -16,7 +16,7 @@ import (
 const createDiscoveryJob = `-- name: CreateDiscoveryJob :one
 INSERT INTO discovery_jobs (location_id, subnet_id, scope_cidr, status)
 VALUES ($1, $2, $3, 'pending')
-RETURNING id, location_id, subnet_id, scope_cidr, status, started_at, finished_at, host_count, found_count, error, metadata, created_at
+RETURNING id, location_id, subnet_id, scope_cidr, status, started_at, finished_at, host_count, found_count, error, metadata, created_at, scanned_count
 `
 
 type CreateDiscoveryJobParams struct {
@@ -41,6 +41,7 @@ func (q *Queries) CreateDiscoveryJob(ctx context.Context, arg CreateDiscoveryJob
 		&i.Error,
 		&i.Metadata,
 		&i.CreatedAt,
+		&i.ScannedCount,
 	)
 	return i, err
 }
@@ -127,7 +128,7 @@ func (q *Queries) DeleteDiscoveryJob(ctx context.Context, id uuid.UUID) error {
 }
 
 const getDiscoveryJob = `-- name: GetDiscoveryJob :one
-SELECT id, location_id, subnet_id, scope_cidr, status, started_at, finished_at, host_count, found_count, error, metadata, created_at FROM discovery_jobs WHERE id = $1
+SELECT id, location_id, subnet_id, scope_cidr, status, started_at, finished_at, host_count, found_count, error, metadata, created_at, scanned_count FROM discovery_jobs WHERE id = $1
 `
 
 func (q *Queries) GetDiscoveryJob(ctx context.Context, id uuid.UUID) (DiscoveryJob, error) {
@@ -146,8 +147,20 @@ func (q *Queries) GetDiscoveryJob(ctx context.Context, id uuid.UUID) (DiscoveryJ
 		&i.Error,
 		&i.Metadata,
 		&i.CreatedAt,
+		&i.ScannedCount,
 	)
 	return i, err
+}
+
+const incrDiscoveryJobScanned = `-- name: IncrDiscoveryJobScanned :exec
+UPDATE discovery_jobs SET scanned_count = scanned_count + 1 WHERE id = $1
+`
+
+// Atomically bump the per-host scan progress counter (safe under the concurrent
+// per-host workers). Drives the running-scan 0→100% progress bar.
+func (q *Queries) IncrDiscoveryJobScanned(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, incrDiscoveryJobScanned, id)
+	return err
 }
 
 const latestDeviceProbeData = `-- name: LatestDeviceProbeData :one
@@ -212,7 +225,7 @@ func (q *Queries) ListDiscoveryJobEvents(ctx context.Context, jobID uuid.UUID) (
 }
 
 const listDiscoveryJobs = `-- name: ListDiscoveryJobs :many
-SELECT id, location_id, subnet_id, scope_cidr, status, started_at, finished_at, host_count, found_count, error, metadata, created_at FROM discovery_jobs ORDER BY created_at DESC LIMIT 50
+SELECT id, location_id, subnet_id, scope_cidr, status, started_at, finished_at, host_count, found_count, error, metadata, created_at, scanned_count FROM discovery_jobs ORDER BY created_at DESC LIMIT 50
 `
 
 func (q *Queries) ListDiscoveryJobs(ctx context.Context) ([]DiscoveryJob, error) {
@@ -237,6 +250,7 @@ func (q *Queries) ListDiscoveryJobs(ctx context.Context) ([]DiscoveryJob, error)
 			&i.Error,
 			&i.Metadata,
 			&i.CreatedAt,
+			&i.ScannedCount,
 		); err != nil {
 			return nil, err
 		}
@@ -489,20 +503,22 @@ func (q *Queries) SetDiscoveryJobMetadata(ctx context.Context, arg SetDiscoveryJ
 const updateDiscoveryJobStatus = `-- name: UpdateDiscoveryJobStatus :exec
 UPDATE discovery_jobs
 SET status = $2,
-    started_at   = CASE WHEN $2 = 'running' THEN now() ELSE started_at END,
-    finished_at  = CASE WHEN $2 IN ('completed','failed','cancelled') THEN now() ELSE finished_at END,
-    host_count   = COALESCE($3, host_count),
-    found_count  = COALESCE($4, found_count),
-    error        = $5
+    started_at    = CASE WHEN $2 = 'running' THEN now() ELSE started_at END,
+    finished_at   = CASE WHEN $2 IN ('completed','failed','cancelled') THEN now() ELSE finished_at END,
+    host_count    = COALESCE($3, host_count),
+    found_count   = COALESCE($4, found_count),
+    scanned_count = COALESCE($6, scanned_count),
+    error         = $5
 WHERE id = $1
 `
 
 type UpdateDiscoveryJobStatusParams struct {
-	ID         uuid.UUID `json:"id"`
-	Status     string    `json:"status"`
-	HostCount  int32     `json:"host_count"`
-	FoundCount int32     `json:"found_count"`
-	Error      *string   `json:"error"`
+	ID           uuid.UUID `json:"id"`
+	Status       string    `json:"status"`
+	HostCount    int32     `json:"host_count"`
+	FoundCount   int32     `json:"found_count"`
+	Error        *string   `json:"error"`
+	ScannedCount int32     `json:"scanned_count"`
 }
 
 func (q *Queries) UpdateDiscoveryJobStatus(ctx context.Context, arg UpdateDiscoveryJobStatusParams) error {
@@ -512,6 +528,7 @@ func (q *Queries) UpdateDiscoveryJobStatus(ctx context.Context, arg UpdateDiscov
 		arg.HostCount,
 		arg.FoundCount,
 		arg.Error,
+		arg.ScannedCount,
 	)
 	return err
 }

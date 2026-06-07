@@ -4,7 +4,7 @@ import { Link, useParams } from 'react-router-dom'
 import { Radar, Boxes, Wifi, ShieldCheck, ShieldOff, HelpCircle, KeyRound, Bot, CircleX, RefreshCw, ArrowLeft, Sparkles, History, LifeBuoy, EyeOff } from 'lucide-react'
 import { Pencil } from 'lucide-react'
 import { api, locationPaths, type Device, type DiscoveryJob, type DiscoveryResult, type Location, type ScanJobCounts } from '../api'
-import { PageHeader, Panel, Kpi, EmptyState, timeAgo } from '../components/ui'
+import { PageHeader, Panel, Kpi, EmptyState, ProgressBar, timeAgo } from '../components/ui'
 import { ReachabilityBadge, ManagementBadge } from '../components/StatusBadges'
 import { EditDevice } from '../components/EditDevice'
 import { OnboardingActions, CollectedViaCell, outcomeBadge, duration } from './Discovery'
@@ -102,8 +102,11 @@ export function ScanJobResults() {
 
   // KPI rollup (joined to the live device for reachability/management).
   const k = useMemo(() => {
-    let online = 0, managed = 0, unmanaged = 0, missing = 0, credFail = 0, needsAgent = 0
+    let online = 0, managed = 0, unmanaged = 0, missing = 0, credFail = 0, needsAgent = 0, pingable = 0
     for (const r of results) {
+      // Pingable = the host answered the scan this run (a result row exists with an
+      // alive outcome). This is the denominator for "managed of pingable".
+      if (r.outcome === 'alive' || r.outcome === 'classified' || r.outcome === 'enrolled') pingable++
       const d = r.device_id ? devMap.get(r.device_id) : undefined
       if (!d) continue
       if (d.reachability === 'online') online++
@@ -114,8 +117,15 @@ export function ScanJobResults() {
       if (d.management === 'needs_agent' || d.management === 'agent_offline') needsAgent++
     }
     const failed = results.filter((r) => r.outcome === 'failed' || r.error).length
-    return { online, managed, unmanaged, missing, credFail, needsAgent, failed }
+    return { online, managed, unmanaged, missing, credFail, needsAgent, failed, pingable }
   }, [results, devMap])
+
+  // Scan progress: hosts processed of total. A finished job reads 100%.
+  const total = job?.host_count ?? 0
+  const scanned = job?.scanned_count ?? 0
+  const done = job ? job.status !== 'running' && job.status !== 'pending' : false
+  const progressPct = done ? 100 : total > 0 ? (scanned / total) * 100 : 0
+  const managedPct = k.pingable > 0 ? (k.managed / k.pingable) * 100 : 0
 
   const filtered = useMemo(() => results.filter((r) => {
     const d = dev(r)
@@ -154,6 +164,13 @@ export function ScanJobResults() {
       {detail.isLoading && <div className="loading">Loading…</div>}
       {job && (
         <>
+          {/* Scan progress (hosts processed of total) + managed-of-pingable ratio. */}
+          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '12px 14px', marginBottom: 12, display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))' }}>
+            <ProgressBar value={progressPct} tone={done ? '#16a34a' : 'var(--brand)'} pulse={!done}
+              label={done ? 'Scan complete' : 'Scanning…'} sublabel={`${Math.min(scanned, total)} of ${total} hosts`} />
+            <ProgressBar value={managedPct} tone="#16a34a"
+              label="Managed of pingable" sublabel={`${k.managed} managed · ${k.pingable} pingable (responded)`} />
+          </div>
           {/* A. Scan stability — separated, honest counts (NOT a stable inventory total). */}
           <div className="kpi-grid">
             <Kpi label="Targets probed" value={counts?.targets_probed ?? job.host_count} icon={Boxes} tone="info" sub={`duration ${duration(job.started_at, job.finished_at)}`} />
@@ -165,8 +182,9 @@ export function ScanJobResults() {
           </div>
           {/* Live device state across this job's results. */}
           <div className="kpi-grid">
+            <Kpi label="Pingable" value={k.pingable} icon={Wifi} tone="info" sub="responded to scan" />
             <Kpi label="Online" value={k.online} icon={Wifi} tone="ok" />
-            <Kpi label="Managed" value={k.managed} icon={ShieldCheck} tone="ok" />
+            <Kpi label="Managed" value={k.managed} icon={ShieldCheck} tone="ok" sub={`of ${k.pingable} pingable`} />
             <Kpi label="Unmanaged" value={k.unmanaged} icon={ShieldOff} tone={k.unmanaged > 0 ? 'warn' : 'default'} />
             <Kpi label="Missing classification" value={k.missing} icon={HelpCircle} tone={k.missing > 0 ? 'warn' : 'default'} />
             <Kpi label="Credential failed" value={k.credFail} icon={KeyRound} tone={k.credFail > 0 ? 'crit' : 'default'} />

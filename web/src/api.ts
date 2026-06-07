@@ -572,6 +572,7 @@ export interface DiscoveryJob {
   finished_at?: string | null
   host_count: number
   found_count: number
+  scanned_count?: number // hosts processed so far (drives the 0→100% scan progress bar)
   error?: string | null
   created_at: string
 }

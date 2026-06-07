@@ -6,7 +6,7 @@ import {
   Network, Server, Laptop, Printer, Camera, Video, Flame, HardDrive, Phone, Wifi, Boxes, HelpCircle, Cpu,
 } from 'lucide-react'
 import { api, locationPaths, type Device, type DiscoveryJob, type DiscoveryResult, type Location, type ScanJobCounts, type ScanEvent } from '../api'
-import { PageHeader, EmptyState } from '../components/ui'
+import { PageHeader, EmptyState, ProgressBar } from '../components/ui'
 import { ReachabilityBadge, ManagementBadge } from '../components/StatusBadges'
 import { EditDevice } from '../components/EditDevice'
 import { duration } from './Discovery'
@@ -282,6 +282,14 @@ export function LiveDiscovery() {
 
   const selNode = sel ? nodes.find((n) => n.ip === sel) : undefined
 
+  // Scan progress (hosts processed of total) + managed-of-pingable ratio.
+  const total = job?.host_count ?? 0
+  const scanned = job?.scanned_count ?? 0
+  const done = !!job && job.status !== 'running' && job.status !== 'pending'
+  const progressPct = done ? 100 : total > 0 ? (scanned / total) * 100 : 0
+  const pingable = counters.online // nodes that responded this run
+  const managedPct = pingable > 0 ? (counters.managed / pingable) * 100 : 0
+
   if (!jobId) return null
   return (
     <div>
@@ -296,6 +304,16 @@ export function LiveDiscovery() {
           <Link className="btn btn-ghost btn-sm" to={`/discovery/jobs/${jobId}/results`}><Table2 size={14} /> Table View</Link>
           {job?.scope_cidr && <button className="btn btn-sm" disabled={rerun.isPending} onClick={() => rerun.mutate()}><RefreshCw size={14} /> Re-run</button>}
         </>} />
+
+      {/* Scan progress (hosts processed of total) + managed-of-pingable ratio. */}
+      {job && (
+        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '12px 14px', marginBottom: 12, display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))' }}>
+          <ProgressBar value={progressPct} tone={done ? '#16a34a' : 'var(--brand)'} pulse={running}
+            label={running ? 'Scanning…' : done ? 'Scan complete' : job.status} sublabel={`${Math.min(scanned, total)} of ${total} hosts`} />
+          <ProgressBar value={managedPct} tone="#16a34a"
+            label="Managed of pingable" sublabel={`${counters.managed} managed · ${pingable} pingable (responded)`} />
+        </div>
+      )}
 
       {/* Live counters */}
       <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))' }}>

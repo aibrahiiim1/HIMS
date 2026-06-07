@@ -447,6 +447,7 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 	var newCount, knownSeenCount, recoveredCount, missedCount int
 
 	res := scan.Scope(ctx, hosts, concurrency, func(ctx context.Context, ip netip.Addr) (uuid.UUID, error) {
+		defer s.bumpScanned(jobID) // advance the 0→100% progress counter (once per host)
 		hctx, hcancel := context.WithTimeout(ctx, 45*time.Second)
 		defer hcancel()
 		hcfg := cfg
@@ -745,11 +746,22 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 		}
 	}
 	_ = s.queries.UpdateDiscoveryJobStatus(context.Background(), db.UpdateDiscoveryJobStatusParams{
-		ID: jobID, Status: status, HostCount: int32(len(hosts)), FoundCount: int32(found), Error: errMsg,
+		// scanned_count = host_count so a finished job reads exactly 100% even if a
+		// per-host increment was missed.
+		ID: jobID, Status: status, HostCount: int32(len(hosts)), FoundCount: int32(found), ScannedCount: int32(len(hosts)), Error: errMsg,
 	})
 	s.publishScanEvent(jobID, netip.Addr{}, uuid.Nil, "job_completed", "", status,
 		fmt.Sprintf("%d found · %d new · %d known · %d recovered · %d missed", found, newCount, knownSeenCount, recoveredCount, missedCount))
 	_ = res // per-IP aggregate retained for potential future telemetry
+}
+
+// bumpScanned advances the job's per-host scan-progress counter (drives the
+// 0→100% progress bar in the Live + Table views). Best-effort with a fresh, short
+// context so it isn't tied to the per-host probe deadline. Called once per host.
+func (s *Server) bumpScanned(jobID uuid.UUID) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = s.queries.IncrDiscoveryJobScanned(ctx, jobID)
 }
 
 // retryMissedKnown runs the targeted Known-Device Retry pass. For each known
