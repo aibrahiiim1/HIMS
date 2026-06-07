@@ -9,7 +9,7 @@ serial 03052208104498 03052208104498 AP410C-2-LOBBY
 `
 
 func TestParseCLIAPRows(t *testing.T) {
-	aps := parseCLIAPRows(sampleShowAP)
+	aps, _ := parseCLIAPRows(sampleShowAP)
 	if len(aps) != 3 {
 		t.Fatalf("aps = %d, want 3", len(aps))
 	}
@@ -37,7 +37,7 @@ Client IP                                Client MAC         Protocol       Radio
 `
 
 func TestParseCLIClientRows(t *testing.T) {
-	clients, ssids := parseCLIClientRows(sampleShowClients)
+	clients, ssids, _ := parseCLIClientRows(sampleShowClients)
 	if len(clients) != 2 {
 		t.Fatalf("clients = %d, want 2", len(clients))
 	}
@@ -51,8 +51,9 @@ func TestParseCLIClientRows(t *testing.T) {
 	if c.SSID != "CoralSea Aqua WiFi" {
 		t.Errorf("ssid = %q, want 'CoralSea Aqua WiFi' (spaces preserved)", c.SSID)
 	}
-	if c.Hostname != "Alisa-Tab-A9" {
-		t.Errorf("hostname = %q, want Alisa-Tab-A9", c.Hostname)
+	// The XCC "User" column maps to Username; persist falls back hostname←username.
+	if c.Username != "Alisa-Tab-A9" {
+		t.Errorf("username = %q, want Alisa-Tab-A9 (from User column)", c.Username)
 	}
 	if c.Band != "5GHz" {
 		t.Errorf("band = %q, want 5GHz", c.Band)

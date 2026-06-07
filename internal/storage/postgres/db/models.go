@@ -918,6 +918,10 @@ type SshCliResult struct {
 	ParsedRows    int32     `json:"parsed_rows"`
 	ErrorMessage  string    `json:"error_message"`
 	CollectedAt   time.Time `json:"collected_at"`
+	LineCount     int32     `json:"line_count"`
+	Headers       string    `json:"headers"`
+	SkippedRows   int32     `json:"skipped_rows"`
+	Warnings      string    `json:"warnings"`
 }
 
 type Subnet struct {
@@ -1053,6 +1057,25 @@ type WirelessClient struct {
 	Band               string    `json:"band"`
 	Source             string    `json:"source"`
 	CollectedAt        time.Time `json:"collected_at"`
+}
+
+type WirelessControllerSummary struct {
+	DeviceID         uuid.UUID `json:"device_id"`
+	SummarySource    string    `json:"summary_source"`
+	NetworksCount    int32     `json:"networks_count"`
+	SwitchesCount    int32     `json:"switches_count"`
+	ApTotal          int32     `json:"ap_total"`
+	AdoptionPrimary  int32     `json:"adoption_primary"`
+	AdoptionBackup   int32     `json:"adoption_backup"`
+	ActiveAps        int32     `json:"active_aps"`
+	NonActiveAps     int32     `json:"non_active_aps"`
+	ClientsTotal     int32     `json:"clients_total"`
+	ParsedApRows     int32     `json:"parsed_ap_rows"`
+	ParsedClientRows int32     `json:"parsed_client_rows"`
+	ParsedSsidRows   int32     `json:"parsed_ssid_rows"`
+	CollectionStatus string    `json:"collection_status"`
+	Detail           string    `json:"detail"`
+	CollectedAt      time.Time `json:"collected_at"`
 }
 
 type WirelessEvent struct {

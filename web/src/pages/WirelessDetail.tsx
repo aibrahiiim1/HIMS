@@ -75,13 +75,57 @@ export function WirelessDetail() {
     <div>
       <DeviceHeader deviceId={id!} icon={Wifi} />
 
-      {d && (
-        <div className="kpi-grid">
-          <Kpi label="Controller" value={d.identity.vendor || '—'} icon={Router} tone="info" sub={d.identity.product || undefined} />
-          <Kpi label="Access Points" value={c.aps ?? 0} icon={Radio} sub={d.collection.ap_data_known ? `${c.aps_online ?? 0} online / ${c.aps_offline ?? 0} offline` : 'no roster yet'} />
-          <Kpi label="SSIDs" value={c.ssids ?? 0} icon={ShieldCheck} />
-          <Kpi label="Clients" value={c.clients ?? 0} icon={Users} />
-        </div>
+      {d && (() => {
+        const sm = d.summary
+        const apReported = sm.has && sm.ap_total > 0 ? sm.ap_total : (c.aps ?? 0)
+        const cliReported = sm.has && sm.clients_total > 0 ? sm.clients_total : (c.clients ?? 0)
+        const apMissing = Math.max(0, apReported - (c.aps ?? 0))
+        const cliMissing = Math.max(0, cliReported - (c.clients ?? 0))
+        return (
+          <div className="kpi-grid">
+            <Kpi label="Access Points (reported)" value={apReported} icon={Radio}
+              tone={apMissing > 0 ? 'warn' : 'info'} sub={`parsed ${c.aps ?? 0} rows${apMissing > 0 ? ` · missing ${apMissing}` : ''}`} />
+            <Kpi label="Active / Non-active APs" value={sm.ap_status_exposed ? `${sm.active_aps} / ${sm.non_active_aps}` : '—'} icon={Radio}
+              sub={sm.ap_status_exposed ? undefined : 'not exposed via SSH CLI'} />
+            <Kpi label="Clients (reported)" value={cliReported} icon={Users}
+              tone={cliMissing > 0 ? 'warn' : 'info'} sub={`parsed ${c.clients ?? 0} rows${cliMissing > 0 ? ` · missing ${cliMissing}` : ''}`} />
+            <Kpi label="Collection status" value={(sm.has ? sm.collection_status : 'not run')} icon={Activity}
+              tone={collStatusKpiTone(sm.has ? sm.collection_status : '')} sub={d.ssh.last_run ? new Date(d.ssh.last_run).toLocaleString() : undefined} />
+            <Kpi label="SSIDs" value={c.ssids ?? 0} icon={ShieldCheck} sub={sm.has ? `${sm.networks} network(s) seen` : undefined} />
+            <Kpi label="Networks" value={sm.has ? sm.networks : '—'} icon={Router} sub="client-derived; CLI may not list all" />
+            <Kpi label="Switches" value={sm.has ? sm.switches : '—'} icon={Router} sub={sm.has ? 'reported' : undefined} />
+            <Kpi label="Controller" value={d.identity.vendor || '—'} icon={Router} tone="info" sub={d.identity.product || undefined} />
+          </div>
+        )
+      })()}
+
+      {/* Controller summary (SSH) vs parsed roster — never present partial as complete. */}
+      {d && d.summary.has && (
+        <Panel title="Controller Summary (SSH CLI)" icon={Activity}>
+          <DefList items={[
+            { label: 'Collection status', value: collStatusLabel(d.summary.collection_status) },
+            { label: 'Access Points', value: `controller reports ${d.summary.ap_total} · HIMS parsed ${d.summary.parsed_ap_rows} rows` },
+            { label: 'Clients', value: `controller reports ${d.summary.clients_total} · HIMS parsed ${d.summary.parsed_client_rows} rows` },
+            { label: 'Active / Non-active APs', value: d.summary.ap_status_exposed ? `${d.summary.active_aps} / ${d.summary.non_active_aps}` : 'not exposed by the supported SSH CLI commands' },
+            { label: 'Networks / Switches', value: `${d.summary.networks} / ${d.summary.switches} (networks are client-derived)` },
+            { label: 'Adoption (primary / backup)', value: (d.summary.adoption_primary || d.summary.adoption_backup) ? `${d.summary.adoption_primary} / ${d.summary.adoption_backup}` : 'not exposed' },
+          ]} />
+          {d.summary.parsed_ap_rows < d.summary.ap_total && (
+            <div className="enc-banner warn" style={{ marginTop: 10 }}>
+              Controller summary reports {d.summary.ap_total} APs but HIMS parsed {d.summary.parsed_ap_rows} AP rows from SSH CLI. Collection is partial — parser/command coverage needs review.
+            </div>
+          )}
+          {d.summary.parsed_client_rows < d.summary.clients_total && (
+            <div className="enc-banner warn" style={{ marginTop: 8 }}>
+              Controller summary reports {d.summary.clients_total} clients but HIMS parsed {d.summary.parsed_client_rows} client rows from SSH CLI. Collection is partial.
+            </div>
+          )}
+          {!d.summary.ap_status_exposed && (
+            <div className="enc-banner info" style={{ marginTop: 8 }}>
+              Active/Non-active AP split and the full network list are not exposed by this controller's restricted SSH CLI (show summary/status/network are rejected). Configure the Extreme XCC API for the controller dashboard summary.
+            </div>
+          )}
+        </Panel>
       )}
 
       {/* Controller identity — always available from SNMP. */}
@@ -257,15 +301,21 @@ export function WirelessDetail() {
                 {sshResults.data && sshResults.data.length === 0 && <EmptyState icon={Terminal} title="No SSH command results" message="Run or test SSH CLI collection to probe the controller's read-only commands." />}
                 {sshResults.data && sshResults.data.length > 0 && (
                   <table className="data-table">
-                    <thead><tr><th>Command</th><th>Status</th><th>Rows</th><th>Output preview (redacted)</th></tr></thead>
+                    <thead><tr><th>Command</th><th>Status</th><th>Lines</th><th>Parsed</th><th>Skipped</th><th>Headers / warnings</th><th>Output preview (redacted)</th></tr></thead>
                     <tbody>
                       {sshResults.data.map((r) => (
                         <tr key={r.id}>
                           <td className="mono">{r.command}</td>
                           <td><StatusPill status={sshTone(r.status)} label={r.status} /></td>
-                          <td>{r.parsed_rows || (r.error_message ? '—' : 0)}</td>
-                          <td style={{ fontFamily: 'monospace', fontSize: 10, maxWidth: 460, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                            {r.error_message ? <span style={{ color: '#ef9a9a' }}>{r.error_message}</span> : (r.output_preview || '—').slice(0, 400)}
+                          <td>{r.line_count || 0}</td>
+                          <td>{r.parsed_rows || 0}</td>
+                          <td>{r.skipped_rows ? <span className="badge badge-warning">{r.skipped_rows}</span> : 0}</td>
+                          <td style={{ fontSize: 10, maxWidth: 220 }}>
+                            {r.headers && <div className="mono" style={{ opacity: 0.8 }}>{r.headers.slice(0, 80)}</div>}
+                            {r.warnings && <div style={{ color: '#ffb74d' }}>{r.warnings}</div>}
+                          </td>
+                          <td style={{ fontFamily: 'monospace', fontSize: 10, maxWidth: 380, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                            {r.error_message ? <span style={{ color: '#ef9a9a' }}>{r.error_message}</span> : (r.output_preview || '—').slice(0, 300)}
                           </td>
                         </tr>
                       ))}
@@ -288,23 +338,27 @@ export function WirelessDetail() {
         )}
         {d && d.aps.length > 0 && (
           <table className="data-table">
-            <thead><tr><th>Name</th><th>Model</th><th>IP</th><th>MAC</th><th>Serial</th><th>Firmware</th><th>Clients</th><th>Status</th></tr></thead>
+            <thead><tr><th>Display name</th><th>Model</th><th>IP</th><th>MAC</th><th>Serial</th><th>Clients</th><th>Status</th><th>Source</th></tr></thead>
             <tbody>
-              {d.aps.map((a) => (
+              {d.aps.slice(0, 500).map((a) => (
                 <tr key={a.id}>
-                  <td className="cell-name">{a.name}</td>
+                  <td className="cell-name">
+                    {a.name}
+                    {a.serial && a.name === a.serial && <span className="badge badge-muted" title="No friendly name exposed by the CLI; display name derived from serial" style={{ marginLeft: 6 }}>serial</span>}
+                  </td>
                   <td>{a.model || '—'}</td>
                   <td className="mono">{a.ip || '—'}</td>
                   <td className="mono">{a.mac || '—'}</td>
                   <td className="mono">{a.serial || '—'}</td>
-                  <td>{a.firmware || '—'}</td>
                   <td>{a.client_count}</td>
                   <td><StatusPill status={apStatus(a.status)} label={a.status} /></td>
+                  <td>{srcLabel(a.source)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
+        {d && d.aps.length > 500 && <div className="muted" style={{ padding: 8 }}>Showing first 500 of {d.aps.length} APs.</div>}
       </Panel>
 
       {/* SSIDs. */}
@@ -340,22 +394,24 @@ export function WirelessDetail() {
         )}
         {d && d.clients.length > 0 && (
           <table className="data-table">
-            <thead><tr><th>MAC</th><th>IP</th><th>Hostname</th><th>AP</th><th>SSID</th><th>RSSI</th><th>Band</th></tr></thead>
+            <thead><tr><th>MAC</th><th>IP</th><th>Hostname / user</th><th>AP (serial)</th><th>SSID</th><th>RSSI</th><th>Band</th><th>Source</th></tr></thead>
             <tbody>
-              {d.clients.slice(0, 200).map((cl) => (
+              {d.clients.slice(0, 400).map((cl) => (
                 <tr key={cl.id}>
                   <td className="mono">{cl.mac}</td>
                   <td className="mono">{cl.ip || '—'}</td>
                   <td>{cl.hostname || '—'}</td>
-                  <td>{cl.ap_name || '—'}</td>
+                  <td className="mono">{cl.ap_name || '—'}</td>
                   <td>{cl.ssid || '—'}</td>
                   <td>{cl.rssi != null ? `${cl.rssi} dBm` : '—'}</td>
                   <td>{cl.band || '—'}</td>
+                  <td>{srcLabel(cl.source)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
+        {d && d.clients.length > 400 && <div className="muted" style={{ padding: 8 }}>Showing first 400 of {d.clients.length} clients.</div>}
       </Panel>
 
       {/* Radios (only when present). */}
@@ -438,6 +494,36 @@ function collectionSourcesLine(d: WirelessDetailResp): string {
   }
   const api = d.collection.has_api_profile ? `configured${d.collection.profile_status ? ` (${d.collection.profile_status})` : ''}` : 'not configured'
   return `SNMP Identity: ${identity} · SNMP MIB: ${mib} · Extreme XCC API: ${api} · SSH CLI: ${sshStatusLabel(d.ssh.status)}`
+}
+
+function srcLabel(s?: string): string {
+  switch (s) {
+    case 'extreme_xcc_ssh': return 'SSH CLI'
+    case 'snmp_wireless_mib': return 'SNMP MIB'
+    case 'extreme_xcc_api': return 'XCC API'
+    case 'snmp_baseline': return 'SNMP'
+    default: return s || '—'
+  }
+}
+
+// collStatusKpiTone maps to the Kpi tone vocabulary ('ok'|'warn'|'crit'|'info').
+function collStatusKpiTone(s: string): 'ok' | 'warn' | 'crit' | 'info' | 'default' {
+  switch (s) {
+    case 'complete': return 'ok'
+    case 'partial': return 'warn'
+    case 'summary_only': return 'warn'
+    case 'failed': return 'crit'
+    default: return 'default'
+  }
+}
+function collStatusLabel(s: string): string {
+  switch (s) {
+    case 'complete': return 'complete — parsed rows match controller summary'
+    case 'partial': return 'partial — parsed rows fewer than controller summary'
+    case 'summary_only': return 'summary only — counts collected, detailed roster unavailable'
+    case 'failed': return 'failed'
+    default: return s || '—'
+  }
 }
 
 function sshStatusLabel(s: string): string {

@@ -55,8 +55,36 @@ func (q *Queries) DeleteSSHCliResultsForSource(ctx context.Context, arg DeleteSS
 	return err
 }
 
+const getWirelessControllerSummary = `-- name: GetWirelessControllerSummary :one
+SELECT device_id, summary_source, networks_count, switches_count, ap_total, adoption_primary, adoption_backup, active_aps, non_active_aps, clients_total, parsed_ap_rows, parsed_client_rows, parsed_ssid_rows, collection_status, detail, collected_at FROM wireless_controller_summary WHERE device_id = $1
+`
+
+func (q *Queries) GetWirelessControllerSummary(ctx context.Context, deviceID uuid.UUID) (WirelessControllerSummary, error) {
+	row := q.db.QueryRow(ctx, getWirelessControllerSummary, deviceID)
+	var i WirelessControllerSummary
+	err := row.Scan(
+		&i.DeviceID,
+		&i.SummarySource,
+		&i.NetworksCount,
+		&i.SwitchesCount,
+		&i.ApTotal,
+		&i.AdoptionPrimary,
+		&i.AdoptionBackup,
+		&i.ActiveAps,
+		&i.NonActiveAps,
+		&i.ClientsTotal,
+		&i.ParsedApRows,
+		&i.ParsedClientRows,
+		&i.ParsedSsidRows,
+		&i.CollectionStatus,
+		&i.Detail,
+		&i.CollectedAt,
+	)
+	return i, err
+}
+
 const listSSHCliResults = `-- name: ListSSHCliResults :many
-SELECT id, device_id, source, command, status, output_preview, parsed_rows, error_message, collected_at FROM ssh_cli_results WHERE device_id = $1 ORDER BY command
+SELECT id, device_id, source, command, status, output_preview, parsed_rows, error_message, collected_at, line_count, headers, skipped_rows, warnings FROM ssh_cli_results WHERE device_id = $1 ORDER BY command
 `
 
 func (q *Queries) ListSSHCliResults(ctx context.Context, deviceID uuid.UUID) ([]SshCliResult, error) {
@@ -78,6 +106,10 @@ func (q *Queries) ListSSHCliResults(ctx context.Context, deviceID uuid.UUID) ([]
 			&i.ParsedRows,
 			&i.ErrorMessage,
 			&i.CollectedAt,
+			&i.LineCount,
+			&i.Headers,
+			&i.SkippedRows,
+			&i.Warnings,
 		); err != nil {
 			return nil, err
 		}
@@ -90,13 +122,17 @@ func (q *Queries) ListSSHCliResults(ctx context.Context, deviceID uuid.UUID) ([]
 }
 
 const upsertSSHCliResult = `-- name: UpsertSSHCliResult :exec
-INSERT INTO ssh_cli_results (device_id, source, command, status, output_preview, parsed_rows, error_message, collected_at)
-VALUES ($1,$2,$3,$4,$5,$6,$7, now())
+INSERT INTO ssh_cli_results (device_id, source, command, status, output_preview, parsed_rows, error_message, line_count, headers, skipped_rows, warnings, collected_at)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now())
 ON CONFLICT (device_id, source, command) DO UPDATE SET
     status = EXCLUDED.status,
     output_preview = EXCLUDED.output_preview,
     parsed_rows = EXCLUDED.parsed_rows,
     error_message = EXCLUDED.error_message,
+    line_count = EXCLUDED.line_count,
+    headers = EXCLUDED.headers,
+    skipped_rows = EXCLUDED.skipped_rows,
+    warnings = EXCLUDED.warnings,
     collected_at = now()
 `
 
@@ -108,6 +144,10 @@ type UpsertSSHCliResultParams struct {
 	OutputPreview string    `json:"output_preview"`
 	ParsedRows    int32     `json:"parsed_rows"`
 	ErrorMessage  string    `json:"error_message"`
+	LineCount     int32     `json:"line_count"`
+	Headers       string    `json:"headers"`
+	SkippedRows   int32     `json:"skipped_rows"`
+	Warnings      string    `json:"warnings"`
 }
 
 func (q *Queries) UpsertSSHCliResult(ctx context.Context, arg UpsertSSHCliResultParams) error {
@@ -119,6 +159,73 @@ func (q *Queries) UpsertSSHCliResult(ctx context.Context, arg UpsertSSHCliResult
 		arg.OutputPreview,
 		arg.ParsedRows,
 		arg.ErrorMessage,
+		arg.LineCount,
+		arg.Headers,
+		arg.SkippedRows,
+		arg.Warnings,
+	)
+	return err
+}
+
+const upsertWirelessControllerSummary = `-- name: UpsertWirelessControllerSummary :exec
+INSERT INTO wireless_controller_summary
+    (device_id, summary_source, networks_count, switches_count, ap_total, adoption_primary, adoption_backup,
+     active_aps, non_active_aps, clients_total, parsed_ap_rows, parsed_client_rows, parsed_ssid_rows,
+     collection_status, detail, collected_at)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15, now())
+ON CONFLICT (device_id) DO UPDATE SET
+    summary_source = EXCLUDED.summary_source,
+    networks_count = EXCLUDED.networks_count,
+    switches_count = EXCLUDED.switches_count,
+    ap_total = EXCLUDED.ap_total,
+    adoption_primary = EXCLUDED.adoption_primary,
+    adoption_backup = EXCLUDED.adoption_backup,
+    active_aps = EXCLUDED.active_aps,
+    non_active_aps = EXCLUDED.non_active_aps,
+    clients_total = EXCLUDED.clients_total,
+    parsed_ap_rows = EXCLUDED.parsed_ap_rows,
+    parsed_client_rows = EXCLUDED.parsed_client_rows,
+    parsed_ssid_rows = EXCLUDED.parsed_ssid_rows,
+    collection_status = EXCLUDED.collection_status,
+    detail = EXCLUDED.detail,
+    collected_at = now()
+`
+
+type UpsertWirelessControllerSummaryParams struct {
+	DeviceID         uuid.UUID `json:"device_id"`
+	SummarySource    string    `json:"summary_source"`
+	NetworksCount    int32     `json:"networks_count"`
+	SwitchesCount    int32     `json:"switches_count"`
+	ApTotal          int32     `json:"ap_total"`
+	AdoptionPrimary  int32     `json:"adoption_primary"`
+	AdoptionBackup   int32     `json:"adoption_backup"`
+	ActiveAps        int32     `json:"active_aps"`
+	NonActiveAps     int32     `json:"non_active_aps"`
+	ClientsTotal     int32     `json:"clients_total"`
+	ParsedApRows     int32     `json:"parsed_ap_rows"`
+	ParsedClientRows int32     `json:"parsed_client_rows"`
+	ParsedSsidRows   int32     `json:"parsed_ssid_rows"`
+	CollectionStatus string    `json:"collection_status"`
+	Detail           string    `json:"detail"`
+}
+
+func (q *Queries) UpsertWirelessControllerSummary(ctx context.Context, arg UpsertWirelessControllerSummaryParams) error {
+	_, err := q.db.Exec(ctx, upsertWirelessControllerSummary,
+		arg.DeviceID,
+		arg.SummarySource,
+		arg.NetworksCount,
+		arg.SwitchesCount,
+		arg.ApTotal,
+		arg.AdoptionPrimary,
+		arg.AdoptionBackup,
+		arg.ActiveAps,
+		arg.NonActiveAps,
+		arg.ClientsTotal,
+		arg.ParsedApRows,
+		arg.ParsedClientRows,
+		arg.ParsedSsidRows,
+		arg.CollectionStatus,
+		arg.Detail,
 	)
 	return err
 }

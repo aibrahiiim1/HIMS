@@ -175,6 +175,7 @@ func (s *Server) dataQuality(w http.ResponseWriter, r *http.Request) {
 
 	// --- Extreme XCC SSH CLI quality (SSH) ------------------------------------
 	s.addSSHWirelessDQ(ctx, devs, &issues)
+	s.addWirelessSummaryDQ(ctx, devs, &issues)
 
 	// Servers/endpoints that have never had a deep OS inventory collected.
 	if rows, err := s.queries.ListDevicesWithoutOSInventory(ctx); err == nil && len(rows) > 0 {
@@ -815,6 +816,99 @@ func (s *Server) addSSHWirelessDQ(ctx context.Context, devs []db.Device, issues 
 	add("wireless_ssh_collection_failed", "Wireless: SSH CLI collection failed", "SSH CLI commands failed/timed out on these controllers. Check the SSH credential and reachability.", "warning", failed)
 	add("wireless_ssh_collection_partial", "Wireless: SSH CLI partial", "SSH CLI ran with supported commands but exposed no AP/client roster via the supported commands.", "info", partial)
 	add("wireless_no_roster_from_snmp_or_ssh", "Wireless: no roster from SNMP or SSH", "Wireless controllers with no AP/SSID/client roster from any source (SNMP MIB, SSH CLI, or API). Configure the Extreme XCC API profile or map a CLI/MIB roster.", "warning", noRoster)
+}
+
+// addWirelessSummaryDQ appends controller-summary vs parsed-roster mismatch +
+// roster-source + staleness data-quality issues.
+func (s *Server) addWirelessSummaryDQ(ctx context.Context, devs []db.Device, issues *[]dqIssue) {
+	stale := time.Now().Add(-7 * 24 * time.Hour)
+	var mismatch, apLess, clientLess, partial, hasRoster, snmpNoSshYes, sshStale, apStale, cliStale, apNameMissing []db.Device
+	for _, d := range devs {
+		if d.Category != string(domain.CatWirelessController) {
+			continue
+		}
+		sshAP, mibAP, nameMissing := 0, 0, 0
+		var apNewest time.Time
+		if aps, e := s.queries.ListAccessPoints(ctx, d.ID); e == nil {
+			for _, a := range aps {
+				switch a.Source {
+				case sshCLISource:
+					sshAP++
+					if a.Name == a.Serial && a.Serial != "" {
+						nameMissing++
+					}
+				case mibSource:
+					mibAP++
+				}
+				if a.Source == sshCLISource && a.CollectedAt.After(apNewest) {
+					apNewest = a.CollectedAt
+				}
+			}
+		}
+		sshCli, mibCli := 0, 0
+		var cliNewest time.Time
+		if cls, e := s.queries.ListWirelessClients(ctx, d.ID); e == nil {
+			for _, c := range cls {
+				switch c.Source {
+				case sshCLISource:
+					sshCli++
+				case mibSource:
+					mibCli++
+				}
+				if c.Source == sshCLISource && c.CollectedAt.After(cliNewest) {
+					cliNewest = c.CollectedAt
+				}
+			}
+		}
+		if sshAP > 0 || sshCli > 0 {
+			hasRoster = append(hasRoster, d)
+		}
+		if (mibAP == 0 && mibCli == 0) && (sshAP > 0 || sshCli > 0) {
+			snmpNoSshYes = append(snmpNoSshYes, d)
+		}
+		if nameMissing > 0 {
+			apNameMissing = append(apNameMissing, d)
+		}
+		if !apNewest.IsZero() && apNewest.Before(stale) {
+			apStale = append(apStale, d)
+		}
+		if !cliNewest.IsZero() && cliNewest.Before(stale) {
+			cliStale = append(cliStale, d)
+		}
+		if cs, err := s.queries.GetWirelessControllerSummary(ctx, d.ID); err == nil {
+			if cs.CollectionStatus == "partial" || cs.CollectionStatus == "summary_only" {
+				partial = append(partial, d)
+			}
+			if cs.ParsedApRows < cs.ApTotal {
+				apLess = append(apLess, d)
+			}
+			if cs.ParsedClientRows < cs.ClientsTotal {
+				clientLess = append(clientLess, d)
+			}
+			if cs.ParsedApRows < cs.ApTotal || cs.ParsedClientRows < cs.ClientsTotal {
+				mismatch = append(mismatch, d)
+			}
+			if cs.CollectedAt.Before(stale) {
+				sshStale = append(sshStale, d)
+			}
+		}
+	}
+	add := func(key, label, desc, sev string, list []db.Device) {
+		if len(list) == 0 {
+			return
+		}
+		*issues = append(*issues, dqIssue{Key: key, Label: label, Description: desc, Severity: sev, Count: len(list), Devices: sampleDevices(list)})
+	}
+	add("wireless_controller_has_roster_via_ssh", "Wireless: roster collected via SSH CLI", "Controllers whose AP/client roster was collected over the SSH CLI (the path that works when SNMP does not expose it).", "info", hasRoster)
+	add("wireless_snmp_no_roster_but_ssh_roster_available", "Wireless: SNMP empty, SSH has roster", "Controllers where the SNMP MIB exposes no AP/client roster but the SSH CLI does — prefer SSH for these.", "info", snmpNoSshYes)
+	add("wireless_controller_summary_mismatch", "Wireless: summary vs parsed mismatch", "Controllers where the controller-reported AP/client totals exceed the parsed roster rows — collection is partial.", "warning", mismatch)
+	add("wireless_ap_rows_less_than_controller_summary", "Wireless: fewer AP rows than reported", "Parsed AP rows are fewer than the controller-reported AP total. Review command coverage / parser.", "warning", apLess)
+	add("wireless_client_rows_less_than_controller_summary", "Wireless: fewer client rows than reported", "Parsed client rows are fewer than the controller-reported client total.", "warning", clientLess)
+	add("wireless_collection_partial", "Wireless: collection partial", "Controllers whose latest collection is partial or summary-only (not a complete roster).", "info", partial)
+	add("wireless_ap_name_missing", "Wireless: AP display name derived from serial", "APs where no friendly name was exposed by the CLI; display name falls back to the serial.", "info", apNameMissing)
+	add("wireless_ssh_collection_stale", "Wireless: SSH collection stale", "SSH CLI collection older than 7 days. Re-run collection.", "info", sshStale)
+	add("wireless_ap_inventory_stale", "Wireless: AP inventory stale", "SSH-sourced AP rows older than 7 days.", "info", apStale)
+	add("wireless_clients_stale", "Wireless: client roster stale", "SSH-sourced client rows older than 7 days (clients are volatile; expect frequent change).", "info", cliStale)
 }
 
 func sampleDevices(list []db.Device) []dqDevice {

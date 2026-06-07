@@ -231,6 +231,7 @@ type Querier interface {
 	GetUserByUsername(ctx context.Context, username string) (User, error)
 	GetVendorProfile(ctx context.Context, id uuid.UUID) (VendorConnectionProfile, error)
 	GetWLANControllerInfo(ctx context.Context, deviceID uuid.UUID) (WlanControllerInfo, error)
+	GetWirelessControllerSummary(ctx context.Context, deviceID uuid.UUID) (WirelessControllerSummary, error)
 	GetWorkOrder(ctx context.Context, id uuid.UUID) (WorkOrder, error)
 	// ===== Audit log ===========================================================
 	InsertAuditLog(ctx context.Context, arg InsertAuditLogParams) error
@@ -612,6 +613,7 @@ type Querier interface {
 	UpsertVpnTunnel(ctx context.Context, arg UpsertVpnTunnelParams) error
 	UpsertWLANControllerInfo(ctx context.Context, arg UpsertWLANControllerInfoParams) (WlanControllerInfo, error)
 	UpsertWirelessClient(ctx context.Context, arg UpsertWirelessClientParams) (WirelessClient, error)
+	UpsertWirelessControllerSummary(ctx context.Context, arg UpsertWirelessControllerSummaryParams) error
 	UpsertWirelessRadio(ctx context.Context, arg UpsertWirelessRadioParams) (WirelessRadioStatus, error)
 	UpsertWirelessSSID(ctx context.Context, arg UpsertWirelessSSIDParams) (WirelessSsid, error)
 }

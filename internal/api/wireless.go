@@ -67,12 +67,36 @@ type wirelessSSHStatus struct {
 	LastRun     *string  `json:"last_run"`
 }
 
+// wirelessControllerSummary mirrors the controller-reported counts, kept SEPARATE
+// from parsed roster rows so the UI never presents partial data as complete.
+type wirelessControllerSummary struct {
+	Has              bool    `json:"has"`
+	Source           string  `json:"source"`
+	CollectionStatus string  `json:"collection_status"` // complete|partial|summary_only|failed
+	Networks         int     `json:"networks"`
+	Switches         int     `json:"switches"`
+	APTotal          int     `json:"ap_total"`
+	AdoptionPrimary  int     `json:"adoption_primary"`
+	AdoptionBackup   int     `json:"adoption_backup"`
+	ActiveAPs        int     `json:"active_aps"`
+	NonActiveAPs     int     `json:"non_active_aps"`
+	ClientsTotal     int     `json:"clients_total"`
+	ParsedAPRows     int     `json:"parsed_ap_rows"`
+	ParsedClientRows int     `json:"parsed_client_rows"`
+	ParsedSSIDRows   int     `json:"parsed_ssid_rows"`
+	// Honest "what the CLI exposed" flags so the UI shows "—" not "0".
+	APStatusExposed bool   `json:"ap_status_exposed"` // active/non-active split available
+	Detail          string `json:"detail"`
+	CollectedAt     *string `json:"collected_at"`
+}
+
 type wirelessDTO struct {
 	Identity   wirelessIdentity       `json:"identity"`
 	Collection wirelessCollection     `json:"collection"`
 	Counts     map[string]int         `json:"counts"`
 	MIB        wirelessMibStatus      `json:"mib"`
 	SSH        wirelessSSHStatus      `json:"ssh"`
+	Summary    wirelessControllerSummary `json:"summary"`
 	APs        []db.AccessPoint       `json:"aps"`
 	SSIDs      []db.WirelessSsid      `json:"ssids"`
 	Clients    []db.WirelessClient    `json:"clients"`
@@ -262,6 +286,20 @@ func (s *Server) deviceWireless(w http.ResponseWriter, r *http.Request) {
 		if !last.IsZero() {
 			ts := last.UTC().Format("2006-01-02T15:04:05Z07:00")
 			dto.SSH.LastRun = &ts
+		}
+	}
+
+	// Controller-reported summary (kept separate from parsed rows).
+	if cs, e := s.queries.GetWirelessControllerSummary(ctx, id); e == nil {
+		ts := cs.CollectedAt.UTC().Format("2006-01-02T15:04:05Z07:00")
+		dto.Summary = wirelessControllerSummary{
+			Has: true, Source: cs.SummarySource, CollectionStatus: cs.CollectionStatus,
+			Networks: int(cs.NetworksCount), Switches: int(cs.SwitchesCount), APTotal: int(cs.ApTotal),
+			AdoptionPrimary: int(cs.AdoptionPrimary), AdoptionBackup: int(cs.AdoptionBackup),
+			ActiveAPs: int(cs.ActiveAps), NonActiveAPs: int(cs.NonActiveAps), ClientsTotal: int(cs.ClientsTotal),
+			ParsedAPRows: int(cs.ParsedApRows), ParsedClientRows: int(cs.ParsedClientRows), ParsedSSIDRows: int(cs.ParsedSsidRows),
+			APStatusExposed: cs.ActiveAps > 0 || cs.NonActiveAps > 0,
+			Detail:          cs.Detail, CollectedAt: &ts,
 		}
 	}
 

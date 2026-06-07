@@ -745,6 +745,25 @@ export interface WirelessDetailResp {
     clients: number
     last_run?: string | null
   }
+  summary: {
+    has: boolean
+    source: string
+    collection_status: string // complete | partial | summary_only | failed
+    networks: number
+    switches: number
+    ap_total: number
+    adoption_primary: number
+    adoption_backup: number
+    active_aps: number
+    non_active_aps: number
+    clients_total: number
+    parsed_ap_rows: number
+    parsed_client_rows: number
+    parsed_ssid_rows: number
+    ap_status_exposed: boolean
+    detail: string
+    collected_at?: string | null
+  }
   aps: AccessPoint[]
   ssids: WirelessSSID[]
   clients: WirelessClient[]
@@ -882,6 +901,10 @@ export interface SSHCliRow {
   status: string
   output_preview: string
   parsed_rows: number
+  skipped_rows: number
+  line_count: number
+  headers: string
+  warnings: string
   error_message: string
   collected_at: string
 }
