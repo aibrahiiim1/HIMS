@@ -198,8 +198,8 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 }
 
 const createVendorFingerprint = `-- name: CreateVendorFingerprint :one
-INSERT INTO vendor_fingerprints (kind, pattern, vendor, device_type, confidence, enabled)
-VALUES ($1,$2,$3,$4,$5,$6) RETURNING id, kind, pattern, vendor, device_type, confidence, enabled, created_at
+INSERT INTO vendor_fingerprints (kind, pattern, vendor, device_type, confidence, enabled, model, priority, source)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id, kind, pattern, vendor, device_type, confidence, enabled, created_at, model, priority, source, updated_at
 `
 
 type CreateVendorFingerprintParams struct {
@@ -209,6 +209,9 @@ type CreateVendorFingerprintParams struct {
 	DeviceType string `json:"device_type"`
 	Confidence int32  `json:"confidence"`
 	Enabled    bool   `json:"enabled"`
+	Model      string `json:"model"`
+	Priority   int32  `json:"priority"`
+	Source     string `json:"source"`
 }
 
 func (q *Queries) CreateVendorFingerprint(ctx context.Context, arg CreateVendorFingerprintParams) (VendorFingerprint, error) {
@@ -219,6 +222,9 @@ func (q *Queries) CreateVendorFingerprint(ctx context.Context, arg CreateVendorF
 		arg.DeviceType,
 		arg.Confidence,
 		arg.Enabled,
+		arg.Model,
+		arg.Priority,
+		arg.Source,
 	)
 	var i VendorFingerprint
 	err := row.Scan(
@@ -230,6 +236,10 @@ func (q *Queries) CreateVendorFingerprint(ctx context.Context, arg CreateVendorF
 		&i.Confidence,
 		&i.Enabled,
 		&i.CreatedAt,
+		&i.Model,
+		&i.Priority,
+		&i.Source,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
@@ -571,10 +581,14 @@ func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
 
 const listVendorFingerprints = `-- name: ListVendorFingerprints :many
 
-SELECT id, kind, pattern, vendor, device_type, confidence, enabled, created_at FROM vendor_fingerprints ORDER BY kind, vendor, pattern
+SELECT id, kind, pattern, vendor, device_type, confidence, enabled, created_at, model, priority, source, updated_at FROM vendor_fingerprints
+ORDER BY (source='user') DESC, priority ASC, confidence DESC, kind, vendor, pattern
 `
 
 // ===== Vendor fingerprints =================================================
+// Ordered so the matching engine's stable sort favours, among equal-confidence
+// ties: user rules over builtin (source asc: 'builtin'<'user' → invert), then
+// the operator's priority (lower first). Display reads the same order.
 func (q *Queries) ListVendorFingerprints(ctx context.Context) ([]VendorFingerprint, error) {
 	rows, err := q.db.Query(ctx, listVendorFingerprints)
 	if err != nil {
@@ -593,6 +607,10 @@ func (q *Queries) ListVendorFingerprints(ctx context.Context) ([]VendorFingerpri
 			&i.Confidence,
 			&i.Enabled,
 			&i.CreatedAt,
+			&i.Model,
+			&i.Priority,
+			&i.Source,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -767,8 +785,9 @@ func (q *Queries) UpdateUser(ctx context.Context, arg UpdateUserParams) (User, e
 
 const updateVendorFingerprint = `-- name: UpdateVendorFingerprint :one
 UPDATE vendor_fingerprints
-SET kind=$2, pattern=$3, vendor=$4, device_type=$5, confidence=$6, enabled=$7
-WHERE id=$1 RETURNING id, kind, pattern, vendor, device_type, confidence, enabled, created_at
+SET kind=$2, pattern=$3, vendor=$4, device_type=$5, confidence=$6, enabled=$7,
+    model=$8, priority=$9, updated_at=now()
+WHERE id=$1 RETURNING id, kind, pattern, vendor, device_type, confidence, enabled, created_at, model, priority, source, updated_at
 `
 
 type UpdateVendorFingerprintParams struct {
@@ -779,6 +798,8 @@ type UpdateVendorFingerprintParams struct {
 	DeviceType string    `json:"device_type"`
 	Confidence int32     `json:"confidence"`
 	Enabled    bool      `json:"enabled"`
+	Model      string    `json:"model"`
+	Priority   int32     `json:"priority"`
 }
 
 func (q *Queries) UpdateVendorFingerprint(ctx context.Context, arg UpdateVendorFingerprintParams) (VendorFingerprint, error) {
@@ -790,6 +811,8 @@ func (q *Queries) UpdateVendorFingerprint(ctx context.Context, arg UpdateVendorF
 		arg.DeviceType,
 		arg.Confidence,
 		arg.Enabled,
+		arg.Model,
+		arg.Priority,
 	)
 	var i VendorFingerprint
 	err := row.Scan(
@@ -801,6 +824,64 @@ func (q *Queries) UpdateVendorFingerprint(ctx context.Context, arg UpdateVendorF
 		&i.Confidence,
 		&i.Enabled,
 		&i.CreatedAt,
+		&i.Model,
+		&i.Priority,
+		&i.Source,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const upsertVendorFingerprint = `-- name: UpsertVendorFingerprint :one
+INSERT INTO vendor_fingerprints (kind, pattern, vendor, device_type, confidence, enabled, model, priority, source)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+ON CONFLICT (kind, pattern) DO UPDATE SET
+    vendor=EXCLUDED.vendor, device_type=EXCLUDED.device_type, confidence=EXCLUDED.confidence,
+    enabled=EXCLUDED.enabled, model=EXCLUDED.model, priority=EXCLUDED.priority,
+    source=EXCLUDED.source, updated_at=now()
+RETURNING id, kind, pattern, vendor, device_type, confidence, enabled, created_at, model, priority, source, updated_at
+`
+
+type UpsertVendorFingerprintParams struct {
+	Kind       string `json:"kind"`
+	Pattern    string `json:"pattern"`
+	Vendor     string `json:"vendor"`
+	DeviceType string `json:"device_type"`
+	Confidence int32  `json:"confidence"`
+	Enabled    bool   `json:"enabled"`
+	Model      string `json:"model"`
+	Priority   int32  `json:"priority"`
+	Source     string `json:"source"`
+}
+
+// Import path: idempotent by (kind, pattern). Re-importing updates the existing
+// rule's vendor/type/confidence/model/priority/source rather than duplicating it.
+func (q *Queries) UpsertVendorFingerprint(ctx context.Context, arg UpsertVendorFingerprintParams) (VendorFingerprint, error) {
+	row := q.db.QueryRow(ctx, upsertVendorFingerprint,
+		arg.Kind,
+		arg.Pattern,
+		arg.Vendor,
+		arg.DeviceType,
+		arg.Confidence,
+		arg.Enabled,
+		arg.Model,
+		arg.Priority,
+		arg.Source,
+	)
+	var i VendorFingerprint
+	err := row.Scan(
+		&i.ID,
+		&i.Kind,
+		&i.Pattern,
+		&i.Vendor,
+		&i.DeviceType,
+		&i.Confidence,
+		&i.Enabled,
+		&i.CreatedAt,
+		&i.Model,
+		&i.Priority,
+		&i.Source,
+		&i.UpdatedAt,
 	)
 	return i, err
 }

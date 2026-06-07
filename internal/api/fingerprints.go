@@ -2,7 +2,16 @@ package api
 
 import (
 	"context"
+	"encoding/csv"
+	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
+	"net/netip"
+	"strconv"
+	"strings"
+
+	"github.com/google/uuid"
 
 	"github.com/coralsearesorts/hims/internal/fingerprint"
 	"github.com/coralsearesorts/hims/internal/osdiscovery"
@@ -130,7 +139,7 @@ func (s *Server) seedVendorFingerprints(w http.ResponseWriter, r *http.Request) 
 		}
 		if _, err := s.queries.CreateVendorFingerprint(r.Context(), db.CreateVendorFingerprintParams{
 			Kind: p.Kind, Pattern: p.Pattern, Vendor: p.Vendor, DeviceType: p.DeviceType,
-			Confidence: int32(p.Confidence), Enabled: true,
+			Confidence: int32(p.Confidence), Enabled: true, Model: "", Priority: 100, Source: "builtin",
 		}); err != nil {
 			writeErr(w, err)
 			return
@@ -185,6 +194,269 @@ func (s *Server) deviceFingerprintSuggestion(w http.ResponseWriter, r *http.Requ
 		"evidence":       ev,
 		"results":        results,
 	})
+}
+
+// ---- Test Fingerprint Against Device (req #2/#3) --------------------------
+
+type testDeviceReq struct {
+	DeviceID string `json:"device_id"`
+	IP       string `json:"ip"`
+}
+
+// testDeviceFingerprint handles POST /vendor-fingerprints/test-device. Given a
+// device (by id or IP), it loads that device's RAW stored SNMP identity facts,
+// runs the effective library, and returns: matched/not-matched, the raw SNMP
+// values used, which rule matched, the resulting vendor/category/model, and the
+// confidence — i.e. exactly what a scan/reclassify would decide for this device.
+func (s *Server) testDeviceFingerprint(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	var req testDeviceReq
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	var dev db.Device
+	var err error
+	switch {
+	case req.DeviceID != "":
+		id, perr := uuid.Parse(req.DeviceID)
+		if perr != nil {
+			http.Error(w, "invalid device_id", http.StatusBadRequest)
+			return
+		}
+		dev, err = s.queries.GetDevice(ctx, id)
+	case req.IP != "":
+		ip, perr := netip.ParseAddr(strings.TrimSpace(req.IP))
+		if perr != nil {
+			http.Error(w, "invalid ip", http.StatusBadRequest)
+			return
+		}
+		dev, err = s.queries.LiveDeviceByIP(ctx, &ip)
+	default:
+		http.Error(w, "device_id or ip is required", http.StatusBadRequest)
+		return
+	}
+	if err != nil {
+		http.Error(w, "device not found", http.StatusNotFound)
+		return
+	}
+
+	facts, _ := s.queries.ListDeviceFacts(ctx, dev.ID)
+	fact := func(key string) string {
+		for _, f := range facts {
+			if f.Key == key && f.Value != nil {
+				return *f.Value
+			}
+		}
+		return ""
+	}
+	sysDescr := fact("snmp.sysdescr")
+	if sysDescr == "" && dev.OsVersion != nil {
+		sysDescr = *dev.OsVersion
+	}
+	ev := fingerprint.Evidence{
+		SysObjectID: fact("snmp.sysobjectid"),
+		SysDescr:    sysDescr,
+		SysName:     fact("snmp.sysname"),
+	}
+	lib := s.scanFingerprintLibrary(ctx)
+	results := fingerprint.Match(ev, lib)
+	rows, _ := s.queries.ListVendorFingerprints(ctx) // for the explicit-model lookup
+
+	resp := map[string]any{
+		"device_id":        dev.ID.String(),
+		"device_name":      dev.Name,
+		"current_category": dev.Category,
+		"current_vendor":   derefStr(dev.Vendor),
+		"current_model":    derefStr(dev.Model),
+		"raw_snmp": map[string]string{ // the exact values the rules were tested against
+			"sysobjectid":  ev.SysObjectID,
+			"sysdescr":     ev.SysDescr,
+			"sysname":      ev.SysName,
+			"syscontact":   fact("snmp.syscontact"),
+			"syslocation":  fact("snmp.syslocation"),
+		},
+		"matched": len(results) > 0,
+		"results": results,
+	}
+	if len(results) > 0 {
+		top := results[0]
+		model := fingerprint.ModelFromSysDescr(sysDescr)
+		if m := s.fpModelForRows(rows, top.Kind, top.Pattern); m != "" {
+			model = m // explicit model on the matched rule wins over the parsed one
+		}
+		resp["top"] = map[string]any{
+			"kind":       top.Kind,
+			"pattern":    top.Pattern,
+			"rule":       top.Kind + ":" + top.Pattern,
+			"vendor":     top.Vendor,
+			"category":   fingerprint.CanonicalCategory(top.DeviceType),
+			"model":      model,
+			"confidence": top.Confidence,
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// fpModelFor returns the explicit model column of the stored fingerprint matching
+// (kind,pattern), or "" — used so a test result can show an operator-pinned model.
+func (s *Server) fpModelForRows(rows []db.VendorFingerprint, kind, pattern string) string {
+	for _, r := range rows {
+		if r.Kind == kind && r.Pattern == pattern {
+			return r.Model
+		}
+	}
+	return ""
+}
+
+// ---- Import / Export (req #4) ---------------------------------------------
+
+type fingerprintExport struct {
+	Kind       string `json:"kind"`
+	Pattern    string `json:"pattern"`
+	Vendor     string `json:"vendor"`
+	DeviceType string `json:"device_type"`
+	Model      string `json:"model"`
+	Confidence int    `json:"confidence"`
+	Priority   int    `json:"priority"`
+	Enabled    bool   `json:"enabled"`
+	Source     string `json:"source"`
+}
+
+// exportVendorFingerprints handles GET /vendor-fingerprints/export?format=json|csv —
+// streams the whole library as a downloadable file for backup / transfer.
+func (s *Server) exportVendorFingerprints(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.queries.ListVendorFingerprints(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	format := r.URL.Query().Get("format")
+	if format == "csv" {
+		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+		w.Header().Set("Content-Disposition", "attachment; filename=\"vendor-fingerprints.csv\"")
+		cw := csv.NewWriter(w)
+		_ = cw.Write([]string{"kind", "pattern", "vendor", "device_type", "model", "confidence", "priority", "enabled", "source"})
+		for _, r := range rows {
+			_ = cw.Write([]string{
+				r.Kind, r.Pattern, r.Vendor, r.DeviceType, r.Model,
+				strconv.Itoa(int(r.Confidence)), strconv.Itoa(int(r.Priority)),
+				strconv.FormatBool(r.Enabled), r.Source,
+			})
+		}
+		cw.Flush()
+		return
+	}
+	out := make([]fingerprintExport, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, fingerprintExport{
+			Kind: r.Kind, Pattern: r.Pattern, Vendor: r.Vendor, DeviceType: r.DeviceType,
+			Model: r.Model, Confidence: int(r.Confidence), Priority: int(r.Priority),
+			Enabled: r.Enabled, Source: r.Source,
+		})
+	}
+	w.Header().Set("Content-Disposition", "attachment; filename=\"vendor-fingerprints.json\"")
+	writeJSON(w, http.StatusOK, out)
+}
+
+// importVendorFingerprints handles POST /vendor-fingerprints/import. Accepts a
+// JSON array (Content-Type application/json) or CSV (text/csv) body with the same
+// columns as export. Each row is upserted by (kind,pattern); imported rows are
+// marked source='user' so they outrank the builtin catalog. Idempotent + audited.
+func (s *Server) importVendorFingerprints(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	body, err := io.ReadAll(io.LimitReader(r.Body, 4<<20)) // 4 MiB cap
+	if err != nil {
+		http.Error(w, "could not read body", http.StatusBadRequest)
+		return
+	}
+	var items []fingerprintExport
+	ct := r.Header.Get("Content-Type")
+	if strings.Contains(ct, "csv") || (len(body) > 0 && body[0] != '[' && body[0] != '{') {
+		items, err = parseFingerprintCSV(body)
+	} else {
+		err = json.Unmarshal(body, &items)
+	}
+	if err != nil {
+		http.Error(w, "parse error: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	imported, failed := 0, 0
+	var errs []string
+	for i, it := range items {
+		if !fpKinds[it.Kind] || strings.TrimSpace(it.Pattern) == "" {
+			failed++
+			if len(errs) < 10 {
+				errs = append(errs, "row "+strconv.Itoa(i+1)+": invalid kind/pattern")
+			}
+			continue
+		}
+		conf := int32(it.Confidence)
+		if conf <= 0 || conf > 100 {
+			conf = 50
+		}
+		prio := int32(it.Priority)
+		if prio <= 0 {
+			prio = 100
+		}
+		if _, err := s.queries.UpsertVendorFingerprint(ctx, db.UpsertVendorFingerprintParams{
+			Kind: it.Kind, Pattern: it.Pattern, Vendor: it.Vendor, DeviceType: it.DeviceType,
+			Confidence: conf, Enabled: it.Enabled || it.Source == "", Model: it.Model,
+			Priority: prio, Source: "user", // imported rules are operator-owned
+		}); err != nil {
+			failed++
+			if len(errs) < 10 {
+				errs = append(errs, "row "+strconv.Itoa(i+1)+": "+err.Error())
+			}
+			continue
+		}
+		imported++
+	}
+	s.audit(r, "config", "fingerprint.import", "vendor_fingerprint", "",
+		"Imported vendor fingerprints", map[string]any{"imported": imported, "failed": failed})
+	writeJSON(w, http.StatusOK, map[string]any{"imported": imported, "failed": failed, "errors": errs})
+}
+
+// parseFingerprintCSV parses an export-shaped CSV (header row required) into
+// import items. Unknown/extra columns are ignored; missing optional columns default.
+func parseFingerprintCSV(body []byte) ([]fingerprintExport, error) {
+	cr := csv.NewReader(strings.NewReader(string(body)))
+	cr.FieldsPerRecord = -1
+	recs, err := cr.ReadAll()
+	if err != nil {
+		return nil, err
+	}
+	if len(recs) < 2 {
+		return nil, errors.New("csv has no data rows")
+	}
+	col := map[string]int{}
+	for i, h := range recs[0] {
+		col[strings.ToLower(strings.TrimSpace(h))] = i
+	}
+	get := func(rec []string, name string) string {
+		if i, ok := col[name]; ok && i < len(rec) {
+			return strings.TrimSpace(rec[i])
+		}
+		return ""
+	}
+	var out []fingerprintExport
+	for _, rec := range recs[1:] {
+		if len(rec) == 0 || strings.TrimSpace(strings.Join(rec, "")) == "" {
+			continue
+		}
+		conf, _ := strconv.Atoi(get(rec, "confidence"))
+		prio, _ := strconv.Atoi(get(rec, "priority"))
+		enabled := true
+		if e := get(rec, "enabled"); e != "" {
+			enabled, _ = strconv.ParseBool(e)
+		}
+		out = append(out, fingerprintExport{
+			Kind: strings.ToLower(get(rec, "kind")), Pattern: get(rec, "pattern"),
+			Vendor: get(rec, "vendor"), DeviceType: get(rec, "device_type"),
+			Model: get(rec, "model"), Confidence: conf, Priority: prio, Enabled: enabled,
+			Source: "user",
+		})
+	}
+	return out, nil
 }
 
 func derefStr(s *string) string {

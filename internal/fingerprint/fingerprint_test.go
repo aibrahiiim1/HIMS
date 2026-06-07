@@ -133,6 +133,33 @@ func TestSysNameMatch(t *testing.T) {
 	}
 }
 
+func TestExtendedCatalog(t *testing.T) {
+	lib := Library()
+	cases := []struct {
+		ev         Evidence
+		wantVendor string
+		wantType   string
+	}{
+		{Evidence{SysObjectID: "1.3.6.1.4.1.25053.1.2"}, "Ruckus", "wireless"},
+		{Evidence{SysObjectID: "1.3.6.1.4.1.534.10"}, "Eaton", "ups"},
+		{Evidence{SysObjectID: "1.3.6.1.4.1.24681.1"}, "QNAP", "server"},
+		{Evidence{SysObjectID: "1.3.6.1.4.1.21342.3"}, "Grandstream", "voip"},
+		{Evidence{SysDescr: "Ruckus ZoneDirector 1200"}, "Ruckus", "wireless_controller"},
+		{Evidence{SysDescr: "Alcatel-Lucent OmniSwitch 6450"}, "Alcatel-Lucent Enterprise", "switch"},
+		{Evidence{SysDescr: "Yealink SIP-T46G"}, "Yealink", "voip"},
+	}
+	for _, c := range cases {
+		res := Match(c.ev, lib)
+		if len(res) == 0 {
+			t.Errorf("%+v: no match", c.ev)
+			continue
+		}
+		if res[0].Vendor != c.wantVendor || res[0].DeviceType != c.wantType {
+			t.Errorf("%+v: got %s/%s, want %s/%s", c.ev, res[0].Vendor, res[0].DeviceType, c.wantVendor, c.wantType)
+		}
+	}
+}
+
 func TestMultiSignalRanksStrongest(t *testing.T) {
 	lib := Library()
 	// Both an OID (conf 82) and a generic OpenSSH banner (conf 30) present:

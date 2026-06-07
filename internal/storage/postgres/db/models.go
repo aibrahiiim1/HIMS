@@ -941,6 +941,10 @@ type VendorFingerprint struct {
 	Confidence int32     `json:"confidence"`
 	Enabled    bool      `json:"enabled"`
 	CreatedAt  time.Time `json:"created_at"`
+	Model      string    `json:"model"`
+	Priority   int32     `json:"priority"`
+	Source     string    `json:"source"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 type VirtualMachine struct {

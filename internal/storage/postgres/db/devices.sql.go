@@ -507,6 +507,40 @@ func (q *Queries) ListDevicesByRole(ctx context.Context, role string) ([]Device,
 	return items, nil
 }
 
+const listSNMPIdentityFacts = `-- name: ListSNMPIdentityFacts :many
+SELECT device_id, key, value FROM device_facts
+WHERE key IN ('snmp.sysobjectid','snmp.sysdescr','snmp.sysname') AND value IS NOT NULL
+`
+
+type ListSNMPIdentityFactsRow struct {
+	DeviceID uuid.UUID `json:"device_id"`
+	Key      string    `json:"key"`
+	Value    *string   `json:"value"`
+}
+
+// Bulk fetch of the raw SNMP system-group identity facts across ALL devices, for
+// Data Quality checks that re-evaluate fingerprints against stored evidence
+// without re-probing. Only the identity keys, not the full fact set.
+func (q *Queries) ListSNMPIdentityFacts(ctx context.Context) ([]ListSNMPIdentityFactsRow, error) {
+	rows, err := q.db.Query(ctx, listSNMPIdentityFacts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListSNMPIdentityFactsRow{}
+	for rows.Next() {
+		var i ListSNMPIdentityFactsRow
+		if err := rows.Scan(&i.DeviceID, &i.Key, &i.Value); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const liveDeviceByIP = `-- name: LiveDeviceByIP :one
 SELECT id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason FROM devices
 WHERE primary_ip = $1 AND deleted_at IS NULL

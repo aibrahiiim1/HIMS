@@ -437,7 +437,7 @@ func (s *Server) deleteDeviceTemplate(w http.ResponseWriter, r *http.Request) {
 
 // ===== Vendor fingerprints ==================================================
 
-var fpKinds = map[string]bool{"oid": true, "service": true, "port": true, "http": true, "ssh": true}
+var fpKinds = map[string]bool{"oid": true, "service": true, "sysname": true, "port": true, "http": true, "ssh": true}
 
 func (s *Server) listVendorFingerprints(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.queries.ListVendorFingerprints(r.Context())
@@ -453,9 +453,13 @@ type fingerprintReq struct {
 	Pattern    string `json:"pattern"`
 	Vendor     string `json:"vendor"`
 	DeviceType string `json:"device_type"`
+	Model      string `json:"model"`
 	Confidence *int32 `json:"confidence"`
+	Priority   *int32 `json:"priority"`
 	Enabled    *bool  `json:"enabled"`
 }
+
+const fpKindsMsg = "kind must be one of oid/service/sysname/port/http/ssh"
 
 func (s *Server) createVendorFingerprint(w http.ResponseWriter, r *http.Request) {
 	var req fingerprintReq
@@ -463,7 +467,7 @@ func (s *Server) createVendorFingerprint(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if !fpKinds[req.Kind] {
-		http.Error(w, "kind must be one of oid/service/port/http/ssh", http.StatusBadRequest)
+		http.Error(w, fpKindsMsg, http.StatusBadRequest)
 		return
 	}
 	if req.Pattern == "" {
@@ -474,19 +478,26 @@ func (s *Server) createVendorFingerprint(w http.ResponseWriter, r *http.Request)
 	if req.Confidence != nil {
 		conf = *req.Confidence
 	}
+	prio := int32(100)
+	if req.Priority != nil {
+		prio = *req.Priority
+	}
 	enabled := true
 	if req.Enabled != nil {
 		enabled = *req.Enabled
 	}
+	// Operator-created rules are always 'user' source so they outrank the shipped
+	// builtin catalog at equal confidence; 'builtin' provenance is set only by seed.
 	row, err := s.queries.CreateVendorFingerprint(r.Context(), db.CreateVendorFingerprintParams{
 		Kind: req.Kind, Pattern: req.Pattern, Vendor: req.Vendor, DeviceType: req.DeviceType,
-		Confidence: conf, Enabled: enabled,
+		Confidence: conf, Enabled: enabled, Model: req.Model, Priority: prio, Source: "user",
 	})
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	s.audit(r, "config", "fingerprint.create", "vendor_fingerprint", row.ID.String(), "Created "+row.Kind+" fingerprint", nil)
+	s.audit(r, "config", "fingerprint.create", "vendor_fingerprint", row.ID.String(),
+		"Created "+row.Kind+" fingerprint "+row.Pattern+" → "+row.Vendor+"/"+row.DeviceType, nil)
 	writeJSON(w, http.StatusCreated, row)
 }
 
@@ -500,12 +511,16 @@ func (s *Server) updateVendorFingerprint(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if !fpKinds[req.Kind] {
-		http.Error(w, "kind must be one of oid/service/port/http/ssh", http.StatusBadRequest)
+		http.Error(w, fpKindsMsg, http.StatusBadRequest)
 		return
 	}
 	conf := int32(50)
 	if req.Confidence != nil {
 		conf = *req.Confidence
+	}
+	prio := int32(100)
+	if req.Priority != nil {
+		prio = *req.Priority
 	}
 	enabled := true
 	if req.Enabled != nil {
@@ -513,13 +528,18 @@ func (s *Server) updateVendorFingerprint(w http.ResponseWriter, r *http.Request)
 	}
 	row, err := s.queries.UpdateVendorFingerprint(r.Context(), db.UpdateVendorFingerprintParams{
 		ID: id, Kind: req.Kind, Pattern: req.Pattern, Vendor: req.Vendor, DeviceType: req.DeviceType,
-		Confidence: conf, Enabled: enabled,
+		Confidence: conf, Enabled: enabled, Model: req.Model, Priority: prio,
 	})
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	s.audit(r, "config", "fingerprint.update", "vendor_fingerprint", id.String(), "Updated fingerprint", nil)
+	// Distinguish an enable/disable toggle from a content edit in the audit trail.
+	action, summary := "fingerprint.update", "Updated fingerprint "+row.Pattern
+	if req.Enabled != nil && !*req.Enabled {
+		action, summary = "fingerprint.disable", "Disabled fingerprint "+row.Pattern
+	}
+	s.audit(r, "config", action, "vendor_fingerprint", id.String(), summary, nil)
 	writeJSON(w, http.StatusOK, row)
 }
 

@@ -97,6 +97,18 @@ async function postBlob(path: string, body: unknown): Promise<Blob> {
   return r.blob()
 }
 
+// getBlob GETs a path and returns the response as a Blob (file downloads, e.g.
+// the vendor-fingerprint export). Carries the session cookie like every call.
+async function getBlob(path: string): Promise<Blob> {
+  const r = await fetch(`${BASE}${path}`, { ...withCreds })
+  if (!r.ok) {
+    check401(r, path)
+    const detail = (await r.text().catch(() => '')).trim()
+    throw new Error(detail || `${r.status} ${r.statusText}: ${path}`)
+  }
+  return r.blob()
+}
+
 // saveBlob triggers a browser download of a Blob under the given filename.
 export function saveBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob)
@@ -109,7 +121,7 @@ export function saveBlob(blob: Blob, filename: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
-export const api = { get, post, patch, put, del, postText, postForm, postBlob }
+export const api = { get, post, patch, put, del, postText, postForm, postBlob, getBlob }
 
 // #P1 Auth — current principal.
 export interface AuthMe {
@@ -964,15 +976,20 @@ export interface VendorFingerprint {
   pattern: string
   vendor: string
   device_type: string
+  model: string
   confidence: number
+  priority: number
+  source: string // 'builtin' | 'user'
   enabled: boolean
   created_at: string
+  updated_at?: string
 }
 
 // #9 Vendor Fingerprint Library — matcher tool.
 export interface FingerprintEvidence {
   sysobjectid?: string
   sysdescr?: string
+  sysname?: string
   http_server?: string
   ssh_banner?: string
   ports?: number[]
@@ -988,6 +1005,28 @@ export interface FingerprintMatchResp {
   evidence: FingerprintEvidence
   results: FingerprintResult[]
 }
+// FP-ext: Test Fingerprint Against Device.
+export interface FingerprintTestTop {
+  kind: string
+  pattern: string
+  rule: string
+  vendor: string
+  category: string
+  model: string
+  confidence: number
+}
+export interface FingerprintTestResp {
+  device_id: string
+  device_name: string
+  current_category: string
+  current_vendor: string
+  current_model: string
+  raw_snmp: { sysobjectid: string; sysdescr: string; sysname: string; syscontact: string; syslocation: string }
+  matched: boolean
+  results: FingerprintResult[]
+  top?: FingerprintTestTop
+}
+export interface FingerprintImportResp { imported: number; failed: number; errors: string[] }
 export type EncryptionState = 'enabled' | 'pending_restart' | 'missing_key' | 'no_metadata' | 'fingerprint_mismatch' | 'invalid_key'
 export interface EncryptionStatus {
   status: EncryptionState

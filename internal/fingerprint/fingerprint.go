@@ -235,6 +235,17 @@ func Library() []Print {
 		{KindOID, "1.3.6.1.4.1.1602", "Canon", "printer", 80},
 		{KindOID, "1.3.6.1.4.1.13885", "Polycom", "voip", 78},
 
+		// --- Extended vendor catalog (FP-ext): real IANA PENs ---
+		{KindOID, "1.3.6.1.4.1.25053", "Ruckus", "wireless", 80},                 // Ruckus Wireless
+		{KindOID, "1.3.6.1.4.1.534", "Eaton", "ups", 82},                         // Eaton / Powerware UPS
+		{KindOID, "1.3.6.1.4.1.24681", "QNAP", "server", 78},                     // QNAP NAS
+		{KindOID, "1.3.6.1.4.1.10642", "Zebra", "printer", 80},                   // Zebra label printers
+		{KindOID, "1.3.6.1.4.1.253", "Xerox", "printer", 80},                     // Xerox
+		{KindOID, "1.3.6.1.4.1.1248", "Epson", "printer", 78},                    // Seiko Epson
+		{KindOID, "1.3.6.1.4.1.11863", "TP-Link", "switch", 70},                  // TP-Link / Omada
+		{KindOID, "1.3.6.1.4.1.21342", "Grandstream", "voip", 80},                // Grandstream
+		{KindOID, "1.3.6.1.4.1.6486", "Alcatel-Lucent Enterprise", "switch", 78}, // ALE OmniSwitch
+
 		// --- SNMP sysDescr / service keywords ---
 		{KindService, "Cisco IOS", "Cisco", "switch", 75},
 		{KindService, "Adaptive Security Appliance", "Cisco", "firewall", 80},
@@ -264,6 +275,22 @@ func Library() []Print {
 		{KindService, "APC", "APC", "ups", 70},
 		{KindService, "Ubiquiti", "Ubiquiti", "wireless", 62},
 		{KindService, "MikroTik", "MikroTik", "router", 70},
+		// Extended vendor catalog (FP-ext) — sysDescr keywords. These resolve a
+		// vendor when only a truncated sysDescr is known, and cover vendors whose
+		// PEN we don't pin above (Dahua, Yealink).
+		{KindService, "OmniSwitch", "Alcatel-Lucent Enterprise", "switch", 80},
+		{KindService, "Ruckus", "Ruckus", "wireless", 70},
+		{KindService, "ZoneDirector", "Ruckus", "wireless_controller", 82},
+		{KindService, "SmartZone", "Ruckus", "wireless_controller", 82},
+		{KindService, "Eaton", "Eaton", "ups", 70},
+		{KindService, "QNAP", "QNAP", "server", 70},
+		{KindService, "Zebra", "Zebra", "printer", 70},
+		{KindService, "Xerox", "Xerox", "printer", 70},
+		{KindService, "EPSON", "Epson", "printer", 70},
+		{KindService, "TP-LINK", "TP-Link", "switch", 60},
+		{KindService, "Grandstream", "Grandstream", "voip", 72},
+		{KindService, "Yealink", "Yealink", "voip", 72},
+		{KindService, "Dahua", "Dahua", "camera", 72},
 
 		// --- HTTP Server header / title ---
 		{KindHTTP, "Microsoft-IIS", "Microsoft", "server", 60},

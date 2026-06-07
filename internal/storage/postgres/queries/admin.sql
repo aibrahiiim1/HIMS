@@ -80,16 +80,32 @@ DELETE FROM device_templates WHERE id=$1;
 -- ===== Vendor fingerprints =================================================
 
 -- name: ListVendorFingerprints :many
-SELECT * FROM vendor_fingerprints ORDER BY kind, vendor, pattern;
+-- Ordered so the matching engine's stable sort favours, among equal-confidence
+-- ties: user rules over builtin (source asc: 'builtin'<'user' → invert), then
+-- the operator's priority (lower first). Display reads the same order.
+SELECT * FROM vendor_fingerprints
+ORDER BY (source='user') DESC, priority ASC, confidence DESC, kind, vendor, pattern;
 
 -- name: CreateVendorFingerprint :one
-INSERT INTO vendor_fingerprints (kind, pattern, vendor, device_type, confidence, enabled)
-VALUES ($1,$2,$3,$4,$5,$6) RETURNING *;
+INSERT INTO vendor_fingerprints (kind, pattern, vendor, device_type, confidence, enabled, model, priority, source)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *;
 
 -- name: UpdateVendorFingerprint :one
 UPDATE vendor_fingerprints
-SET kind=$2, pattern=$3, vendor=$4, device_type=$5, confidence=$6, enabled=$7
+SET kind=$2, pattern=$3, vendor=$4, device_type=$5, confidence=$6, enabled=$7,
+    model=$8, priority=$9, updated_at=now()
 WHERE id=$1 RETURNING *;
+
+-- name: UpsertVendorFingerprint :one
+-- Import path: idempotent by (kind, pattern). Re-importing updates the existing
+-- rule's vendor/type/confidence/model/priority/source rather than duplicating it.
+INSERT INTO vendor_fingerprints (kind, pattern, vendor, device_type, confidence, enabled, model, priority, source)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+ON CONFLICT (kind, pattern) DO UPDATE SET
+    vendor=EXCLUDED.vendor, device_type=EXCLUDED.device_type, confidence=EXCLUDED.confidence,
+    enabled=EXCLUDED.enabled, model=EXCLUDED.model, priority=EXCLUDED.priority,
+    source=EXCLUDED.source, updated_at=now()
+RETURNING *;
 
 -- name: DeleteVendorFingerprint :exec
 DELETE FROM vendor_fingerprints WHERE id=$1;

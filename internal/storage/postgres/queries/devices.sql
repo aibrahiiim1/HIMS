@@ -115,6 +115,13 @@ ON CONFLICT (device_id, key) DO UPDATE SET
 -- name: ListDeviceFacts :many
 SELECT * FROM device_facts WHERE device_id = $1 ORDER BY key;
 
+-- name: ListSNMPIdentityFacts :many
+-- Bulk fetch of the raw SNMP system-group identity facts across ALL devices, for
+-- Data Quality checks that re-evaluate fingerprints against stored evidence
+-- without re-probing. Only the identity keys, not the full fact set.
+SELECT device_id, key, value FROM device_facts
+WHERE key IN ('snmp.sysobjectid','snmp.sysdescr','snmp.sysname') AND value IS NOT NULL;
+
 -- name: AddDeviceRole :exec
 INSERT INTO device_roles (device_id, role, source)
 VALUES ($1, $2, $3)

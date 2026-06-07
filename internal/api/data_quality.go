@@ -1,12 +1,14 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/coralsearesorts/hims/internal/fingerprint"
 	"github.com/coralsearesorts/hims/internal/osinv"
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
 	"github.com/google/uuid"
@@ -154,6 +156,14 @@ func (s *Server) dataQuality(w http.ResponseWriter, r *http.Request) {
 	addIssue("unknown_category", "Unclassified devices", "Devices still classified as 'unknown'. Enrich with SNMP/CLI or set the type manually so they appear in the right inventory views.", "info", unknownCat)
 	addIssue("low_confidence", "Low-confidence classification", "Devices auto-classified below "+strconv.Itoa(lowConfidenceThreshold)+"% confidence. Open the device, Re-classify (or bind a credential for deeper signals), then Lock once correct.", "info", lowConf)
 	addIssue("missing_vendor", "Missing vendor", "Devices with no vendor recorded. Vendor enriches fingerprinting, reports and lifecycle.", "info", missingVendor)
+
+	// --- Fingerprint-driven classification quality (FP-ext) -------------------
+	// Re-evaluate the vendor-fingerprint library against each device's STORED raw
+	// SNMP identity facts (no re-probe). Surfaces devices that a fingerprint could
+	// classify better than the value currently on the row — most importantly, a
+	// device that an operator's own (user) fingerprint would re-classify but which
+	// hasn't been re-scanned since the rule was added.
+	s.addFingerprintDQ(ctx, devs, &issues)
 
 	// Servers/endpoints that have never had a deep OS inventory collected.
 	if rows, err := s.queries.ListDevicesWithoutOSInventory(ctx); err == nil && len(rows) > 0 {
@@ -552,4 +562,115 @@ func sampleDevices(list []db.Device) []dqDevice {
 		out = append(out, toDQ(d))
 	}
 	return out
+}
+
+// genericVendorLabels are the bare single-word vendor names the low-confidence
+// fingerprint fallbacks produce (e.g. "Extreme", not "Extreme Networks"). A device
+// whose vendor is exactly one of these was matched only generically — a specific
+// product fingerprint (or re-scan) would give a fuller vendor + correct category.
+var genericVendorLabels = map[string]bool{
+	"extreme": true, "cisco": true, "aruba": true, "aruba/hpe": true, "huawei": true,
+	"hp": true, "hpe": true, "dell": true, "vmware": true, "axis": true, "apc": true,
+	"juniper": true, "arista": true, "netgear": true, "brocade": true, "ruckus": true,
+	"qnap": true, "zebra": true, "xerox": true, "epson": true, "eaton": true,
+	"dahua": true, "hikvision": true, "ubiquiti": true, "mikrotik": true,
+	"generic": true, "embedded": true, "tp-link": true,
+}
+
+// addFingerprintDQ appends the four FP-ext classification-quality issues, derived
+// from each device's STORED raw SNMP identity facts re-matched against the library.
+func (s *Server) addFingerprintDQ(ctx context.Context, devs []db.Device, issues *[]dqIssue) {
+	// Bulk-load the raw SNMP identity facts (one query, all devices).
+	type snmpID struct{ oid, descr, name string }
+	byDev := map[uuid.UUID]*snmpID{}
+	if rows, err := s.queries.ListSNMPIdentityFacts(ctx); err == nil {
+		for _, f := range rows {
+			e := byDev[f.DeviceID]
+			if e == nil {
+				e = &snmpID{}
+				byDev[f.DeviceID] = e
+			}
+			v := ""
+			if f.Value != nil {
+				v = *f.Value
+			}
+			switch f.Key {
+			case "snmp.sysobjectid":
+				e.oid = v
+			case "snmp.sysdescr":
+				e.descr = v
+			case "snmp.sysname":
+				e.name = v
+			}
+		}
+	}
+
+	// Operator (source='user') ENABLED fingerprints only — the "custom_fingerprint_
+	// not_applied" check is specifically about rules an operator added themselves.
+	var userLib []fingerprint.Print
+	if rows, err := s.queries.ListVendorFingerprints(ctx); err == nil {
+		for _, r := range rows {
+			if r.Enabled && r.Source == "user" {
+				userLib = append(userLib, fingerprint.Print{
+					Kind: r.Kind, Pattern: r.Pattern, Vendor: r.Vendor,
+					DeviceType: r.DeviceType, Confidence: int(r.Confidence),
+				})
+			}
+		}
+	}
+
+	var genericVendor, weakSNMP, vendorNoCat, fpNotApplied []db.Device
+	for _, d := range devs {
+		vendor := ""
+		if d.Vendor != nil {
+			vendor = strings.TrimSpace(*d.Vendor)
+		}
+		id := byDev[d.ID]
+		answeredSNMP := id != nil && (id.oid != "" || id.descr != "")
+
+		if vendor != "" && genericVendorLabels[strings.ToLower(vendor)] {
+			genericVendor = append(genericVendor, d)
+		}
+		if answeredSNMP && (d.Category == "unknown" ||
+			(d.ConfidenceScore != nil && *d.ConfidenceScore > 0 && *d.ConfidenceScore < lowConfidenceThreshold)) {
+			weakSNMP = append(weakSNMP, d)
+		}
+		if vendor != "" && d.Category == "unknown" {
+			vendorNoCat = append(vendorNoCat, d)
+		}
+		// A user fingerprint that WOULD match this device's stored evidence but
+		// whose verdict the device doesn't reflect → operator added a rule but
+		// hasn't re-scanned/reclassified. The actionable, operator-owned case.
+		if id != nil && len(userLib) > 0 {
+			ev := fingerprint.Evidence{SysObjectID: id.oid, SysDescr: id.descr, SysName: id.name}
+			if res := fingerprint.Match(ev, userLib); len(res) > 0 {
+				top := res[0]
+				cat := fingerprint.CanonicalCategory(top.DeviceType)
+				catDiff := cat != "" && cat != d.Category
+				venDiff := top.Vendor != "" && !strings.EqualFold(top.Vendor, vendor)
+				if catDiff || venDiff {
+					fpNotApplied = append(fpNotApplied, d)
+				}
+			}
+		}
+	}
+
+	add := func(key, label, desc, sev string, list []db.Device) {
+		if len(list) == 0 {
+			return
+		}
+		*issues = append(*issues, dqIssue{Key: key, Label: label, Description: desc, Severity: sev, Count: len(list), Devices: sampleDevices(list)})
+	}
+	add("generic_vendor_classification", "Generic vendor classification",
+		"Devices matched only to a bare vendor name (e.g. \"Extreme\" rather than \"Extreme Networks\"). Add a product fingerprint or re-scan so the specific model and category are captured.",
+		"info", genericVendor)
+	add("weak_snmp_classification", "Weak SNMP classification",
+		"Devices that answered SNMP (sysObjectID/sysDescr are stored) but are still 'unknown' or classified below "+strconv.Itoa(lowConfidenceThreshold)+"% confidence. A vendor fingerprint for their sysObjectID would classify them.",
+		"warning", weakSNMP)
+	add("vendor_known_but_category_generic", "Vendor known, category unknown",
+		"Devices where the vendor is known but the category is still 'unknown'. Add a fingerprint mapping this vendor's product OID to the right device type.",
+		"warning", vendorNoCat)
+	add("custom_fingerprint_not_applied", "Custom fingerprint not applied",
+		"One of your own vendor fingerprints matches these devices' stored SNMP evidence, but their current classification doesn't reflect it. Re-scan or Re-classify them so the rule takes effect.",
+		"warning", fpNotApplied)
 }

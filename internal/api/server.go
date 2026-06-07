@@ -406,6 +406,9 @@ func (s *Server) routes() {
 		r.Post("/vendor-fingerprints", s.createVendorFingerprint)
 		r.Post("/vendor-fingerprints/seed", s.seedVendorFingerprints)
 		r.Post("/vendor-fingerprints/match", s.matchVendorFingerprints)
+		r.Post("/vendor-fingerprints/test-device", s.testDeviceFingerprint)
+		r.Get("/vendor-fingerprints/export", s.exportVendorFingerprints)
+		r.Post("/vendor-fingerprints/import", s.importVendorFingerprints)
 		r.Patch("/vendor-fingerprints/{id}", s.updateVendorFingerprint)
 		r.Delete("/vendor-fingerprints/{id}", s.deleteVendorFingerprint)
 
