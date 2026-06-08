@@ -697,6 +697,7 @@ select.field { cursor: pointer; }
 .port-legend .dot.port-up { background: var(--ok-bg); border-color: var(--ok); }
 .port-legend .dot.port-down { background: var(--surface-3); }
 .port-legend .dot.port-admindown { background: var(--neutral-bg); border-color: var(--neutral); }
+.port-legend .dot.port-unknown { background: var(--surface-3); border-color: var(--border); }
 .port-legend .dot.port-trunk-key { background: var(--brand); border-color: var(--brand); }
 
 .port-detail { margin-top: var(--space-4); padding-top: var(--space-4); border-top: 1px solid var(--border); }
@@ -778,7 +779,7 @@ select.field { cursor: pointer; }
 
 /* ---- Device hero header --------------------------------------------------- */
 .device-hero {
-  display: flex; align-items: center; justify-content: space-between; gap: var(--space-5);
+  display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-5);
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg);
   box-shadow: var(--shadow-sm); padding: var(--space-5); margin-bottom: var(--space-4); flex-wrap: wrap;
 }
@@ -799,15 +800,28 @@ select.field { cursor: pointer; }
 }
 .hero-badge em { font-style: normal; color: var(--text-faint); font-weight: 600; text-transform: uppercase; font-size: 10px; letter-spacing: .4px; }
 
-.device-hero-metrics { display: flex; align-items: center; gap: var(--space-5); flex-wrap: wrap; }
-.device-hero-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 22px; }
-.hero-stat { display: flex; align-items: center; gap: 9px; }
+.device-hero-metrics { display: flex; flex-direction: column; align-items: flex-end; gap: 10px; min-width: 340px; }
+.device-hero-telemetry {
+  display: flex; align-items: center; gap: 18px; width: 100%; box-sizing: border-box;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 12px 16px;
+}
+.device-hero-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 20px; flex: 1; min-width: 0; }
+.hero-stat { display: flex; align-items: center; gap: 9px; min-width: 0; }
 .hero-stat-ico { width: 30px; height: 30px; border-radius: var(--radius-sm); flex: none; background: var(--surface-3); color: var(--text-muted); display: flex; align-items: center; justify-content: center; }
 .hero-stat-ico.tone-info { background: var(--brand-soft); color: var(--brand); }
 .hero-stat > div { display: flex; flex-direction: column; line-height: 1.2; min-width: 0; }
 .hero-stat b { font-size: var(--fs-base); color: var(--text); font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 150px; }
 .hero-stat small { font-size: var(--fs-sm); color: var(--text-faint); }
-@media (max-width: 720px) { .device-hero-stats { grid-template-columns: 1fr; } }
+.device-hero-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.device-hero-msgs { display: flex; flex-direction: column; gap: 2px; align-items: flex-end; text-align: right; }
+.device-hero-msgs .muted { font-size: 11px; max-width: 320px; }
+.device-hero-cred { display: flex; justify-content: flex-end; width: 100%; }
+@media (max-width: 720px) {
+  .device-hero-metrics { align-items: stretch; min-width: 0; width: 100%; }
+  .device-hero-stats { grid-template-columns: 1fr; }
+  .device-hero-telemetry { flex-direction: column; align-items: flex-start; }
+  .device-hero-actions, .device-hero-msgs, .device-hero-cred { justify-content: flex-start; align-items: flex-start; text-align: left; }
+}
 
 /* Config Backup & Drift (#10/#11) */
 .data-table tr.row-selected > td { background: var(--info-bg); }

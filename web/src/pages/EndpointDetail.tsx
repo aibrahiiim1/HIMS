@@ -1,13 +1,14 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
-import { Laptop, MonitorSmartphone, Cpu, MemoryStick, HardDrive, Boxes, AlertTriangle, Settings, LayoutDashboard, Clock } from 'lucide-react'
+import { Laptop, MonitorSmartphone, Cpu, MemoryStick, HardDrive, Boxes, AlertTriangle, Settings, LayoutDashboard, Clock, KeyRound } from 'lucide-react'
 import { api, type OSInventoryBundle } from '../api'
 import { DeviceHeader } from '../components/DeviceHeader'
 import { ClassificationCard } from '../components/ClassificationCard'
 import { DeepOSInventory } from '../components/DeepOSInventory'
 import { DeviceOps } from '../components/DeviceOps'
 import { DeviceCredentialHealth } from '../components/DeviceCredentialHealth'
+import { CredentialBindSelect } from '../components/CredentialBindSelect'
 import { Panel, Kpi, EmptyState, TabBar } from '../components/ui'
 
 type Tab = 'overview' | 'operations'
@@ -51,7 +52,7 @@ export function EndpointDetail() {
 
   return (
     <div>
-      <DeviceHeader deviceId={deviceId} icon={Laptop} />
+      <DeviceHeader deviceId={deviceId} icon={Laptop} showCredential={false} />
 
       <TabBar tabs={tabs} active={tab} onChange={(k) => setTab(k as Tab)} />
 
@@ -90,6 +91,12 @@ export function EndpointDetail() {
 
       {tab === 'operations' && (
         <>
+          <Panel title="Collection Credential" icon={KeyRound}>
+            <CredentialBindSelect deviceId={deviceId} />
+            <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+              The credential HIMS uses for deep OS inventory (WinRM for Windows, SSH for Linux). After binding, use <strong>Collect OS</strong> below — or <strong>Re-scan this device</strong> in the header — to apply it.
+            </p>
+          </Panel>
           <DeviceCredentialHealth deviceId={deviceId} category="endpoint" />
           <DeviceOps deviceId={deviceId} />
         </>

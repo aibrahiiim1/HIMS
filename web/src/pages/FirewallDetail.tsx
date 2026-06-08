@@ -9,6 +9,7 @@ import { api, type FirewallStatus, type VpnTunnel, type HAMember, type License, 
 import { DeviceOps } from '../components/DeviceOps'
 import { DeviceHeader } from '../components/DeviceHeader'
 import { DeviceCredentialHealth } from '../components/DeviceCredentialHealth'
+import { CredentialBindSelect } from '../components/CredentialBindSelect'
 import { Panel, Kpi, DefList, EmptyState, StatusPill, Meter, TabBar } from '../components/ui'
 
 type Tab = 'overview' | 'vpn' | 'ha' | 'licenses' | 'interfaces' | 'operations'
@@ -99,7 +100,7 @@ export function FirewallDetail() {
 
   return (
     <div>
-      <DeviceHeader deviceId={id!} icon={Flame} />
+      <DeviceHeader deviceId={id!} icon={Flame} showCredential={false} />
 
       <TabBar tabs={tabs} active={tab} onChange={(k) => setTab(k as Tab)} />
 
@@ -308,6 +309,12 @@ export function FirewallDetail() {
       {/* ── OPERATIONS ────────────────────────────────────────────────────── */}
       {tab === 'operations' && (
         <>
+          <Panel title="Collection Credential" icon={KeyRound}>
+            <CredentialBindSelect deviceId={id!} />
+            <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+              The credential HIMS uses to collect from this firewall (SNMP for status/VPN/HA). After binding, use <strong>Re-scan this device</strong> in the header — or run a collection — to apply it.
+            </p>
+          </Panel>
           <DeviceCredentialHealth deviceId={id!} category="firewall" />
           <DeviceOps deviceId={id!} />
         </>

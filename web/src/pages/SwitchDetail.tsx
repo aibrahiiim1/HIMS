@@ -1,13 +1,14 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
-import { Network, Cable, Layers, Share2, Activity, Settings, Gauge, LayoutGrid, Table, Router } from 'lucide-react'
+import { Network, Cable, Layers, Share2, Activity, Settings, Gauge, LayoutGrid, Table, Router, KeyRound } from 'lucide-react'
 import { api, type Interface, type VLAN, type Neighbor, type TopologyLink, type MonitoringCheck, type MonitoringSample, type MacEntry, type ArpEntry } from '../api'
 import { DeviceHeader } from '../components/DeviceHeader'
 import { ClassificationCard } from '../components/ClassificationCard'
 import { DeepOSInventory } from '../components/DeepOSInventory'
 import { DeviceOps } from '../components/DeviceOps'
 import { DeviceCredentialHealth } from '../components/DeviceCredentialHealth'
+import { CredentialBindSelect } from '../components/CredentialBindSelect'
 import { SwitchPorts } from '../components/SwitchPorts'
 import { Panel, TabBar, Kpi, StatusPill, EmptyState, Sparkline, timeAgo, usePaged, Pager } from '../components/ui'
 
@@ -50,7 +51,7 @@ export function SwitchDetail() {
 
   return (
     <div>
-      <DeviceHeader deviceId={id!} icon={Network} />
+      <DeviceHeader deviceId={id!} icon={Network} showCredential={false} />
 
       <TabBar tabs={tabs} active={tab} onChange={(k) => setTab(k as Tab)} />
 
@@ -138,7 +139,18 @@ export function SwitchDetail() {
       )}
 
       {tab === 'monitoring' && <MonitoringTab id={id!} />}
-      {tab === 'operations' && <><DeviceCredentialHealth deviceId={id!} category="switch" /><DeviceOps deviceId={id!} /></>}
+      {tab === 'operations' && (
+        <>
+          <Panel title="Collection Credential" icon={KeyRound}>
+            <CredentialBindSelect deviceId={id!} />
+            <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+              The credential HIMS uses to collect from this switch (SNMP/SSH). After binding, use <strong>Re-scan this device</strong> in the header — or run a collection — to apply it.
+            </p>
+          </Panel>
+          <DeviceCredentialHealth deviceId={id!} category="switch" />
+          <DeviceOps deviceId={id!} />
+        </>
+      )}
     </div>
   )
 }

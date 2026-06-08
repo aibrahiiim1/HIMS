@@ -153,34 +153,38 @@ export function DeviceHeader({ deviceId, icon: Icon = HardDrive, showCredential 
       </div>
 
       <div className="device-hero-metrics">
-        {checks.length > 0 && <HealthRing score={score} size={84} label="Health" />}
-        <div className="device-hero-stats">
-          <div className="hero-stat"><span className="hero-stat-ico tone-info"><Wifi size={15} /></span>
-            <div>
-              <b>{tcpCheck?.target_port ? `:${tcpCheck.target_port}` : '—'}{tcpCheck ? ` · ${tcpCheck.last_status || 'unknown'}` : ''}</b>
-              <small>reachability target {tcpCheck?.last_run_at ? `· ${timeAgo(tcpCheck.last_run_at)}` : ''}</small>
-            </div></div>
-          <div className="hero-stat"><span className="hero-stat-ico"><ShieldCheck size={15} /></span>
-            <div>
-              <b style={{ whiteSpace: 'normal', wordBreak: 'break-word' }} title={managedViaLabels(d.managed_by, d.driver ?? 'none')}>{managedViaLabels(d.managed_by, d.driver ?? 'none')}</b>
-              <small>managed via</small>
-            </div></div>
-          <div className="hero-stat"><span className="hero-stat-ico"><Radar size={15} /></span>
-            <div><b>{timeAgo(d.last_discovery_at)}</b><small>last discovery</small></div></div>
-          <div className="hero-stat"><span className="hero-stat-ico"><MapPin size={15} /></span>
-            <div><b>{d.location_id ? (locPath[d.location_id] ?? '—') : '—'}</b><small>location</small></div></div>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end', minWidth: 230 }}>
-          <div className="row" style={{ gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-            <RescanSplit targets={d.primary_ip ?? ''} label="Re-scan this device" size="sm" onMsg={onScanMsg} />
-            <button className="btn btn-ghost btn-sm" onClick={repairReachability} disabled={repairing} title="Recompute the reachability monitoring target from discovered open ports">
-              <Wrench size={13} /> {repairing ? 'Repairing…' : 'Repair check'}
-            </button>
+        <div className="device-hero-telemetry">
+          {checks.length > 0 && <HealthRing score={score} size={76} label="Health" />}
+          <div className="device-hero-stats">
+            <div className="hero-stat"><span className="hero-stat-ico tone-info"><Wifi size={15} /></span>
+              <div>
+                <b>{tcpCheck?.target_port ? `:${tcpCheck.target_port}` : '—'}{tcpCheck ? ` · ${tcpCheck.last_status || 'unknown'}` : ''}</b>
+                <small>reachability target {tcpCheck?.last_run_at ? `· ${timeAgo(tcpCheck.last_run_at)}` : ''}</small>
+              </div></div>
+            <div className="hero-stat"><span className="hero-stat-ico"><ShieldCheck size={15} /></span>
+              <div>
+                <b style={{ whiteSpace: 'normal', wordBreak: 'break-word' }} title={managedViaLabels(d.managed_by, d.driver ?? 'none')}>{managedViaLabels(d.managed_by, d.driver ?? 'none')}</b>
+                <small>managed via</small>
+              </div></div>
+            <div className="hero-stat"><span className="hero-stat-ico"><Radar size={15} /></span>
+              <div><b>{timeAgo(d.last_discovery_at)}</b><small>last discovery</small></div></div>
+            <div className="hero-stat"><span className="hero-stat-ico"><MapPin size={15} /></span>
+              <div><b>{d.location_id ? (locPath[d.location_id] ?? '—') : '—'}</b><small>location</small></div></div>
           </div>
-          {scanMsg && <span className="muted" style={{ fontSize: 11, maxWidth: 280, textAlign: 'right' }}>{scanMsg} <Link to="/discovery">View scan jobs</Link></span>}
-          {repairMsg && <span className="muted" style={{ fontSize: 11, maxWidth: 280, textAlign: 'right' }}>{repairMsg}</span>}
-          {showCredential && <CredentialBindSelect deviceId={deviceId} align="end" />}
         </div>
+        <div className="device-hero-actions">
+          <RescanSplit targets={d.primary_ip ?? ''} label="Re-scan this device" size="sm" onMsg={onScanMsg} />
+          <button className="btn btn-ghost btn-sm" onClick={repairReachability} disabled={repairing} title="Recompute the reachability monitoring target from discovered open ports">
+            <Wrench size={13} /> {repairing ? 'Repairing…' : 'Repair check'}
+          </button>
+        </div>
+        {(scanMsg || repairMsg) && (
+          <div className="device-hero-msgs">
+            {scanMsg && <span className="muted">{scanMsg} <Link to="/discovery">View scan jobs</Link></span>}
+            {repairMsg && <span className="muted">{repairMsg}</span>}
+          </div>
+        )}
+        {showCredential && <div className="device-hero-cred"><CredentialBindSelect deviceId={deviceId} align="end" /></div>}
       </div>
       {editing && <EditDevice device={d} onClose={() => setEditing(false)} onSaved={() => qc.invalidateQueries({ queryKey: ['devices', 'all'] })} />}
     </div>

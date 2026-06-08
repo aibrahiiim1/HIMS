@@ -1,12 +1,13 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
-import { Server, Cpu, HardDrive, Cable, Activity, Settings, LayoutDashboard, Gauge, Thermometer, MemoryStick } from 'lucide-react'
+import { Server, Cpu, HardDrive, Cable, Activity, Settings, LayoutDashboard, Gauge, Thermometer, MemoryStick, KeyRound } from 'lucide-react'
 import { api, type ServerStorage, type DeviceFact, type DeviceRole, type Interface, type BMCInfo, type BMCSensor } from '../api'
 import { DeviceOps } from '../components/DeviceOps'
 import { DeviceHeader } from '../components/DeviceHeader'
 import { DeepOSInventory } from '../components/DeepOSInventory'
 import { DeviceCredentialHealth } from '../components/DeviceCredentialHealth'
+import { CredentialBindSelect } from '../components/CredentialBindSelect'
 import { Panel, Kpi, DefList, EmptyState, StatusPill, Meter, TabBar } from '../components/ui'
 
 type Tab = 'overview' | 'storage' | 'interfaces' | 'hardware' | 'operations'
@@ -69,7 +70,7 @@ export function ServerDetail() {
 
   return (
     <div>
-      <DeviceHeader deviceId={deviceId} icon={Server} />
+      <DeviceHeader deviceId={deviceId} icon={Server} showCredential={false} />
 
       <TabBar tabs={tabs} active={tab} onChange={(k) => setTab(k as Tab)} />
 
@@ -209,6 +210,12 @@ export function ServerDetail() {
       {/* ── OPERATIONS ────────────────────────────────────────────────────── */}
       {tab === 'operations' && (
         <>
+          <Panel title="Collection Credential" icon={KeyRound}>
+            <CredentialBindSelect deviceId={deviceId} />
+            <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+              The credential HIMS uses to collect from this server (SNMP for HOST-RESOURCES, WinRM/SSH for deep OS, Redfish for BMC). After binding, use <strong>Re-scan this device</strong> in the header — or run a collection — to apply it.
+            </p>
+          </Panel>
           <DeviceCredentialHealth deviceId={deviceId} category="server" />
           <DeviceOps deviceId={deviceId} />
         </>
