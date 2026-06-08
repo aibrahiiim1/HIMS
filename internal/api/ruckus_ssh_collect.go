@@ -51,6 +51,11 @@ func (s *Server) collectRuckusSSHCLI(ctx context.Context, dev db.Device, overUse
 	}
 	emit("ssh_cli_collection_started", "started", "", "Ruckus ZD SSH CLI started", 0, 0, 0)
 	sum := sshCLISummary{}
+	if dev.PrimaryIp == nil || !dev.PrimaryIp.IsValid() {
+		sum.Detail = "SSH CLI not run: this controller has no IP address"
+		emit("ssh_cli_collection_failed", "failed", "", sum.Detail, 0, 0, 0)
+		return sum
+	}
 	// The ZoneDirector CLI login uses the SAME admin account as the Web-XML profile,
 	// so prefer the bound ruckus_zd profile credential. An explicit override (Test
 	// SSH form) wins; a resolved SSH/CLI credential is the last resort.

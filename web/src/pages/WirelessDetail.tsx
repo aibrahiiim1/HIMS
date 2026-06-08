@@ -1,16 +1,21 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
-import { Wifi, Router, Users, Radio, ShieldCheck, Activity, Plug, FlaskConical, DownloadCloud, Terminal, Layers, FileSearch, Pencil } from 'lucide-react'
+import { Wifi, Router, Users, Radio, ShieldCheck, Activity, Plug, FlaskConical, DownloadCloud, Terminal, Layers, FileSearch, Pencil, RefreshCw, Settings, LayoutDashboard } from 'lucide-react'
 import { api, type WirelessDetailResp, type MibWalkRow, type MibExplorerResp, type SSHCliSummary, type SSHCliRow, type AccessPoint, type WirelessClient, type WirelessSSID } from '../api'
 import { DeviceHeader } from '../components/DeviceHeader'
-import { Panel, Kpi, DefList, EmptyState, StatusPill } from '../components/ui'
+import { Panel, Kpi, DefList, EmptyState, StatusPill, TabBar } from '../components/ui'
 import { DataTable, type DataCol, type DataFilter } from '../components/DataTable'
 
-// Wireless Controller — operator dashboard. Honest about which source produced
-// which data (SNMP identity / SNMP MIB / SSH CLI / XCC API), never presents
-// partial collection as complete, and never invents AP status the source did
-// not expose. Rosters are paginated/searchable/sortable client-side.
+// Wireless Controller — operator dashboard, organised into tabs:
+//   Overview  → identity card + summary KPIs + honesty warnings
+//   APs / Clients / SSIDs → searchable/filterable rosters with a summary strip
+//   Manage    → every collection/diagnostic action + per-source status + raw MIB
+// Honest about which source produced which data (REST/XML primary, SNMP/SSH
+// secondary); never presents partial collection as complete and never invents
+// AP status a source did not expose.
+type Tab = 'overview' | 'aps' | 'clients' | 'ssids' | 'manage'
+
 export function WirelessDetail() {
   const { id } = useParams<{ id: string }>()
   const qc = useQueryClient()
@@ -19,6 +24,7 @@ export function WirelessDetail() {
   const c = d?.counts ?? {}
   const refetch = () => qc.invalidateQueries({ queryKey: ['wireless', id] })
   const [msg, setMsg] = useState('')
+  const [tab, setTab] = useState<Tab>('overview')
 
   const pid = d?.collection.profile_id
   const test = useMutation({
@@ -46,13 +52,20 @@ export function WirelessDetail() {
     onSuccess: (r) => { setMsg((r.ok ? '✓ ' : '⚠ ') + 'SSH test: ' + r.detail); refetch() },
     onError: (e) => setMsg('✗ ' + (e as Error).message),
   })
+  // Re-scan THIS controller by IP — re-runs discovery (tries every relevant stored
+  // credential) just like the device header's button, surfaced here in Manage too.
+  const rescan = useMutation({
+    mutationFn: () => api.post<{ id?: string }>(`/discovery/scan`, { mode: 'targets', targets: d?.identity.ip ?? '' }),
+    onSuccess: () => { setMsg('✓ Re-scan launched — track progress in Discovery → Jobs.') },
+    onError: (e) => setMsg('✗ ' + (e as Error).message),
+  })
 
-  // Collapsible advanced sections (lazy-loaded).
+  // Advanced sections (lazy-loaded; only fetch when the Manage tab opens them).
   const [showDiag, setShowDiag] = useState(false)
   const [showRaw, setShowRaw] = useState(false)
-  const sshResults = useQuery({ queryKey: ['ssh-cli-results', id], queryFn: () => api.get<SSHCliRow[]>(`/devices/${id}/ssh-cli-results`), enabled: showDiag })
-  const explorer = useQuery({ queryKey: ['mib-explorer', id], queryFn: () => api.get<MibExplorerResp>(`/devices/${id}/mib-explorer`), enabled: showRaw })
-  const rawRows = useQuery({ queryKey: ['mib-rows', id], queryFn: () => api.get<MibWalkRow[]>(`/devices/${id}/mib-rows`), enabled: showRaw })
+  const sshResults = useQuery({ queryKey: ['ssh-cli-results', id], queryFn: () => api.get<SSHCliRow[]>(`/devices/${id}/ssh-cli-results`), enabled: tab === 'manage' && showDiag })
+  const explorer = useQuery({ queryKey: ['mib-explorer', id], queryFn: () => api.get<MibExplorerResp>(`/devices/${id}/mib-explorer`), enabled: tab === 'manage' && showRaw })
+  const rawRows = useQuery({ queryKey: ['mib-rows', id], queryFn: () => api.get<MibWalkRow[]>(`/devices/${id}/mib-rows`), enabled: tab === 'manage' && showRaw })
 
   const configureHref = d
     ? `/vendor-profiles?create=1&vendor_type=extreme_xcc&device_id=${id}&target_url=${encodeURIComponent(`https://${d.identity.ip}:8443`)}`
@@ -65,13 +78,14 @@ export function WirelessDetail() {
 
   // AP online/offline counts. Prefer the controller-summary split (SSH CLI path);
   // otherwise derive from the AP rows themselves, which carry per-AP status when a
-  // source exposes it (e.g. Ruckus SNMP MIB). So the Active/Non-active KPIs reflect
-  // reality for any vendor, not only the SSH-summary controllers.
+  // source exposes it. So the Active/Non-active KPIs reflect reality for any vendor.
   const apRowOnline = aps.filter((a) => { const s = apState(a.status); return s === 'up' || s === 'warn' }).length
   const apRowOffline = aps.filter((a) => apState(a.status) === 'down').length
   const apStatusShown = (sm?.ap_status_exposed ?? false) || apRowOnline + apRowOffline > 0
   const apActive = sm?.ap_status_exposed ? sm.active_aps : apRowOnline
   const apNonActive = sm?.ap_status_exposed ? sm.non_active_aps : apRowOffline
+  const apSites = uniq(aps.map((a) => a.site || '').filter(Boolean))
+  const ssidEnabled = ssids.filter((s) => s.status === 'enabled' || s.status === 'active').length
 
   // Per-SSID rollups derived from the live client roster (honest: only what we saw).
   const ssidRollup = useMemo(() => {
@@ -85,243 +99,293 @@ export function WirelessDetail() {
     return m
   }, [d])
 
-  const busy = test.isPending || runApi.isPending || runMib.isPending || runSsh.isPending || testSsh.isPending
-  // managed_via comes from the backend (honest: REST/XML leads when a controller
-  // profile is the primary path; SNMP is the identity baseline). SSH is appended
-  // when a CLI collection actually ran.
+  // Client band breakdown for the Clients summary strip.
+  const clientBands = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const cl of clients) { const b = cl.band || 'unknown'; m.set(b, (m.get(b) ?? 0) + 1) }
+    return Array.from(m.entries()).sort((a, b) => b[1] - a[1])
+  }, [clients])
+
+  const busy = test.isPending || runApi.isPending || runMib.isPending || runSsh.isPending || testSsh.isPending || rescan.isPending
+  // managed_via from the backend (REST/XML leads when a controller profile is the
+  // primary path; SNMP is the identity baseline). SSH appended when a CLI run happened.
   const managedVia = d
     ? [
         ...((d.identity.managed_via ?? []).map((m) => (m === 'rest_xml' ? 'REST/XML' : m === 'snmp' ? 'SNMP' : m.toUpperCase()))),
         ...(d.ssh.status === 'collected' || d.ssh.status === 'partial' ? ['SSH'] : []),
       ]
     : []
-  // Vendor-aware label for the controller REST/XML API source row.
   const apiLabel = d?.collection.source === 'ruckus_zd_xml' ? 'Ruckus ZoneDirector (Web-XML)'
     : d?.collection.source === 'extreme_xcc_api' ? 'Extreme XCC API'
     : 'Controller API (REST/XML)'
-  // SSH CLI is an Extreme-XCC-specific method; the backend reports 'not_applicable'
-  // for a Ruckus ZoneDirector (Web-XML primary) — hide the SSH actions for it.
   const sshNA = d?.ssh.status === 'not_applicable'
+  const apMissing = sm ? Math.max(0, sm.ap_total - (c.aps ?? 0)) : 0
+  const cliMissing = sm ? Math.max(0, sm.clients_total - (c.clients ?? 0)) : 0
+
+  const tabs = [
+    { key: 'overview', label: 'Overview', icon: LayoutDashboard },
+    { key: 'aps', label: 'Access Points', icon: Radio, count: aps.length },
+    { key: 'clients', label: 'Clients', icon: Users, count: clients.length },
+    { key: 'ssids', label: 'SSIDs', icon: ShieldCheck, count: ssids.length },
+    { key: 'manage', label: 'Manage', icon: Settings },
+  ]
 
   return (
     <div>
       <DeviceHeader deviceId={id!} icon={Wifi} />
 
-      {/* Action toolbar + identity. */}
-      <Panel title="Controller" icon={Router}>
-        {d && (
-          <>
+      {msg && <div className={'enc-banner ' + (msg.startsWith('✗') ? 'crit' : 'info')} style={{ whiteSpace: 'pre-wrap', marginBottom: 12 }}>{msg}</div>}
+
+      <TabBar tabs={tabs} active={tab} onChange={(k) => setTab(k as Tab)} />
+
+      {!d && <div className="muted" style={{ padding: 16 }}>Loading…</div>}
+
+      {/* ── OVERVIEW ──────────────────────────────────────────────────────── */}
+      {tab === 'overview' && d && (
+        <>
+          <Panel title="Controller" icon={Router}>
             <DefList items={[
               { label: 'Vendor / Product', value: `${d.identity.vendor || '—'}${d.identity.product ? ' · ' + d.identity.product : ''}` },
               { label: 'Model / Firmware', value: `${d.identity.model || '—'}${d.identity.firmware ? ' · ' + d.identity.firmware : ''}` },
-              { label: 'Status / Managed via', value: `${cap(d.identity.status)} · Managed via ${managedVia.join(' + ') || 'SNMP'}` },
-              { label: 'Last collection', value: d.summary.collected_at ? `${new Date(d.summary.collected_at).toLocaleString()} (${dataAge(d.summary.collected_at)})` : (d.collection.collected_at ? new Date(d.collection.collected_at).toLocaleString() : '—') },
+              { label: 'Serial', value: d.identity.serial || '—' },
+              { label: 'IP address', value: d.identity.ip || '—' },
+              { label: 'Status', value: <StatusPill status={statusTone(d.identity.status)} label={cap(d.identity.status)} /> },
+              {
+                label: 'Managed via', value: (
+                  <span className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+                    {(managedVia.length ? managedVia : ['SNMP']).map((m) => <span key={m} className="badge badge-info">{m}</span>)}
+                  </span>
+                ),
+              },
+              { label: 'Primary source', value: srcLabel(d.collection.source) },
+              { label: 'Last collection', value: d.summary.collected_at ? `${new Date(d.summary.collected_at).toLocaleString()} (${dataAge(d.summary.collected_at)} ago)` : (d.collection.collected_at ? new Date(d.collection.collected_at).toLocaleString() : '—') },
             ]} />
-            <div className="row" style={{ gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
-              {!sshNA && <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => { setMsg(''); runSsh.mutate() }}><DownloadCloud size={14} /> {runSsh.isPending ? 'Collecting…' : 'Run SSH Collection'}</button>}
-              <button className="btn btn-ghost btn-sm" disabled={busy || !d.mib.has_pack} onClick={() => { setMsg(''); runMib.mutate() }}><DownloadCloud size={14} /> {runMib.isPending ? 'Walking…' : 'Run SNMP MIB Collection'}</button>
-              {!sshNA && <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => { setMsg(''); testSsh.mutate() }}><FlaskConical size={14} /> {testSsh.isPending ? 'Probing…' : 'Test SSH'}</button>}
-              <Link className="btn btn-ghost btn-sm" to={d.mib.pack_id ? `/mibs?pack=${d.mib.pack_id}` : '/mibs'}><FlaskConical size={14} /> Test MIB Pack</Link>
-              {d.collection.has_api_profile
-                ? <button className="btn btn-ghost btn-sm" disabled={busy || !pid} onClick={() => { setMsg(''); runApi.mutate() }}><Plug size={14} /> Run Collection</button>
-                : <Link className="btn btn-ghost btn-sm" to={configureHref}><Plug size={14} /> Configure API Profile</Link>}
-              <Link className="btn btn-ghost btn-sm" to={`/devices/${id}`}><Pencil size={14} /> Edit Device</Link>
-            </div>
-            {msg && <div className={'enc-banner ' + (msg.startsWith('✗') ? 'crit' : 'info')} style={{ marginTop: 10, whiteSpace: 'pre-wrap' }}>{msg}</div>}
-          </>
-        )}
-      </Panel>
+            {d.collection.next_action && <div className="enc-banner info" style={{ marginTop: 12 }}>{d.collection.next_action} <button className="btn btn-ghost btn-xs" style={{ marginLeft: 8 }} onClick={() => setTab('manage')}>Open Manage</button></div>}
+          </Panel>
 
-      {/* KPI cards — controller-reported vs parsed, never overstated. */}
-      {d && sm && (() => {
-        const apMissing = Math.max(0, sm.ap_total - (c.aps ?? 0))
-        const cliMissing = Math.max(0, sm.clients_total - (c.clients ?? 0))
-        return (
+          {/* Summary KPIs — robust whether or not a controller summary exists. */}
           <div className="kpi-grid">
-            <Kpi label="Total APs (reported)" value={sm.ap_total || (c.aps ?? 0)} icon={Radio} tone={apMissing > 0 ? 'warn' : 'info'} sub={`parsed ${c.aps ?? 0} rows${apMissing > 0 ? ` · missing ${apMissing}` : ''}`} />
-            <Kpi label="Active APs" value={apStatusShown ? apActive : '—'} icon={Radio} sub={apStatusShown ? undefined : 'status not exposed'} />
-            <Kpi label="Non-active APs" value={apStatusShown ? apNonActive : '—'} icon={Radio} sub={apStatusShown ? undefined : 'status not exposed'} />
-            <Kpi label="Total clients (reported)" value={sm.clients_total || (c.clients ?? 0)} icon={Users} tone={cliMissing > 0 ? 'warn' : 'info'} sub={`parsed ${c.clients ?? 0}${cliMissing > 0 ? ` · live ±${cliMissing}` : ''}`} />
-            <Kpi label="SSIDs" value={c.ssids ?? 0} icon={ShieldCheck} sub="full WLAN list incl. disabled (show wlans)" />
-            <Kpi label="Networks" value={sm.networks} icon={Router} sub="client-derived" />
-            <Kpi label="Switches" value={sm.switches} icon={Router} />
-            <Kpi label="Collection status" value={collStatusLabelShort(sm.collection_status)} icon={Activity} tone={collStatusKpiTone(sm.collection_status)} sub={sm.collected_at ? dataAge(sm.collected_at) + ' ago' : undefined} />
+            <Kpi label="Access points" value={c.aps ?? 0} icon={Radio} tone={apMissing > 0 ? 'warn' : 'info'} sub={sm && sm.ap_total ? `controller reports ${sm.ap_total}${apMissing > 0 ? ` · missing ${apMissing}` : ''}` : undefined} />
+            <Kpi label="Active APs" value={apStatusShown ? apActive : '—'} icon={Radio} tone="ok" sub={apStatusShown ? undefined : 'status not exposed'} />
+            <Kpi label="Non-active APs" value={apStatusShown ? apNonActive : '—'} icon={Radio} tone={apNonActive > 0 ? 'warn' : 'default'} sub={apStatusShown ? undefined : 'status not exposed'} />
+            <Kpi label="Clients" value={c.clients ?? 0} icon={Users} tone={cliMissing > 0 ? 'warn' : 'info'} sub={sm && sm.clients_total ? `controller reports ${sm.clients_total}` : undefined} />
+            <Kpi label="SSIDs" value={c.ssids ?? 0} icon={ShieldCheck} sub={ssids.length ? `${ssidEnabled} enabled` : undefined} />
+            <Kpi label="Sites" value={apSites.length} icon={Router} sub={apSites.length ? undefined : 'not exposed'} />
+            <Kpi label="Collection status" value={sm ? collStatusLabelShort(sm.collection_status) : (d.collection.source && d.collection.source !== 'snmp_baseline' ? 'Collected' : 'Not run')} icon={Activity} tone={sm ? collStatusKpiTone(sm.collection_status) : 'default'} sub={sm?.collected_at ? dataAge(sm.collected_at) + ' ago' : undefined} />
+            <Kpi label="Events" value={c.events ?? 0} icon={Activity} sub={c.events ? undefined : 'none / not exposed'} />
           </div>
-        )
-      })()}
 
-      {/* Mismatch / partial / not-exposed warnings — front and centre, never buried. */}
-      {d && sm && (
-        <>
-          {sm.parsed_ap_rows < sm.ap_total && (
-            <div className="enc-banner warn">Controller summary reports {sm.ap_total} APs but HIMS parsed {sm.parsed_ap_rows} AP rows from SSH CLI. Collection is partial — review parser/command coverage.</div>
-          )}
-          {sm.parsed_client_rows < sm.clients_total && (
-            <div className="enc-banner warn">Controller summary reports {sm.clients_total} clients but HIMS parsed {sm.parsed_client_rows} client rows. Client counts change live.</div>
-          )}
-          {!apStatusShown && aps.length > 0 && (
-            <div className="enc-banner info">Per-AP active/non-active status is not exposed by this controller's SSH CLI (show summary/status are rejected). Configure the Extreme XCC API for per-AP status.</div>
-          )}
-          {sm.ap_status_exposed && sm.non_active_aps > 0 && (
-            <div className="enc-banner warn">Controller reports {sm.non_active_aps} non-active AP(s), but the current source does not expose which individual APs are non-active.</div>
+          {/* Honesty warnings — never bury a partial/mismatch. */}
+          {sm && (
+            <>
+              {sm.parsed_ap_rows < sm.ap_total && <div className="enc-banner warn">Controller reports {sm.ap_total} APs but {sm.parsed_ap_rows} AP rows were parsed — collection is partial.</div>}
+              {sm.parsed_client_rows < sm.clients_total && <div className="enc-banner warn">Controller reports {sm.clients_total} clients but {sm.parsed_client_rows} client rows were parsed — client counts change live.</div>}
+              {!apStatusShown && aps.length > 0 && <div className="enc-banner info">Per-AP active/non-active status is not exposed by the current source.</div>}
+            </>
           )}
         </>
       )}
 
-      {/* Collection sources — one honest row per source. */}
-      <Panel title="Collection Sources" icon={Layers}>
-        {d && (
-          <table className="data-table">
-            <thead><tr><th>Source</th><th>Status</th><th>Rows / detail</th><th>Last run</th><th></th></tr></thead>
-            <tbody>
-              <tr>
-                <td><strong>SNMP Identity</strong></td>
-                <td><StatusPill status={(d.identity.sysobjectid || d.identity.sysdescr) ? 'up' : 'unknown'} label={(d.identity.sysobjectid || d.identity.sysdescr) ? 'collected' : '—'} /></td>
-                <td style={{ fontSize: 12 }}>{d.identity.product || d.identity.vendor || '—'}</td>
-                <td className="muted" style={{ fontSize: 11 }}>from scan</td>
-                <td><Link className="btn btn-ghost btn-xs" to={`/devices/${id}`}>Device</Link></td>
-              </tr>
-              <tr>
-                <td><strong>SNMP Wireless MIB</strong></td>
-                <td><StatusPill status={d.mib.has_pack ? 'warning' : 'unknown'} label={d.mib.has_pack ? 'operational only' : 'no pack'} /></td>
-                <td style={{ fontSize: 12 }}>{d.mib.has_pack ? `${d.mib.walked_tables.filter(t => t.rows > 0).length} table(s) responded · no AP roster on this firmware` : 'no applicable pack'}</td>
-                <td className="muted" style={{ fontSize: 11 }}>—</td>
-                <td><button className="btn btn-ghost btn-xs" disabled={busy || !d.mib.has_pack} onClick={() => { setMsg(''); runMib.mutate() }}>Run</button></td>
-              </tr>
-              <tr>
-                <td><strong>SSH CLI</strong></td>
-                <td><StatusPill status={sshTone2(d.ssh.status)} label={sshNA ? 'not applicable' : d.ssh.status} /></td>
-                <td style={{ fontSize: 12 }}>{sshNA ? 'Extreme XCC method — this controller uses Web-XML (primary)' : `${d.ssh.aps} APs · ${d.ssh.clients} clients · ${d.ssh.supported.length} supported / ${d.ssh.unsupported.length} unsupported cmds`}</td>
-                <td className="muted" style={{ fontSize: 11 }}>{!sshNA && d.ssh.last_run ? new Date(d.ssh.last_run).toLocaleString() : '—'}</td>
-                <td>{sshNA ? <span className="muted" style={{ fontSize: 11 }}>—</span> : <button className="btn btn-ghost btn-xs" disabled={busy} onClick={() => { setMsg(''); runSsh.mutate() }}>Run</button>}</td>
-              </tr>
-              <tr>
-                <td><strong>{apiLabel}</strong></td>
-                <td><StatusPill status={d.collection.has_api_profile ? (d.collection.ap_data_known ? 'up' : 'warning') : 'unknown'} label={d.collection.has_api_profile ? (d.collection.profile_status || 'configured') : 'not configured'} /></td>
-                <td style={{ fontSize: 12 }}>{d.collection.has_api_profile ? (d.collection.last_detail || 'profile configured') : 'no REST/XML profile'}</td>
-                <td className="muted" style={{ fontSize: 11 }}>—</td>
-                <td>{d.collection.has_api_profile ? <button className="btn btn-ghost btn-xs" disabled={busy || !pid} onClick={() => { setMsg(''); runApi.mutate() }}>Run</button> : <Link className="btn btn-ghost btn-xs" to={configureHref}>Setup</Link>}</td>
-              </tr>
-            </tbody>
-          </table>
-        )}
-      </Panel>
+      {/* ── ACCESS POINTS ─────────────────────────────────────────────────── */}
+      {tab === 'aps' && d && (
+        <Panel title="Access Points" icon={Radio} subtitle={aps.length ? `${aps.length} in roster` : undefined}>
+          {aps.length === 0 && <EmptyState icon={Radio} title="No AP inventory" message="Collect via the controller (Manage → Run Collection) to populate the AP roster." />}
+          {aps.length > 0 && (
+            <>
+              <div className="row" style={{ gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+                {apStatusShown && <span className="badge badge-success">{apActive} active</span>}
+                {apStatusShown && <span className="badge badge-warning">{apNonActive} non-active</span>}
+                {apSites.length > 0 && <span className="badge badge-info">{apSites.length} site{apSites.length === 1 ? '' : 's'}</span>}
+                <span className="badge badge-muted">{aps.length} total</span>
+              </div>
+              <DataTable<AccessPoint>
+                rows={aps}
+                getKey={(a) => a.id}
+                searchText={(a) => `${a.serial || ''} ${a.name} ${a.ip || ''} ${a.mac || ''} ${a.model || ''} ${a.site || ''}`}
+                searchPlaceholder="Search serial / name / IP / MAC / model / site…"
+                filters={apFilters(aps)}
+                cols={apCols(sm?.ap_status_exposed ?? false)}
+              />
+            </>
+          )}
+        </Panel>
+      )}
 
-      {/* Access Points. */}
-      <Panel title={`Access Points${aps.length ? ` (${aps.length})` : ''}`} icon={Radio}>
-        {d && aps.length === 0 && <EmptyState icon={Radio} title="No AP inventory" message="Run SSH Collection to pull the AP roster, or configure the Extreme XCC API." />}
-        {d && aps.length > 0 && (
-          <DataTable<AccessPoint>
-            rows={aps}
-            getKey={(a) => a.id}
-            searchText={(a) => `${a.serial || ''} ${a.name} ${a.ip || ''} ${a.mac || ''} ${a.model || ''} ${a.site || ''}`}
-            searchPlaceholder="Search serial / name / IP / MAC / model / site…"
-            filters={apFilters(aps)}
-            cols={apCols(sm?.ap_status_exposed ?? false)}
-          />
-        )}
-      </Panel>
+      {/* ── CLIENTS ───────────────────────────────────────────────────────── */}
+      {tab === 'clients' && d && (
+        <Panel title="Clients" icon={Users} subtitle={sm && sm.clients_total ? `controller reports ${sm.clients_total}` : undefined}>
+          {clients.length === 0 && <EmptyState icon={Users} title="No client roster" message="Collect via the controller to pull associated clients. Client counts change live." />}
+          {clients.length > 0 && (
+            <>
+              <div className="row" style={{ gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+                <span className="badge badge-muted">{clients.length} associated</span>
+                {clientBands.slice(0, 4).map(([b, n]) => <span key={b} className="badge badge-info">{b}: {n}</span>)}
+              </div>
+              <DataTable<WirelessClient>
+                rows={clients}
+                getKey={(cl) => cl.id}
+                searchText={(cl) => `${cl.mac} ${cl.ip || ''} ${cl.hostname || ''} ${cl.ssid || ''} ${cl.ap_name || ''}`}
+                searchPlaceholder="Search MAC / IP / hostname / SSID / AP…"
+                filters={clientFilters(clients)}
+                cols={clientCols}
+              />
+            </>
+          )}
+        </Panel>
+      )}
 
-      {/* Clients. */}
-      <Panel title={`Clients${clients.length ? ` (${clients.length})` : ''}`} icon={Users}
-        subtitle={sm && sm.clients_total ? `controller reports ${sm.clients_total}` : undefined}>
-        {d && clients.length === 0 && <EmptyState icon={Users} title="No client roster" message="Run SSH Collection to pull associated clients. Client counts change live." />}
-        {d && clients.length > 0 && (
-          <DataTable<WirelessClient>
-            rows={clients}
-            getKey={(cl) => cl.id}
-            searchText={(cl) => `${cl.mac} ${cl.ip || ''} ${cl.hostname || ''} ${cl.ssid || ''} ${cl.ap_name || ''}`}
-            searchPlaceholder="Search MAC / IP / hostname / SSID / AP…"
-            filters={clientFilters(clients)}
-            cols={clientCols}
-          />
-        )}
-      </Panel>
-
-      {/* SSIDs / WLANs. */}
-      <Panel title={`SSIDs / WLANs${ssids.length ? ` (${ssids.length})` : ''}`} icon={ShieldCheck}>
-        {d && ssids.length === 0 && <EmptyState icon={ShieldCheck} title="No SSIDs" message="SSIDs are derived from active client associations or the controller API." />}
-        {d && ssids.length > 0 && (
-          <DataTable
-            rows={ssids}
-            getKey={(s) => s.id}
-            searchText={(s) => `${s.name} ${s.security || ''} ${s.band || ''} ${s.vlan || ''}`}
-            searchPlaceholder="Search SSID / security / band / VLAN…"
-            pageSizeDefault={25}
-            filters={ssidFilters(ssids)}
-            cols={[
-              { key: 'name', label: 'SSID', render: (s) => <strong>{s.name}</strong>, sortVal: (s) => s.name },
-              { key: 'status', label: 'Status', render: (s) => <StatusPill status={s.status === 'active' || s.status === 'enabled' ? 'up' : s.status === 'disabled' ? 'down' : 'unknown'} label={s.status || 'unknown'} /> },
-              { key: 'security', label: 'Security', render: (s) => s.security || '—' },
-              { key: 'band', label: 'Band', render: (s) => s.band || '—' },
-              { key: 'net', label: 'Network/VLAN', render: (s) => s.vlan || '—' },
-              { key: 'aps', label: 'APs (seen)', render: (s) => ssidRollup.get(s.name)?.aps.size ?? 0, sortVal: (s) => ssidRollup.get(s.name)?.aps.size ?? 0 },
-              { key: 'clients', label: 'Clients (seen)', render: (s) => ssidRollup.get(s.name)?.clients ?? 0, sortVal: (s) => ssidRollup.get(s.name)?.clients ?? 0 },
-              { key: 'source', label: 'Source', render: (s) => srcLabel(s.source) },
-            ]}
-          />
-        )}
-      </Panel>
-
-      {/* Diagnostics — collapsible. */}
-      <Panel title="Diagnostics — SSH command results" icon={Terminal}>
-        <button className="btn btn-ghost btn-sm" onClick={() => setShowDiag((v) => !v)}>{showDiag ? 'Hide' : 'Show'} command diagnostics</button>
-        {showDiag && (
-          <div style={{ marginTop: 12 }}>
-            {sshResults.isLoading && <div className="muted">Loading…</div>}
-            {sshResults.data && sshResults.data.length === 0 && <EmptyState icon={Terminal} title="No command results" message="Run or test SSH collection first." />}
-            {sshResults.data && sshResults.data.length > 0 && (
+      {/* ── SSIDs ─────────────────────────────────────────────────────────── */}
+      {tab === 'ssids' && d && (
+        <Panel title="SSIDs / WLANs" icon={ShieldCheck} subtitle={ssids.length ? `${ssids.length} configured` : undefined}>
+          {ssids.length === 0 && <EmptyState icon={ShieldCheck} title="No SSIDs" message="SSIDs come from the controller's WLAN list or active client associations." />}
+          {ssids.length > 0 && (
+            <>
+              <div className="row" style={{ gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+                <span className="badge badge-success">{ssidEnabled} enabled</span>
+                {ssids.length - ssidEnabled > 0 && <span className="badge badge-muted">{ssids.length - ssidEnabled} disabled/other</span>}
+              </div>
               <DataTable
-                rows={sshResults.data}
-                getKey={(r) => r.id}
-                searchText={(r) => `${r.command} ${r.status}`}
-                searchPlaceholder="Search command…"
-                filters={[{ key: 'status', label: 'Status', options: ['parsed', 'not_parsed', 'unsupported', 'failed', 'timeout'].map((v) => ({ value: v, label: v })), match: (r, v) => r.status === v }]}
+                rows={ssids}
+                getKey={(s) => s.id}
+                searchText={(s) => `${s.name} ${s.security || ''} ${s.band || ''} ${s.vlan || ''}`}
+                searchPlaceholder="Search SSID / security / band / VLAN…"
+                pageSizeDefault={25}
+                filters={ssidFilters(ssids)}
                 cols={[
-                  { key: 'command', label: 'Command', render: (r) => r.command, mono: true, sortVal: (r) => r.command },
-                  { key: 'status', label: 'Status', render: (r) => <StatusPill status={sshTone(r.status)} label={r.status} />, sortVal: (r) => r.status },
-                  { key: 'lines', label: 'Lines', render: (r) => r.line_count || 0, sortVal: (r) => r.line_count || 0 },
-                  { key: 'parsed', label: 'Parsed', render: (r) => r.parsed_rows || 0, sortVal: (r) => r.parsed_rows || 0 },
-                  { key: 'skipped', label: 'Skipped', render: (r) => r.skipped_rows ? <span className="badge badge-warning">{r.skipped_rows}</span> : 0 },
-                  { key: 'diag', label: 'Headers / warnings', render: (r) => <div style={{ fontSize: 10, maxWidth: 200 }}>{r.headers && <div className="mono" style={{ opacity: .8 }}>{r.headers.slice(0, 70)}</div>}{r.warnings && <div style={{ color: '#ffb74d' }}>{r.warnings}</div>}</div> },
-                  { key: 'out', label: 'Output (redacted)', render: (r) => <span style={{ fontFamily: 'monospace', fontSize: 10 }}>{r.error_message ? <span style={{ color: '#ef9a9a' }}>{r.error_message}</span> : (r.output_preview || '—').slice(0, 200)}</span> },
+                  { key: 'name', label: 'SSID', render: (s) => <strong>{s.name}</strong>, sortVal: (s) => s.name },
+                  { key: 'status', label: 'Status', render: (s) => <StatusPill status={s.status === 'active' || s.status === 'enabled' ? 'up' : s.status === 'disabled' ? 'down' : 'unknown'} label={s.status || 'unknown'} /> },
+                  { key: 'security', label: 'Security', render: (s) => s.security || '—' },
+                  { key: 'band', label: 'Band', render: (s) => s.band || '—' },
+                  { key: 'net', label: 'Network/VLAN', render: (s) => s.vlan || '—' },
+                  { key: 'aps', label: 'APs (seen)', render: (s) => ssidRollup.get(s.name)?.aps.size ?? 0, sortVal: (s) => ssidRollup.get(s.name)?.aps.size ?? 0 },
+                  { key: 'clients', label: 'Clients (seen)', render: (s) => ssidRollup.get(s.name)?.clients ?? 0, sortVal: (s) => ssidRollup.get(s.name)?.clients ?? 0 },
+                  { key: 'source', label: 'Source', render: (s) => srcLabel(s.source) },
                 ]}
               />
-            )}
-          </div>
-        )}
-      </Panel>
+            </>
+          )}
+        </Panel>
+      )}
 
-      {/* Advanced / Raw MIB — collapsible. */}
-      <Panel title="Advanced — Raw MIB Explorer" icon={FileSearch}>
-        <button className="btn btn-ghost btn-sm" onClick={() => setShowRaw((v) => !v)}>{showRaw ? 'Hide' : 'Show'} raw MIB</button>
-        {showRaw && (
-          <div style={{ marginTop: 12 }}>
-            {explorer.isLoading && <div className="muted">Loading…</div>}
-            {explorer.data && explorer.data.total_rows === 0 && <EmptyState icon={FileSearch} title="Nothing captured" message="Run an SNMP MIB collection to populate the explorer." />}
-            {explorer.data && explorer.data.total_rows > 0 && (
-              <>
-                <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>{explorer.data.total_rows} distinct OIDs · {explorer.data.groups.length} columns/subtrees ({rawRows.data?.length ?? 0} raw rows loaded)</div>
-                <DataTable
-                  rows={explorer.data.groups}
-                  getKey={(g) => g.column_oid}
-                  searchText={(g) => `${g.column_oid} ${g.name} ${g.table} ${g.samples.map(s => s.value).join(' ')}`}
-                  searchPlaceholder="Search OID / name / value…"
-                  filters={[{ key: 'mapped', label: 'Mapped', options: [{ value: 'yes', label: 'mapped' }, { value: 'no', label: 'unmapped' }], match: (g, v) => (v === 'yes') === g.mapped }]}
-                  cols={[
-                    { key: 'oid', label: 'Column OID', render: (g) => g.column_oid, mono: true },
-                    { key: 'name', label: 'Name', render: (g) => g.name || <span className="muted">(undocumented)</span>, sortVal: (g) => g.name },
-                    { key: 'type', label: 'Type', render: (g) => g.value_type, sortVal: (g) => g.value_type },
-                    { key: 'rows', label: 'Rows', render: (g) => g.rows, sortVal: (g) => g.rows },
-                    { key: 'maps', label: 'Maps to', render: (g) => g.field ? <span className="badge badge-success">{g.purpose}.{g.field}</span> : <span className="muted">—</span> },
-                    { key: 'sample', label: 'Sample', render: (g) => <span style={{ fontFamily: 'monospace', fontSize: 10 }}>{g.samples.slice(0, 2).map((s, i) => <div key={i}>{s.index} → {s.value.slice(0, 40)}</div>)}</span> },
-                  ]}
-                />
-              </>
+      {/* ── MANAGE ────────────────────────────────────────────────────────── */}
+      {tab === 'manage' && d && (
+        <>
+          <Panel title="Collection & maintenance actions" icon={Settings}>
+            <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+              {d.collection.has_api_profile
+                ? <button className="btn btn-primary btn-sm" disabled={busy || !pid} onClick={() => { setMsg(''); runApi.mutate() }}><Plug size={14} /> {runApi.isPending ? 'Collecting…' : 'Run Collection (REST/XML)'}</button>
+                : <Link className="btn btn-primary btn-sm" to={configureHref}><Plug size={14} /> Configure API profile</Link>}
+              {d.collection.has_api_profile && <button className="btn btn-ghost btn-sm" disabled={busy || !pid} onClick={() => { setMsg(''); test.mutate() }}><FlaskConical size={14} /> {test.isPending ? 'Testing…' : 'Test Connection'}</button>}
+              {!sshNA && <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => { setMsg(''); runSsh.mutate() }}><DownloadCloud size={14} /> {runSsh.isPending ? 'Collecting…' : 'Run SSH Collection'}</button>}
+              {!sshNA && <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => { setMsg(''); testSsh.mutate() }}><FlaskConical size={14} /> {testSsh.isPending ? 'Probing…' : 'Test SSH'}</button>}
+              <button className="btn btn-ghost btn-sm" disabled={busy || !d.mib.has_pack} onClick={() => { setMsg(''); runMib.mutate() }}><DownloadCloud size={14} /> {runMib.isPending ? 'Walking…' : 'Run SNMP MIB Collection'}</button>
+              <Link className="btn btn-ghost btn-sm" to={d.mib.pack_id ? `/mibs?pack=${d.mib.pack_id}` : '/mibs'}><FlaskConical size={14} /> Test MIB Pack</Link>
+              <button className="btn btn-ghost btn-sm" disabled={busy || !d.identity.ip} onClick={() => { setMsg(''); rescan.mutate() }}><RefreshCw size={14} /> {rescan.isPending ? 'Launching…' : 'Re-scan this device'}</button>
+              <Link className="btn btn-ghost btn-sm" to={`/devices/${id}`}><Pencil size={14} /> Edit Device</Link>
+            </div>
+            <div className="muted" style={{ fontSize: 11, marginTop: 10 }}>
+              REST/XML (Web-XML / XCC API) is the primary roster source. SNMP MIB and SSH CLI are read-only secondary/diagnostic sources — they never overwrite the primary AP/client/SSID tables.
+            </div>
+          </Panel>
+
+          {/* Per-source status — one honest row per collection method. */}
+          <Panel title="Collection Sources" icon={Layers}>
+            <table className="data-table">
+              <thead><tr><th>Source</th><th>Status</th><th>Rows / detail</th><th>Last run</th><th></th></tr></thead>
+              <tbody>
+                <tr>
+                  <td><strong>SNMP Identity</strong></td>
+                  <td><StatusPill status={(d.identity.sysobjectid || d.identity.sysdescr) ? 'up' : 'unknown'} label={(d.identity.sysobjectid || d.identity.sysdescr) ? 'collected' : '—'} /></td>
+                  <td style={{ fontSize: 12 }}>{d.identity.product || d.identity.vendor || '—'}</td>
+                  <td className="muted" style={{ fontSize: 11 }}>from scan</td>
+                  <td><Link className="btn btn-ghost btn-xs" to={`/devices/${id}`}>Device</Link></td>
+                </tr>
+                <tr>
+                  <td><strong>{apiLabel}</strong></td>
+                  <td><StatusPill status={d.collection.has_api_profile ? (d.collection.ap_data_known ? 'up' : 'warning') : 'unknown'} label={d.collection.has_api_profile ? (d.collection.profile_status || 'configured') : 'not configured'} /></td>
+                  <td style={{ fontSize: 12 }}>{d.collection.has_api_profile ? (d.collection.last_detail || 'profile configured') : 'no REST/XML profile'}</td>
+                  <td className="muted" style={{ fontSize: 11 }}>{d.collection.collected_at ? dataAge(d.collection.collected_at) + ' ago' : '—'}</td>
+                  <td>{d.collection.has_api_profile ? <button className="btn btn-ghost btn-xs" disabled={busy || !pid} onClick={() => { setMsg(''); runApi.mutate() }}>Run</button> : <Link className="btn btn-ghost btn-xs" to={configureHref}>Setup</Link>}</td>
+                </tr>
+                <tr>
+                  <td><strong>SNMP Wireless MIB</strong></td>
+                  <td><StatusPill status={d.mib.has_pack ? 'warning' : 'unknown'} label={d.mib.has_pack ? 'operational' : 'no pack'} /></td>
+                  <td style={{ fontSize: 12 }}>{d.mib.has_pack ? `${d.mib.walked_tables.filter((t) => t.rows > 0).length} table(s) responded` : 'no applicable pack'}</td>
+                  <td className="muted" style={{ fontSize: 11 }}>—</td>
+                  <td><button className="btn btn-ghost btn-xs" disabled={busy || !d.mib.has_pack} onClick={() => { setMsg(''); runMib.mutate() }}>Run</button></td>
+                </tr>
+                <tr>
+                  <td><strong>SSH CLI</strong></td>
+                  <td><StatusPill status={sshTone2(d.ssh.status)} label={sshNA ? 'not applicable' : d.ssh.status} /></td>
+                  <td style={{ fontSize: 12 }}>{sshNA ? 'controller uses Web-XML (primary)' : `${d.ssh.aps} APs · ${d.ssh.clients} clients · ${d.ssh.supported.length} cmds`}</td>
+                  <td className="muted" style={{ fontSize: 11 }}>{!sshNA && d.ssh.last_run ? dataAge(d.ssh.last_run) + ' ago' : '—'}</td>
+                  <td>{sshNA ? <span className="muted" style={{ fontSize: 11 }}>—</span> : <button className="btn btn-ghost btn-xs" disabled={busy} onClick={() => { setMsg(''); runSsh.mutate() }}>Run</button>}</td>
+                </tr>
+              </tbody>
+            </table>
+          </Panel>
+
+          {/* Diagnostics — SSH command results (redacted). */}
+          <Panel title="Diagnostics — SSH command results" icon={Terminal}>
+            <button className="btn btn-ghost btn-sm" onClick={() => setShowDiag((v) => !v)}>{showDiag ? 'Hide' : 'Show'} command diagnostics</button>
+            {showDiag && (
+              <div style={{ marginTop: 12 }}>
+                {sshResults.isLoading && <div className="muted">Loading…</div>}
+                {sshResults.data && sshResults.data.length === 0 && <EmptyState icon={Terminal} title="No command results" message="Run or test SSH collection first." />}
+                {sshResults.data && sshResults.data.length > 0 && (
+                  <DataTable
+                    rows={sshResults.data}
+                    getKey={(r) => r.id}
+                    searchText={(r) => `${r.command} ${r.status}`}
+                    searchPlaceholder="Search command…"
+                    filters={[{ key: 'status', label: 'Status', options: ['parsed', 'not_parsed', 'unsupported', 'failed', 'timeout'].map((v) => ({ value: v, label: v })), match: (r, v) => r.status === v }]}
+                    cols={[
+                      { key: 'command', label: 'Command', render: (r) => r.command, mono: true, sortVal: (r) => r.command },
+                      { key: 'status', label: 'Status', render: (r) => <StatusPill status={sshTone(r.status)} label={r.status} />, sortVal: (r) => r.status },
+                      { key: 'lines', label: 'Lines', render: (r) => r.line_count || 0, sortVal: (r) => r.line_count || 0 },
+                      { key: 'parsed', label: 'Parsed', render: (r) => r.parsed_rows || 0, sortVal: (r) => r.parsed_rows || 0 },
+                      { key: 'skipped', label: 'Skipped', render: (r) => r.skipped_rows ? <span className="badge badge-warning">{r.skipped_rows}</span> : 0 },
+                      { key: 'diag', label: 'Headers / warnings', render: (r) => <div style={{ fontSize: 10, maxWidth: 200 }}>{r.headers && <div className="mono" style={{ opacity: .8 }}>{r.headers.slice(0, 70)}</div>}{r.warnings && <div style={{ color: '#ffb74d' }}>{r.warnings}</div>}</div> },
+                      { key: 'out', label: 'Output (redacted)', render: (r) => <span style={{ fontFamily: 'monospace', fontSize: 10 }}>{r.error_message ? <span style={{ color: '#ef9a9a' }}>{r.error_message}</span> : (r.output_preview || '—').slice(0, 200)}</span> },
+                    ]}
+                  />
+                )}
+              </div>
             )}
-          </div>
-        )}
-      </Panel>
+          </Panel>
+
+          {/* Advanced — Raw MIB Explorer. */}
+          <Panel title="Advanced — Raw MIB Explorer" icon={FileSearch}>
+            <button className="btn btn-ghost btn-sm" onClick={() => setShowRaw((v) => !v)}>{showRaw ? 'Hide' : 'Show'} raw MIB</button>
+            {showRaw && (
+              <div style={{ marginTop: 12 }}>
+                {explorer.isLoading && <div className="muted">Loading…</div>}
+                {explorer.data && explorer.data.total_rows === 0 && <EmptyState icon={FileSearch} title="Nothing captured" message="Run an SNMP MIB collection to populate the explorer." />}
+                {explorer.data && explorer.data.total_rows > 0 && (
+                  <>
+                    <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>{explorer.data.total_rows} distinct OIDs · {explorer.data.groups.length} columns/subtrees ({rawRows.data?.length ?? 0} raw rows loaded)</div>
+                    <DataTable
+                      rows={explorer.data.groups}
+                      getKey={(g) => g.column_oid}
+                      searchText={(g) => `${g.column_oid} ${g.name} ${g.table} ${g.samples.map((s) => s.value).join(' ')}`}
+                      searchPlaceholder="Search OID / name / value…"
+                      filters={[{ key: 'mapped', label: 'Mapped', options: [{ value: 'yes', label: 'mapped' }, { value: 'no', label: 'unmapped' }], match: (g, v) => (v === 'yes') === g.mapped }]}
+                      cols={[
+                        { key: 'oid', label: 'Column OID', render: (g) => g.column_oid, mono: true },
+                        { key: 'name', label: 'Name', render: (g) => g.name || <span className="muted">(undocumented)</span>, sortVal: (g) => g.name },
+                        { key: 'type', label: 'Type', render: (g) => g.value_type, sortVal: (g) => g.value_type },
+                        { key: 'rows', label: 'Rows', render: (g) => g.rows, sortVal: (g) => g.rows },
+                        { key: 'maps', label: 'Maps to', render: (g) => g.field ? <span className="badge badge-success">{g.purpose}.{g.field}</span> : <span className="muted">—</span> },
+                        { key: 'sample', label: 'Sample', render: (g) => <span style={{ fontFamily: 'monospace', fontSize: 10 }}>{g.samples.slice(0, 2).map((s, i) => <div key={i}>{s.index} → {s.value.slice(0, 40)}</div>)}</span> },
+                      ]}
+                    />
+                  </>
+                )}
+              </div>
+            )}
+          </Panel>
+        </>
+      )}
     </div>
   )
 }
@@ -437,6 +501,9 @@ function ssidFilters(ssids: WirelessSSID[]): DataFilter<WirelessSSID>[] {
 function uniq(xs: string[]): string[] { return Array.from(new Set(xs)).sort() }
 function cap(s: string): string { return s ? s.charAt(0).toUpperCase() + s.slice(1) : '—' }
 function tsShort(ts?: string): string { return ts ? new Date(ts).toLocaleString() : '—' }
+function statusTone(s: string): string {
+  switch ((s || '').toLowerCase()) { case 'up': case 'online': return 'up'; case 'down': case 'offline': return 'down'; case 'needs attention': return 'warning'; default: return 'unknown' }
+}
 function dataAge(ts?: string): string {
   if (!ts) return '—'
   const ms = Date.now() - new Date(ts).getTime()
@@ -449,7 +516,8 @@ function dataAge(ts?: string): string {
 }
 function srcLabel(s?: string): string {
   switch (s) {
-    case 'extreme_xcc_ssh': return 'SSH CLI'
+    case 'extreme_xcc_ssh': return 'Extreme SSH CLI'
+    case 'ruckus_zd_ssh': return 'Ruckus SSH CLI'
     case 'snmp_wireless_mib': return 'SNMP MIB'
     case 'extreme_xcc_api': return 'XCC REST API'
     case 'ruckus_zd_xml': return 'Ruckus ZD Web-XML'

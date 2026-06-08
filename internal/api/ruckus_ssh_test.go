@@ -60,7 +60,7 @@ const zdWlanFixture = `WLAN Service:
       SSID = chr
       Authentication = open
       Encryption = wpa2
-      Passphrase = Coral@321
+      Passphrase = FAKE-TEST-PSK-not-a-real-key
       VLAN-ID = 214
     2:
       NAME = Coral Sea WiFi
@@ -116,7 +116,7 @@ func TestZDCountIndented(t *testing.T) {
 // preview (the reZDPassphrase scrub runs before persistence).
 func TestZDPassphraseRedaction(t *testing.T) {
 	scrubbed := reZDPassphrase.ReplaceAllString(zdWlanFixture, "${1}${2}***")
-	if strings.Contains(scrubbed, "Coral@321") {
+	if strings.Contains(scrubbed, "FAKE-TEST-PSK-not-a-real-key") {
 		t.Fatalf("PSK leaked into scrubbed preview:\n%s", scrubbed)
 	}
 }

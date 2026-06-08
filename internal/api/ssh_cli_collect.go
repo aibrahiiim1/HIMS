@@ -104,7 +104,10 @@ var (
 	// Markers that mean "the controller rejected this command" (restricted CLI).
 	reUnsupported = regexp.MustCompile(`(?i)(invalid command|unknown command|unrecognized command|command not found|% invalid|ambiguous command|syntax error|incomplete command|not allowed|permission denied|no such command|% error)`)
 	// Secret-bearing tokens to redact from any captured output.
-	reSecret = regexp.MustCompile(`(?i)\b(password|passwd|secret|psk|passphrase|community|pre-shared-key|preshared|wpa-?key|radius-?key|shared-?secret|token|apikey|api-key|credential)\b\s*[:=]?\s*\S+`)
+	// Mask the WHOLE remainder of the line after a secret label (not just the first
+	// token) so a space-bearing value can't leak its tail. `.` is line-scoped in Go
+	// regexp (no /s flag), so this never crosses into the next line.
+	reSecret = regexp.MustCompile(`(?i)\b(password|passwd|secret|psk|passphrase|community|pre-shared-key|preshared|wpa-?key|radius-?key|shared-?secret|token|apikey|api-key|credential)\b\s*[:=]?\s*.*`)
 )
 
 // redactOnly masks secret-bearing values WITHOUT length-capping — used for
