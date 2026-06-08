@@ -5,6 +5,7 @@ import { Wifi, Router, Users, Radio, ShieldCheck, Activity, Plug, FlaskConical, 
 import { api, type WirelessDetailResp, type MibWalkRow, type MibExplorerResp, type SSHCliSummary, type SSHCliRow, type AccessPoint, type WirelessClient, type WirelessSSID } from '../api'
 import { DeviceHeader } from '../components/DeviceHeader'
 import { RescanSplit } from '../components/RescanSplit'
+import { CredentialBindSelect } from '../components/CredentialBindSelect'
 import { Panel, Kpi, DefList, EmptyState, StatusPill, TabBar } from '../components/ui'
 import { DataTable, type DataCol, type DataFilter } from '../components/DataTable'
 
@@ -124,7 +125,7 @@ export function WirelessDetail() {
 
   return (
     <div>
-      <DeviceHeader deviceId={id!} icon={Wifi} />
+      <DeviceHeader deviceId={id!} icon={Wifi} showCredential={false} />
 
       {msg && <div className={'enc-banner ' + (msg.startsWith('✗') ? 'crit' : 'info')} style={{ whiteSpace: 'pre-wrap', marginBottom: 12 }}>{msg}</div>}
 
@@ -277,6 +278,9 @@ export function WirelessDetail() {
             </div>
             <div className="muted" style={{ fontSize: 11, marginTop: 10 }}>
               REST/XML (Web-XML / XCC API) is the primary roster source. SNMP MIB and SSH CLI are read-only secondary/diagnostic sources — they never overwrite the primary AP/client/SSID tables.
+            </div>
+            <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+              <CredentialBindSelect deviceId={id!} />
             </div>
           </Panel>
 
