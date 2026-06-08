@@ -15,12 +15,12 @@
 package extremexcc
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 )
 
@@ -169,15 +169,19 @@ func (c *Client) tryAuth(ctx context.Context) (method string, ok bool) {
 	return "none", false
 }
 
-// oauthToken posts a password grant and returns the access token (or "").
+// oauthToken posts the OAuth2 password grant and returns the access token (or "").
+// The proven XCC flow (desktop ExtremeCloudIqConnector) is a JSON body —
+// {"grantType":"password","userId":…,"password":…,"scope":""} — NOT a form post;
+// the controller rejects the form variant on this firmware.
 func (c *Client) oauthToken(ctx context.Context, path string) string {
-	form := url.Values{"grantType": {"PASSWORD"}, "userId": {c.Username}, "password": {c.Password}}
-	body := strings.NewReader(form.Encode())
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+path, body)
+	jb, _ := json.Marshal(map[string]string{
+		"grantType": "password", "userId": c.Username, "password": c.Password, "scope": "",
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+path, bytes.NewReader(jb))
 	if err != nil {
 		return ""
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	resp, err := c.Doer.Do(req)
 	if err != nil {
