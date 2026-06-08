@@ -211,30 +211,44 @@ func (s *Server) topologyHealth(ctx context.Context) topologyHealth {
 			newest = l.LastSeenAt
 		}
 	}
-	t.MappedDevices = len(mapped)
 	t.MissingNeighbors = missing
 	t.LastTopologyRefreshAt = iso(newest)
 
+	// Coverage is measured over the topology-capable FABRIC only — switches and
+	// routers (incl. ISP routers). Endpoints, controllers, servers, APs, printers
+	// etc. don't form LLDP/CDP links, so counting them in the denominator would
+	// permanently understate coverage and keep this panel stuck on "warning".
+	fabricCats := map[string]bool{"switch": true, "router": true, "isp_router": true}
+	hasFabric := false
 	if devs, derr := s.queries.ListAllDevices(ctx); derr == nil {
-		total := len(devs)
-		if total > 0 {
-			t.UnmappedDevices = total - t.MappedDevices
-			if t.UnmappedDevices < 0 {
-				t.UnmappedDevices = 0
+		totalFabric, mappedFabric := 0, 0
+		for _, dv := range devs {
+			if !fabricCats[dv.Category] {
+				continue
 			}
-			cov := int(float64(t.MappedDevices) / float64(total) * 100.0)
+			totalFabric++
+			if _, ok := mapped[dv.ID]; ok {
+				mappedFabric++
+			}
+		}
+		t.MappedDevices = mappedFabric
+		if totalFabric > 0 {
+			hasFabric = true
+			t.UnmappedDevices = totalFabric - mappedFabric
+			cov := int(float64(mappedFabric) / float64(totalFabric) * 100.0)
 			t.CoveragePercent = &cov
 		}
 	}
 	if maxSeen, nerr := s.queries.MaxNeighborSeenAt(ctx); nerr == nil && !maxSeen.IsZero() {
 		t.LldpCdpDataAge = iso(maxSeen)
 	}
-	// Health by coverage.
-	cov := 0
-	if t.CoveragePercent != nil {
-		cov = *t.CoveragePercent
+	// Health by fabric coverage. With no switches/routers in inventory there is
+	// nothing to map — report "unknown" rather than a misleading "critical".
+	if !hasFabric {
+		t.Status = "unknown"
+		return t
 	}
-	switch {
+	switch cov := *t.CoveragePercent; {
 	case cov >= 70:
 		t.Status = "healthy"
 	case cov >= 30:

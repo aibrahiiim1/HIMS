@@ -319,14 +319,14 @@ export function Dashboard() {
                   title="Topology Health" icon={Network} status={tp?.status ?? 'unknown'}
                   notCollectedReason="No topology links computed yet — discover switches to gather LLDP/CDP neighbors."
                   rows={tp ? [
-                    { label: 'Mapped Devices', value: tp.mapped_devices },
-                    { label: 'Unmapped Devices', value: tp.unmapped_devices },
+                    { label: 'Mapped switches/routers', value: tp.mapped_devices },
+                    { label: 'Unmapped switches/routers', value: tp.unmapped_devices },
                     { label: 'Missing Neighbors', value: tp.missing_neighbors },
-                    { label: 'Topology Coverage', value: tp.coverage_percent == null ? 'Not collected yet' : `${tp.coverage_percent}%` },
+                    { label: 'Fabric Coverage', value: tp.coverage_percent == null ? 'No switches/routers yet' : `${tp.coverage_percent}%` },
                     { label: 'LLDP/CDP Data Age', value: ago(tp.lldp_cdp_data_age) },
                     { label: 'Last Refresh', value: ago(tp.last_topology_refresh_at) },
                   ] : []}
-                  impact="Topology reflects physical links; low coverage means the network map is incomplete."
+                  impact="Coverage is measured over switches & routers only (the LLDP/CDP fabric) — APs, controllers, servers and endpoints don't form links and aren't counted. Low coverage means part of the switch fabric isn't mapped."
                   action={<Link className="btn btn-ghost btn-sm" to="/topology">Open Topology →</Link>}
                 />
                 <OperationalHealthPanel

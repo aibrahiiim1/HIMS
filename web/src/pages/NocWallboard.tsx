@@ -259,7 +259,7 @@ export function NocWallboard() {
           <div className="noc-sub">Failed: {disc?.failed_scan_count ?? 0}</div>
           <h2 style={{ marginTop: 16 }}><Network size={14} /> Topology Coverage</h2>
           <div className="noc-big" style={{ fontSize: 34, color: TONE[statusTone(topo?.status)] }}>{topo?.coverage_percent ?? 0}%</div>
-          <div className="noc-sub">{topo?.mapped_devices ?? 0} mapped · {topo?.unmapped_devices ?? 0} unmapped</div>
+          <div className="noc-sub">{topo?.mapped_devices ?? 0} mapped · {topo?.unmapped_devices ?? 0} unmapped (switches/routers)</div>
         </div>
 
         {/* Latest events */}
