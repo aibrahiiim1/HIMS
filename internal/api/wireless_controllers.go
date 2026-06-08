@@ -77,11 +77,17 @@ func (s *Server) addWirelessController(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cred, err := s.queries.CreateCredential(ctx, db.CreateCredentialParams{
-		Name: name + " (wireless admin)", Kind: string(domain.CredHTTPBasic),
+		// Disambiguate by IP so distinct controllers don't collide on the unique
+		// credential name; a clean 409 guides re-adds of the same controller.
+		Name: name + " wireless admin @" + ip.String(), Kind: string(domain.CredHTTPBasic),
 		EncryptedBlob: blob, KeyID: keyID,
 		Weak: isWeakSecret(string(domain.CredHTTPBasic), req.Password), Metadata: []byte("{}"),
 	})
 	if err != nil {
+		if isUniqueViolation(err) {
+			http.Error(w, "a wireless-admin credential for this controller already exists — delete the existing controller/credential first, or edit its vendor profile", http.StatusConflict)
+			return
+		}
 		writeErr(w, err)
 		return
 	}
