@@ -2,11 +2,12 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   Activity, TriangleAlert, Building2, Radar, Network, Maximize, Minimize,
-  RefreshCw, Clock, ServerCrash, HeartPulse, ShieldCheck,
+  RefreshCw, Clock, ServerCrash, HeartPulse, ShieldCheck, ArrowUpDown,
 } from 'lucide-react'
 import {
   api, type InfrastructureHealth, type OperationalHealth, type Alert,
   type Device, type Location, type AuditEntry,
+  type AvailabilityAnalytics, type DeviceUptime,
 } from '../api'
 
 // NOC Wallboard — a large-format operations view for a TV / wall display.
@@ -99,6 +100,8 @@ export function NocWallboard() {
   const devices = useQuery({ queryKey: ['noc', 'devices'], queryFn: () => api.get<Device[]>('/devices?category=all'), ...opts })
   const locations = useQuery({ queryKey: ['noc', 'locs'], queryFn: () => api.get<Location[]>('/locations/all'), ...opts })
   const events = useQuery({ queryKey: ['noc', 'events'], queryFn: () => api.get<AuditEntry[]>('/audit-log'), ...opts })
+  const avail = useQuery({ queryKey: ['noc', 'avail'], queryFn: () => api.get<AvailabilityAnalytics>('/analytics/availability?window=24h'), ...opts })
+  const uptime = useQuery({ queryKey: ['noc', 'uptime'], queryFn: () => api.get<DeviceUptime[]>('/analytics/device-uptime?window=24h'), ...opts })
 
   const lastUpdated = Math.max(infra.dataUpdatedAt, ops.dataUpdatedAt, devices.dataUpdatedAt, alerts.dataUpdatedAt)
 
@@ -152,6 +155,15 @@ export function NocWallboard() {
   const mon = ops.data?.monitoring
   const disc = ops.data?.discovery
   const topo = ops.data?.topology
+
+  // ---- 24h availability trend + worst performers (real history) ----
+  const availSum = avail.data?.summary
+  const availPts = (avail.data?.series ?? []).map((p) => p.uptime_pct)
+  const availTone: ToneKey = availSum == null ? 'muted' : availSum.uptime_pct >= 99.9 ? 'ok' : availSum.uptime_pct >= 99 ? 'warn' : 'crit'
+  const worst = useMemo(
+    () => (uptime.data ?? []).filter((d) => d.uptime_pct < 100 || d.flaps > 0).slice(0, 8),
+    [uptime.data],
+  )
 
   return (
     <div className={'noc' + (isFs ? ' is-fs' : '')} ref={rootRef}>
@@ -262,6 +274,40 @@ export function NocWallboard() {
           <div className="noc-sub">{topo?.mapped_devices ?? 0} mapped · {topo?.unmapped_devices ?? 0} unmapped (switches/routers)</div>
         </div>
 
+        {/* Fleet availability (24h trend) */}
+        <div className="noc-card" style={{ gridColumn: 'span 8' }}>
+          <h2><ShieldCheck size={14} /> Fleet Availability · 24h</h2>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 26, flexWrap: 'wrap' }}>
+            <div>
+              <div className="noc-big" style={{ color: TONE[availTone] }}>{availSum ? `${availSum.uptime_pct.toFixed(2)}%` : '—'}</div>
+              <div className="noc-sub">
+                {availSum ? `${availSum.devices} devices · ${availSum.up.toLocaleString()}/${availSum.samples.toLocaleString()} polls up` : 'no history yet'}
+              </div>
+              <div className="noc-sub">
+                avg {availSum?.avg_latency_ms != null ? Math.round(availSum.avg_latency_ms) : '—'} ms · p95 {availSum?.p95_latency_ms != null ? Math.round(availSum.p95_latency_ms) : '—'} ms · SLA 99.9%
+              </div>
+            </div>
+            <div style={{ flex: 1, minWidth: 240 }}>
+              {availPts.length > 1 ? <NocSpark points={availPts} color={TONE[availTone]} /> : <div className="noc-empty">Availability history builds as the monitor polls.</div>}
+            </div>
+          </div>
+        </div>
+
+        {/* Worst performers / flapping */}
+        <div className="noc-card" style={{ gridColumn: 'span 4' }}>
+          <h2><ArrowUpDown size={14} /> Lowest Uptime · 24h</h2>
+          {worst.length === 0 && <div className="noc-empty">Every device held 100% with no flaps.</div>}
+          <ul className="noc-list">
+            {worst.map((d) => (
+              <li key={d.device_id}>
+                <span className="noc-pill" style={{ background: 'rgba(245,158,11,.15)', color: d.uptime_pct >= 99 ? TONE.warn : TONE.crit }}>{d.uptime_pct.toFixed(1)}%</span>
+                <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.name}</span>
+                <span className="mono">{d.flaps > 0 ? `${d.flaps} flaps` : ''}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+
         {/* Latest events */}
         <div className="noc-card" style={{ gridColumn: 'span 12' }}>
           <h2><ShieldCheck size={14} /> Latest Events</h2>
@@ -294,6 +340,24 @@ function Gauge({ score }: { score: number }) {
         transform={`rotate(-90 ${size / 2} ${size / 2})`} />
       <text x="50%" y="52%" textAnchor="middle" fontSize="30" fontWeight="800" fill="#e8eefb">{s}</text>
       <text x="50%" y="68%" textAnchor="middle" fontSize="11" fill="#8aa0c6">/ 100</text>
+    </svg>
+  )
+}
+
+// NocSpark — a dark-themed sparkline for the wallboard availability trend.
+// Auto-scales to its points; the y-range floors a little below the lowest point
+// so small dips are visible rather than a flat line.
+function NocSpark({ points, color }: { points: number[]; color: string }) {
+  const W = 600, H = 90
+  const lo = Math.min(...points), hi = Math.max(...points, lo + 0.1)
+  const span = hi - lo || 1
+  const x = (i: number) => (i / (points.length - 1)) * W
+  const y = (v: number) => 6 + (H - 12) * (1 - (v - lo) / span)
+  const line = points.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ')
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ width: '100%', height: 90, display: 'block' }}>
+      <polygon points={`0,${H} ${line} ${W},${H}`} fill={color} opacity={0.12} />
+      <polyline points={line} fill="none" stroke={color} strokeWidth={2} vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
     </svg>
   )
 }

@@ -3,10 +3,11 @@ import { Link } from 'react-router-dom'
 import {
   LayoutDashboard, Server, Wifi, WifiOff, Bell, ClipboardList, ShieldAlert,
   Radar, Activity, TriangleAlert, RefreshCw, Clock, Boxes, TrendingUp, Lock, KeyRound, HeartPulse, Network,
+  ShieldCheck, Building2, ArrowUpDown,
 } from 'lucide-react'
-import { api, type Device, type Alert, type DiscoveryJob, type MonitoringOverviewRow, type RoleSummaryRow, type ExpenseByCategory, type EncryptionStatus, type OperationalHealth, type InfrastructureHealth, type RelayAgent } from '../api'
+import { api, type Device, type Alert, type DiscoveryJob, type MonitoringOverviewRow, type RoleSummaryRow, type ExpenseByCategory, type EncryptionStatus, type OperationalHealth, type InfrastructureHealth, type RelayAgent, type AvailabilityAnalytics, type DeviceUptime, type SiteRollup } from '../api'
 import {
-  PageHeader, Panel, Kpi, HealthRing, Donut, Legend, BarList, Sparkline,
+  PageHeader, Panel, Kpi, HealthRing, Donut, Legend, BarList, Sparkline, AreaChart,
   ActivityFeed, EmptyState, StatusPill, OperationalHealthPanel, colorFor, timeAgo,
 } from '../components/ui'
 import { ManagementAccessCoverage } from '../components/AccessCoverageCard'
@@ -94,6 +95,9 @@ export function Dashboard() {
   const enc = useQuery({ queryKey: ['enc-status'], queryFn: () => api.get<EncryptionStatus>('/security/encryption/status'), refetchInterval: 60_000, retry: 0 })
   const oph = useQuery({ queryKey: ['operational-health'], queryFn: () => api.get<OperationalHealth>('/dashboard/operational-health'), refetchInterval: 30_000, retry: 0 })
   const infra = useQuery({ queryKey: ['infra-health'], queryFn: () => api.get<InfrastructureHealth>('/dashboard/infrastructure-health'), refetchInterval: 30_000, retry: 0 })
+  const avail = useQuery({ queryKey: ['analytics-availability', '24h'], queryFn: () => api.get<AvailabilityAnalytics>('/analytics/availability?window=24h'), refetchInterval: 60_000, retry: 0 })
+  const sites = useQuery({ queryKey: ['sites-overview'], queryFn: () => api.get<SiteRollup[]>('/sites/overview'), refetchInterval: 60_000, retry: 0 })
+  const uptime = useQuery({ queryKey: ['analytics-device-uptime', '24h'], queryFn: () => api.get<DeviceUptime[]>('/analytics/device-uptime?window=24h'), refetchInterval: 60_000, retry: 0 })
 
   const h = dash.data?.headline ?? {}
   const devs = devices.data ?? []
@@ -150,6 +154,22 @@ export function Dashboard() {
 
   const detailBase: Record<string, string> = { switch: '/devices', server: '/servers', firewall: '/firewalls', camera: '/cctv', nvr: '/cctv', wireless_controller: '/wlan', printer: '/printers', ups: '/ups', pbx: '/pbx', virtual_host: '/virtual-hosts' }
 
+  // ---- 24h availability trend (SLA) ----
+  const availSeries = avail.data?.series ?? []
+  const availSum = avail.data?.summary
+  const availPts = availSeries.map((p) => p.uptime_pct)
+  const availLabels = availSeries.map((p) => new Date(p.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))
+  const availMin = Math.min(99.9, ...(availPts.length ? availPts : [100]))
+  const fmtPct = (v?: number | null) => (v == null ? '—' : `${v.toFixed(v >= 99.95 ? 3 : 2)}%`)
+
+  // ---- Site health matrix (multi-site rollup, worst health first) ----
+  const siteRows = [...(sites.data ?? [])]
+    .map((s) => ({ ...s, avail: s.devices > 0 ? (s.up / s.devices) * 100 : 0 }))
+    .sort((a, b) => (a.down - b.down === 0 ? a.avail - b.avail : b.down - a.down))
+
+  // ---- Worst performers (lowest 24h uptime, then flapping) ----
+  const worst = (uptime.data ?? []).filter((d) => d.uptime_pct < 100 || d.flaps > 0).slice(0, 6)
+
   return (
     <div>
       <PageHeader
@@ -199,7 +219,45 @@ export function Dashboard() {
             </div>
           </Panel>
 
+          {availSeries.length > 0 && (
+            <Panel
+              title="Fleet Availability · 24h" icon={ShieldCheck}
+              actions={<Link className="btn btn-ghost btn-sm" to="/monitoring">Health Overview →</Link>}
+              subtitle={availSum ? `${fmtPct(availSum.uptime_pct)} uptime · ${availSum.devices} devices · avg ${availSum.avg_latency_ms != null ? Math.round(availSum.avg_latency_ms) : '—'} ms` : undefined}
+            >
+              <AreaChart points={availPts} labels={availLabels} height={120} min={Math.max(0, availMin - 0.4)} max={100} unit="%" baseline={99.9} color="var(--ok)" valueFmt={(v) => fmtPct(v)} ariaLabel="Fleet availability, last 24 hours" />
+            </Panel>
+          )}
+
           <ManagementAccessCoverage />
+
+          {siteRows.length > 1 && (
+            <Panel title="Site Health" icon={Building2} subtitle={`${siteRows.length} sites · worst first`} actions={<Link className="btn btn-ghost btn-sm" to="/sites">Multi-Site →</Link>}>
+              <table className="site-matrix">
+                <thead><tr><th>Site</th><th>Devices</th><th>Online</th><th>Offline</th><th>Availability</th><th>Alerts</th></tr></thead>
+                <tbody>
+                  {siteRows.slice(0, 8).map((s) => {
+                    const tone = s.down > 0 ? 'var(--crit)' : s.warning > 0 ? 'var(--warn)' : 'var(--ok)'
+                    return (
+                      <tr key={s.site_id}>
+                        <td><Link className="cell-name" to="/sites">{s.site_name}</Link></td>
+                        <td>{s.devices}</td>
+                        <td style={{ color: 'var(--ok)' }}>{s.up}</td>
+                        <td style={{ color: s.down > 0 ? 'var(--crit)' : undefined, fontWeight: s.down > 0 ? 600 : undefined }}>{s.down}</td>
+                        <td>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <div className="avail-track"><div className="avail-fill" style={{ width: `${s.avail}%`, background: tone }} /></div>
+                            <span className="mono" style={{ fontSize: 12 }}>{Math.round(s.avail)}%</span>
+                          </div>
+                        </td>
+                        <td>{s.open_alerts > 0 ? <span className="badge badge-down">{s.open_alerts}</span> : <span className="muted">0</span>}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </Panel>
+          )}
 
           <div className="grid-2">
             <Panel title="Devices by Type" icon={Boxes}>
@@ -347,6 +405,23 @@ export function Dashboard() {
               </>
             )
           })()}
+          {worst.length > 0 && (
+            <Panel title="Lowest Uptime · 24h" icon={ArrowUpDown} subtitle="worst availability + flapping" actions={<Link className="btn btn-ghost btn-sm" to="/monitoring">Analyze →</Link>}>
+              <ul className="activity">
+                {worst.map((d) => (
+                  <li key={d.device_id} className="activity-item">
+                    <span className={`activity-dot ${d.uptime_pct >= 99 ? 'tone-warn' : 'tone-crit'}`}><ArrowUpDown size={13} /></span>
+                    <div className="activity-body">
+                      <div className="activity-title"><Link to={`/devices/${d.device_id}`}>{d.name}</Link></div>
+                      <div className="activity-meta">{d.primary_ip || '—'}{d.flaps > 0 ? ` · ${d.flaps} flaps` : ''}</div>
+                    </div>
+                    <span className={`badge badge-${d.uptime_pct >= 99.9 ? 'up' : d.uptime_pct >= 99 ? 'warning' : 'down'}`}>{fmtPct(d.uptime_pct)}</span>
+                  </li>
+                ))}
+              </ul>
+            </Panel>
+          )}
+
           <Panel title="Critical Assets" icon={TriangleAlert} actions={critical.length > 0 ? <Link className="btn btn-ghost btn-sm" to="/monitoring">View all</Link> : undefined}>
             {critical.length === 0
               ? <EmptyState icon={Wifi} title="All systems operational" message="No devices are offline or flagged for attention." />

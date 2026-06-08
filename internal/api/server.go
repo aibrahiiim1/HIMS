@@ -140,6 +140,11 @@ func (s *Server) routes() {
 		r.Get("/dashboard/access-coverage", s.accessCoverage)
 		r.Get("/dashboard/badge-counts", s.badgeCounts)
 
+		// --- Analytics (historical trend/time-series) ----------------
+		r.Get("/analytics/availability", s.analyticsAvailability)
+		r.Get("/analytics/device-uptime", s.analyticsDeviceUptime)
+		r.Get("/analytics/alerts", s.analyticsAlerts)
+
 		// --- System: runtime identity of THIS API process ------------
 		r.Get("/system/runtime", s.systemRuntime)
 		r.Get("/data-quality", s.dataQuality)

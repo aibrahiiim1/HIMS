@@ -1751,3 +1751,67 @@ export interface AgentJob {
   error?: string
   created_at: string
 }
+
+// ---- Analytics (historical trend/time-series) ----------------------------
+export interface AvailabilityPoint {
+  ts: string
+  total: number
+  up: number
+  down: number
+  warning: number
+  uptime_pct: number
+  avg_latency_ms: number | null
+  p95_latency_ms: number | null
+}
+export interface AvailabilitySummary {
+  samples: number
+  up: number
+  down: number
+  warning: number
+  devices: number
+  uptime_pct: number
+  avg_latency_ms: number | null
+  p95_latency_ms: number | null
+}
+export interface AvailabilityAnalytics {
+  window: string
+  bucket: string
+  summary: AvailabilitySummary
+  series: AvailabilityPoint[]
+}
+export interface DeviceUptime {
+  device_id: string
+  name: string
+  primary_ip: string | null
+  category: string
+  samples: number
+  up: number
+  uptime_pct: number
+  avg_latency_ms: number | null
+  max_latency_ms: number | null
+  flaps: number
+}
+export interface AlertAnalytics {
+  window: string
+  bucket: string
+  opened: number
+  resolved: number
+  open_now: number
+  open_critical: number
+  mtta_seconds: number | null
+  mttr_seconds: number | null
+  series: { ts: string; opened: number; critical: number; warning: number }[]
+}
+// Per-site rollup from GET /sites/overview.
+export interface SiteRollup {
+  site_id: string
+  site_name: string
+  kind: string
+  devices: number
+  up: number
+  down: number
+  warning: number
+  unknown: number
+  open_alerts: number
+  by_category: Record<string, number>
+}

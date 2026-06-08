@@ -828,3 +828,40 @@ select.field { cursor: pointer; }
   0%, 100% { opacity: 1; }
   50% { opacity: 0.45; }
 }
+
+/* ---- AreaChart (historical trend analytics) ----------------------------- */
+.areachart { width: 100%; }
+.areachart-ax {
+  position: absolute; top: 6px; bottom: 18px; left: 0; right: 0;
+  display: flex; flex-direction: column; justify-content: space-between;
+  pointer-events: none; font-size: 10px; color: var(--text-muted);
+}
+.areachart-ax span { background: linear-gradient(90deg, var(--panel) 60%, transparent); padding-right: 4px; width: fit-content; }
+.areachart-x { display: flex; justify-content: space-between; font-size: 10px; color: var(--text-muted); margin-top: 2px; }
+.areachart-tip {
+  position: absolute; top: -2px; transform: translateX(-50%);
+  background: var(--panel-2, var(--bg-elevated, #1b2233)); border: 1px solid var(--border);
+  border-radius: 6px; padding: 3px 7px; font-size: 11px; line-height: 1.25; white-space: nowrap;
+  box-shadow: 0 4px 14px rgba(0,0,0,.25); pointer-events: none; z-index: 3;
+}
+.areachart-tip b { display: block; }
+.areachart-tip small { color: var(--text-muted); }
+.chart-empty {
+  display: flex; align-items: center; justify-content: center;
+  color: var(--text-muted); font-size: var(--fs-sm); border: 1px dashed var(--border);
+  border-radius: 8px; background: rgba(127,127,127,.04);
+}
+
+/* ---- Analytics widgets (shared by Dashboard / Monitoring / NOC) ---------- */
+.seg { display: inline-flex; gap: 2px; padding: 2px; background: rgba(127,127,127,.1); border-radius: 8px; }
+.seg button { border: none; background: transparent; color: var(--text-muted); font-size: 12px; font-weight: 600; padding: 4px 11px; border-radius: 6px; cursor: pointer; }
+.seg button.active { background: var(--panel); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+.stat-strip { display: flex; flex-wrap: wrap; gap: 18px 26px; }
+.stat-strip .s-item { display: flex; flex-direction: column; gap: 1px; }
+.stat-strip .s-item b { font-size: 19px; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.stat-strip .s-item small { font-size: 11px; color: var(--text-muted); }
+.site-matrix { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); }
+.site-matrix th { text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); padding: 4px 8px; }
+.site-matrix td { padding: 6px 8px; border-top: 1px solid var(--border); }
+.site-matrix .avail-track { width: 84px; height: 7px; border-radius: 4px; background: rgba(127,127,127,.18); overflow: hidden; }
+.site-matrix .avail-fill { height: 100%; border-radius: 4px; }

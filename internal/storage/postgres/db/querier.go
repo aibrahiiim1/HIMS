@@ -27,6 +27,12 @@ type Querier interface {
 	// Absolute set of on-hand quantity (a stock count / receiving correction).
 	// The CHECK (quantity >= 0) constraint rejects negative results.
 	AdjustSparePartStock(ctx context.Context, arg AdjustSparePartStockParams) (SparePart, error)
+	// Alert volume + responsiveness over the window. MTTA/MTTR are NULL until alerts
+	// with acknowledged/resolved timestamps exist (honest empty state). $1 = window.
+	AlertAnalyticsSummary(ctx context.Context, dollar_1 string) (AlertAnalyticsSummaryRow, error)
+	// Alerts opened per time bucket, split by severity, for the alert-rate trend.
+	// $1 = granularity, $2 = window.
+	AlertOpenedSeries(ctx context.Context, arg AlertOpenedSeriesParams) ([]AlertOpenedSeriesRow, error)
 	// Distinct filter values (+counts) for the audit filter UI, in one round-trip.
 	AuditFacets(ctx context.Context) ([]AuditFacetsRow, error)
 	BindCredentialGroup(ctx context.Context, arg BindCredentialGroupParams) (CredentialBinding, error)
@@ -183,6 +189,10 @@ type Querier interface {
 	DeleteWirelessEventsForSource(ctx context.Context, arg DeleteWirelessEventsForSourceParams) error
 	DeviceCountByCategory(ctx context.Context) ([]DeviceCountByCategoryRow, error)
 	DeviceCountByStatus(ctx context.Context) ([]DeviceCountByStatusRow, error)
+	// Per-device availability over the window: sample/up counts (for uptime %),
+	// latency, and flap count (status transitions). Ordered worst-first so the UI can
+	// show "worst performers" and a flapping list. $1 = window (e.g. '24 hours').
+	DeviceUptimeRanking(ctx context.Context, dollar_1 string) ([]DeviceUptimeRankingRow, error)
 	// Mark open, unacknowledged, not-yet-escalated alerts as escalated once they
 	// have aged past their rule's escalate_after_minutes (0 = never).
 	EscalateStaleAlerts(ctx context.Context) ([]EscalateStaleAlertsRow, error)
@@ -197,6 +207,22 @@ type Querier interface {
 	FindMACByIP(ctx context.Context, ipAddress netip.Addr) ([]FindMACByIPRow, error)
 	// Topology search: which switch + port + VLAN carries a MAC?
 	FindMACOnSwitches(ctx context.Context, mac string) ([]FindMACOnSwitchesRow, error)
+	// Analytics aggregations powering the enterprise dashboards (Dashboard, NOC
+	// Wallboard, Health Overview). All grounded in real collected data:
+	// monitoring_samples (reachability time-series) and alerts. Bucket granularity
+	// and window are passed as text params so one query serves 24h/7d/30d.
+	//
+	// Percentages are intentionally NOT computed in SQL (kept as raw up/total int
+	// counts) so the result types stay clean float8/bigint; the handler derives %.
+	// Latency / MTTA / MTTR are nullable: avg() over no rows is NULL, which must
+	// read as "no data" (not a fake 0) — hence bare aggregates, no ::float8 cast.
+	// Fleet-wide reachability over time: one row per time bucket with up/down/warning
+	// sample counts and latency stats. $1 = date_trunc granularity ('hour'|'day'),
+	// $2 = window (e.g. '24 hours', '7 days'). Powers the availability trend chart.
+	FleetAvailabilitySeries(ctx context.Context, arg FleetAvailabilitySeriesParams) ([]FleetAvailabilitySeriesRow, error)
+	// Single-row rollup over the same window: sample counts (for uptime %), distinct
+	// devices, and latency stats. Used for the headline availability KPI / SLA figure.
+	FleetAvailabilitySummary(ctx context.Context, dollar_1 string) (FleetAvailabilitySummaryRow, error)
 	FlowOverview(ctx context.Context, at time.Time) (FlowOverviewRow, error)
 	GetAgentJob(ctx context.Context, id uuid.UUID) (AgentJob, error)
 	GetAlert(ctx context.Context, id uuid.UUID) (Alert, error)

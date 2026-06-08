@@ -3,7 +3,7 @@
 // components with their small formatting helpers (timeAgo, colorFor,
 // STATUS_COLOR). The react-refresh rule is an HMR-only nicety, not correctness.
 import { useMemo, useState } from 'react'
-import type { ComponentType, ReactNode } from 'react'
+import type { ComponentType, ReactNode, MouseEvent as ReactMouseEvent } from 'react'
 
 /* ============================================================================
    Enterprise UI kit — presentational primitives shared across all pages.
@@ -410,4 +410,71 @@ export const STATUS_COLOR: Record<string, string> = {
   down: 'var(--crit)', offline: 'var(--crit)',
   warning: 'var(--warn)', needs_attention: 'var(--warn)',
   unknown: 'var(--neutral)',
+}
+
+/* ---- AreaChart: responsive time-series line+area with hover -------------- */
+// A dependency-free trend chart for historical analytics (availability %,
+// latency over time, alert rate). Stretches to its container width; hover
+// reveals the value + label at the nearest point. Pass `baseline` to draw a
+// reference line (e.g. an SLA target).
+export function AreaChart({
+  points, labels, height = 140, color = 'var(--brand)', area = true,
+  min, max, unit = '', baseline, valueFmt, ariaLabel,
+}: {
+  points: number[]
+  labels?: string[]
+  height?: number
+  color?: string
+  area?: boolean
+  min?: number
+  max?: number
+  unit?: string
+  baseline?: number
+  valueFmt?: (v: number) => string
+  ariaLabel?: string
+}) {
+  const [hi, setHi] = useState<number | null>(null)
+  if (!points.length) {
+    return <div className="chart-empty" style={{ height }}>No data in this window</div>
+  }
+  const lo = min ?? Math.min(...points)
+  const hiV = max ?? Math.max(...points, lo + 1)
+  const span = hiV - lo || 1
+  const W = 1000, H = 300, padT = 10
+  const x = (i: number) => (points.length === 1 ? W / 2 : (i / (points.length - 1)) * W)
+  const y = (v: number) => padT + (H - padT) * (1 - (v - lo) / span)
+  const line = points.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ')
+  const fmt = valueFmt ?? ((v: number) => `${Math.round(v * 100) / 100}${unit}`)
+  const onMove = (e: ReactMouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect()
+    const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width))
+    setHi(Math.round(frac * (points.length - 1)))
+  }
+  return (
+    <div className="areachart" style={{ position: 'relative' }} onMouseMove={onMove} onMouseLeave={() => setHi(null)} role="img" aria-label={ariaLabel}>
+      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ width: '100%', height, display: 'block' }}>
+        {area && <polygon points={`0,${H} ${line} ${W},${H}`} fill={color} opacity={0.12} />}
+        {baseline != null && baseline >= lo && baseline <= hiV && (
+          <line x1={0} x2={W} y1={y(baseline)} y2={y(baseline)} stroke="var(--warn)" strokeWidth={1} strokeDasharray="6 6" vectorEffect="non-scaling-stroke" opacity={0.7} />
+        )}
+        <polyline points={line} fill="none" stroke={color} strokeWidth={2} vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
+        {hi != null && (
+          <>
+            <line x1={x(hi)} x2={x(hi)} y1={0} y2={H} stroke="var(--border)" strokeWidth={1} vectorEffect="non-scaling-stroke" />
+            <circle cx={x(hi)} cy={y(points[hi])} r={5} fill={color} stroke="var(--panel)" strokeWidth={2} vectorEffect="non-scaling-stroke" />
+          </>
+        )}
+      </svg>
+      <div className="areachart-ax"><span>{fmt(hiV)}</span><span>{fmt(lo)}</span></div>
+      {labels && labels.length > 0 && (
+        <div className="areachart-x"><span>{labels[0]}</span>{labels.length > 2 && <span>{labels[Math.floor(labels.length / 2)]}</span>}<span>{labels[labels.length - 1]}</span></div>
+      )}
+      {hi != null && (
+        <div className="areachart-tip" style={{ left: `${(x(hi) / W) * 100}%` }}>
+          <b>{fmt(points[hi])}</b>
+          {labels && labels[hi] && <small>{labels[hi]}</small>}
+        </div>
+      )}
+    </div>
+  )
 }
