@@ -15,8 +15,8 @@ import {
 } from '../components/ui'
 
 const STATUS_DONUT_COLOR: Record<string, string> = { up: '#16a34a', warning: '#d97706', down: '#dc2626', unknown: '#94a3b8' }
-type Win = '24h' | '7d' | '30d'
-const WINDOWS: { k: Win; label: string }[] = [{ k: '24h', label: '24h' }, { k: '7d', label: '7d' }, { k: '30d', label: '30d' }]
+type Win = '1h' | '24h' | '7d' | '30d'
+const WINDOWS: { k: Win; label: string }[] = [{ k: '1h', label: '1h' }, { k: '24h', label: '24h' }, { k: '7d', label: '7d' }, { k: '30d', label: '30d' }]
 
 // SLA target line drawn on the availability trend. 99.9% ≈ "three nines".
 const SLA_TARGET = 99.9
@@ -24,7 +24,7 @@ const SLA_TARGET = 99.9
 // bucketLabel renders an ISO bucket as a compact axis/tooltip label.
 function bucketLabel(iso: string, bucket: string): string {
   const d = new Date(iso)
-  if (bucket === 'hour') return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  if (bucket === 'hour' || bucket === 'minute') return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   return d.toLocaleDateString([], { month: 'short', day: 'numeric' })
 }
 const fmtMs = (v?: number | null) => (v == null ? '—' : `${v < 10 ? v.toFixed(1) : Math.round(v)} ms`)

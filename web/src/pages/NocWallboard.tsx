@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   Activity, TriangleAlert, Building2, Radar, Network, Maximize, Minimize,
-  RefreshCw, Clock, ServerCrash, HeartPulse, ShieldCheck, ArrowUpDown,
+  RefreshCw, Clock, ServerCrash, HeartPulse, ShieldCheck, ArrowUpDown, Zap,
 } from 'lucide-react'
 import {
   api, type InfrastructureHealth, type OperationalHealth, type Alert,
@@ -33,6 +33,9 @@ const WALL_CSS = `
 .noc-btn:hover { border-color:var(--noc-accent); }
 .noc-sel { background:var(--noc-panel); border:1px solid var(--noc-line); color:var(--noc-text);
   padding:7px 10px; border-radius:9px; font-size:13px; font-weight:700; }
+.noc-seg { display:inline-flex; gap:2px; padding:2px; background:var(--noc-panel2); border:1px solid var(--noc-line); border-radius:9px; }
+.noc-seg button { border:none; background:transparent; color:var(--noc-muted); font-size:13px; font-weight:700; padding:5px 11px; border-radius:7px; cursor:pointer; }
+.noc-seg button.active { background:var(--noc-accent); color:#fff; }
 .noc-grid { display:grid; grid-template-columns:repeat(12,1fr); gap:16px; }
 .noc-card { background:var(--noc-panel); border:1px solid var(--noc-line); border-radius:14px; padding:16px 18px; }
 .noc-card h2 { font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--noc-muted);
@@ -76,9 +79,12 @@ function statusTone(s?: string): ToneKey {
   }
 }
 const REFRESH_MS = 30_000
+type Win = '1h' | '24h' | '7d' | '30d'
+const WINDOWS: Win[] = ['1h', '24h', '7d', '30d']
 
 export function NocWallboard() {
   const [refreshMs, setRefreshMs] = useState(REFRESH_MS)
+  const [win, setWin] = useState<Win>('24h')
   const [isFs, setIsFs] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
   const [now, setNow] = useState(() => new Date())
@@ -100,8 +106,8 @@ export function NocWallboard() {
   const devices = useQuery({ queryKey: ['noc', 'devices'], queryFn: () => api.get<Device[]>('/devices?category=all'), ...opts })
   const locations = useQuery({ queryKey: ['noc', 'locs'], queryFn: () => api.get<Location[]>('/locations/all'), ...opts })
   const events = useQuery({ queryKey: ['noc', 'events'], queryFn: () => api.get<AuditEntry[]>('/audit-log'), ...opts })
-  const avail = useQuery({ queryKey: ['noc', 'avail'], queryFn: () => api.get<AvailabilityAnalytics>('/analytics/availability?window=24h'), ...opts })
-  const uptime = useQuery({ queryKey: ['noc', 'uptime'], queryFn: () => api.get<DeviceUptime[]>('/analytics/device-uptime?window=24h'), ...opts })
+  const avail = useQuery({ queryKey: ['noc', 'avail', win], queryFn: () => api.get<AvailabilityAnalytics>(`/analytics/availability?window=${win}`), ...opts })
+  const uptime = useQuery({ queryKey: ['noc', 'uptime', win], queryFn: () => api.get<DeviceUptime[]>(`/analytics/device-uptime?window=${win}`), ...opts })
 
   const lastUpdated = Math.max(infra.dataUpdatedAt, ops.dataUpdatedAt, devices.dataUpdatedAt, alerts.dataUpdatedAt)
 
@@ -156,9 +162,10 @@ export function NocWallboard() {
   const disc = ops.data?.discovery
   const topo = ops.data?.topology
 
-  // ---- 24h availability trend + worst performers (real history) ----
+  // ---- availability trend + worst performers (real history, windowed) ----
   const availSum = avail.data?.summary
   const availPts = (avail.data?.series ?? []).map((p) => p.uptime_pct)
+  const latPts = (avail.data?.series ?? []).map((p) => p.avg_latency_ms ?? 0)
   const availTone: ToneKey = availSum == null ? 'muted' : availSum.uptime_pct >= 99.9 ? 'ok' : availSum.uptime_pct >= 99 ? 'warn' : 'crit'
   const worst = useMemo(
     () => (uptime.data ?? []).filter((d) => d.uptime_pct < 100 || d.flaps > 0).slice(0, 8),
@@ -173,6 +180,11 @@ export function NocWallboard() {
         <h1><Activity size={22} /> HIMS NOC</h1>
         <span className="noc-chip"><Clock size={14} /> <b>{now.toLocaleTimeString()}</b> · {now.toLocaleDateString()}</span>
         <div className="spacer" />
+        <div className="noc-seg" role="tablist" aria-label="Analysis window">
+          {WINDOWS.map((w) => (
+            <button key={w} className={win === w ? 'active' : ''} onClick={() => setWin(w)}>{w}</button>
+          ))}
+        </div>
         <span className="noc-chip"><RefreshCw size={14} /> updated {lastUpdated ? secsAgo(lastUpdated, now) : '—'}</span>
         <select className="noc-sel" value={refreshMs} onChange={(e) => setRefreshMs(Number(e.target.value))} title="Auto-refresh interval">
           <option value={30_000}>Refresh 30s</option>
@@ -274,9 +286,9 @@ export function NocWallboard() {
           <div className="noc-sub">{topo?.mapped_devices ?? 0} mapped · {topo?.unmapped_devices ?? 0} unmapped (switches/routers)</div>
         </div>
 
-        {/* Fleet availability (24h trend) */}
-        <div className="noc-card" style={{ gridColumn: 'span 8' }}>
-          <h2><ShieldCheck size={14} /> Fleet Availability · 24h</h2>
+        {/* Fleet availability (windowed trend) */}
+        <div className="noc-card" style={{ gridColumn: 'span 5' }}>
+          <h2><ShieldCheck size={14} /> Fleet Availability · {win}</h2>
           <div style={{ display: 'flex', alignItems: 'center', gap: 26, flexWrap: 'wrap' }}>
             <div>
               <div className="noc-big" style={{ color: TONE[availTone] }}>{availSum ? `${availSum.uptime_pct.toFixed(2)}%` : '—'}</div>
@@ -295,7 +307,7 @@ export function NocWallboard() {
 
         {/* Worst performers / flapping */}
         <div className="noc-card" style={{ gridColumn: 'span 4' }}>
-          <h2><ArrowUpDown size={14} /> Lowest Uptime · 24h</h2>
+          <h2><ArrowUpDown size={14} /> Lowest Uptime · {win}</h2>
           {worst.length === 0 && <div className="noc-empty">Every device held 100% with no flaps.</div>}
           <ul className="noc-list">
             {worst.map((d) => (
@@ -306,6 +318,16 @@ export function NocWallboard() {
               </li>
             ))}
           </ul>
+        </div>
+
+        {/* Latency trend */}
+        <div className="noc-card" style={{ gridColumn: 'span 3' }}>
+          <h2><Zap size={14} /> Latency · {win}</h2>
+          <div className="noc-big" style={{ fontSize: 34, color: TONE.info }}>{availSum?.avg_latency_ms != null ? Math.round(availSum.avg_latency_ms) : '—'}<span style={{ fontSize: 15, color: 'var(--noc-muted)' }}> ms avg</span></div>
+          <div className="noc-sub">p95 {availSum?.p95_latency_ms != null ? Math.round(availSum.p95_latency_ms) : '—'} ms (TCP round-trip)</div>
+          <div style={{ marginTop: 10 }}>
+            {latPts.some((v) => v > 0) ? <NocSpark points={latPts} color={TONE.info} /> : <div className="noc-empty">No latency samples.</div>}
+          </div>
         </div>
 
         {/* Latest events */}

@@ -865,3 +865,10 @@ select.field { cursor: pointer; }
 .site-matrix td { padding: 6px 8px; border-top: 1px solid var(--border); }
 .site-matrix .avail-track { width: 84px; height: 7px; border-radius: 4px; background: rgba(127,127,127,.18); overflow: hidden; }
 .site-matrix .avail-fill { height: 100%; border-radius: 4px; }
+
+/* ---- Dashboard section dividers ----------------------------------------- */
+.dash-section { display: flex; align-items: center; gap: 8px; margin: 22px 0 12px; color: var(--text); }
+.dash-section h2 { font-size: 14px; font-weight: 700; margin: 0; letter-spacing: .01em; }
+.dash-section svg { color: var(--brand); }
+.dash-section .dash-section-hint { color: var(--text-muted); font-size: 12px; font-weight: 500; }
+.dash-section::after { content: ''; flex: 1; height: 1px; background: var(--border); margin-left: 4px; }

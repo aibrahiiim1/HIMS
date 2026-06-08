@@ -15,6 +15,8 @@ import (
 // Postgres interval string. Unknown tokens fall back to the 24h view.
 func analyticsWindow(w string) (token, bucket, interval string) {
 	switch w {
+	case "1h":
+		return "1h", "minute", "1 hour"
 	case "7d":
 		return "7d", "day", "7 days"
 	case "30d":
