@@ -280,8 +280,8 @@ export interface Neighbor {
 }
 
 export interface TopologyLink {
-  local_device_id: string
-  local_device_name: string
+  local_device_id?: string
+  local_device_name?: string
   local_ip?: string | null
   local_if_index?: number | null
   local_if_name?: string | null
@@ -289,7 +289,14 @@ export interface TopologyLink {
   remote_device_name?: string | null
   remote_ip?: string | null
   remote_sys_name?: string | null
+  remote_vendor?: string | null
+  remote_category?: string | null
+  remote_port?: string | null
+  // inbound=true: link was derived from the neighbour's side (e.g. a MAC/FDB
+  // cross-vendor uplink); this device's own local port is unknown.
+  inbound?: boolean
   link_source: string
+  last_seen_at?: string
 }
 
 export interface TopologyGraphNode {

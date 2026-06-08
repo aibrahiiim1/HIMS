@@ -336,6 +336,122 @@ func (q *Queries) ListAllTopologyLinks(ctx context.Context) ([]ListAllTopologyLi
 	return items, nil
 }
 
+const listDeviceLinksBidirectional = `-- name: ListDeviceLinksBidirectional :many
+SELECT tl.id,
+       tl.local_device_id, tl.local_if_index, tl.local_if_name,
+       tl.remote_device_id, tl.remote_sys_name, tl.remote_ip,
+       tl.link_source, tl.last_seen_at,
+       (tl.local_device_id <> $1) AS inbound,
+       ld.name AS local_name, ld.primary_ip AS local_dev_ip, ld.vendor AS local_vendor, ld.category AS local_category,
+       rd.name AS remote_name, rd.primary_ip AS remote_dev_ip, rd.vendor AS remote_vendor, rd.category AS remote_category
+FROM topology_links tl
+JOIN devices ld ON ld.id = tl.local_device_id AND ld.deleted_at IS NULL
+LEFT JOIN devices rd ON rd.id = tl.remote_device_id AND rd.deleted_at IS NULL
+WHERE tl.local_device_id = $1 OR tl.remote_device_id = $1
+ORDER BY tl.local_if_index NULLS LAST
+`
+
+type ListDeviceLinksBidirectionalRow struct {
+	ID             uuid.UUID   `json:"id"`
+	LocalDeviceID  uuid.UUID   `json:"local_device_id"`
+	LocalIfIndex   *int32      `json:"local_if_index"`
+	LocalIfName    *string     `json:"local_if_name"`
+	RemoteDeviceID *uuid.UUID  `json:"remote_device_id"`
+	RemoteSysName  *string     `json:"remote_sys_name"`
+	RemoteIp       *netip.Addr `json:"remote_ip"`
+	LinkSource     string      `json:"link_source"`
+	LastSeenAt     time.Time   `json:"last_seen_at"`
+	Inbound        bool        `json:"inbound"`
+	LocalName      string      `json:"local_name"`
+	LocalDevIp     *netip.Addr `json:"local_dev_ip"`
+	LocalVendor    *string     `json:"local_vendor"`
+	LocalCategory  string      `json:"local_category"`
+	RemoteName     *string     `json:"remote_name"`
+	RemoteDevIp    *netip.Addr `json:"remote_dev_ip"`
+	RemoteVendor   *string     `json:"remote_vendor"`
+	RemoteCategory *string     `json:"remote_category"`
+}
+
+// All topology links touching a device from EITHER endpoint, with both ends
+// enriched (name/ip/vendor/category) and an `inbound` flag set when the device
+// is the link's remote side. The handler normalizes this so the per-device
+// Topology tab always shows the OTHER device — including links that point AT it
+// (e.g. a MAC/FDB-derived cross-vendor uplink stored from the neighbour's side).
+func (q *Queries) ListDeviceLinksBidirectional(ctx context.Context, localDeviceID uuid.UUID) ([]ListDeviceLinksBidirectionalRow, error) {
+	rows, err := q.db.Query(ctx, listDeviceLinksBidirectional, localDeviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListDeviceLinksBidirectionalRow{}
+	for rows.Next() {
+		var i ListDeviceLinksBidirectionalRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.LocalDeviceID,
+			&i.LocalIfIndex,
+			&i.LocalIfName,
+			&i.RemoteDeviceID,
+			&i.RemoteSysName,
+			&i.RemoteIp,
+			&i.LinkSource,
+			&i.LastSeenAt,
+			&i.Inbound,
+			&i.LocalName,
+			&i.LocalDevIp,
+			&i.LocalVendor,
+			&i.LocalCategory,
+			&i.RemoteName,
+			&i.RemoteDevIp,
+			&i.RemoteVendor,
+			&i.RemoteCategory,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listFabricInterfaceMACs = `-- name: ListFabricInterfaceMACs :many
+SELECT i.device_id, i.mac
+FROM interfaces i
+JOIN devices d ON d.id = i.device_id AND d.deleted_at IS NULL
+WHERE i.mac IS NOT NULL AND i.mac <> ''
+  AND d.category IN ('switch', 'router', 'isp_router')
+`
+
+type ListFabricInterfaceMACsRow struct {
+	DeviceID uuid.UUID `json:"device_id"`
+	Mac      *string   `json:"mac"`
+}
+
+// Every interface MAC belonging to a topology-capable fabric device (switch /
+// router / ISP router). Used to map an observed FDB MAC back to the device that
+// owns it, for vendor-neutral L2 link inference (FDB-based topology).
+func (q *Queries) ListFabricInterfaceMACs(ctx context.Context) ([]ListFabricInterfaceMACsRow, error) {
+	rows, err := q.db.Query(ctx, listFabricInterfaceMACs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListFabricInterfaceMACsRow{}
+	for rows.Next() {
+		var i ListFabricInterfaceMACsRow
+		if err := rows.Scan(&i.DeviceID, &i.Mac); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listInterfaces = `-- name: ListInterfaces :many
 SELECT id, device_id, if_index, if_name, if_descr, if_alias, if_type, mac, speed_mbps, admin_status, oper_status, port_role, collection_source, last_seen_at, created_at, updated_at FROM interfaces WHERE device_id = $1 ORDER BY if_index
 `

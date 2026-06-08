@@ -93,24 +93,18 @@ export function SwitchDetail() {
       )}
 
       {tab === 'neighbors' && (
-        <Panel title="LLDP / CDP Neighbors" subtitle={`${neighbors.data?.length ?? 0}`} pad={false}>
+        <Panel title="LLDP / CDP Neighbors" subtitle={`${neighbors.data?.length ?? 0} · raw protocol neighbours`} pad={false}>
           {neighbors.isLoading && <div className="loading">Loading neighbors…</div>}
-          {neighbors.data && neighbors.data.length === 0 && <EmptyState icon={Share2} title="No neighbors discovered" message="Empty is normal in mixed-vendor segments." />}
+          {neighbors.data && neighbors.data.length === 0 && <EmptyState icon={Share2} title="No LLDP/CDP neighbors" message="Empty is normal in mixed-vendor segments (e.g. a Cisco port that only speaks CDP facing an Aruba that only reads LLDP). Cross-vendor links still appear under the Topology tab, derived from the MAC forwarding table." />}
           {(neighbors.data?.length ?? 0) > 0 && <NeighborTable data={neighbors.data!} full />}
         </Panel>
       )}
 
       {tab === 'topology' && (
-        <Panel title="Topology Links" subtitle={`${topo.data?.length ?? 0}`} pad={false}>
+        <Panel title="Topology Links" subtitle={`${topo.data?.length ?? 0} · LLDP/CDP + MAC-derived, any vendor`} pad={false}>
           {topo.isLoading && <div className="loading">Loading links…</div>}
-          {topo.data && topo.data.length === 0 && <EmptyState icon={Network} title="No topology links computed" message="Links are derived from LLDP/CDP and ARP/MAC correlation." />}
-          {(topo.data?.length ?? 0) > 0 && (
-            <table className="data-table"><thead><tr><th>Local port</th><th>Connects to</th><th>Remote IP</th><th>Source</th></tr></thead>
-              <tbody>{topo.data!.map((l, i) => (
-                <tr key={i}><td>{l.local_if_name ?? l.local_if_index ?? '—'}</td><td className="cell-name">{l.remote_device_name ?? l.remote_sys_name ?? '—'}</td><td className="mono">{l.remote_ip ?? '—'}</td><td><span className={`badge badge-${l.link_source}`}>{l.link_source}</span></td></tr>
-              ))}</tbody>
-            </table>
-          )}
+          {topo.data && topo.data.length === 0 && <EmptyState icon={Network} title="No topology links computed" message="Links are derived from LLDP/CDP neighbours and, when those don't cross a vendor boundary, from the bridge MAC forwarding table (FDB)." />}
+          {(topo.data?.length ?? 0) > 0 && <TopologyLinkTable data={topo.data!} />}
         </Panel>
       )}
 
@@ -153,6 +147,45 @@ function NeighborTable({ data, full }: { data: Neighbor[]; full?: boolean }) {
             <td>{n.rem_port_id ?? n.rem_port_desc ?? '—'}</td>
             {full && <td className="mono">{n.rem_mgmt_ip ?? '—'}</td>}
             <td><span className={`badge badge-${n.protocol}`}>{n.protocol}</span></td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+// How each link was derived, for the source badge tooltip.
+const LINK_SOURCE_LABEL: Record<string, string> = {
+  lldp: 'LLDP neighbour (standard, vendor-neutral)',
+  cdp: 'CDP neighbour (Cisco Discovery Protocol)',
+  mac: 'Derived from the bridge MAC forwarding table (FDB) — vendor-neutral L2 adjacency, used when LLDP/CDP does not cross the vendor boundary',
+  arp: 'Derived from ARP correlation',
+}
+
+// TopologyLinkTable renders the per-device links from the bidirectional view:
+// every link touching this device, with the OTHER end as "connects to". MAC-
+// derived links (cross-vendor uplinks) and links learned from the neighbour's
+// side (inbound) are labelled so the source is always honest.
+function TopologyLinkTable({ data }: { data: TopologyLink[] }) {
+  return (
+    <table className="data-table">
+      <thead><tr><th>Local port</th><th>Connects to</th><th>Vendor</th><th>Remote IP</th><th>Source</th></tr></thead>
+      <tbody>
+        {data.map((l, i) => (
+          <tr key={i}>
+            <td>
+              {l.inbound
+                ? <span className="muted" title="This link was learned from the neighbour's side (e.g. its MAC table), so this device's own port is not known.">via neighbour{l.remote_port ? ` · ${l.remote_port}` : ''}</span>
+                : (l.local_if_name ?? l.local_if_index ?? '—')}
+            </td>
+            <td className="cell-name">{l.remote_device_name ?? l.remote_sys_name ?? '—'}</td>
+            <td>{l.remote_vendor ?? '—'}</td>
+            <td className="mono">{l.remote_ip ?? '—'}</td>
+            <td>
+              <span className={`badge badge-${l.link_source}`} title={LINK_SOURCE_LABEL[l.link_source] ?? l.link_source}>
+                {l.link_source === 'mac' ? 'MAC/FDB' : l.link_source.toUpperCase()}
+              </span>
+            </td>
           </tr>
         ))}
       </tbody>

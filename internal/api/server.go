@@ -599,17 +599,75 @@ func (s *Server) deviceNeighbors(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, rows)
 }
 
+// deviceLinkDTO is one topology link as seen from a single device: the OTHER
+// end is always the "remote", regardless of which side the row was stored on.
+// inbound=true means the link was derived from the neighbour's side (e.g. a
+// MAC/FDB-inferred cross-vendor uplink), so this device's own local port is not
+// known — remote_port carries the neighbour's port instead.
+type deviceLinkDTO struct {
+	RemoteDeviceID   *uuid.UUID `json:"remote_device_id"`
+	RemoteDeviceName *string    `json:"remote_device_name"`
+	RemoteSysName    *string    `json:"remote_sys_name"`
+	RemoteIP         *string    `json:"remote_ip"`
+	RemoteVendor     *string    `json:"remote_vendor"`
+	RemoteCategory   *string    `json:"remote_category"`
+	LocalIfName      *string    `json:"local_if_name"`
+	LocalIfIndex     *int32     `json:"local_if_index"`
+	RemotePort       *string    `json:"remote_port"`
+	LinkSource       string     `json:"link_source"`
+	Inbound          bool       `json:"inbound"`
+	LastSeenAt       string     `json:"last_seen_at"`
+}
+
 func (s *Server) deviceTopology(w http.ResponseWriter, r *http.Request) {
 	ctx, id, ok := pathDevice(w, r)
 	if !ok {
 		return
 	}
-	links, err := s.queries.ListTopologyLinks(ctx, id)
+	rows, err := s.queries.ListDeviceLinksBidirectional(ctx, id)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, links)
+	ipStr := func(a *netip.Addr) *string {
+		if a != nil && a.IsValid() {
+			s := a.String()
+			return &s
+		}
+		return nil
+	}
+	out := make([]deviceLinkDTO, 0, len(rows))
+	for _, l := range rows {
+		d := deviceLinkDTO{LinkSource: l.LinkSource, Inbound: l.Inbound, LastSeenAt: l.LastSeenAt.UTC().Format(time.RFC3339)}
+		if l.Inbound {
+			// This device is the link's remote side → the neighbour is the LOCAL row.
+			lid := l.LocalDeviceID
+			ln := l.LocalName
+			d.RemoteDeviceID = &lid
+			d.RemoteDeviceName = &ln
+			d.RemoteSysName = &ln
+			d.RemoteIP = ipStr(l.LocalDevIp)
+			d.RemoteVendor = l.LocalVendor
+			lc := l.LocalCategory
+			d.RemoteCategory = &lc
+			d.RemotePort = l.LocalIfName // the neighbour's port toward us
+		} else {
+			d.RemoteDeviceID = l.RemoteDeviceID
+			d.RemoteDeviceName = l.RemoteName
+			d.RemoteSysName = l.RemoteSysName
+			if ip := ipStr(l.RemoteDevIp); ip != nil {
+				d.RemoteIP = ip
+			} else {
+				d.RemoteIP = ipStr(l.RemoteIp)
+			}
+			d.RemoteVendor = l.RemoteVendor
+			d.RemoteCategory = l.RemoteCategory
+			d.LocalIfName = l.LocalIfName
+			d.LocalIfIndex = l.LocalIfIndex
+		}
+		out = append(out, d)
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) deviceStorage(w http.ResponseWriter, r *http.Request) {
@@ -932,6 +990,15 @@ func (s *Server) rebuildTopologyOnce(ctx context.Context) (devices, links int, s
 		ids = append(ids, d.ID)
 	}
 	nd, nl := s.topo.RebuildAll(ctx, ids)
+	// Vendor-neutral fill: derive switch-to-switch links from the bridge MAC
+	// forwarding tables (FDB) for gaps LLDP/CDP can't cover — notably cross-vendor
+	// uplinks (e.g. a Cisco access switch on an Aruba/HPE port). Runs after the
+	// authoritative LLDP/CDP pass and never overrides it.
+	if mc, ferr := s.topo.InferLinksFromFDB(ctx); ferr != nil {
+		slog.Warn("topology FDB inference failed", "error", ferr)
+	} else {
+		nl += mc
+	}
 	stale, _ := s.topo.CleanupStaleLinks(ctx, 7*24*time.Hour)
 	return nd, nl, stale, nil
 }

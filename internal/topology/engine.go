@@ -39,6 +39,10 @@ type Querier interface {
 	GetDevice(ctx context.Context, id uuid.UUID) (db.Device, error)
 	ListMACForDevice(ctx context.Context, deviceID uuid.UUID) ([]db.ListMACForDeviceRow, error)
 	ListARPForDevice(ctx context.Context, deviceID uuid.UUID) ([]db.ListARPForDeviceRow, error)
+	// FDB-based (vendor-neutral) link inference.
+	ListAllDevices(ctx context.Context) ([]db.Device, error)
+	ListFabricInterfaceMACs(ctx context.Context) ([]db.ListFabricInterfaceMACsRow, error)
+	MACCountByPort(ctx context.Context, deviceID uuid.UUID) ([]db.MACCountByPortRow, error)
 }
 
 // Link is a directed network link for API/UI consumption.
@@ -767,4 +771,189 @@ func (e *Engine) RebuildAll(ctx context.Context, deviceIDs []uuid.UUID) (devices
 		linksBuilt += n
 	}
 	return devicesProcessed, linksBuilt
+}
+
+// fdbFabricCats are the device classes that form the switched fabric. FDB-based
+// link inference only connects these to each other — endpoints, servers, APs
+// etc. that merely appear in a forwarding table must not become topology nodes.
+var fdbFabricCats = map[string]bool{"switch": true, "router": true, "isp_router": true}
+
+// fdbEdgePortMaxMACs caps how many MAC addresses a port may carry to be treated
+// as a DIRECT edge / point-to-point attachment in FDB inference. Above this the
+// port is an aggregation trunk where the device is merely *downstream*, not
+// directly attached — those are skipped so the map isn't polluted with guessed
+// transit links. (Real edge/access ports carry a handful to a few dozen MACs;
+// uplinks/trunks carry hundreds.)
+const fdbEdgePortMaxMACs = 64
+
+// normMAC lowercases a MAC and strips any separators so values from different
+// sources/vendors (aa:bb:.., AA-BB-.., aabb..) compare equal.
+func normMAC(s string) string {
+	var b strings.Builder
+	b.Grow(12)
+	for _, r := range s {
+		switch {
+		case r >= '0' && r <= '9', r >= 'a' && r <= 'f':
+			b.WriteRune(r)
+		case r >= 'A' && r <= 'F':
+			b.WriteRune(r + 32)
+		}
+	}
+	return b.String()
+}
+
+// fdbPairKey returns an order-independent key for an unordered device pair.
+func fdbPairKey(a, b uuid.UUID) [2]uuid.UUID {
+	if a.String() > b.String() {
+		a, b = b, a
+	}
+	return [2]uuid.UUID{a, b}
+}
+
+// fdbCand is one observation "switch S learned device D's MAC on port P, and P
+// carries macCount MACs in total".
+type fdbCand struct {
+	switchID uuid.UUID
+	ifIndex  *int32
+	ifName   *string
+	macCount int64
+}
+
+// InferLinksFromFDB derives vendor-neutral switch-to-switch topology links from
+// the bridge MAC forwarding tables (FDB/CAM), filling the gaps LLDP/CDP can't —
+// notably cross-vendor uplinks (e.g. a Cisco access switch on an Aruba/HPE port)
+// where the two ends speak different neighbor-discovery protocols and never see
+// each other.
+//
+// For every fabric device D, each switch S whose FDB learned one of D's
+// interface MACs is a candidate; D is taken to attach directly to the S whose
+// port-toward-D carries the FEWEST MACs (the closest, edge-like port). Trunk
+// ports (high fan-out — D is merely downstream) and pairs already connected by
+// authoritative LLDP/CDP are skipped, so this only adds genuine, edge-like links
+// and never overrides protocol evidence. Stored with link_source='mac'; the
+// graph rates these medium-confidence. Returns the number of links upserted.
+func (e *Engine) InferLinksFromFDB(ctx context.Context) (int, error) {
+	devs, err := e.q.ListAllDevices(ctx)
+	if err != nil {
+		return 0, err
+	}
+	nameByID := make(map[uuid.UUID]string, len(devs))
+	isFabric := make(map[uuid.UUID]bool, len(devs))
+	for _, d := range devs {
+		nameByID[d.ID] = d.Name
+		if fdbFabricCats[d.Category] {
+			isFabric[d.ID] = true
+		}
+	}
+
+	// MAC → owning fabric device (only fabric MACs, so endpoints never link).
+	ownerRows, err := e.q.ListFabricInterfaceMACs(ctx)
+	if err != nil {
+		return 0, err
+	}
+	macOwner := make(map[string]uuid.UUID, len(ownerRows))
+	for _, r := range ownerRows {
+		if r.Mac == nil {
+			continue
+		}
+		if nm := normMAC(*r.Mac); len(nm) == 12 {
+			macOwner[nm] = r.DeviceID
+		}
+	}
+
+	// Pairs already connected by authoritative LLDP/CDP — never override these.
+	authPair := map[[2]uuid.UUID]bool{}
+	allLinks, err := e.q.ListAllTopologyLinks(ctx)
+	if err != nil {
+		return 0, err
+	}
+	for _, l := range allLinks {
+		if l.RemoteDeviceID != nil && (l.LinkSource == "lldp" || l.LinkSource == "cdp") {
+			authPair[fdbPairKey(l.LocalDeviceID, *l.RemoteDeviceID)] = true
+		}
+	}
+
+	// For each fabric switch S, find — per target device — the smallest-fan-out
+	// port of S that learned that target's MAC.
+	candidates := map[uuid.UUID][]fdbCand{} // target device → candidate attach points
+	for _, d := range devs {
+		if !isFabric[d.ID] {
+			continue
+		}
+		counts, cerr := e.q.MACCountByPort(ctx, d.ID)
+		if cerr != nil {
+			continue
+		}
+		portCount := map[int32]int64{}
+		for _, c := range counts {
+			if c.IfIndex != nil {
+				portCount[*c.IfIndex] = c.MacCount
+			}
+		}
+		fdb, ferr := e.q.ListMACForDevice(ctx, d.ID)
+		if ferr != nil {
+			continue
+		}
+		best := map[uuid.UUID]fdbCand{} // target → smallest port on THIS switch
+		for _, m := range fdb {
+			if m.IfIndex == nil {
+				continue
+			}
+			owner, ok := macOwner[normMAC(m.Mac)]
+			if !ok || owner == d.ID || !isFabric[owner] {
+				continue
+			}
+			cnt := portCount[*m.IfIndex]
+			if cur, seen := best[owner]; !seen || cnt < cur.macCount {
+				best[owner] = fdbCand{switchID: d.ID, ifIndex: m.IfIndex, ifName: m.IfName, macCount: cnt}
+			}
+		}
+		for owner, c := range best {
+			candidates[owner] = append(candidates[owner], c)
+		}
+	}
+
+	// Pick, per target, the closest switch (fewest MACs on the port toward it),
+	// then dedupe reciprocal observations of the same physical link — keeping the
+	// end whose port has the smaller fan-out, which best attributes the port.
+	chosen := map[[2]uuid.UUID]db.UpsertTopologyLinkParams{}
+	chosenCnt := map[[2]uuid.UUID]int64{}
+	for target, cands := range candidates {
+		best := cands[0]
+		for _, c := range cands[1:] {
+			if c.macCount < best.macCount {
+				best = c
+			}
+		}
+		if best.macCount > fdbEdgePortMaxMACs {
+			continue // only edge-like (point-to-point/access) attachments
+		}
+		pk := fdbPairKey(best.switchID, target)
+		if authPair[pk] {
+			continue // already proven by LLDP/CDP
+		}
+		if prev, ok := chosenCnt[pk]; ok && prev <= best.macCount {
+			continue // a stronger (lower fan-out) observation already won this pair
+		}
+		name := nameByID[target]
+		tgt := target
+		chosen[pk] = db.UpsertTopologyLinkParams{
+			LocalDeviceID:  best.switchID,
+			LocalIfIndex:   best.ifIndex,
+			LocalIfName:    best.ifName,
+			RemoteDeviceID: &tgt,
+			RemoteSysName:  &name,
+			LinkSource:     "mac",
+			LastSeenAt:     time.Now().UTC(),
+		}
+		chosenCnt[pk] = best.macCount
+	}
+
+	built := 0
+	for _, arg := range chosen {
+		if err := e.q.UpsertTopologyLink(ctx, arg); err == nil {
+			built++
+		}
+	}
+	return built, nil
 }

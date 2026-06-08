@@ -326,6 +326,12 @@ type Querier interface {
 	// Full recent test history for one device (Device Detail → Credential Health).
 	ListDeviceCredentialTests(ctx context.Context, arg ListDeviceCredentialTestsParams) ([]CredentialTestResult, error)
 	ListDeviceFacts(ctx context.Context, deviceID uuid.UUID) ([]DeviceFact, error)
+	// All topology links touching a device from EITHER endpoint, with both ends
+	// enriched (name/ip/vendor/category) and an `inbound` flag set when the device
+	// is the link's remote side. The handler normalizes this so the per-device
+	// Topology tab always shows the OTHER device — including links that point AT it
+	// (e.g. a MAC/FDB-derived cross-vendor uplink stored from the neighbour's side).
+	ListDeviceLinksBidirectional(ctx context.Context, localDeviceID uuid.UUID) ([]ListDeviceLinksBidirectionalRow, error)
 	ListDeviceRoles(ctx context.Context, deviceID uuid.UUID) ([]DeviceRole, error)
 	// ===== Device templates ====================================================
 	ListDeviceTemplates(ctx context.Context) ([]DeviceTemplate, error)
@@ -347,6 +353,10 @@ type Querier interface {
 	// The evaluator's input: every enabled check joined to its device so rules
 	// can filter by category and alerts can carry a readable device name.
 	ListEnabledChecksWithDevice(ctx context.Context) ([]ListEnabledChecksWithDeviceRow, error)
+	// Every interface MAC belonging to a topology-capable fabric device (switch /
+	// router / ISP router). Used to map an observed FDB MAC back to the device that
+	// owns it, for vendor-neutral L2 link inference (FDB-based topology).
+	ListFabricInterfaceMACs(ctx context.Context) ([]ListFabricInterfaceMACsRow, error)
 	ListHAMembers(ctx context.Context, deviceID uuid.UUID) ([]FirewallHaMember, error)
 	ListInterfaces(ctx context.Context, deviceID uuid.UUID) ([]Interface, error)
 	// Per-device scan dispositions across recent jobs (newest first). Powers the

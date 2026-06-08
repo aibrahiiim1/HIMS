@@ -22,6 +22,11 @@ type fakeQuerier struct {
 	arpTables    map[uuid.UUID][]db.ListARPForDeviceRow
 	links        map[uuid.UUID][]db.TopologyLink
 	allLinks     []db.ListAllTopologyLinksRow
+	// FDB inference inputs/outputs.
+	allDevices []db.Device
+	fabricMACs []db.ListFabricInterfaceMACsRow
+	portCounts map[uuid.UUID][]db.MACCountByPortRow
+	upserted   []db.UpsertTopologyLinkParams
 }
 
 func (f *fakeQuerier) GetDevice(_ context.Context, id uuid.UUID) (db.Device, error) {
@@ -64,11 +69,21 @@ func (f *fakeQuerier) DeleteStaleTopologyLinks(_ context.Context, _ time.Time) (
 func (f *fakeQuerier) ListAllTopologyLinks(_ context.Context) ([]db.ListAllTopologyLinksRow, error) {
 	return f.allLinks, nil
 }
-func (f *fakeQuerier) UpsertTopologyLink(_ context.Context, _ db.UpsertTopologyLinkParams) error {
+func (f *fakeQuerier) UpsertTopologyLink(_ context.Context, arg db.UpsertTopologyLinkParams) error {
+	f.upserted = append(f.upserted, arg)
 	return nil
 }
 func (f *fakeQuerier) ListNeighbors(_ context.Context, _ uuid.UUID) ([]db.Neighbor, error) {
 	return nil, nil
+}
+func (f *fakeQuerier) ListAllDevices(_ context.Context) ([]db.Device, error) {
+	return f.allDevices, nil
+}
+func (f *fakeQuerier) ListFabricInterfaceMACs(_ context.Context) ([]db.ListFabricInterfaceMACsRow, error) {
+	return f.fabricMACs, nil
+}
+func (f *fakeQuerier) MACCountByPort(_ context.Context, id uuid.UUID) ([]db.MACCountByPortRow, error) {
+	return f.portCounts[id], nil
 }
 
 func TestSearchMAC_NoResults(t *testing.T) {
@@ -264,5 +279,104 @@ func TestSearchIP_ViaARP(t *testing.T) {
 	}
 	if len(res.SwitchPort) != 1 {
 		t.Fatalf("expected 1 switch-port, got %d", len(res.SwitchPort))
+	}
+}
+
+func sp(s string) *string { return &s }
+func i32p(i int32) *int32 { return &i }
+
+// TestInferLinksFromFDB models the real cross-vendor gap: a Cisco access switch
+// (cisco) whose MAC is learned by three Aruba switches — on an edge port of the
+// nearest one (b12, 12 MACs) and on trunk ports of two aggregation switches
+// (core 376, b11 328). The Cisco speaks no LLDP toward them, so only the FDB
+// connects it. Expect exactly one inferred 'mac' link: cisco ↔ b12 (the edge
+// port), with the trunk observations and any LLDP-proven pair ignored.
+func TestInferLinksFromFDB(t *testing.T) {
+	cisco := uuid.New()
+	b12 := uuid.New()
+	core := uuid.New()
+	b11 := uuid.New()
+	mac := "10:8c:cf:2d:ee:40"
+
+	q := &fakeQuerier{
+		allDevices: []db.Device{
+			{ID: cisco, Name: "CHV_Mall_POE_SW01", Category: "switch", Vendor: sp("Cisco")},
+			{ID: b12, Name: "CHV-B12-1", Category: "switch", Vendor: sp("Aruba/HPE")},
+			{ID: core, Name: "CHV-CORE", Category: "switch", Vendor: sp("Aruba/HPE")},
+			{ID: b11, Name: "CHV-B11-1", Category: "switch", Vendor: sp("Aruba/HPE")},
+		},
+		fabricMACs: []db.ListFabricInterfaceMACsRow{
+			{DeviceID: cisco, Mac: sp("10-8C-CF-2D-EE-40")}, // different separators/case on purpose
+		},
+		macTables: map[uuid.UUID][]db.ListMACForDeviceRow{
+			b12:  {{Mac: mac, IfIndex: i32p(25), IfName: sp("25")}},
+			core: {{Mac: mac, IfIndex: i32p(21), IfName: sp("21")}},
+			b11:  {{Mac: mac, IfIndex: i32p(28), IfName: sp("28")}},
+		},
+		portCounts: map[uuid.UUID][]db.MACCountByPortRow{
+			b12:  {{IfIndex: i32p(25), MacCount: 12}},  // edge port — wins
+			core: {{IfIndex: i32p(21), MacCount: 376}}, // trunk — skipped
+			b11:  {{IfIndex: i32p(28), MacCount: 328}}, // trunk — skipped
+		},
+	}
+	e := New(q)
+	n, err := e.InferLinksFromFDB(context.Background())
+	if err != nil {
+		t.Fatalf("InferLinksFromFDB: %v", err)
+	}
+	if n != 1 || len(q.upserted) != 1 {
+		t.Fatalf("expected exactly 1 inferred link, got n=%d upserted=%d", n, len(q.upserted))
+	}
+	got := q.upserted[0]
+	if got.LocalDeviceID != b12 || got.RemoteDeviceID == nil || *got.RemoteDeviceID != cisco {
+		t.Fatalf("expected b12 ↔ cisco, got local=%v remote=%v", got.LocalDeviceID, got.RemoteDeviceID)
+	}
+	if got.LinkSource != "mac" {
+		t.Fatalf("expected link_source=mac, got %q", got.LinkSource)
+	}
+	if got.LocalIfIndex == nil || *got.LocalIfIndex != 25 {
+		t.Fatalf("expected edge port 25, got %v", got.LocalIfIndex)
+	}
+}
+
+// TestInferLinksFromFDB_TrunkOnlySkipped: when a device only appears behind
+// high-fan-out trunk ports (no edge-like evidence), no link is inferred — we do
+// not guess a direct attachment we can't substantiate.
+func TestInferLinksFromFDB_TrunkOnlySkipped(t *testing.T) {
+	a := uuid.New()
+	b := uuid.New()
+	mac := "aa:bb:cc:dd:ee:ff"
+	q := &fakeQuerier{
+		allDevices: []db.Device{
+			{ID: a, Name: "A", Category: "switch"},
+			{ID: b, Name: "B", Category: "switch"},
+		},
+		fabricMACs: []db.ListFabricInterfaceMACsRow{{DeviceID: a, Mac: sp(mac)}},
+		macTables:  map[uuid.UUID][]db.ListMACForDeviceRow{b: {{Mac: mac, IfIndex: i32p(1)}}},
+		portCounts: map[uuid.UUID][]db.MACCountByPortRow{b: {{IfIndex: i32p(1), MacCount: 500}}},
+	}
+	if n, err := New(q).InferLinksFromFDB(context.Background()); err != nil || n != 0 {
+		t.Fatalf("expected 0 links for trunk-only evidence, got n=%d err=%v", n, err)
+	}
+}
+
+// TestInferLinksFromFDB_SkipsLLDPProvenPair: if the pair is already connected by
+// authoritative LLDP/CDP, the FDB pass must not add a redundant 'mac' link.
+func TestInferLinksFromFDB_SkipsLLDPProvenPair(t *testing.T) {
+	a := uuid.New()
+	b := uuid.New()
+	mac := "aa:bb:cc:00:11:22"
+	q := &fakeQuerier{
+		allDevices: []db.Device{
+			{ID: a, Name: "A", Category: "switch"},
+			{ID: b, Name: "B", Category: "switch"},
+		},
+		fabricMACs: []db.ListFabricInterfaceMACsRow{{DeviceID: a, Mac: sp(mac)}},
+		macTables:  map[uuid.UUID][]db.ListMACForDeviceRow{b: {{Mac: mac, IfIndex: i32p(3)}}},
+		portCounts: map[uuid.UUID][]db.MACCountByPortRow{b: {{IfIndex: i32p(3), MacCount: 2}}},
+		allLinks:   []db.ListAllTopologyLinksRow{{LocalDeviceID: b, RemoteDeviceID: &a, LinkSource: "lldp"}},
+	}
+	if n, err := New(q).InferLinksFromFDB(context.Background()); err != nil || n != 0 {
+		t.Fatalf("expected 0 links when pair already LLDP-proven, got n=%d err=%v", n, err)
 	}
 }
