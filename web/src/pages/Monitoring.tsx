@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import {
   HeartPulse, Activity, Play, Wifi, WifiOff, TriangleAlert,
   Gauge, Zap, CircleDot, ArrowUpDown, ShieldCheck,
@@ -32,7 +32,10 @@ const fmtPct = (v?: number | null) => (v == null ? '—' : `${v.toFixed(v >= 99.
 
 export function Monitoring() {
   const qc = useQueryClient()
+  const navigate = useNavigate()
   const [win, setWin] = useState<Win>('24h')
+  const flappingRef = useRef<HTMLDivElement>(null)
+  const focusFlapping = () => flappingRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
 
   const overview = useQuery({ queryKey: ['mon-overview'], queryFn: () => api.get<MonitoringOverviewRow[]>('/monitoring/overview'), refetchInterval: 15_000 })
   const checks = useQuery({ queryKey: ['mon-checks'], queryFn: () => api.get<MonitoringCheck[]>('/monitoring/checks'), refetchInterval: 15_000 })
@@ -56,6 +59,21 @@ export function Monitoring() {
   const monitored = up + warning + down
   const health = monitored > 0 ? Math.round(((up + warning * 0.5) / monitored) * 100) : 0
   const all = checks.data ?? []
+
+  // Per-device check counts so the Checks panel can flag multi-port devices and
+  // identify each check by device name/IP instead of a bare port.
+  const checkCountByDevice = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const c of all) m.set(c.device_id, (m.get(c.device_id) ?? 0) + 1)
+    return m
+  }, [all])
+  const deviceCount = checkCountByDevice.size
+  const multiCheckDevices = useMemo(() => [...checkCountByDevice.values()].filter((n) => n > 1).length, [checkCountByDevice])
+  // Extra (supplemental) checks: total + how many are currently offline (down).
+  // Surfaced on the Online card footer so the operator sees them without their
+  // failures ever being counted as offline devices.
+  const extraChecks = useMemo(() => all.filter((c) => c.role === 'supplemental'), [all])
+  const extraDown = useMemo(() => extraChecks.filter((c) => (c.last_status || '').toLowerCase() === 'down').length, [extraChecks])
 
   const statusDonut = [
     { label: 'Online', value: up, color: STATUS_DONUT_COLOR.up },
@@ -118,11 +136,23 @@ export function Monitoring() {
 
       <div className="kpi-grid">
         <Kpi label={`Availability · ${win}`} value={fmtPct(sum?.uptime_pct)} icon={ShieldCheck} tone={slaTone(sum?.uptime_pct)} sub={sum ? `${sum.samples.toLocaleString()} polls · SLA ${SLA_TARGET}%` : 'no data'} />
-        <Kpi label="Online now" value={up} icon={Wifi} tone="ok" sub={monitored ? `${Math.round((up / monitored) * 100)}% of ${monitored}` : '—'} />
-        <Kpi label="Degraded" value={warning} icon={TriangleAlert} tone={warning > 0 ? 'warn' : 'default'} sub="warning" />
-        <Kpi label="Offline now" value={down} icon={WifiOff} tone={down > 0 ? 'crit' : 'default'} sub="down" />
+        <Kpi
+          label="Online now"
+          value={up}
+          icon={Wifi}
+          tone="ok"
+          sub={monitored ? `${Math.round((up / monitored) * 100)}% of ${monitored}` : '—'}
+          footerLeft={extraChecks.length > 0 ? `${extraChecks.length} extra check${extraChecks.length !== 1 ? 's' : ''}` : undefined}
+          footerRight={extraChecks.length > 0
+            ? (extraDown > 0
+                ? <span style={{ color: 'var(--crit)', cursor: 'pointer' }} title="Extra checks currently offline — the devices show as Degraded, not offline" onClick={() => navigate('/inventory?reachability=warning')}>{extraDown} offline ›</span>
+                : <span style={{ color: 'var(--ok)' }}>all OK</span>)
+            : undefined}
+        />
+        <Kpi label="Degraded" value={warning} icon={TriangleAlert} tone={warning > 0 ? 'warn' : 'default'} sub={warning > 0 ? 'view degraded →' : 'warning'} onClick={warning > 0 ? () => navigate('/inventory?reachability=warning') : undefined} />
+        <Kpi label="Offline now" value={down} icon={WifiOff} tone={down > 0 ? 'crit' : 'default'} sub={down > 0 ? 'view offline →' : 'down'} onClick={down > 0 ? () => navigate('/inventory?reachability=offline') : undefined} />
         <Kpi label={`Avg latency · ${win}`} value={fmtMs(sum?.avg_latency_ms)} icon={Zap} tone="default" sub={`p95 ${fmtMs(sum?.p95_latency_ms)}`} />
-        <Kpi label="Flapping" value={flapping.length} icon={ArrowUpDown} tone={flapping.length > 0 ? 'warn' : 'default'} sub={`devices · ${win}`} />
+        <Kpi label="Flapping" value={flapping.length} icon={ArrowUpDown} tone={flapping.length > 0 ? 'warn' : 'default'} sub={flapping.length > 0 ? 'view devices →' : `devices · ${win}`} onClick={flapping.length > 0 ? focusFlapping : undefined} />
       </div>
 
       <div className="grid-side">
@@ -169,30 +199,60 @@ export function Monitoring() {
             )}
           </Panel>
 
-          <Panel title="Checks" icon={CircleDot} subtitle={`${all.length} configured`} pad={false}>
+          <Panel
+            title="Checks"
+            icon={CircleDot}
+            subtitle={all.length > 0 ? `${all.length} checks across ${deviceCount} devices${multiCheckDevices > 0 ? ` · ${multiCheckDevices} with multiple checks` : ''}` : `${all.length} configured`}
+            pad={false}
+          >
             {checks.isLoading && <div className="loading">Loading…</div>}
             {all.length === 0 && <EmptyState icon={CircleDot} title="No checks configured" message="Click “Seed checks” to create reachability checks." />}
             {all.length > 0 && (
               <table className="data-table">
                 <thead>
-                  <tr><th>Kind</th><th>Port</th><th>Interval</th><th>Status</th><th>Latency</th><th>Fails</th><th>Last run</th><th></th></tr>
+                  <tr><th>Device</th><th>Check</th><th>Role</th><th>Status</th><th>Latency</th><th>Fails</th><th>Last run</th><th></th></tr>
                 </thead>
                 <tbody>
-                  {all.map((c) => (
-                    <tr key={c.id}>
-                      <td style={{ textTransform: 'uppercase', fontWeight: 600 }}>{c.kind}</td>
-                      <td>{c.target_port ?? '—'}</td>
-                      <td>{c.interval_seconds}s</td>
-                      <td><StatusPill status={c.last_status} /></td>
-                      <td className="mono">{c.last_latency_ms != null ? `${c.last_latency_ms.toFixed(1)} ms` : '—'}</td>
-                      <td>{c.consecutive_failures}</td>
-                      <td className="muted">{timeAgo(c.last_run_at)}</td>
-                      <td className="cell-actions">
-                        <button className="btn btn-ghost btn-xs" onClick={() => toggle.mutate(c)}>{c.enabled ? 'Disable' : 'Enable'}</button>
-                        <button className="btn btn-ghost btn-xs" style={{ color: 'var(--crit)' }} onClick={() => remove.mutate(c.id)}>Delete</button>
-                      </td>
-                    </tr>
-                  ))}
+                  {all.map((c, i) => {
+                    // The list is ordered by device then reachability-first, so a
+                    // device's checks group together. Show the device identity only
+                    // on its first row; subsequent rows indent to read as "another
+                    // check on the same device" (multi-port handling).
+                    const firstOfDevice = i === 0 || all[i - 1].device_id !== c.device_id
+                    const count = checkCountByDevice.get(c.device_id) ?? 1
+                    const label = c.device_name?.trim() || c.device_ip || '(unnamed)'
+                    return (
+                      <tr key={c.id}>
+                        <td>
+                          {firstOfDevice ? (
+                            <Link className="cell-name" to={`/devices/${c.device_id}`} title={c.device_ip ? `${label} · ${c.device_ip}` : label}>
+                              {label}
+                              {count > 1 && <span className="badge badge-unknown" style={{ marginLeft: 6 }} title={`${count} checks configured on this device`}>{count} checks</span>}
+                            </Link>
+                          ) : (
+                            <span className="muted" style={{ paddingLeft: 14 }}>↳ same device</span>
+                          )}
+                        </td>
+                        <td className="mono" style={{ whiteSpace: 'nowrap' }}>
+                          <span style={{ textTransform: 'uppercase', fontWeight: 600 }}>{c.kind}</span>
+                          {c.target_port != null ? <span className="muted"> :{c.target_port}</span> : ''}
+                        </td>
+                        <td>
+                          {c.role === 'supplemental'
+                            ? <span className="badge badge-unknown" title="Extra check — a failure marks the device Degraded (needs attention) and lowers its health, but never marks it offline or changes the offline count">Extra</span>
+                            : <span className="badge badge-up" title="Reachability check — drives the device's online/offline status">Reachability</span>}
+                        </td>
+                        <td><StatusPill status={c.last_status} /></td>
+                        <td className="mono">{c.last_latency_ms != null ? `${c.last_latency_ms.toFixed(1)} ms` : '—'}</td>
+                        <td>{c.consecutive_failures}</td>
+                        <td className="muted">{timeAgo(c.last_run_at)}</td>
+                        <td className="cell-actions">
+                          <button className="btn btn-ghost btn-xs" onClick={() => toggle.mutate(c)}>{c.enabled ? 'Disable' : 'Enable'}</button>
+                          <button className="btn btn-ghost btn-xs" style={{ color: 'var(--crit)' }} onClick={() => remove.mutate(c.id)}>Delete</button>
+                        </td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             )}
@@ -204,7 +264,7 @@ export function Monitoring() {
             {monitored > 0 ? (
               <div className="row" style={{ alignItems: 'center', gap: 24, flexWrap: 'wrap' }}>
                 <HealthRing score={health} label="Now" />
-                <Donut data={statusDonut} centerValue={monitored} centerLabel="checks" />
+                <Donut data={statusDonut} centerValue={monitored} centerLabel="devices" />
                 <div style={{ flex: 1, minWidth: 150 }}><Legend data={statusDonut} total={monitored} /></div>
               </div>
             ) : (
@@ -212,11 +272,13 @@ export function Monitoring() {
             )}
           </Panel>
 
-          <Panel title="Flapping Devices" icon={ArrowUpDown} subtitle={`most status changes · ${win}`}>
-            {flapping.length > 0 ? (
-              <BarList rows={flapping.map((d) => ({ label: d.name, value: d.flaps, color: 'var(--warn)', to: `/devices/${d.device_id}` }))} />
-            ) : <div className="muted" style={{ fontSize: 13 }}>No flapping — every device held a steady status across the window.</div>}
-          </Panel>
+          <div ref={flappingRef}>
+            <Panel title="Flapping Devices" icon={ArrowUpDown} subtitle={`most status changes · ${win}`}>
+              {flapping.length > 0 ? (
+                <BarList rows={flapping.map((d) => ({ label: d.name, value: d.flaps, color: 'var(--warn)', to: `/devices/${d.device_id}` }))} />
+              ) : <div className="muted" style={{ fontSize: 13 }}>No flapping — every device held a steady status across the window.</div>}
+            </Panel>
+          </div>
 
           <Panel title="Highest Latency" icon={Gauge} subtitle={`peak round-trip · ${win}`}>
             {slowest.length === 0 ? <div className="muted">No latency samples yet.</div> : (

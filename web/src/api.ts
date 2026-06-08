@@ -1113,6 +1113,15 @@ export interface MonitoringCheck {
   last_status: string
   last_latency_ms?: number | null
   consecutive_failures: number
+  // 'reachability' = drives the device's online/offline status + inventory
+  // counts; 'supplemental' = an extra port/metric check (polled + shown, but
+  // never flips the device offline).
+  role?: string
+  // Present on the global checks list (GET /monitoring/checks), which joins the
+  // device so each check is identified by name/IP, not just a bare port.
+  device_name?: string
+  device_ip?: string | null
+  device_category?: string
 }
 
 export interface MonitoringSample {

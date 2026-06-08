@@ -84,3 +84,50 @@ func RollupDevice(statuses []Status) Status {
 	}
 	return worst
 }
+
+// RollupDeviceWithSupplemental folds a device's checks into one status while
+// honouring the reachability/supplemental split:
+//
+//   - REACHABILITY checks decide whether the device is up/down/warning/unknown.
+//     They alone can mark a device "down" (offline) — that drives the inventory
+//     online/offline counts.
+//   - SUPPLEMENTAL checks (extra ports/metrics an operator added) can only
+//     DEGRADE a reachable device to "warning" (needs attention). A failing extra
+//     check is informational: it lowers the health score and is surfaced to the
+//     operator, but it must never flip the device to "down"/offline or inflate
+//     the offline count. (cf. requirement: "an extra check offline must not make
+//     the whole device offline, but I want to know it's degraded".)
+//
+// If the device has no reachability checks at all, supplemental checks are used
+// as the fallback signal (so a device isn't blind), but still capped at warning
+// so an extra check can never report a hard offline on its own.
+func RollupDeviceWithSupplemental(reachability, supplemental []Status) Status {
+	if len(reachability) == 0 && len(supplemental) == 0 {
+		return StatusUnknown
+	}
+	var dev Status
+	if len(reachability) > 0 {
+		dev = RollupDevice(reachability)
+	} else {
+		// No reachability check: fall back to the supplemental signal but cap at
+		// warning — extra checks never assert a hard offline by themselves.
+		dev = capAtWarning(RollupDevice(supplemental))
+		return dev
+	}
+	// Reachability says the device is reachable (or merely unknown). If any
+	// supplemental check is unhealthy, degrade to "warning" — never "down".
+	if dev == StatusUp || dev == StatusUnknown {
+		if w := RollupDevice(supplemental); w == StatusDown || w == StatusWarning {
+			dev = StatusWarning
+		}
+	}
+	return dev
+}
+
+// capAtWarning turns a "down" into "warning"; everything else is unchanged.
+func capAtWarning(s Status) Status {
+	if s == StatusDown {
+		return StatusWarning
+	}
+	return s
+}

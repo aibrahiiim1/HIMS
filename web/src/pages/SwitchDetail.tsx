@@ -25,6 +25,16 @@ export function SwitchDetail() {
 
   const ifList = ifaces.data ?? []
   const ifUp = ifList.filter((i) => i.oper_status === 1).length
+  const ifDown = ifList.filter((i) => i.oper_status === 2).length
+  const ifOther = Math.max(0, ifList.length - ifUp - ifDown)
+  const neighList = neighbors.data ?? []
+  const lldpN = neighList.filter((n) => n.protocol === 'lldp').length
+  const cdpN = neighList.filter((n) => n.protocol === 'cdp').length
+  const linkList = topo.data ?? []
+  const macLinks = linkList.filter((l) => l.link_source === 'mac').length
+  const roleCount = (role: string) => ifList.filter((i) => i.port_role === role).length
+  const accessPorts = roleCount('access'), trunkPorts = roleCount('trunk') + roleCount('uplink')
+  const utilPct = ifList.length ? Math.round((ifUp / ifList.length) * 100) : 0
 
   const tabs = [
     { key: 'overview', label: 'Overview', icon: Activity },
@@ -46,22 +56,41 @@ export function SwitchDetail() {
 
       {tab === 'overview' && (
         <div>
-          <div className="kpi-grid">
-            <Kpi label="Interfaces" value={ifList.length} icon={Cable} tone="info" sub={`${ifUp} operationally up`} />
-            <Kpi label="VLANs" value={vlans.data?.length ?? 0} icon={Layers} tone="default" />
-            <Kpi label="Neighbors" value={neighbors.data?.length ?? 0} icon={Share2} tone="default" sub="LLDP / CDP" />
-            <Kpi label="Topology Links" value={topo.data?.length ?? 0} icon={Network} tone="default" />
+          <div className="kpi-grid kpi-6">
+            <Kpi label="Ports" value={ifList.length} icon={Cable} tone="info" sub={ifList.length ? `${ifUp} up · ${ifDown} down` : 'none collected'} onClick={ifList.length ? () => setTab('ports') : undefined} />
+            <Kpi label="Port utilisation" value={ifList.length ? `${utilPct}%` : '—'} icon={Gauge} tone={utilPct >= 90 ? 'warn' : 'ok'} sub="operationally up" />
+            <Kpi label="Access / Trunk" value={ifList.length ? `${accessPorts} / ${trunkPorts}` : '—'} icon={LayoutGrid} tone="default" sub="access / trunk·uplink" />
+            <Kpi label="VLANs" value={vlans.data?.length ?? 0} icon={Layers} tone="default" onClick={(vlans.data?.length ?? 0) ? () => setTab('vlans') : undefined} />
+            <Kpi label="Neighbors" value={neighList.length} icon={Share2} tone="default" sub={neighList.length ? `${lldpN} LLDP · ${cdpN} CDP` : 'LLDP / CDP'} onClick={neighList.length ? () => setTab('neighbors') : undefined} />
+            <Kpi label="Topology Links" value={linkList.length} icon={Network} tone="default" sub={macLinks > 0 ? `${macLinks} MAC-derived` : 'LLDP/CDP'} onClick={linkList.length ? () => setTab('topology') : undefined} />
           </div>
-          <div style={{ marginBottom: 16 }}><ClassificationCard deviceId={id!} /></div>
+
+          {ifList.length > 0 && (
+            <Panel title="Port status" icon={LayoutGrid} subtitle={`${ifUp} up · ${ifDown} down${ifOther ? ` · ${ifOther} other` : ''}`}>
+              <div style={{ display: 'flex', height: 14, borderRadius: 7, overflow: 'hidden', background: 'var(--surface-3)' }} title={`${ifUp} up / ${ifDown} down / ${ifOther} other`}>
+                {ifUp > 0 && <div style={{ flex: ifUp, background: 'var(--ok)' }} />}
+                {ifDown > 0 && <div style={{ flex: ifDown, background: 'var(--crit)' }} />}
+                {ifOther > 0 && <div style={{ flex: ifOther, background: 'var(--surface-4, #94a3b8)' }} />}
+              </div>
+              <div className="row" style={{ gap: 14, marginTop: 10, flexWrap: 'wrap', fontSize: 12 }}>
+                <span className="row" style={{ gap: 6 }}><i style={{ width: 10, height: 10, borderRadius: 2, background: 'var(--ok)', display: 'inline-block' }} /> {ifUp} up</span>
+                <span className="row" style={{ gap: 6 }}><i style={{ width: 10, height: 10, borderRadius: 2, background: 'var(--crit)', display: 'inline-block' }} /> {ifDown} down</span>
+                {ifOther > 0 && <span className="row" style={{ gap: 6 }}><i style={{ width: 10, height: 10, borderRadius: 2, background: 'var(--surface-4, #94a3b8)', display: 'inline-block' }} /> {ifOther} other</span>}
+                <button className="btn btn-ghost btn-xs" style={{ marginLeft: 'auto' }} onClick={() => setTab('ports')}>Open port grid →</button>
+              </div>
+            </Panel>
+          )}
+
+          <div style={{ margin: '16px 0' }}><ClassificationCard deviceId={id!} /></div>
           <DeepOSInventory deviceId={id!} />
-          <div className="grid-2">
-            <Panel title="Top Interfaces" icon={Cable} pad={false}>
-              {ifList.length === 0 ? <EmptyState icon={Cable} title="No interfaces collected" />
+          <div className="grid-2" style={{ alignItems: 'start' }}>
+            <Panel title="Top Interfaces" icon={Cable} subtitle={ifList.length ? `showing ${Math.min(8, ifList.length)} of ${ifList.length}` : undefined} pad={false}>
+              {ifList.length === 0 ? <EmptyState icon={Cable} title="No interfaces collected" message="Bind a working SNMP/SSH credential and re-scan to collect ports." />
                 : <InterfaceTable data={ifList.slice(0, 8)} />}
             </Panel>
-            <Panel title="Neighbors" icon={Share2} pad={false}>
-              {(neighbors.data?.length ?? 0) === 0 ? <EmptyState icon={Share2} title="No LLDP/CDP neighbors" message="Empty is normal in mixed-vendor segments." />
-                : <NeighborTable data={neighbors.data!.slice(0, 8)} />}
+            <Panel title="Neighbors" icon={Share2} subtitle={neighList.length ? `${lldpN} LLDP · ${cdpN} CDP` : undefined} pad={false}>
+              {neighList.length === 0 ? <EmptyState icon={Share2} title="No LLDP/CDP neighbors" message="Empty is normal in mixed-vendor segments — cross-vendor links still appear under Topology (MAC-derived)." />
+                : <NeighborTable data={neighList.slice(0, 8)} />}
             </Panel>
           </div>
         </div>

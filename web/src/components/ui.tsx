@@ -54,8 +54,11 @@ export function Panel({ title, subtitle, icon: Icon, actions, children, classNam
 
 /* ---- KPI / stat card ------------------------------------------------------ */
 export type Tone = 'default' | 'ok' | 'warn' | 'crit' | 'info'
-export function Kpi({ label, value, sub, tone = 'default', icon: Icon, onClick }: {
+export function Kpi({ label, value, sub, tone = 'default', icon: Icon, onClick, footerLeft, footerRight }: {
   label: string; value: ReactNode; sub?: ReactNode; tone?: Tone; icon?: IconType; onClick?: () => void
+  // Optional split footer pinned to the bottom of the card: a left chip and a
+  // right chip (e.g. "1 extra check" on the left, "1 offline" on the right).
+  footerLeft?: ReactNode; footerRight?: ReactNode
 }) {
   return (
     <div className={`kpi tone-${tone}${onClick ? ' is-clickable' : ''}`} onClick={onClick}>
@@ -65,6 +68,12 @@ export function Kpi({ label, value, sub, tone = 'default', icon: Icon, onClick }
       </div>
       <div className="kpi-value">{value}</div>
       {sub != null && <div className="kpi-sub">{sub}</div>}
+      {(footerLeft != null || footerRight != null) && (
+        <div className="kpi-footer">
+          <span className="kpi-footer-left">{footerLeft}</span>
+          <span className="kpi-footer-right">{footerRight}</span>
+        </div>
+      )}
     </div>
   )
 }

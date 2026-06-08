@@ -1,12 +1,12 @@
 import { useState, type ComponentType } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard, Server, Wifi, WifiOff, Bell, ClipboardList, ShieldAlert,
   Radar, Activity, TriangleAlert, RefreshCw, Clock, Boxes, TrendingUp, Lock, KeyRound, HeartPulse, Network,
   ShieldCheck, Building2, ArrowUpDown, Zap, Layers,
 } from 'lucide-react'
-import { api, type Device, type Alert, type DiscoveryJob, type MonitoringOverviewRow, type RoleSummaryRow, type ExpenseByCategory, type EncryptionStatus, type OperationalHealth, type InfrastructureHealth, type RelayAgent, type AvailabilityAnalytics, type DeviceUptime, type SiteRollup } from '../api'
+import { api, type Device, type Alert, type DiscoveryJob, type MonitoringOverviewRow, type MonitoringCheck, type RoleSummaryRow, type ExpenseByCategory, type EncryptionStatus, type OperationalHealth, type InfrastructureHealth, type RelayAgent, type AvailabilityAnalytics, type DeviceUptime, type SiteRollup } from '../api'
 import {
   PageHeader, Panel, Kpi, HealthRing, Donut, Legend, BarList, Sparkline, AreaChart,
   ActivityFeed, EmptyState, StatusPill, OperationalHealthPanel, colorFor, timeAgo,
@@ -75,14 +75,34 @@ function InfraHealthCard({ data }: { data?: InfrastructureHealth }) {
   if (!data) return <Panel title="Overall Infrastructure Health" icon={Activity}><div className="loading">Loading…</div></Panel>
   const o = data.overall
   const confCls = o.confidence === 'high' ? 'badge-up' : o.confidence === 'limited' ? 'badge-warning' : 'badge-unknown'
+  // When the overall status is anything other than healthy ("excellent"/"good"),
+  // explain WHY on hover: which sections are degraded/critical, plus any
+  // limited-confidence reasons. Operators hover the status word for the detail.
+  const healthy = o.status === 'excellent' || o.status === 'good'
+  const problems = data.sections.filter((s) => s.included && s.status !== 'healthy' && s.status !== 'unknown')
+  const tip = healthy
+    ? undefined
+    : [
+        problems.length
+          ? `Affected: ${problems.map((s) => `${s.name} (${s.status})`).join(', ')}`
+          : '',
+        o.confidence === 'limited' && o.limited_reasons.length > 0
+          ? `Limited confidence: ${o.limited_reasons.join('; ')}`
+          : '',
+      ].filter(Boolean).join(' · ') || 'Overall status is below healthy — see the section breakdown.'
+  const statusLabel = OVERALL_LABEL[o.status] ?? o.status
   return (
-    <Panel title="Overall Infrastructure Health" icon={Activity} actions={<span className={`badge ${OVERALL_BADGE[o.status] ?? 'badge-unknown'}`}>{OVERALL_LABEL[o.status] ?? o.status}</span>}>
+    <Panel
+      title="Overall Infrastructure Health"
+      icon={Activity}
+      actions={<span className={`badge ${OVERALL_BADGE[o.status] ?? 'badge-unknown'}`} title={tip} style={tip ? { cursor: 'help', textDecoration: 'underline dotted', textUnderlineOffset: 3 } : undefined}>{statusLabel}</span>}
+    >
       <div className="infra-card">
         <div className="infra-score">
           {o.confidence === 'unknown'
             ? <div style={{ fontSize: 40, fontWeight: 800, color: 'var(--text-faint)' }}>—</div>
             : <HealthRing score={o.score} size={120} label="Score" />}
-          <span className="infra-score-label">{OVERALL_LABEL[o.status] ?? o.status}</span>
+          <span className="infra-score-label" title={tip} style={tip ? { cursor: 'help' } : undefined}>{statusLabel}</span>
         </div>
         <div className="infra-sections">
           {data.sections.map((s) => (
@@ -105,9 +125,11 @@ function InfraHealthCard({ data }: { data?: InfrastructureHealth }) {
 }
 
 export function Dashboard() {
+  const navigate = useNavigate()
   const [win, setWin] = useState<Win>('24h')
   const dash = useQuery({ queryKey: ['dashboard'], queryFn: () => api.get<DashboardData>('/dashboard'), refetchInterval: 30_000 })
   const mon = useQuery({ queryKey: ['mon-overview'], queryFn: () => api.get<MonitoringOverviewRow[]>('/monitoring/overview'), refetchInterval: 30_000 })
+  const checks = useQuery({ queryKey: ['mon-checks'], queryFn: () => api.get<MonitoringCheck[]>('/monitoring/checks'), refetchInterval: 30_000 })
   const devices = useQuery({ queryKey: ['devices', 'all'], queryFn: () => api.get<Device[]>('/devices?category=all') })
   const jobs = useQuery({ queryKey: ['discovery-jobs'], queryFn: () => api.get<DiscoveryJob[]>('/discovery/jobs'), refetchInterval: 30_000 })
   const alerts = useQuery({ queryKey: ['alerts'], queryFn: () => api.get<Alert[]>('/alerts'), refetchInterval: 30_000 })
@@ -126,6 +148,10 @@ export function Dashboard() {
   const up = monMap.get('up') ?? 0, warning = monMap.get('warning') ?? 0, down = monMap.get('down') ?? 0, unknown = monMap.get('unknown') ?? 0
   const monitored = up + warning + down
   const health = monitored > 0 ? Math.round(((up + warning * 0.5) / monitored) * 100) : (total > 0 ? 100 : 0)
+  // Extra (supplemental) checks summary for the Online card footer.
+  const allChecks = checks.data ?? []
+  const extraChecks = allChecks.filter((c) => c.role === 'supplemental')
+  const extraDown = extraChecks.filter((c) => (c.last_status || '').toLowerCase() === 'down').length
   const statusDonut = [
     { label: 'Online', value: up, color: STATUS_DONUT_COLOR.up },
     { label: 'Warning', value: warning, color: STATUS_DONUT_COLOR.warning },
@@ -231,8 +257,20 @@ export function Dashboard() {
       {/* KPI row */}
       <div className="kpi-grid kpi-6">
         <Kpi label="Total Devices" value={total} icon={Boxes} tone="info" sub={`${byType.length} categories`} />
-        <Kpi label="Online" value={up} icon={Wifi} tone="ok" sub={monitored > 0 ? `${Math.round((up / monitored) * 100)}% of monitored` : 'no checks'} />
-        <Kpi label="Offline" value={down} icon={WifiOff} tone={down > 0 ? 'crit' : 'default'} sub={warning > 0 ? `${warning} warning` : 'all clear'} />
+        <Kpi
+          label="Online"
+          value={up}
+          icon={Wifi}
+          tone="ok"
+          sub={monitored > 0 ? `${Math.round((up / monitored) * 100)}% of monitored` : 'no checks'}
+          footerLeft={extraChecks.length > 0 ? `${extraChecks.length} extra check${extraChecks.length !== 1 ? 's' : ''}` : undefined}
+          footerRight={extraChecks.length > 0
+            ? (extraDown > 0
+                ? <span style={{ color: 'var(--crit)', cursor: 'pointer' }} title="Extra checks currently offline — the devices show as Degraded, not offline" onClick={() => navigate('/inventory?reachability=warning')}>{extraDown} offline ›</span>
+                : <span style={{ color: 'var(--ok)' }}>all OK</span>)
+            : undefined}
+        />
+        <Kpi label="Offline" value={down} icon={WifiOff} tone={down > 0 ? 'crit' : 'default'} sub={down > 0 ? 'view offline →' : (warning > 0 ? `${warning} warning` : 'all clear')} onClick={down > 0 ? () => navigate('/inventory?reachability=offline') : undefined} />
         <Kpi label="Active Alerts" value={h.open_alerts ?? 0} icon={Bell} tone={(h.open_alerts ?? 0) > 0 ? 'crit' : 'default'} sub="unresolved" />
         <Kpi label="Open Work Orders" value={h.open_work_orders ?? 0} icon={ClipboardList} tone={(h.open_work_orders ?? 0) > 0 ? 'warn' : 'default'} sub="in progress" />
         <Kpi label="Expiring Systems" value={h.expiring_systems ?? 0} icon={ShieldAlert} tone={(h.expiring_systems ?? 0) > 0 ? 'warn' : 'default'} sub="next 90 days" />

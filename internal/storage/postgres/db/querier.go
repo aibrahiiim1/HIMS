@@ -412,7 +412,10 @@ type Querier interface {
 	ListMibPackTables(ctx context.Context, packID uuid.UUID) ([]MibPackTable, error)
 	ListMibPacks(ctx context.Context) ([]MibPack, error)
 	ListMibWalkRows(ctx context.Context, arg ListMibWalkRowsParams) ([]MibWalkRow, error)
-	ListMonitoringChecks(ctx context.Context) ([]MonitoringCheck, error)
+	// Global checks list (Health Overview). Joined to the device so the UI can
+	// identify each check by device name / IP (not just a bare port), and ordered
+	// by device then reachability-first so a device's checks group together.
+	ListMonitoringChecks(ctx context.Context) ([]ListMonitoringChecksRow, error)
 	ListMonitoringChecksByDevice(ctx context.Context, deviceID uuid.UUID) ([]MonitoringCheck, error)
 	ListMonitoringSamplesByCheck(ctx context.Context, arg ListMonitoringSamplesByCheckParams) ([]MonitoringSample, error)
 	ListMonitoringSamplesByDevice(ctx context.Context, arg ListMonitoringSamplesByDeviceParams) ([]MonitoringSample, error)
@@ -497,7 +500,14 @@ type Querier interface {
 	MarkAgentJobDispatched(ctx context.Context, id uuid.UUID) error
 	// Freshness of the most recent LLDP/CDP neighbor observation (topology age).
 	MaxNeighborSeenAt(ctx context.Context) (time.Time, error)
-	// Live fleet rollup: how many checks sit in each status bucket.
+	// Fleet health rollup, DEVICE-based: how many MONITORED devices sit in each
+	// reachability bucket. We count devices (not checks) and map the device's
+	// rolled-up status onto the up/down/warning/unknown vocabulary, so the KPI
+	// counts match the inventory reachability filter exactly (a click lands on the
+	// same devices). A failing SUPPLEMENTAL check surfaces here as "warning" (the
+	// rollup degrades the device to warning, never down) — it lowers the health
+	// score and is clickable, but never inflates the "down"/offline bucket. A device
+	// is "monitored" when it has at least one enabled check.
 	MonitoringStatusOverview(ctx context.Context) ([]MonitoringStatusOverviewRow, error)
 	// ---- Alerts ---------------------------------------------------------------
 	// Atomic open: ON CONFLICT against idx_alerts_one_open means a second open
@@ -556,6 +566,9 @@ type Querier interface {
 	SetMibPackParseMeta(ctx context.Context, arg SetMibPackParseMetaParams) error
 	SetMibPackTested(ctx context.Context, arg SetMibPackTestedParams) error
 	SetMonitoringCheckEnabled(ctx context.Context, arg SetMonitoringCheckEnabledParams) (MonitoringCheck, error)
+	// Mark a check as reachability (drives device status) or supplemental (extra,
+	// informational only). Used when an operator adds a check beyond the default.
+	SetMonitoringCheckRole(ctx context.Context, arg SetMonitoringCheckRoleParams) error
 	SetNotificationChannelEnabled(ctx context.Context, arg SetNotificationChannelEnabledParams) (NotificationChannel, error)
 	SetRelayAgentEnabled(ctx context.Context, arg SetRelayAgentEnabledParams) error
 	SetRelayAgentLocation(ctx context.Context, arg SetRelayAgentLocationParams) error
