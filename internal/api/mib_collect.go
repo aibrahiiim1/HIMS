@@ -315,6 +315,14 @@ func (s *Server) runWirelessMibCollection(w http.ResponseWriter, r *http.Request
 		writeErr(w, err)
 		return
 	}
+	// §4.5 precedence: if an enabled vendor profile (REST/XML) is bound to this
+	// controller, that is the PRIMARY collector — even when invoked via the SNMP
+	// "collect now" action. Only when no profile exists do we fall back to the MIB.
+	if handled, pok, pdetail := s.collectWirelessForDevice(ctx, dev, nil); handled {
+		s.audit(r, "inventory", "wireless.collect_primary", "device", id.String(), "REST/XML wireless collection on "+dev.Name, map[string]any{"detail": pdetail})
+		writeJSON(w, http.StatusOK, map[string]any{"collected": pok, "detail": pdetail, "source": "vendor_profile"})
+		return
+	}
 	res, detail, ok2 := s.collectWirelessMib(ctx, dev, "")
 	if !ok2 && res == nil {
 		writeJSON(w, http.StatusOK, map[string]any{"collected": false, "detail": detail})

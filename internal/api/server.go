@@ -224,6 +224,7 @@ func (s *Server) routes() {
 		r.Get("/devices/{id}/access-points", s.deviceAccessPoints)
 		r.Get("/devices/{id}/wireless", s.deviceWireless) // consolidated wireless detail (identity + rosters)
 		r.Post("/devices/{id}/collect-wireless-mib", s.runWirelessMibCollection) // SNMP MIB-pack wireless collection
+		r.Post("/wireless/controllers", s.addWirelessController)                 // add a controller manually (REST/XML primary)
 		r.Get("/devices/{id}/mib-rows", s.listMibWalkRows)                       // raw walked MIB rows
 		r.Get("/devices/{id}/mib-explorer", s.mibExplorer)                       // grouped OID-tree explorer
 		r.Post("/devices/{id}/collect-ssh-cli", s.runSSHCLICollection)           // Extreme XCC SSH CLI collection

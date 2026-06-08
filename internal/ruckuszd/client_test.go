@@ -25,14 +25,22 @@ func (f *fakeDoer) Do(req *http.Request) (*http.Response, error) {
 	if v := req.Header.Get("X-CSRF-Token"); v != "" {
 		f.lastCSRF = v
 	}
-	for k, r := range f.routes {
-		if strings.Contains(req.URL.Path, k) {
-			h := http.Header{}
-			for hk, hv := range r.headers {
-				h.Set(hk, hv)
-			}
-			return &http.Response{StatusCode: r.status, Header: h, Body: io.NopCloser(strings.NewReader(r.body))}, nil
+	// Pick the most-specific (longest) matching route; "/" matches only the exact
+	// root path (admin-discovery GET), never as a substring of every path.
+	best, bestLen := "", -1
+	for k := range f.routes {
+		matched := (k == "/" && req.URL.Path == "/") || (k != "/" && strings.Contains(req.URL.Path, k))
+		if matched && len(k) > bestLen {
+			best, bestLen = k, len(k)
 		}
+	}
+	if bestLen >= 0 {
+		r := f.routes[best]
+		h := http.Header{}
+		for hk, hv := range r.headers {
+			h.Set(hk, hv)
+		}
+		return &http.Response{StatusCode: r.status, Header: h, Body: io.NopCloser(strings.NewReader(r.body))}, nil
 	}
 	return &http.Response{StatusCode: 404, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(""))}, nil
 }
