@@ -86,7 +86,19 @@ export function WirelessDetail() {
   }, [d])
 
   const busy = test.isPending || runApi.isPending || runMib.isPending || runSsh.isPending || testSsh.isPending
-  const managedVia = d ? ['SNMP', ...(d.ssh.status === 'collected' || d.ssh.status === 'partial' ? ['SSH'] : []), ...(d.collection.has_api_profile ? ['API'] : [])] : []
+  // managed_via comes from the backend (honest: REST/XML leads when a controller
+  // profile is the primary path; SNMP is the identity baseline). SSH is appended
+  // when a CLI collection actually ran.
+  const managedVia = d
+    ? [
+        ...((d.identity.managed_via ?? []).map((m) => (m === 'rest_xml' ? 'REST/XML' : m === 'snmp' ? 'SNMP' : m.toUpperCase()))),
+        ...(d.ssh.status === 'collected' || d.ssh.status === 'partial' ? ['SSH'] : []),
+      ]
+    : []
+  // Vendor-aware label for the controller REST/XML API source row.
+  const apiLabel = d?.collection.source === 'ruckus_zd_xml' ? 'Ruckus ZoneDirector (Web-XML)'
+    : d?.collection.source === 'extreme_xcc_api' ? 'Extreme XCC API'
+    : 'Controller API (REST/XML)'
 
   return (
     <div>
@@ -108,7 +120,7 @@ export function WirelessDetail() {
               <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => { setMsg(''); testSsh.mutate() }}><FlaskConical size={14} /> {testSsh.isPending ? 'Probing…' : 'Test SSH'}</button>
               <Link className="btn btn-ghost btn-sm" to={d.mib.pack_id ? `/mibs?pack=${d.mib.pack_id}` : '/mibs'}><FlaskConical size={14} /> Test MIB Pack</Link>
               {d.collection.has_api_profile
-                ? <button className="btn btn-ghost btn-sm" disabled={busy || !pid} onClick={() => { setMsg(''); runApi.mutate() }}><Plug size={14} /> Run XCC API</button>
+                ? <button className="btn btn-ghost btn-sm" disabled={busy || !pid} onClick={() => { setMsg(''); runApi.mutate() }}><Plug size={14} /> Run Collection</button>
                 : <Link className="btn btn-ghost btn-sm" to={configureHref}><Plug size={14} /> Configure API Profile</Link>}
               <Link className="btn btn-ghost btn-sm" to={`/devices/${id}`}><Pencil size={14} /> Edit Device</Link>
             </div>
@@ -174,16 +186,16 @@ export function WirelessDetail() {
                 <td><button className="btn btn-ghost btn-xs" disabled={busy || !d.mib.has_pack} onClick={() => { setMsg(''); runMib.mutate() }}>Run</button></td>
               </tr>
               <tr>
-                <td><strong>SSH CLI (Extreme XCC)</strong></td>
+                <td><strong>SSH CLI</strong></td>
                 <td><StatusPill status={sshTone2(d.ssh.status)} label={d.ssh.status} /></td>
                 <td style={{ fontSize: 12 }}>{d.ssh.aps} APs · {d.ssh.clients} clients · {d.ssh.supported.length} supported / {d.ssh.unsupported.length} unsupported cmds</td>
                 <td className="muted" style={{ fontSize: 11 }}>{d.ssh.last_run ? new Date(d.ssh.last_run).toLocaleString() : '—'}</td>
                 <td><button className="btn btn-ghost btn-xs" disabled={busy} onClick={() => { setMsg(''); runSsh.mutate() }}>Run</button></td>
               </tr>
               <tr>
-                <td><strong>Extreme XCC API</strong></td>
+                <td><strong>{apiLabel}</strong></td>
                 <td><StatusPill status={d.collection.has_api_profile ? (d.collection.ap_data_known ? 'up' : 'warning') : 'unknown'} label={d.collection.has_api_profile ? (d.collection.profile_status || 'configured') : 'not configured'} /></td>
-                <td style={{ fontSize: 12 }}>{d.collection.has_api_profile ? (d.collection.last_detail || 'profile configured') : 'no JSON API profile'}</td>
+                <td style={{ fontSize: 12 }}>{d.collection.has_api_profile ? (d.collection.last_detail || 'profile configured') : 'no REST/XML profile'}</td>
                 <td className="muted" style={{ fontSize: 11 }}>—</td>
                 <td>{d.collection.has_api_profile ? <button className="btn btn-ghost btn-xs" disabled={busy || !pid} onClick={() => { setMsg(''); runApi.mutate() }}>Run</button> : <Link className="btn btn-ghost btn-xs" to={configureHref}>Setup</Link>}</td>
               </tr>

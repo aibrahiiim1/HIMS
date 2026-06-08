@@ -15,6 +15,9 @@ const VENDOR_LABEL: Record<Vendor, string> = {
   ruckus_zd: 'Ruckus ZoneDirector — Web-XML (AJAX :443)',
 }
 const DEFAULT_PORT: Record<Vendor, number> = { extreme_xcc: 5825, ruckus_zd: 443 }
+// '' = no vendor chosen yet. We force an explicit choice so a Ruckus controller is
+// never accidentally added as Extreme (which can't talk to a ZoneDirector).
+type VendorSel = Vendor | ''
 
 // AddWirelessController is the one-step "Add controller" form. It posts to
 // POST /wireless/controllers, which seals the credential, creates the device +
@@ -22,7 +25,7 @@ const DEFAULT_PORT: Record<Vendor, number> = { extreme_xcc: 5825, ruckus_zd: 443
 export function AddWirelessController({ onClose, onAdded }: Props) {
   const qc = useQueryClient()
   const locs = useQuery({ queryKey: ['locations-all'], queryFn: () => api.get<Location[]>('/locations/all') })
-  const [vendor, setVendor] = useState<Vendor>('extreme_xcc')
+  const [vendor, setVendor] = useState<VendorSel>('')
   const [f, setF] = useState({
     ip: '', name: '', username: 'admin', password: '', port: '', api_base: '', location_id: '',
   })
@@ -53,6 +56,7 @@ export function AddWirelessController({ onClose, onAdded }: Props) {
 
   function submit() {
     setErr(null)
+    if (!vendor) { setErr('Choose the controller type — Extreme XCC or Ruckus ZoneDirector.'); return }
     if (!f.ip.trim()) { setErr('Controller IP is required.'); return }
     if (!f.username.trim() || !f.password) { setErr('Admin username and password are required.'); return }
     add.mutate()
@@ -82,11 +86,12 @@ export function AddWirelessController({ onClose, onAdded }: Props) {
           </p>
 
           {field('Vendor', (
-            <select value={vendor} onChange={(e) => setVendor(e.target.value as Vendor)} style={inputStyle}>
+            <select value={vendor} onChange={(e) => setVendor(e.target.value as VendorSel)} style={inputStyle}>
+              <option value="">— select controller type —</option>
               <option value="extreme_xcc">{VENDOR_LABEL.extreme_xcc}</option>
               <option value="ruckus_zd">{VENDOR_LABEL.ruckus_zd}</option>
             </select>
-          ))}
+          ), 'Pick the controller family — a Ruckus ZoneDirector added as Extreme (or vice-versa) cannot collect.')}
           {field('Controller IP', <input value={f.ip} onChange={(e) => set('ip', e.target.value)} placeholder="172.21.96.100" style={inputStyle} />)}
           {field('Name (optional)', <input value={f.name} onChange={(e) => set('name', e.target.value)} placeholder="Aqua XIQC" style={inputStyle} />)}
           {field('Site (optional)', (
@@ -97,7 +102,7 @@ export function AddWirelessController({ onClose, onAdded }: Props) {
           ))}
           {field('Admin username', <input value={f.username} onChange={(e) => set('username', e.target.value)} autoComplete="off" style={inputStyle} />)}
           {field('Admin password', <input type="password" value={f.password} onChange={(e) => set('password', e.target.value)} autoComplete="new-password" style={inputStyle} />)}
-          {field('Port', <input value={f.port} onChange={(e) => set('port', e.target.value)} placeholder={String(DEFAULT_PORT[vendor])} style={inputStyle} />, `Default ${DEFAULT_PORT[vendor]}`)}
+          {field('Port', <input value={f.port} onChange={(e) => set('port', e.target.value)} placeholder={vendor ? String(DEFAULT_PORT[vendor]) : 'choose a vendor first'} style={inputStyle} />, vendor ? `Default ${DEFAULT_PORT[vendor]}` : undefined)}
           {vendor === 'extreme_xcc' && field('API base (optional)', <input value={f.api_base} onChange={(e) => set('api_base', e.target.value)} placeholder="/management/v1" style={inputStyle} />)}
 
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>

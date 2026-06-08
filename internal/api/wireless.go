@@ -149,11 +149,9 @@ func (s *Server) deviceWireless(w http.ResponseWriter, r *http.Request) {
 		SysDescr:    fact("snmp.sysdescr"),
 		SysName:     fact("snmp.sysname"),
 	}
-	// Managed-via is honest: SNMP identity present ⇒ managed via SNMP. A bound
-	// credential of a wireless-API kind would add "api" once collection runs.
-	if ident.SysDescr != "" || ident.SysObjectID != "" {
-		ident.ManagedVia = append(ident.ManagedVia, "snmp")
-	}
+	// managed_via is rebuilt below, after the REST/XML profile + collection source
+	// are known, so the PRIMARY method (REST/XML when a controller profile is
+	// configured) leads and SNMP is shown only as the identity baseline.
 
 	dto := wirelessDTO{Identity: ident, APs: []db.AccessPoint{}, SSIDs: []db.WirelessSsid{}, Clients: []db.WirelessClient{}, Radios: []db.WirelessRadioStatus{}, Events: []db.WirelessEvent{}}
 
@@ -171,18 +169,38 @@ func (s *Server) deviceWireless(w http.ResponseWriter, r *http.Request) {
 		dto.Collection.Source = "snmp_baseline"
 	}
 
-	// Is an Extreme XCC API profile configured for this controller?
+	// Is a REST/XML controller profile (Extreme XCC or Ruckus ZD) configured for
+	// this controller? Prefer an enabled one — the enabled profile is the PRIMARY
+	// collection path, regardless of vendor.
+	hasEnabledProfile := false
 	if profs, e := s.queries.ListVendorProfiles(ctx); e == nil {
 		for _, p := range profs {
-			if p.VendorType == "extreme_xcc" && p.DeviceID != nil && *p.DeviceID == id {
+			if (p.VendorType == "extreme_xcc" || p.VendorType == "ruckus_zd") && p.DeviceID != nil && *p.DeviceID == id {
 				dto.Collection.HasAPIProfile = true
-				dto.Collection.ProfileID = p.ID.String()
-				dto.Collection.ProfileStatus = p.Status
-				dto.Collection.LastDetail = p.LastCollectionDetail
-				break
+				if dto.Collection.ProfileID == "" || p.Enabled {
+					dto.Collection.ProfileID = p.ID.String()
+					dto.Collection.ProfileStatus = p.Status
+					dto.Collection.LastDetail = p.LastCollectionDetail
+				}
+				if p.Enabled {
+					hasEnabledProfile = true
+				}
 			}
 		}
 	}
+
+	// managed_via (honest): REST/XML leads when a controller profile is the primary
+	// path (an enabled profile, or a REST/XML source already ran); SNMP is shown as
+	// the identity baseline whenever the system-group facts are present.
+	restXMLPrimary := hasEnabledProfile || dto.Collection.Source == xccSource || dto.Collection.Source == ruckusZDSource
+	var via []string
+	if restXMLPrimary {
+		via = append(via, "rest_xml")
+	}
+	if ident.SysDescr != "" || ident.SysObjectID != "" {
+		via = append(via, "snmp")
+	}
+	dto.Identity.ManagedVia = via
 
 	// Rosters.
 	if rows, e := s.queries.ListAccessPoints(ctx, id); e == nil {
@@ -194,6 +212,9 @@ func (s *Server) deviceWireless(w http.ResponseWriter, r *http.Request) {
 	if rows, e := s.queries.ListWirelessClients(ctx, id); e == nil {
 		dto.Clients = rows
 	}
+	// Controllers report a client's AP by its MAC (Ruckus) or serial (Extreme
+	// fallback). Show the friendly AP name from the roster instead, when one exists.
+	resolveClientAPNames(dto.APs, dto.Clients)
 	if rows, e := s.queries.ListWirelessRadios(ctx, id); e == nil {
 		dto.Radios = rows
 	}
@@ -306,14 +327,50 @@ func (s *Server) deviceWireless(w http.ResponseWriter, r *http.Request) {
 	// Next action: honest guidance when the rich roster isn't collected.
 	switch {
 	case dto.Collection.HasAPIProfile && !dto.Collection.APDataKnown:
-		dto.Collection.NextAction = "Extreme XCC profile configured — Run Collection (or Test Connection) to pull AP/SSID/client data."
+		dto.Collection.NextAction = "Controller profile configured — Run Collection (or Test Connection) to pull AP/SSID/client data via REST/XML."
 	case !dto.Collection.HasAPIProfile:
-		dto.Collection.NextAction = "Configure Extreme XCC profile to collect AP/SSID/client data."
+		dto.Collection.NextAction = "Add this controller (Inventory → Wireless → Add controller) to collect AP/SSID/client data via REST/XML."
 	default:
 		dto.Collection.NextAction = ""
 	}
 
 	writeJSON(w, http.StatusOK, dto)
+}
+
+// resolveClientAPNames rewrites each client's ApName — which controllers report
+// as the AP's MAC (Ruckus ZD) or serial (Extreme XCC fallback) — to the friendly
+// AP name from the roster, when one is available. It leaves the value untouched
+// when no roster AP matches, or when the AP itself has no friendly name (its name
+// equals its MAC), so the column is never blanked or fabricated. Mutates clients
+// in place. Vendor-agnostic and idempotent (SSH-sourced names already match by
+// name and are left as-is).
+func resolveClientAPNames(aps []db.AccessPoint, clients []db.WirelessClient) {
+	if len(clients) == 0 || len(aps) == 0 {
+		return
+	}
+	nameByKey := make(map[string]string, len(aps)*2)
+	for _, a := range aps {
+		if strings.TrimSpace(a.Name) == "" {
+			continue
+		}
+		if a.Mac != nil {
+			if k := strings.ToLower(strings.TrimSpace(*a.Mac)); k != "" {
+				nameByKey[k] = a.Name
+			}
+		}
+		if k := strings.ToLower(strings.TrimSpace(a.Serial)); k != "" {
+			nameByKey[k] = a.Name
+		}
+	}
+	for i := range clients {
+		key := strings.ToLower(strings.TrimSpace(clients[i].ApName))
+		if key == "" {
+			continue
+		}
+		if friendly, ok := nameByKey[key]; ok {
+			clients[i].ApName = friendly
+		}
+	}
 }
 
 // productFromSysDescr extracts the product name from a vendor sysDescr of the

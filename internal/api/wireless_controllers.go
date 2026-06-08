@@ -84,16 +84,37 @@ func (s *Server) addWirelessController(w http.ResponseWriter, r *http.Request) {
 		vendorLabel = "Extreme Networks"
 	}
 
-	// 2. Find-or-create the controller device by (ip, location).
-	dev, err := s.queries.LiveDeviceByIPAndLocation(ctx, db.LiveDeviceByIPAndLocationParams{PrimaryIp: &ip, LocationID: locID})
-	if err != nil {
-		dev, err = s.queries.CreateDevice(ctx, db.CreateDeviceParams{
-			LocationID: locID, PrimaryIp: &ip, Name: name, Category: string(domain.CatWirelessController),
-			Vendor: &vendorLabel, Status: "unknown", Metadata: []byte(`{"source":"wireless_controller_add"}`),
-		})
-		if err != nil {
-			writeErr(w, err)
-			return
+	// 2. Find-or-create the controller device. idx_devices_unique_primary_ip is a
+	// GLOBAL unique index on primary_ip, so we MUST reconcile by IP — not just by
+	// (ip, location) — otherwise a controller already discovered under a different
+	// (or NULL) location collides with a 23505 instead of being reused. Re-adding
+	// an existing controller reuses its row and re-points it at REST/XML; it never
+	// duplicates and never errors.
+	dev, derr := s.queries.LiveDeviceByIPAndLocation(ctx, db.LiveDeviceByIPAndLocationParams{PrimaryIp: &ip, LocationID: locID})
+	if derr != nil {
+		if byIP, e2 := s.queries.LiveDeviceByIP(ctx, &ip); e2 == nil {
+			dev = byIP
+		} else {
+			dev, derr = s.queries.CreateDevice(ctx, db.CreateDeviceParams{
+				LocationID: locID, PrimaryIp: &ip, Name: name, Category: string(domain.CatWirelessController),
+				Vendor: &vendorLabel, Status: "unknown", Metadata: []byte(`{"source":"wireless_controller_add"}`),
+			})
+			if derr != nil {
+				writeErr(w, derr)
+				return
+			}
+		}
+	}
+	// A reused device must be treated as a wireless controller so it routes to
+	// REST/XML and surfaces under Inventory → Wireless. The query is a guarded
+	// no-op when the operator locked classification, and preserves os/class fields.
+	if dev.Category != string(domain.CatWirelessController) {
+		if updated, cerr := s.queries.UpdateDeviceClassification(ctx, db.UpdateDeviceClassificationParams{
+			ID: dev.ID, Category: string(domain.CatWirelessController),
+			OsFamily: dev.OsFamily, DeviceClass: dev.DeviceClass,
+			ConfidenceScore: dev.ConfidenceScore, ClassificationEvidence: dev.ClassificationEvidence,
+		}); cerr == nil {
+			dev = updated
 		}
 	}
 	devID := dev.ID
@@ -159,6 +180,23 @@ func (s *Server) addWirelessController(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// A controller has exactly ONE REST/XML vendor. If a DIFFERENT-vendor profile
+	// was previously bound to this device (e.g. added as Extreme by mistake, now
+	// re-added as Ruckus), retire it so the routing authority can never pick the
+	// wrong collector. This realises the operator's "delete the current one and
+	// add it" — the next collection rewrites the controller source to this vendor.
+	otherVendor := "ruckus_zd"
+	if req.Vendor == "ruckus_zd" {
+		otherVendor = "extreme_xcc"
+	}
+	if old, oerr := s.queries.GetVendorProfileForDeviceVendor(ctx, db.GetVendorProfileForDeviceVendorParams{DeviceID: &devID, VendorType: otherVendor}); oerr == nil && old.Enabled {
+		_, _ = s.queries.UpdateVendorProfile(ctx, db.UpdateVendorProfileParams{
+			ID: old.ID, Name: old.Name, VendorType: old.VendorType, TargetUrl: old.TargetUrl,
+			CredentialID: old.CredentialID, LocationID: old.LocationID, DeviceID: old.DeviceID,
+			Config: old.Config, Enabled: false,
+		})
+	}
+
 	s.audit(r, "inventory", "wireless.add_controller", "device", dev.ID.String(),
 		"Added/updated "+req.Vendor+" wireless controller "+name, map[string]any{"vendor": req.Vendor, "ip": ip.String()})
 
