@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Settings as SettingsIcon, Radar, Plug, Tags, Palette, Sun, Moon } from 'lucide-react'
+import { Settings as SettingsIcon, Radar, Plug, Tags, Palette, Sun, Moon, ShieldAlert, Trash2 } from 'lucide-react'
 import { api } from '../api'
 import { PageHeader, Panel } from '../components/ui'
+import { useDeleteAllArmed, setDeleteAllArmed } from '../lib/dangerMode'
 
 type Settings = Record<string, number>
-type Section = 'discovery' | 'collection' | 'classification' | 'appearance'
+type Section = 'discovery' | 'collection' | 'classification' | 'appearance' | 'danger'
 
 const SNMP_PRESETS = [1000, 3000, 10000]
 
@@ -36,6 +37,7 @@ export function Settings() {
     { key: 'collection', label: 'Collection & Integrations', icon: Plug },
     { key: 'classification', label: 'Classification', icon: Tags },
     { key: 'appearance', label: 'Appearance', icon: Palette },
+    { key: 'danger', label: 'Destructive Actions', icon: ShieldAlert },
   ]
 
   const saveBar = (
@@ -95,6 +97,7 @@ export function Settings() {
           )}
 
           {section === 'appearance' && <AppearanceSection />}
+          {section === 'danger' && <DangerZoneSection />}
         </div>
       </div>
     </div>
@@ -110,6 +113,36 @@ function AppearanceSection() {
         <button className={'btn' + (theme === 'light' ? ' btn-primary' : '')} onClick={() => apply('light')}><Sun size={15} /> Light</button>
         <button className={'btn' + (theme === 'dark' ? ' btn-primary' : '')} onClick={() => apply('dark')}><Moon size={15} /> Dark</button>
       </div>
+    </Panel>
+  )
+}
+
+// DangerZoneSection — one browser-wide switch that shows/hides the bulk
+// "Delete all" buttons across the Inventory page and every device-category list.
+// Off by default; the preference is stored on this browser (localStorage) and
+// applied immediately to every open list. Per-row and multi-select delete are
+// never gated by this — only the wipe-the-whole-view button.
+function DangerZoneSection() {
+  const armed = useDeleteAllArmed()
+  return (
+    <Panel title="Destructive Actions" icon={ShieldAlert} subtitle="show or hide the bulk “Delete all” buttons across Inventory and every device list (stored on this browser)">
+      <div className="set-row">
+        <div>
+          <div className="set-label">“Delete all” buttons</div>
+          <div className="muted" style={{ fontSize: 12, maxWidth: 540 }}>
+            When enabled, a red <strong>Delete all (N)</strong> button appears on the Inventory page and every device-category list, wiping the entire current (filtered) view at once. When disabled, those buttons are hidden everywhere. Per-row delete and multi-select delete are unaffected. Wiping the entire unfiltered inventory still requires typing <code>DELETE</code> to confirm.
+          </div>
+        </div>
+        <button className={'btn' + (armed ? ' btn-danger' : '')} onClick={() => setDeleteAllArmed(!armed)}
+          title="Toggle the destructive Delete-all buttons for this browser">
+          {armed ? <><Trash2 size={15} /> Enabled — disable</> : 'Disabled — enable'}
+        </button>
+      </div>
+      {armed && (
+        <p style={{ fontSize: 12, marginTop: 12, color: 'var(--crit)' }}>
+          <ShieldAlert size={13} style={{ verticalAlign: -2 }} /> Delete-all buttons are currently visible on all device lists.
+        </p>
+      )}
     </Panel>
   )
 }
