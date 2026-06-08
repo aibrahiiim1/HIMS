@@ -51,18 +51,33 @@ func (s *Server) collectRuckusSSHCLI(ctx context.Context, dev db.Device, overUse
 	}
 	emit("ssh_cli_collection_started", "started", "", "Ruckus ZD SSH CLI started", 0, 0, 0)
 	sum := sshCLISummary{}
-	creds, credID, legacy, ok, detail := s.resolveSSHCred(ctx, dev, overUser, overPass)
-	if !ok {
-		sum.Detail = "SSH CLI not run: " + detail
-		emit("ssh_cli_collection_failed", "failed", "", sum.Detail, 0, 0, 0)
-		return sum
-	}
-	if credID != nil && dev.CredentialID == nil {
-		_ = s.queries.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: dev.ID, CredentialID: credID})
+	// The ZoneDirector CLI login uses the SAME admin account as the Web-XML profile,
+	// so prefer the bound ruckus_zd profile credential. An explicit override (Test
+	// SSH form) wins; a resolved SSH/CLI credential is the last resort.
+	var creds ssh.Creds
+	switch {
+	case strings.TrimSpace(overUser) != "":
+		creds = ssh.Creds{Username: strings.TrimSpace(overUser), Password: overPass}
+	default:
+		if prof, perr := s.queries.GetVendorProfileForDeviceVendor(ctx, db.GetVendorProfileForDeviceVendorParams{DeviceID: &dev.ID, VendorType: "ruckus_zd"}); perr == nil {
+			if u, p, has := s.vendorProfileSecret(ctx, prof); has {
+				creds = ssh.Creds{Username: u, Password: p}
+			}
+		}
+		if creds.Username == "" {
+			rc, _, _, rok, rdetail := s.resolveSSHCred(ctx, dev, "", "")
+			if !rok {
+				sum.Detail = "SSH CLI not run: " + rdetail
+				emit("ssh_cli_collection_failed", "failed", "", sum.Detail, 0, 0, 0)
+				return sum
+			}
+			creds = rc
+		}
 	}
 	host := dev.PrimaryIp.String()
 
-	outputs, transcript, err := runZDSSHSession(ctx, host, 22, creds, legacy, ruckusZDCLICommands, 90*time.Second)
+	// ZoneDirector firmware needs legacy SSH KEX/ciphers (appended to the modern set).
+	outputs, transcript, err := runZDSSHSession(ctx, host, 22, creds, true, ruckusZDCLICommands, 90*time.Second)
 	if err != nil && len(outputs) == 0 {
 		sum.Detail = "Ruckus ZD SSH CLI failed: " + redactSecrets(err.Error(), 200)
 		emit("ssh_cli_collection_failed", "failed", "", sum.Detail, 0, 0, 0)
