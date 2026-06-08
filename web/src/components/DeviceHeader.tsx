@@ -1,11 +1,12 @@
 import { useMemo, useState, type ComponentType } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { HardDrive, Radar, ShieldCheck, MapPin, Wifi, Wrench, RefreshCw, KeyRound, Pencil, Lock } from 'lucide-react'
-import { api, type Device, type Location, type MonitoringCheck, type DiscoveryJob, type Credential, locationPaths } from '../api'
+import { HardDrive, Radar, ShieldCheck, MapPin, Wifi, Wrench, KeyRound, Pencil, Lock } from 'lucide-react'
+import { api, type Device, type Location, type MonitoringCheck, type Credential, locationPaths } from '../api'
 import { HealthRing, colorFor, timeAgo } from './ui'
 import { ReachabilityBadge, ManagementBadge } from './StatusBadges'
 import { EditDevice } from './EditDevice'
+import { RescanSplit } from './RescanSplit'
 
 const PORT_SOURCE_LABEL: Record<string, string> = {
   discovered_open_port: 'discovered open port',
@@ -45,7 +46,6 @@ export function DeviceHeader({ deviceId, icon: Icon = HardDrive }: {
   const [repairing, setRepairing] = useState(false)
   const [repairMsg, setRepairMsg] = useState<string | null>(null)
   const [editing, setEditing] = useState(false)
-  const [scanning, setScanning] = useState(false)
   const [scanMsg, setScanMsg] = useState<string | null>(null)
 
   const d = (devices.data ?? []).find((x) => x.id === deviceId)
@@ -70,30 +70,15 @@ export function DeviceHeader({ deviceId, icon: Icon = HardDrive }: {
     }
   }
 
-  // Re-scan THIS device by its IP: re-runs discovery (tries every relevant stored
-  // credential, classifies, and binds on success) — the action to use after
-  // adding/fixing a credential so a "failed to be managed" host gets re-probed.
-  async function rescan() {
-    if (!d?.primary_ip) {
-      setScanMsg('This device has no IP to scan.')
-      return
-    }
-    setScanning(true)
-    setScanMsg(null)
-    try {
-      const job = await api.post<DiscoveryJob>('/discovery/scan', { mode: 'targets', targets: d.primary_ip })
-      setScanMsg(`Scan launched for ${d.primary_ip}. Tries all stored credentials and binds on success.`)
-      void job
-      // Refresh device + checks shortly after so the page reflects the new result.
-      setTimeout(() => {
-        qc.invalidateQueries({ queryKey: ['devices'] })
-        qc.invalidateQueries({ queryKey: ['dev-checks', deviceId] })
-      }, 6000)
-    } catch (e) {
-      setScanMsg(`Scan failed to launch: ${(e as Error).message}`)
-    } finally {
-      setScanning(false)
-    }
+  // RescanSplit launches the discovery scan (all credentials, or one chosen
+  // credential); after it fires we refresh the device + checks so the page
+  // reflects the new result once the scan completes.
+  function onScanMsg(m: string) {
+    setScanMsg(m)
+    setTimeout(() => {
+      qc.invalidateQueries({ queryKey: ['devices'] })
+      qc.invalidateQueries({ queryKey: ['dev-checks', deviceId] })
+    }, 6000)
   }
 
   // Bind/unbind the credential HIMS uses for this device. Picking the wrong kind
@@ -169,7 +154,7 @@ export function DeviceHeader({ deviceId, icon: Icon = HardDrive }: {
             </div></div>
           <div className="hero-stat"><span className="hero-stat-ico"><ShieldCheck size={15} /></span>
             <div>
-              <b>{d.managed_by && d.managed_by.length ? d.managed_by.map((p) => p.toUpperCase()).join(', ') : (d.driver ?? 'none')}</b>
+              <b style={{ whiteSpace: 'normal', wordBreak: 'break-word' }} title={d.managed_by && d.managed_by.length ? d.managed_by.map((p) => p.toUpperCase()).join(', ') : (d.driver ?? 'none')}>{d.managed_by && d.managed_by.length ? d.managed_by.map((p) => p.toUpperCase()).join(', ') : (d.driver ?? 'none')}</b>
               <small>managed via</small>
             </div></div>
           <div className="hero-stat"><span className="hero-stat-ico"><Radar size={15} /></span>
@@ -177,30 +162,25 @@ export function DeviceHeader({ deviceId, icon: Icon = HardDrive }: {
           <div className="hero-stat"><span className="hero-stat-ico"><MapPin size={15} /></span>
             <div><b>{d.location_id ? (locPath[d.location_id] ?? '—') : '—'}</b><small>location</small></div></div>
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end' }}>
-          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12 }} title="Bind the credential HIMS uses to collect from this device, or set to none to unbind">
-            <KeyRound size={13} />
-            <select value={d.credential_id ?? ''} onChange={(e) => setCredential(e.target.value)} style={{ fontSize: 12, maxWidth: 220 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end', minWidth: 230 }}>
+          <div className="row" style={{ gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            <RescanSplit targets={d.primary_ip ?? ''} label="Re-scan this device" size="sm" onMsg={onScanMsg} />
+            <button className="btn btn-ghost btn-sm" onClick={repairReachability} disabled={repairing} title="Recompute the reachability monitoring target from discovered open ports">
+              <Wrench size={13} /> {repairing ? 'Repairing…' : 'Repair check'}
+            </button>
+          </div>
+          {scanMsg && <span className="muted" style={{ fontSize: 11, maxWidth: 280, textAlign: 'right' }}>{scanMsg} <Link to="/discovery">View scan jobs</Link></span>}
+          {repairMsg && <span className="muted" style={{ fontSize: 11, maxWidth: 280, textAlign: 'right' }}>{repairMsg}</span>}
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11, alignItems: 'flex-end' }} title="Bind the credential HIMS uses to collect from this device, or set to none to unbind">
+            <span className="muted" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><KeyRound size={12} /> Collection credential</span>
+            <select value={d.credential_id ?? ''} onChange={(e) => setCredential(e.target.value)} style={{ fontSize: 12, maxWidth: 260, minWidth: 200 }}>
               <option value="">— no credential (unbind) —</option>
               {(creds.data ?? []).map((c) => (
                 <option key={c.id} value={c.id}>{c.name} · {c.kind}</option>
               ))}
             </select>
           </label>
-          {credMsg && <span className="muted" style={{ fontSize: 11, maxWidth: 240, textAlign: 'right' }}>{credMsg}</span>}
-          <button className="btn btn-primary btn-sm" onClick={rescan} disabled={scanning || !d.primary_ip}
-            title="Re-run discovery against this device — tries every stored credential and binds on success. Use after adding/fixing a credential.">
-            <RefreshCw size={13} /> {scanning ? 'Launching…' : 'Re-scan this device'}
-          </button>
-          {scanMsg && (
-            <span className="muted" style={{ fontSize: 11, maxWidth: 240, textAlign: 'right' }}>
-              {scanMsg} <Link to="/discovery">View scan jobs</Link>
-            </span>
-          )}
-          <button className="btn btn-ghost btn-sm" onClick={repairReachability} disabled={repairing} title="Recompute the reachability monitoring target from discovered open ports">
-            <Wrench size={13} /> {repairing ? 'Repairing…' : 'Repair reachability check'}
-          </button>
-          {repairMsg && <span className="muted" style={{ fontSize: 11, maxWidth: 240, textAlign: 'right' }}>{repairMsg}</span>}
+          {credMsg && <span className="muted" style={{ fontSize: 11, maxWidth: 260, textAlign: 'right' }}>{credMsg}</span>}
         </div>
       </div>
       {editing && <EditDevice device={d} onClose={() => setEditing(false)} onSaved={() => qc.invalidateQueries({ queryKey: ['devices', 'all'] })} />}

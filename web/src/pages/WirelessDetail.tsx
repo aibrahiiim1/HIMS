@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
-import { Wifi, Router, Users, Radio, ShieldCheck, Activity, Plug, FlaskConical, DownloadCloud, Terminal, Layers, FileSearch, Pencil, RefreshCw, Settings, LayoutDashboard } from 'lucide-react'
+import { Wifi, Router, Users, Radio, ShieldCheck, Activity, Plug, FlaskConical, DownloadCloud, Terminal, Layers, FileSearch, Pencil, Settings, LayoutDashboard } from 'lucide-react'
 import { api, type WirelessDetailResp, type MibWalkRow, type MibExplorerResp, type SSHCliSummary, type SSHCliRow, type AccessPoint, type WirelessClient, type WirelessSSID } from '../api'
 import { DeviceHeader } from '../components/DeviceHeader'
+import { RescanSplit } from '../components/RescanSplit'
 import { Panel, Kpi, DefList, EmptyState, StatusPill, TabBar } from '../components/ui'
 import { DataTable, type DataCol, type DataFilter } from '../components/DataTable'
 
@@ -52,14 +53,6 @@ export function WirelessDetail() {
     onSuccess: (r) => { setMsg((r.ok ? '✓ ' : '⚠ ') + 'SSH test: ' + r.detail); refetch() },
     onError: (e) => setMsg('✗ ' + (e as Error).message),
   })
-  // Re-scan THIS controller by IP — re-runs discovery (tries every relevant stored
-  // credential) just like the device header's button, surfaced here in Manage too.
-  const rescan = useMutation({
-    mutationFn: () => api.post<{ id?: string }>(`/discovery/scan`, { mode: 'targets', targets: d?.identity.ip ?? '' }),
-    onSuccess: () => { setMsg('✓ Re-scan launched — track progress in Discovery → Jobs.') },
-    onError: (e) => setMsg('✗ ' + (e as Error).message),
-  })
-
   // Advanced sections (lazy-loaded; only fetch when the Manage tab opens them).
   const [showDiag, setShowDiag] = useState(false)
   const [showRaw, setShowRaw] = useState(false)
@@ -106,7 +99,7 @@ export function WirelessDetail() {
     return Array.from(m.entries()).sort((a, b) => b[1] - a[1])
   }, [clients])
 
-  const busy = test.isPending || runApi.isPending || runMib.isPending || runSsh.isPending || testSsh.isPending || rescan.isPending
+  const busy = test.isPending || runApi.isPending || runMib.isPending || runSsh.isPending || testSsh.isPending
   // managed_via from the backend (REST/XML leads when a controller profile is the
   // primary path; SNMP is the identity baseline). SSH appended when a CLI run happened.
   const managedVia = d
@@ -118,7 +111,6 @@ export function WirelessDetail() {
   const apiLabel = d?.collection.source === 'ruckus_zd_xml' ? 'Ruckus ZoneDirector (Web-XML)'
     : d?.collection.source === 'extreme_xcc_api' ? 'Extreme XCC API'
     : 'Controller API (REST/XML)'
-  const sshNA = d?.ssh.status === 'not_applicable'
   const apMissing = sm ? Math.max(0, sm.ap_total - (c.aps ?? 0)) : 0
   const cliMissing = sm ? Math.max(0, sm.clients_total - (c.clients ?? 0)) : 0
 
@@ -276,11 +268,11 @@ export function WirelessDetail() {
                 ? <button className="btn btn-primary btn-sm" disabled={busy || !pid} onClick={() => { setMsg(''); runApi.mutate() }}><Plug size={14} /> {runApi.isPending ? 'Collecting…' : 'Run Collection (REST/XML)'}</button>
                 : <Link className="btn btn-primary btn-sm" to={configureHref}><Plug size={14} /> Configure API profile</Link>}
               {d.collection.has_api_profile && <button className="btn btn-ghost btn-sm" disabled={busy || !pid} onClick={() => { setMsg(''); test.mutate() }}><FlaskConical size={14} /> {test.isPending ? 'Testing…' : 'Test Connection'}</button>}
-              {!sshNA && <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => { setMsg(''); runSsh.mutate() }}><DownloadCloud size={14} /> {runSsh.isPending ? 'Collecting…' : 'Run SSH Collection'}</button>}
-              {!sshNA && <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => { setMsg(''); testSsh.mutate() }}><FlaskConical size={14} /> {testSsh.isPending ? 'Probing…' : 'Test SSH'}</button>}
+              <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => { setMsg(''); runSsh.mutate() }}><DownloadCloud size={14} /> {runSsh.isPending ? 'Collecting…' : 'Run SSH Collection'}</button>
+              <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => { setMsg(''); testSsh.mutate() }}><FlaskConical size={14} /> {testSsh.isPending ? 'Probing…' : 'Test SSH'}</button>
               <button className="btn btn-ghost btn-sm" disabled={busy || !d.mib.has_pack} onClick={() => { setMsg(''); runMib.mutate() }}><DownloadCloud size={14} /> {runMib.isPending ? 'Walking…' : 'Run SNMP MIB Collection'}</button>
               <Link className="btn btn-ghost btn-sm" to={d.mib.pack_id ? `/mibs?pack=${d.mib.pack_id}` : '/mibs'}><FlaskConical size={14} /> Test MIB Pack</Link>
-              <button className="btn btn-ghost btn-sm" disabled={busy || !d.identity.ip} onClick={() => { setMsg(''); rescan.mutate() }}><RefreshCw size={14} /> {rescan.isPending ? 'Launching…' : 'Re-scan this device'}</button>
+              <RescanSplit targets={d.identity.ip ?? ''} label="Re-scan this device" size="sm" onMsg={setMsg} />
               <Link className="btn btn-ghost btn-sm" to={`/devices/${id}`}><Pencil size={14} /> Edit Device</Link>
             </div>
             <div className="muted" style={{ fontSize: 11, marginTop: 10 }}>
@@ -316,10 +308,10 @@ export function WirelessDetail() {
                 </tr>
                 <tr>
                   <td><strong>SSH CLI</strong></td>
-                  <td><StatusPill status={sshTone2(d.ssh.status)} label={sshNA ? 'not applicable' : d.ssh.status} /></td>
-                  <td style={{ fontSize: 12 }}>{sshNA ? 'controller uses Web-XML (primary)' : `${d.ssh.aps} APs · ${d.ssh.clients} clients · ${d.ssh.supported.length} cmds`}</td>
-                  <td className="muted" style={{ fontSize: 11 }}>{!sshNA && d.ssh.last_run ? dataAge(d.ssh.last_run) + ' ago' : '—'}</td>
-                  <td>{sshNA ? <span className="muted" style={{ fontSize: 11 }}>—</span> : <button className="btn btn-ghost btn-xs" disabled={busy} onClick={() => { setMsg(''); runSsh.mutate() }}>Run</button>}</td>
+                  <td><StatusPill status={sshTone2(d.ssh.status)} label={d.ssh.status} /></td>
+                  <td style={{ fontSize: 12 }}>{`${d.ssh.aps} APs · ${d.ssh.clients} clients · ${d.ssh.supported.length} cmds`}</td>
+                  <td className="muted" style={{ fontSize: 11 }}>{d.ssh.last_run ? dataAge(d.ssh.last_run) + ' ago' : '—'}</td>
+                  <td><button className="btn btn-ghost btn-xs" disabled={busy} onClick={() => { setMsg(''); runSsh.mutate() }}>Run</button></td>
                 </tr>
               </tbody>
             </table>
