@@ -1,9 +1,11 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/coralsearesorts/hims/internal/classify"
 	"github.com/coralsearesorts/hims/internal/domain"
@@ -115,6 +117,21 @@ func (s *Server) reclassifyDevice(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// Switch subtype (access / distribution / core): switches & routers earn a
+	// subtype from their collected topology — interface/VLAN/neighbour counts —
+	// even when the live port-probe yields no category signal. This is why their
+	// Classification card was previously blank.
+	if d.Category == string(domain.CatSwitch) || d.Category == string(domain.CatRouter) || d.Category == string(domain.CatISPRouter) {
+		if sub, sconf, sev := s.switchSubtypeFromInventory(ctx, d); sub != "" {
+			res.Category = d.Category
+			if int(sconf) > res.Confidence {
+				res.Confidence = int(sconf)
+			}
+			res.Subtype = sub
+			res.Evidence = append(res.Evidence, sev...)
+		}
+	}
+
 	if res.Confidence == 0 || res.Category == string(domain.CatUnknown) {
 		// No classifying signal — do NOT downgrade an existing category.
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -163,6 +180,76 @@ func (s *Server) reclassifyDevice(w http.ResponseWriter, r *http.Request) {
 		"Re-classified "+updated.Name+" → "+res.Category,
 		map[string]any{"category": res.Category, "os_family": res.OSFamily, "confidence": res.Confidence})
 	writeJSON(w, http.StatusOK, map[string]any{"changed": true, "classification": toClassificationDTO(updated)})
+}
+
+// switchRouterIdentities returns the lowercased names and the IPs of every
+// known switch/router/isp_router device — used to tell an infrastructure uplink
+// (neighbour is a switch) from an edge/downlink (neighbour is an AP/phone/camera).
+func (s *Server) switchRouterIdentities(ctx context.Context) (names map[string]bool, ips map[string]bool) {
+	names, ips = map[string]bool{}, map[string]bool{}
+	devs, err := s.queries.ListAllDevices(ctx)
+	if err != nil {
+		return
+	}
+	for _, x := range devs {
+		if x.Category != string(domain.CatSwitch) && x.Category != string(domain.CatRouter) && x.Category != string(domain.CatISPRouter) {
+			continue
+		}
+		if x.Name != "" {
+			names[strings.ToLower(strings.TrimSpace(x.Name))] = true
+		}
+		if x.PrimaryIp != nil && x.PrimaryIp.IsValid() {
+			ips[x.PrimaryIp.String()] = true
+		}
+	}
+	return
+}
+
+// switchSubtypeFromInventory scores a switch/router's access/distribution/core
+// subtype from its collected interfaces, VLANs and LLDP/CDP neighbours.
+func (s *Server) switchSubtypeFromInventory(ctx context.Context, d db.Device) (string, int16, []domain.ClassificationEvidence) {
+	ifs, _ := s.queries.ListInterfaces(ctx, d.ID)
+	vlans, _ := s.queries.ListVlans(ctx, d.ID)
+	neigh, _ := s.queries.ListNeighbors(ctx, d.ID)
+	up := 0
+	for _, i := range ifs {
+		if i.OperStatus != nil && *i.OperStatus == 1 {
+			up++
+		}
+	}
+	// Infrastructure uplinks = local ports whose LLDP/CDP neighbour is another
+	// switch/router we know (APs, phones and cameras also speak LLDP, so counting
+	// every neighbour would mislabel a floor access switch as core).
+	swNames, swIPs := s.switchRouterIdentities(ctx)
+	uplinkPorts := map[int32]bool{}
+	for _, n := range neigh {
+		if n.LocalIfIndex == nil {
+			continue
+		}
+		nm := ""
+		if n.RemSysName != nil {
+			nm = strings.ToLower(strings.TrimSpace(*n.RemSysName))
+		}
+		ip := ""
+		if n.RemMgmtIp != nil {
+			ip = n.RemMgmtIp.String()
+		}
+		if (nm != "" && swNames[nm]) || (ip != "" && swIPs[ip]) {
+			uplinkPorts[*n.LocalIfIndex] = true
+		}
+	}
+	vendor, model := "", ""
+	if d.Vendor != nil {
+		vendor = *d.Vendor
+	}
+	if d.Model != nil {
+		model = *d.Model
+	}
+	sub, conf, ev := classify.SwitchSubtype(classify.SwitchSignals{
+		Vendor: vendor, Model: model, Hostname: d.Name,
+		PortsTotal: len(ifs), PortsUp: up, VLANs: len(vlans), Uplinks: len(uplinkPorts),
+	})
+	return sub, int16(conf), ev
 }
 
 type lockReq struct {
