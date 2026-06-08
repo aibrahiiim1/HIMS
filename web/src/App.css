@@ -626,6 +626,16 @@ select.field { cursor: pointer; }
 @media (max-width: 980px) {
   .grid-2, .grid-3, .grid-side { grid-template-columns: 1fr; }
 }
+/* Cards that sit side-by-side in a row-grid stretch to equal height so the row
+   lines up cleanly; `.panel`'s own margin-bottom is dropped inside flex/grid
+   containers (which already space with `gap`) to avoid uneven double-spacing. */
+.grid-2 { align-items: stretch; }
+.grid-2 > .panel, .grid-3 > .panel { height: 100%; margin-bottom: 0; }
+.stack > .panel { margin-bottom: 0; }
+/* Even KPI tile row that never leaves an orphan: 6 → 3 → 2 (all divide 6). */
+.kpi-grid.kpi-6 { grid-template-columns: repeat(6, 1fr); }
+@media (max-width: 1280px) { .kpi-grid.kpi-6 { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 680px) { .kpi-grid.kpi-6 { grid-template-columns: repeat(2, 1fr); } }
 
 /* ---- Segmented filter chips ----------------------------------------------- */
 .seg { display: inline-flex; flex-wrap: wrap; gap: 6px; }

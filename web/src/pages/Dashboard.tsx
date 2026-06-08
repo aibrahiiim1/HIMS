@@ -229,7 +229,7 @@ export function Dashboard() {
       </div>
 
       {/* KPI row */}
-      <div className="kpi-grid">
+      <div className="kpi-grid kpi-6">
         <Kpi label="Total Devices" value={total} icon={Boxes} tone="info" sub={`${byType.length} categories`} />
         <Kpi label="Online" value={up} icon={Wifi} tone="ok" sub={monitored > 0 ? `${Math.round((up / monitored) * 100)}% of monitored` : 'no checks'} />
         <Kpi label="Offline" value={down} icon={WifiOff} tone={down > 0 ? 'crit' : 'default'} sub={warning > 0 ? `${warning} warning` : 'all clear'} />
