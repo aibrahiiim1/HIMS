@@ -37,6 +37,7 @@ import { Settings } from './pages/Settings'
 import { Inventory } from './pages/Inventory'
 import { MissingClassification } from './pages/MissingClassification'
 import { UnmanagedDevices } from './pages/UnmanagedDevices'
+import { UnmappedDevices } from './pages/UnmappedDevices'
 import { Locations } from './pages/Locations'
 import { Reports } from './pages/Reports'
 import { DeviceIntelligence } from './pages/DeviceIntelligence'
@@ -137,6 +138,7 @@ function Shell({ me, onLogout }: { me?: AuthMe; onLogout: () => void }) {
                 Unmanaged (can't access it). /unknown kept as a redirect for old links. */}
             <Route path="/inventory/missing-classification" element={<MissingClassification />} />
             <Route path="/inventory/unmanaged" element={<UnmanagedDevices />} />
+            <Route path="/inventory/unmapped" element={<UnmappedDevices />} />
             <Route path="/unknown" element={<Navigate to="/inventory/missing-classification" replace />} />
             <Route path="/topology" element={<TopologyPage />} />
             <Route path="/monitoring" element={<Monitoring />} />

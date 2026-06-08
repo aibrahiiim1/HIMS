@@ -395,6 +395,10 @@ const missingClassLowConf = 50
 type badgeCountsDTO struct {
 	MissingClassification int `json:"missing_classification"`
 	Unmanaged             int `json:"unmanaged"`
+	// Unmapped = topology-capable fabric devices (switches/routers) absent from
+	// every topology link. Matches the Unmapped Devices page by construction
+	// (same fabric predicate + scoped device set).
+	Unmapped int `json:"unmapped"`
 }
 
 // deviceNeedsClassification mirrors web/src/lib/classify.ts needsClassification:
@@ -431,7 +435,8 @@ func (s *Server) badgeCounts(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	var missing, unmanaged int
+	mapped := s.mappedDeviceIDs(ctx)
+	var missing, unmanaged, unmapped int
 	for _, d := range devices {
 		if deviceNeedsClassification(d) {
 			missing++
@@ -439,8 +444,11 @@ func (s *Server) badgeCounts(w http.ResponseWriter, r *http.Request) {
 		if !am[d.ID].hasProven() { // proven-only: a bare binding is NOT managed
 			unmanaged++
 		}
+		if isUnmappedFabric(d, mapped) {
+			unmapped++
+		}
 	}
-	writeJSON(w, http.StatusOK, badgeCountsDTO{MissingClassification: missing, Unmanaged: unmanaged})
+	writeJSON(w, http.StatusOK, badgeCountsDTO{MissingClassification: missing, Unmanaged: unmanaged, Unmapped: unmapped})
 }
 
 // expectedProtocols lists the management protocol(s) a device of this class is

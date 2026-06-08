@@ -464,10 +464,11 @@ func (s *Server) listDevices(w http.ResponseWriter, r *http.Request) {
 	cat := q.Get("category")
 	access, proto, issue := q.Get("access"), q.Get("accessProtocol"), q.Get("accessIssue")
 	reachFilter, mgmtFilter := q.Get("reachability"), q.Get("management")
+	topoFilter := q.Get("topology") // "unmapped" → fabric devices absent from topology
 
 	var rows []db.Device
 	var err error
-	if cat == "all" || cat == "" && (reachFilter != "" || mgmtFilter != "") {
+	if cat == "all" || topoFilter != "" || cat == "" && (reachFilter != "" || mgmtFilter != "") {
 		rows, err = s.queries.ListAllDevices(ctx)
 	} else {
 		if cat == "" {
@@ -480,6 +481,20 @@ func (s *Server) listDevices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows = s.scopeDevices(ctx, rows)
+
+	// Topology drill-down (Inventory → Unmapped Devices). Restrict to the
+	// topology-capable fabric (switches/routers) that appear in no topology link,
+	// using the same predicate as topology coverage and the sidebar badge.
+	if topoFilter == "unmapped" {
+		mapped := s.mappedDeviceIDs(ctx)
+		kept := rows[:0]
+		for _, d := range rows {
+			if isUnmappedFabric(d, mapped) {
+				kept = append(kept, d)
+			}
+		}
+		rows = kept
+	}
 
 	// Management-access drill-down filters (dashboard card → Inventory). Computed
 	// from real bindings + collection evidence only.
