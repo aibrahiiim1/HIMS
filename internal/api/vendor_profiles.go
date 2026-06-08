@@ -155,6 +155,10 @@ func (s *Server) createVendorProfile(w http.ResponseWriter, r *http.Request) {
 		DeviceID: parseUUIDPtr(&req.DeviceID), Config: cfgOrEmpty(cfg), Enabled: enabled,
 	})
 	if err != nil {
+		if isUniqueViolation(err) {
+			http.Error(w, "this device already has a "+req.VendorType+" profile — edit it instead of adding a duplicate", http.StatusConflict)
+			return
+		}
 		writeErr(w, err)
 		return
 	}
@@ -184,6 +188,10 @@ func (s *Server) updateVendorProfile(w http.ResponseWriter, r *http.Request) {
 		DeviceID: parseUUIDPtr(&req.DeviceID), Config: cfgOrEmpty(cfg), Enabled: enabled,
 	})
 	if err != nil {
+		if isUniqueViolation(err) {
+			http.Error(w, "this device already has a "+req.VendorType+" profile — edit it instead of creating a duplicate", http.StatusConflict)
+			return
+		}
 		writeErr(w, err)
 		return
 	}

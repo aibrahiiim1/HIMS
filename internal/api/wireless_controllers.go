@@ -77,12 +77,19 @@ func (s *Server) addWirelessController(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Vendor label hint — recorded on the device so it carries a vendor even before
+	// any SNMP fingerprint, and so the SNMP fallback has a vendor signal.
+	vendorLabel := "Ruckus Wireless"
+	if req.Vendor == "extreme_xcc" {
+		vendorLabel = "Extreme Networks"
+	}
+
 	// 2. Find-or-create the controller device by (ip, location).
 	dev, err := s.queries.LiveDeviceByIPAndLocation(ctx, db.LiveDeviceByIPAndLocationParams{PrimaryIp: &ip, LocationID: locID})
 	if err != nil {
 		dev, err = s.queries.CreateDevice(ctx, db.CreateDeviceParams{
 			LocationID: locID, PrimaryIp: &ip, Name: name, Category: string(domain.CatWirelessController),
-			Status: "unknown", Metadata: []byte(`{"source":"wireless_controller_add"}`),
+			Vendor: &vendorLabel, Status: "unknown", Metadata: []byte(`{"source":"wireless_controller_add"}`),
 		})
 		if err != nil {
 			writeErr(w, err)

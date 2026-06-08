@@ -332,8 +332,42 @@ func (s *Server) runWirelessMibCollection(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, map[string]any{"collected": ok2, "detail": detail, "results": res})
 }
 
+// probeSysIdentity does a one-shot SNMP GET of sysObjectID + sysDescr and persists
+// them as device facts so MIB-pack matching has a vendor-exact signal even for a
+// device added manually (no scan-time fingerprint). Best-effort: a missing or
+// non-SNMP bound credential simply skips it (pack matching falls back to category).
+func (s *Server) probeSysIdentity(ctx context.Context, dev db.Device, community string) {
+	c, err := s.snmpClientForDevice(ctx, dev, community, 6*time.Second)
+	if err != nil {
+		return
+	}
+	defer c.Close()
+	pdus, err := c.Get(ctx, "1.3.6.1.2.1.1.2.0", "1.3.6.1.2.1.1.1.0") // sysObjectID.0, sysDescr.0
+	if err != nil {
+		return
+	}
+	if len(pdus) > 0 {
+		if v := snmp.PDUString(pdus[0]); v != "" {
+			_ = s.queries.UpsertDeviceFact(ctx, db.UpsertDeviceFactParams{DeviceID: dev.ID, Key: "snmp.sysobjectid", Value: &v, Driver: "snmp"})
+		}
+	}
+	if len(pdus) > 1 {
+		if v := snmp.PDUString(pdus[1]); v != "" {
+			_ = s.queries.UpsertDeviceFact(ctx, db.UpsertDeviceFactParams{DeviceID: dev.ID, Key: "snmp.sysdescr", Value: &v, Driver: "snmp"})
+		}
+	}
+}
+
 // collectWirelessMib resolves the applicable pack and runs the collection.
 func (s *Server) collectWirelessMib(ctx context.Context, dev db.Device, community string) ([]tableResult, string, bool) {
+	// Self-heal pack selection: a wireless_controller added via the manual REST/XML
+	// "Add controller" flow has no SNMP fingerprint, so it would match only the broad
+	// category and shadow the vendor-exact pack (e.g. the HiPath pack swallowing a
+	// Ruckus device). Probe sysObjectID/sysDescr once and persist them so matchMibPack
+	// has a vendor-exact signal on this and future runs.
+	if oid, _ := s.deviceSysIdentity(ctx, dev); oid == "" {
+		s.probeSysIdentity(ctx, dev, community)
+	}
 	pack, found := s.matchMibPack(ctx, dev)
 	if !found {
 		return nil, "No applicable MIB pack for this device (vendor/sysObjectID/category did not match any enabled pack).", false
