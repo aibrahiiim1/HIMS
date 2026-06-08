@@ -203,6 +203,11 @@ type Querier interface {
 	// same repair/license).
 	ExpensesByCategory(ctx context.Context) ([]ExpensesByCategoryRow, error)
 	ExpensesByLocation(ctx context.Context) ([]ExpensesByLocationRow, error)
+	// Reconcile orphaned scans: a scan runs as an in-process goroutine, so any job
+	// still 'running'/'pending' after a restart (or that hangs past a max duration)
+	// has no live worker and must be failed. $1 = cutoff (started/created before
+	// this), $2 = error message. Returns the number of jobs reconciled.
+	FailStaleScanJobs(ctx context.Context, arg FailStaleScanJobsParams) (int64, error)
 	// First step of the IP→MAC→port→path search.
 	FindMACByIP(ctx context.Context, ipAddress netip.Addr) ([]FindMACByIPRow, error)
 	// Topology search: which switch + port + VLAN carries a MAC?

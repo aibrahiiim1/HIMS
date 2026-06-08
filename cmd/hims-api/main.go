@@ -176,6 +176,10 @@ func run(ctx context.Context, serviceMode, logPath string) error {
 	srv.StartTopologyRebuilder(ctx, 10*time.Minute)
 	srv.StartMonitoring(ctx, 30*time.Second)
 	srv.StartNotifier(ctx, 30*time.Second)
+	// Discovery worker-crash recovery: fail scans orphaned by a restart on boot,
+	// then watchdog scans that hang past 45m (single targets/CIDRs finish in
+	// minutes — a longer "running" job has no live worker).
+	srv.StartScanReconciler(ctx, 5*time.Minute, 45*time.Minute)
 	if err := srv.BootstrapAdmin(ctx, os.Getenv("HIMS_ADMIN_USER"), os.Getenv("HIMS_ADMIN_PASSWORD")); err != nil {
 		slog.Error("admin bootstrap failed", "error", err)
 	}

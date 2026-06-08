@@ -582,6 +582,10 @@ export interface DiscoveryJob {
   scanned_count?: number // hosts processed so far (drives the 0→100% scan progress bar)
   error?: string | null
   created_at: string
+  // What was scanned, decoded from the job's saved scan spec (metadata):
+  mode?: string // 'targets' | 'site_subnets' | ''
+  targets?: string // raw target list (IP / range / CIDR / mixed) for target-mode scans
+  scope?: string // human-readable scope label (targets || scope_cidr || 'site subnets' || 'import / manual')
 }
 
 export interface ScanCredAttempt { kind: string; protocol: string; category: string; detail: string; success: boolean; relevant?: boolean }

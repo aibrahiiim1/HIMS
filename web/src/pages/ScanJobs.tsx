@@ -56,7 +56,7 @@ export function ScanJobs() {
             <tbody>
               {list.map((j) => (
                 <tr key={j.id}>
-                  <td className="mono" style={{ fontSize: 12 }}><Link className="cell-name" to={`/discovery/jobs/${j.id}/results`}>{j.scope_cidr ?? 'import'}</Link></td>
+                  <td className="mono" style={{ fontSize: 12, maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={j.scope ?? j.targets ?? j.scope_cidr ?? ''}><Link className="cell-name" to={`/discovery/jobs/${j.id}/results`}>{j.scope ?? j.scope_cidr ?? 'import / manual'}</Link></td>
                   <td><span className={`badge badge-${jobBadge(j.status)}`}>{j.status}</span></td>
                   <td>{j.location_id ? (locPath[j.location_id] ?? '—') : '—'}</td>
                   <td>{j.started_at ? new Date(j.started_at).toLocaleString() : '—'}</td>
@@ -67,7 +67,7 @@ export function ScanJobs() {
                   <td style={{ whiteSpace: 'nowrap' }}>
                     <Link className="btn btn-ghost btn-xs" to={`/discovery/jobs/${j.id}/results`}>Open Results</Link>{' '}
                     <Link className="btn btn-ghost btn-xs" to={`/discovery/jobs/${j.id}/live`} title="Live visual board">Live</Link>{' '}
-                    {j.scope_cidr && <button className="btn btn-ghost btn-xs" disabled={rerun.isPending} onClick={() => rerun.mutate(j.id)} title="Re-run this scan"><RefreshCw size={12} /></button>}{' '}
+                    {(j.scope_cidr || j.targets || j.mode === 'site_subnets') && j.status !== 'running' && <button className="btn btn-ghost btn-xs" disabled={rerun.isPending} onClick={() => rerun.mutate(j.id)} title="Re-run this scan"><RefreshCw size={12} /></button>}{' '}
                     <button className="btn btn-ghost btn-xs" style={{ color: 'var(--crit)' }} onClick={() => { if (confirm('Delete this job and its results?')) del.mutate(j.id) }} title="Delete job"><Trash2 size={12} /></button>
                   </td>
                 </tr>

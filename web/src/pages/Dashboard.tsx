@@ -398,7 +398,7 @@ export function Dashboard() {
                   <tbody>
                     {recentJobs.slice(0, 5).map((j) => (
                       <tr key={j.id}>
-                        <td className="mono">{j.scope_cidr || '—'}</td>
+                        <td className="mono" style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={j.scope ?? j.scope_cidr ?? ''}>{j.scope || j.scope_cidr || '—'}</td>
                         <td><StatusPill status={j.status === 'completed' ? 'up' : j.status === 'failed' ? 'down' : 'warning'} label={j.status} /></td>
                         <td>{j.host_count}</td>
                         <td>{j.found_count}</td>

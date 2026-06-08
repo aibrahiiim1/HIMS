@@ -127,6 +127,32 @@ func (q *Queries) DeleteDiscoveryJob(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
+const failStaleScanJobs = `-- name: FailStaleScanJobs :execrows
+UPDATE discovery_jobs
+SET status = 'failed',
+    finished_at = now(),
+    error = $2
+WHERE status IN ('running', 'pending')
+  AND COALESCE(started_at, created_at) < $1
+`
+
+type FailStaleScanJobsParams struct {
+	StartedAt *time.Time `json:"started_at"`
+	Error     *string    `json:"error"`
+}
+
+// Reconcile orphaned scans: a scan runs as an in-process goroutine, so any job
+// still 'running'/'pending' after a restart (or that hangs past a max duration)
+// has no live worker and must be failed. $1 = cutoff (started/created before
+// this), $2 = error message. Returns the number of jobs reconciled.
+func (q *Queries) FailStaleScanJobs(ctx context.Context, arg FailStaleScanJobsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, failStaleScanJobs, arg.StartedAt, arg.Error)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getDiscoveryJob = `-- name: GetDiscoveryJob :one
 SELECT id, location_id, subnet_id, scope_cidr, status, started_at, finished_at, host_count, found_count, error, metadata, created_at, scanned_count FROM discovery_jobs WHERE id = $1
 `

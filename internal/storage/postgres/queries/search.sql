@@ -104,3 +104,15 @@ RETURNING seq;
 -- name: ListDiscoveryJobEvents :many
 SELECT seq, job_id, ip, device_id, stage, protocol, status, message, created_at
 FROM discovery_job_events WHERE job_id = $1 ORDER BY seq ASC LIMIT 5000;
+
+-- name: FailStaleScanJobs :execrows
+-- Reconcile orphaned scans: a scan runs as an in-process goroutine, so any job
+-- still 'running'/'pending' after a restart (or that hangs past a max duration)
+-- has no live worker and must be failed. $1 = cutoff (started/created before
+-- this), $2 = error message. Returns the number of jobs reconciled.
+UPDATE discovery_jobs
+SET status = 'failed',
+    finished_at = now(),
+    error = $2
+WHERE status IN ('running', 'pending')
+  AND COALESCE(started_at, created_at) < $1;
