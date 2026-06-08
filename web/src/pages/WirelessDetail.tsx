@@ -357,7 +357,11 @@ const clientCols: DataCol<WirelessClient>[] = [
   { key: 'ssid', label: 'SSID', render: (c) => c.ssid || '—', sortVal: (c) => c.ssid },
   { key: 'ap', label: 'AP (serial)', render: (c) => c.ap_name || '—', mono: true, sortVal: (c) => c.ap_name },
   { key: 'rssi', label: 'RSSI', render: (c) => (c.rssi != null ? `${c.rssi} dBm` : '—'), sortVal: (c) => c.rssi ?? 0 },
+  { key: 'snr', label: 'SNR', render: (c) => (c.snr != null ? `${c.snr} dB` : '—'), sortVal: (c) => c.snr ?? 0 },
   { key: 'band', label: 'Band', render: (c) => c.band || '—' },
+  { key: 'rx', label: 'Rx', render: (c) => fmtBytes(c.rx_bytes), sortVal: (c) => c.rx_bytes ?? 0 },
+  { key: 'tx', label: 'Tx', render: (c) => fmtBytes(c.tx_bytes), sortVal: (c) => c.tx_bytes ?? 0 },
+  { key: 'since', label: 'Connected since', render: (c) => c.connected_since || '—', sortVal: (c) => c.connected_since || '' },
   { key: 'seen', label: 'Last seen', render: (c) => tsShort(c.collected_at), sortVal: (c) => c.collected_at || '' },
   { key: 'source', label: 'Source', render: (c) => srcLabel(c.source) },
 ]
@@ -392,10 +396,19 @@ function srcLabel(s?: string): string {
   switch (s) {
     case 'extreme_xcc_ssh': return 'SSH CLI'
     case 'snmp_wireless_mib': return 'SNMP MIB'
-    case 'extreme_xcc_api': return 'XCC API'
+    case 'extreme_xcc_api': return 'XCC REST API'
+    case 'ruckus_zd_xml': return 'Ruckus ZD Web-XML'
     case 'snmp_baseline': return 'SNMP'
     default: return s || '—'
   }
+}
+// fmtBytes renders a byte counter as a compact human size; "—" when not reported.
+function fmtBytes(n?: number | null): string {
+  if (n == null) return '—'
+  const u = ['B', 'KB', 'MB', 'GB', 'TB']
+  let v = n, i = 0
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++ }
+  return `${i === 0 ? v : v.toFixed(1)} ${u[i]}`
 }
 function collStatusKpiTone(s: string): 'ok' | 'warn' | 'crit' | 'info' | 'default' {
   switch (s) { case 'complete': return 'ok'; case 'partial': case 'summary_only': return 'warn'; case 'failed': return 'crit'; default: return 'default' }

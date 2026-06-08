@@ -18,6 +18,7 @@ import { PrinterDetail } from './pages/PrinterDetail'
 import { UPSDetail } from './pages/UPSDetail'
 import { PbxDetail } from './pages/PbxDetail'
 import { WirelessDetail } from './pages/WirelessDetail'
+import { WirelessControllers } from './pages/WirelessControllers'
 import { DeviceDetailDispatch } from './pages/DeviceDetailDispatch'
 import { TopologyPage } from './pages/TopologyPage'
 import { SearchPage } from './pages/SearchPage'
@@ -122,7 +123,7 @@ function Shell({ me, onLogout }: { me?: AuthMe; onLogout: () => void }) {
             <Route path="/cameras" element={<DeviceList category="camera" title="Cameras" detailBase="/cctv" />} />
             <Route path="/nvrs" element={<DeviceList category="nvr" title="NVR / DVR" detailBase="/cctv" />} />
             <Route path="/cctv/:id" element={<CctvDetail />} />
-            <Route path="/wlan" element={<DeviceList category="wireless_controller" title="Wireless Controllers" detailBase="/wlan" />} />
+            <Route path="/wlan" element={<WirelessControllers />} />
             <Route path="/wlan/:id" element={<WirelessDetail />} />
             <Route path="/workstations" element={<DeviceList category="endpoint" title="Workstations" detailBase="/workstations" />} />
             <Route path="/workstations/:id" element={<EndpointDetail />} />

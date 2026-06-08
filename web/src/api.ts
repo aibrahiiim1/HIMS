@@ -732,6 +732,8 @@ export interface AccessPoint {
   serial?: string
   firmware?: string
   band?: string
+  site?: string
+  uptime?: string
   source?: string
   last_seen_at?: string
   collected_at?: string
@@ -739,7 +741,7 @@ export interface AccessPoint {
 
 // Consolidated Wireless Controller detail (GET /devices/{id}/wireless).
 export interface WirelessSSID { id: string; name: string; status: string; security: string; band: string; vlan: string; client_count: number; source: string }
-export interface WirelessClient { id: string; mac: string; ip: string; hostname: string; ap_name: string; ssid: string; rssi?: number | null; band: string; source: string; collected_at?: string }
+export interface WirelessClient { id: string; mac: string; ip: string; hostname: string; ap_name: string; ssid: string; rssi?: number | null; snr?: number | null; rx_bytes?: number | null; tx_bytes?: number | null; connected_since?: string; band: string; source: string; collected_at?: string }
 export interface WirelessRadio { id: string; ap_name: string; radio: string; band: string; channel?: number | null; power_dbm?: number | null; client_count: number; source: string }
 export interface WirelessEvent { id: string; at: string; severity: string; category: string; message: string; source: string }
 export interface WirelessDetailResp {

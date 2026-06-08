@@ -11,11 +11,12 @@ interface Props {
   category: string
   title: string
   detailBase: string
+  headerExtra?: React.ReactNode // optional action(s) rendered before the delete control
 }
 
 const isOffline = (s: string) => ['down', 'offline', 'needs_attention'].includes((s || '').toLowerCase())
 
-export function DeviceList({ category, title, detailBase }: Props) {
+export function DeviceList({ category, title, detailBase, headerExtra }: Props) {
   const qc = useQueryClient()
   const [msg, setMsg] = useState('')
   const [editDev, setEditDev] = useState<Device | null>(null)
@@ -47,9 +48,12 @@ export function DeviceList({ category, title, detailBase }: Props) {
     <div>
       <PageHeader title={title} subtitle={`Managed ${title.toLowerCase()} across the fleet`} icon={Boxes}
         actions={
-          <DeleteAllToggle ids={filtered.map((d) => d.id)} fullInventory={false}
-            scope={q.trim() ? `filtered ${title.toLowerCase()}` : `all ${title.toLowerCase()}`}
-            onDelete={(ids) => del.mutate(ids)} busy={del.isPending} />
+          <>
+            {headerExtra}
+            <DeleteAllToggle ids={filtered.map((d) => d.id)} fullInventory={false}
+              scope={q.trim() ? `filtered ${title.toLowerCase()}` : `all ${title.toLowerCase()}`}
+              onDelete={(ids) => del.mutate(ids)} busy={del.isPending} />
+          </>
         }
       />
       {msg && <div className="banner" style={{ marginBottom: 12, fontSize: 13 }}>{msg}</div>}
