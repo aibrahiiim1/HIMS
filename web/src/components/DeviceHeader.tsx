@@ -15,6 +15,27 @@ const PORT_SOURCE_LABEL: Record<string, string> = {
   manual: 'manual',
 }
 
+// Friendly labels for the raw managed_by tokens the backend records, so the header
+// reads "SNMP · Vendor API" instead of "SNMP_V2C, VENDOR_API". Generic across all
+// device types (a vendor profile is "Vendor API" — REST/XML, vSphere, ONVIF, …).
+const MANAGED_VIA_LABEL: Record<string, string> = {
+  snmp: 'SNMP', snmp_v2c: 'SNMP', snmp_v3: 'SNMP', snmp_metric: 'SNMP',
+  vendor_api: 'Vendor API', rest_xml: 'Vendor API',
+  ssh: 'SSH', ssh_cli: 'SSH', cli: 'SSH',
+  winrm: 'WinRM', wmi: 'WMI', redfish: 'Redfish',
+  http_basic: 'HTTP', http: 'HTTP', web: 'HTTP', agent: 'Agent',
+}
+function managedViaLabels(tokens?: string[] | null, fallback = 'none'): string {
+  if (!tokens || tokens.length === 0) return fallback
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const t of tokens) {
+    const label = MANAGED_VIA_LABEL[t.toLowerCase()] ?? t.toUpperCase()
+    if (!seen.has(label)) { seen.add(label); out.push(label) }
+  }
+  return out.join(' · ')
+}
+
 function deviceHealth(checks: MonitoringCheck[]): { score: number; status: string } {
   if (checks.length === 0) return { score: 0, status: 'unknown' }
   const score = Math.round(checks.reduce((a, c) => {
@@ -141,7 +162,7 @@ export function DeviceHeader({ deviceId, icon: Icon = HardDrive, showCredential 
             </div></div>
           <div className="hero-stat"><span className="hero-stat-ico"><ShieldCheck size={15} /></span>
             <div>
-              <b style={{ whiteSpace: 'normal', wordBreak: 'break-word' }} title={d.managed_by && d.managed_by.length ? d.managed_by.map((p) => p.toUpperCase()).join(', ') : (d.driver ?? 'none')}>{d.managed_by && d.managed_by.length ? d.managed_by.map((p) => p.toUpperCase()).join(', ') : (d.driver ?? 'none')}</b>
+              <b style={{ whiteSpace: 'normal', wordBreak: 'break-word' }} title={managedViaLabels(d.managed_by, d.driver ?? 'none')}>{managedViaLabels(d.managed_by, d.driver ?? 'none')}</b>
               <small>managed via</small>
             </div></div>
           <div className="hero-stat"><span className="hero-stat-ico"><Radar size={15} /></span>

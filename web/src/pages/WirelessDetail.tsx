@@ -101,14 +101,6 @@ export function WirelessDetail() {
   }, [clients])
 
   const busy = test.isPending || runApi.isPending || runMib.isPending || runSsh.isPending || testSsh.isPending
-  // managed_via from the backend (REST/XML leads when a controller profile is the
-  // primary path; SNMP is the identity baseline). SSH appended when a CLI run happened.
-  const managedVia = d
-    ? [
-        ...((d.identity.managed_via ?? []).map((m) => (m === 'rest_xml' ? 'REST/XML' : m === 'snmp' ? 'SNMP' : m.toUpperCase()))),
-        ...(d.ssh.status === 'collected' || d.ssh.status === 'partial' ? ['SSH'] : []),
-      ]
-    : []
   const apiLabel = d?.collection.source === 'ruckus_zd_xml' ? 'Ruckus ZoneDirector (Web-XML)'
     : d?.collection.source === 'extreme_xcc_api' ? 'Extreme XCC API'
     : 'Controller API (REST/XML)'
@@ -143,13 +135,6 @@ export function WirelessDetail() {
               { label: 'Serial', value: d.identity.serial || '—' },
               { label: 'IP address', value: d.identity.ip || '—' },
               { label: 'Status', value: <StatusPill status={statusTone(d.identity.status)} label={cap(d.identity.status)} /> },
-              {
-                label: 'Managed via', value: (
-                  <span className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
-                    {(managedVia.length ? managedVia : ['SNMP']).map((m) => <span key={m} className="badge badge-info">{m}</span>)}
-                  </span>
-                ),
-              },
               { label: 'Primary source', value: srcLabel(d.collection.source) },
               { label: 'Last collection', value: d.summary.collected_at ? `${new Date(d.summary.collected_at).toLocaleString()} (${dataAge(d.summary.collected_at)} ago)` : (d.collection.collected_at ? new Date(d.collection.collected_at).toLocaleString() : '—') },
             ]} />
