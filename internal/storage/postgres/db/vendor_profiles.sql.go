@@ -11,6 +11,19 @@ import (
 	"github.com/google/uuid"
 )
 
+const countVendorProfilesUsingCredential = `-- name: CountVendorProfilesUsingCredential :one
+SELECT count(*) FROM vendor_connection_profiles WHERE credential_id = $1
+`
+
+// How many profiles still reference a credential (for orphan-credential cleanup on
+// profile delete).
+func (q *Queries) CountVendorProfilesUsingCredential(ctx context.Context, credentialID *uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countVendorProfilesUsingCredential, credentialID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createVendorProfile = `-- name: CreateVendorProfile :one
 
 INSERT INTO vendor_connection_profiles (name, vendor_type, target_url, credential_id, location_id, device_id, config, enabled)
@@ -80,6 +93,44 @@ SELECT id, name, vendor_type, target_url, credential_id, location_id, device_id,
 
 func (q *Queries) GetVendorProfile(ctx context.Context, id uuid.UUID) (VendorConnectionProfile, error) {
 	row := q.db.QueryRow(ctx, getVendorProfile, id)
+	var i VendorConnectionProfile
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.VendorType,
+		&i.TargetUrl,
+		&i.CredentialID,
+		&i.LocationID,
+		&i.DeviceID,
+		&i.Config,
+		&i.Enabled,
+		&i.LastTestAt,
+		&i.LastTestOk,
+		&i.LastTestDetail,
+		&i.LastCollectionAt,
+		&i.LastCollectionDetail,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getVendorProfileForDeviceVendor = `-- name: GetVendorProfileForDeviceVendor :one
+SELECT id, name, vendor_type, target_url, credential_id, location_id, device_id, config, enabled, last_test_at, last_test_ok, last_test_detail, last_collection_at, last_collection_detail, status, created_at, updated_at FROM vendor_connection_profiles
+WHERE device_id = $1 AND vendor_type = $2
+ORDER BY created_at LIMIT 1
+`
+
+type GetVendorProfileForDeviceVendorParams struct {
+	DeviceID   *uuid.UUID `json:"device_id"`
+	VendorType string     `json:"vendor_type"`
+}
+
+// The (device, vendor_type) profile if one exists (any enabled state) — keeps the
+// "Add controller" flow idempotent (update in place rather than create a duplicate).
+func (q *Queries) GetVendorProfileForDeviceVendor(ctx context.Context, arg GetVendorProfileForDeviceVendorParams) (VendorConnectionProfile, error) {
+	row := q.db.QueryRow(ctx, getVendorProfileForDeviceVendor, arg.DeviceID, arg.VendorType)
 	var i VendorConnectionProfile
 	err := row.Scan(
 		&i.ID,

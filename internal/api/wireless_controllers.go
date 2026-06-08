@@ -76,21 +76,6 @@ func (s *Server) addWirelessController(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	cred, err := s.queries.CreateCredential(ctx, db.CreateCredentialParams{
-		// Disambiguate by IP so distinct controllers don't collide on the unique
-		// credential name; a clean 409 guides re-adds of the same controller.
-		Name: name + " wireless admin @" + ip.String(), Kind: string(domain.CredHTTPBasic),
-		EncryptedBlob: blob, KeyID: keyID,
-		Weak: isWeakSecret(string(domain.CredHTTPBasic), req.Password), Metadata: []byte("{}"),
-	})
-	if err != nil {
-		if isUniqueViolation(err) {
-			http.Error(w, "a wireless-admin credential for this controller already exists — delete the existing controller/credential first, or edit its vendor profile", http.StatusConflict)
-			return
-		}
-		writeErr(w, err)
-		return
-	}
 
 	// 2. Find-or-create the controller device by (ip, location).
 	dev, err := s.queries.LiveDeviceByIPAndLocation(ctx, db.LiveDeviceByIPAndLocationParams{PrimaryIp: &ip, LocationID: locID})
@@ -104,8 +89,8 @@ func (s *Server) addWirelessController(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	devID := dev.ID
 
-	// 3. Create the enabled vendor profile bound to the device (the PRIMARY path).
 	cfg := map[string]any{"ssl_verify": req.SSLVerify}
 	if req.Vendor == "extreme_xcc" {
 		base := strings.TrimSpace(req.APIBase)
@@ -116,19 +101,59 @@ func (s *Server) addWirelessController(w http.ResponseWriter, r *http.Request) {
 	}
 	cfgJSON, _ := json.Marshal(cfg)
 	targetURL := "https://" + ip.String() + ":" + strconv.Itoa(port)
-	devID := dev.ID
-	credID := cred.ID
-	prof, err := s.queries.CreateVendorProfile(ctx, db.CreateVendorProfileParams{
-		Name: name, VendorType: req.Vendor, TargetUrl: targetURL,
-		CredentialID: &credID, LocationID: locID, DeviceID: &devID,
-		Config: cfgJSON, Enabled: true,
-	})
-	if err != nil {
-		writeErr(w, err)
-		return
+	credName := name + " wireless admin @" + ip.String()
+
+	// 3. Idempotent: re-adding the same controller (same device + vendor) updates the
+	// existing profile + re-seals its credential rather than creating duplicates.
+	var prof db.VendorConnectionProfile
+	if existing, gerr := s.queries.GetVendorProfileForDeviceVendor(ctx, db.GetVendorProfileForDeviceVendorParams{DeviceID: &devID, VendorType: req.Vendor}); gerr == nil {
+		credID := existing.CredentialID
+		if credID != nil {
+			if err := s.queries.UpdateCredentialSecret(ctx, db.UpdateCredentialSecretParams{ID: *credID, EncryptedBlob: blob, KeyID: keyID}); err != nil {
+				writeErr(w, err)
+				return
+			}
+		} else {
+			c, cerr := s.queries.CreateCredential(ctx, db.CreateCredentialParams{Name: credName, Kind: string(domain.CredHTTPBasic), EncryptedBlob: blob, KeyID: keyID, Weak: isWeakSecret(string(domain.CredHTTPBasic), req.Password), Metadata: []byte("{}")})
+			if cerr != nil {
+				writeErr(w, cerr)
+				return
+			}
+			credID = &c.ID
+		}
+		prof, err = s.queries.UpdateVendorProfile(ctx, db.UpdateVendorProfileParams{
+			ID: existing.ID, Name: name, VendorType: req.Vendor, TargetUrl: targetURL,
+			CredentialID: credID, LocationID: locID, DeviceID: &devID, Config: cfgJSON, Enabled: true,
+		})
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+	} else {
+		cred, cerr := s.queries.CreateCredential(ctx, db.CreateCredentialParams{
+			Name: credName, Kind: string(domain.CredHTTPBasic), EncryptedBlob: blob, KeyID: keyID,
+			Weak: isWeakSecret(string(domain.CredHTTPBasic), req.Password), Metadata: []byte("{}"),
+		})
+		if cerr != nil {
+			if isUniqueViolation(cerr) {
+				http.Error(w, "a wireless-admin credential with this name already exists — pick a different controller name", http.StatusConflict)
+				return
+			}
+			writeErr(w, cerr)
+			return
+		}
+		credID := cred.ID
+		prof, err = s.queries.CreateVendorProfile(ctx, db.CreateVendorProfileParams{
+			Name: name, VendorType: req.Vendor, TargetUrl: targetURL,
+			CredentialID: &credID, LocationID: locID, DeviceID: &devID, Config: cfgJSON, Enabled: true,
+		})
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
 	}
 	s.audit(r, "inventory", "wireless.add_controller", "device", dev.ID.String(),
-		"Added "+req.Vendor+" wireless controller "+name, map[string]any{"vendor": req.Vendor, "ip": ip.String()})
+		"Added/updated "+req.Vendor+" wireless controller "+name, map[string]any{"vendor": req.Vendor, "ip": ip.String()})
 
 	// 4. Kick the REST/XML collection asynchronously — the primary collection path.
 	go func(p db.VendorConnectionProfile, d db.Device) {

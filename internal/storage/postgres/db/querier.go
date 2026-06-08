@@ -67,6 +67,9 @@ type Querier interface {
 	// Blobs sealed under a key id other than the one currently loaded.
 	CountUndecryptableCredentials(ctx context.Context, keyID string) (int64, error)
 	CountUsersWithPassword(ctx context.Context) (int64, error)
+	// How many profiles still reference a credential (for orphan-credential cleanup on
+	// profile delete).
+	CountVendorProfilesUsingCredential(ctx context.Context, credentialID *uuid.UUID) (int64, error)
 	CreateAgentJob(ctx context.Context, arg CreateAgentJobParams) (AgentJob, error)
 	// ---- Alert rules ----------------------------------------------------------
 	CreateAlertRule(ctx context.Context, arg CreateAlertRuleParams) (AlertRule, error)
@@ -230,6 +233,9 @@ type Querier interface {
 	GetUPSStatus(ctx context.Context, deviceID uuid.UUID) (UpsStatus, error)
 	GetUserByUsername(ctx context.Context, username string) (User, error)
 	GetVendorProfile(ctx context.Context, id uuid.UUID) (VendorConnectionProfile, error)
+	// The (device, vendor_type) profile if one exists (any enabled state) — keeps the
+	// "Add controller" flow idempotent (update in place rather than create a duplicate).
+	GetVendorProfileForDeviceVendor(ctx context.Context, arg GetVendorProfileForDeviceVendorParams) (VendorConnectionProfile, error)
 	GetWLANControllerInfo(ctx context.Context, deviceID uuid.UUID) (WlanControllerInfo, error)
 	GetWirelessControllerSummary(ctx context.Context, deviceID uuid.UUID) (WirelessControllerSummary, error)
 	GetWorkOrder(ctx context.Context, id uuid.UUID) (WorkOrder, error)

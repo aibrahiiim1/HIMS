@@ -19,6 +19,18 @@ DELETE FROM vendor_connection_profiles WHERE id = $1;
 -- name: GetVendorProfile :one
 SELECT * FROM vendor_connection_profiles WHERE id = $1;
 
+-- name: GetVendorProfileForDeviceVendor :one
+-- The (device, vendor_type) profile if one exists (any enabled state) — keeps the
+-- "Add controller" flow idempotent (update in place rather than create a duplicate).
+SELECT * FROM vendor_connection_profiles
+WHERE device_id = $1 AND vendor_type = $2
+ORDER BY created_at LIMIT 1;
+
+-- name: CountVendorProfilesUsingCredential :one
+-- How many profiles still reference a credential (for orphan-credential cleanup on
+-- profile delete).
+SELECT count(*) FROM vendor_connection_profiles WHERE credential_id = $1;
+
 -- name: ListVendorProfiles :many
 SELECT * FROM vendor_connection_profiles ORDER BY vendor_type, name;
 
