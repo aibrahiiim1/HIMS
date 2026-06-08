@@ -33,8 +33,8 @@ type wirelessIdentity struct {
 }
 
 type wirelessCollection struct {
-	Source        string  `json:"source"`         // extreme_xcc_api | snmp_baseline | cloud_xiq | ""
-	CollectedAt   *string `json:"collected_at"`   // RFC3339, nil when never collected
+	Source        string  `json:"source"`       // extreme_xcc_api | snmp_baseline | cloud_xiq | ""
+	CollectedAt   *string `json:"collected_at"` // RFC3339, nil when never collected
 	HasAPIProfile bool    `json:"has_api_profile"`
 	ProfileID     string  `json:"profile_id,omitempty"`
 	ProfileStatus string  `json:"profile_status,omitempty"`
@@ -44,10 +44,10 @@ type wirelessCollection struct {
 }
 
 type wirelessMibStatus struct {
-	HasPack     bool             `json:"has_pack"`
-	PackName    string           `json:"pack_name,omitempty"`
-	PackSource  string           `json:"pack_source,omitempty"`
-	PackID      string           `json:"pack_id,omitempty"`
+	HasPack      bool               `json:"has_pack"`
+	PackName     string             `json:"pack_name,omitempty"`
+	PackSource   string             `json:"pack_source,omitempty"`
+	PackID       string             `json:"pack_id,omitempty"`
 	WalkedTables []wirelessMibTable `json:"walked_tables"`
 }
 
@@ -70,38 +70,38 @@ type wirelessSSHStatus struct {
 // wirelessControllerSummary mirrors the controller-reported counts, kept SEPARATE
 // from parsed roster rows so the UI never presents partial data as complete.
 type wirelessControllerSummary struct {
-	Has              bool    `json:"has"`
-	Source           string  `json:"source"`
-	CollectionStatus string  `json:"collection_status"` // complete|partial|summary_only|failed
-	Networks         int     `json:"networks"`
-	Switches         int     `json:"switches"`
-	APTotal          int     `json:"ap_total"`
-	AdoptionPrimary  int     `json:"adoption_primary"`
-	AdoptionBackup   int     `json:"adoption_backup"`
-	ActiveAPs        int     `json:"active_aps"`
-	NonActiveAPs     int     `json:"non_active_aps"`
-	ClientsTotal     int     `json:"clients_total"`
-	ParsedAPRows     int     `json:"parsed_ap_rows"`
-	ParsedClientRows int     `json:"parsed_client_rows"`
-	ParsedSSIDRows   int     `json:"parsed_ssid_rows"`
+	Has              bool   `json:"has"`
+	Source           string `json:"source"`
+	CollectionStatus string `json:"collection_status"` // complete|partial|summary_only|failed
+	Networks         int    `json:"networks"`
+	Switches         int    `json:"switches"`
+	APTotal          int    `json:"ap_total"`
+	AdoptionPrimary  int    `json:"adoption_primary"`
+	AdoptionBackup   int    `json:"adoption_backup"`
+	ActiveAPs        int    `json:"active_aps"`
+	NonActiveAPs     int    `json:"non_active_aps"`
+	ClientsTotal     int    `json:"clients_total"`
+	ParsedAPRows     int    `json:"parsed_ap_rows"`
+	ParsedClientRows int    `json:"parsed_client_rows"`
+	ParsedSSIDRows   int    `json:"parsed_ssid_rows"`
 	// Honest "what the CLI exposed" flags so the UI shows "—" not "0".
-	APStatusExposed bool   `json:"ap_status_exposed"` // active/non-active split available
-	Detail          string `json:"detail"`
+	APStatusExposed bool    `json:"ap_status_exposed"` // active/non-active split available
+	Detail          string  `json:"detail"`
 	CollectedAt     *string `json:"collected_at"`
 }
 
 type wirelessDTO struct {
-	Identity   wirelessIdentity       `json:"identity"`
-	Collection wirelessCollection     `json:"collection"`
-	Counts     map[string]int         `json:"counts"`
-	MIB        wirelessMibStatus      `json:"mib"`
-	SSH        wirelessSSHStatus      `json:"ssh"`
+	Identity   wirelessIdentity          `json:"identity"`
+	Collection wirelessCollection        `json:"collection"`
+	Counts     map[string]int            `json:"counts"`
+	MIB        wirelessMibStatus         `json:"mib"`
+	SSH        wirelessSSHStatus         `json:"ssh"`
 	Summary    wirelessControllerSummary `json:"summary"`
-	APs        []db.AccessPoint       `json:"aps"`
-	SSIDs      []db.WirelessSsid      `json:"ssids"`
-	Clients    []db.WirelessClient    `json:"clients"`
-	Radios     []db.WirelessRadioStatus `json:"radios"`
-	Events     []db.WirelessEvent     `json:"events"`
+	APs        []db.AccessPoint          `json:"aps"`
+	SSIDs      []db.WirelessSsid         `json:"ssids"`
+	Clients    []db.WirelessClient       `json:"clients"`
+	Radios     []db.WirelessRadioStatus  `json:"radios"`
+	Events     []db.WirelessEvent        `json:"events"`
 }
 
 // deviceWireless serves GET /devices/{id}/wireless.

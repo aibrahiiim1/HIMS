@@ -56,14 +56,14 @@ type Probe struct {
 	Method      string `json:"method"`
 	Status      int    `json:"status"`
 	ContentType string `json:"content_type"`
-	JSON        bool   `json:"json"`  // response looked like JSON (by content-type)
+	JSON        bool   `json:"json"` // response looked like JSON (by content-type)
 	Note        string `json:"note,omitempty"`
 }
 
 // ExploreResult is the safe-discovery report shown to the operator.
 type ExploreResult struct {
 	Reachable        bool    `json:"reachable"`
-	AuthMethod       string  `json:"auth_method"`       // basic | bearer | token | none | unknown
+	AuthMethod       string  `json:"auth_method"` // basic | bearer | token | none | unknown
 	Authenticated    bool    `json:"authenticated"`
 	SuggestedAPIBase string  `json:"suggested_api_base"`
 	Probes           []Probe `json:"probes"`

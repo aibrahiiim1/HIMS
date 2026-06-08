@@ -196,16 +196,16 @@ func (s *Server) drReadiness(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"db_connected":     true,
-		"key_loaded":       keyLoaded,
-		"key_fingerprint":  fingerprint,
-		"last_backup_at":   lastAt,
-		"last_backup_kind": lastKind,
+		"db_connected":          true,
+		"key_loaded":            keyLoaded,
+		"key_fingerprint":       fingerprint,
+		"last_backup_at":        lastAt,
+		"last_backup_kind":      lastKind,
 		"last_backup_age_hours": ageHours,
-		"recent_backup":    recentBackup,
-		"device_count":     devCount,
-		"credential_count": credCount,
-		"checklist":        checklist,
+		"recent_backup":         recentBackup,
+		"device_count":          devCount,
+		"credential_count":      credCount,
+		"checklist":             checklist,
 	})
 }
 

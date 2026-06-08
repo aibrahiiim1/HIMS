@@ -19,12 +19,12 @@ import (
 
 // Encryption status vocabulary (one-way fingerprints only; never the key).
 const (
-	encEnabled       = "enabled"
-	encMissingKey    = "missing_key"
-	encNoMetadata    = "no_metadata"
+	encEnabled        = "enabled"
+	encMissingKey     = "missing_key"
+	encNoMetadata     = "no_metadata"
 	encPendingRestart = "pending_restart"
-	encMismatch      = "fingerprint_mismatch"
-	encInvalidKey    = "invalid_key"
+	encMismatch       = "fingerprint_mismatch"
+	encInvalidKey     = "invalid_key"
 )
 
 var encReason = map[string]string{

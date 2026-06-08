@@ -70,7 +70,7 @@ const (
 
 func newTestClient() (*Client, *fakeDoer) {
 	d := &fakeDoer{routes: map[string]resp{
-		"/": {status: 302, headers: map[string]string{"Location": "/admin10/login.jsp"}}, // root redirect (admin discovery)
+		"/":                          {status: 302, headers: map[string]string{"Location": "/admin10/login.jsp"}}, // root redirect (admin discovery)
 		"/admin10/login.jsp":         {status: 302, headers: map[string]string{"Location": "/admin10/dashboard.jsp"}},
 		"/admin10/_csrfTokenVar.jsp": {status: 200, body: `<script>var csfrToken = 'ABC1234567';</script>`},
 		"/admin10/_cmdstat.jsp":      {status: 200, body: apXMLFixture},

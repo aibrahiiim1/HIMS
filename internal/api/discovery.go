@@ -458,7 +458,7 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 		enrichment := ""
 		var profRes *scanProfileResult
 		var sshSum *scanSSHSummary
-		effCat, classNote := "", ""        // reconciled category + honest preservation note
+		effCat, classNote := "", ""       // reconciled category + honest preservation note
 		collectedVia, agentName := "", "" // how OS inventory was/will be collected
 		if r.Facts != nil {
 			enrichment = "SNMP facts collected"
@@ -873,9 +873,9 @@ type scanDetail struct {
 	NextAction             string               `json:"next_action"`
 	// How OS inventory was (or will be) collected for this host:
 	//   "" (n/a) | "direct" | "relay_agent" (queued) | "agent_offline" | "agent_missing"
-	CollectedVia string `json:"collected_via,omitempty"`
-	AgentName    string `json:"agent_name,omitempty"` // relay agent the job was dispatched to
-	SSH          *scanSSHSummary `json:"ssh,omitempty"`   // Extreme XCC SSH CLI collection summary
+	CollectedVia string          `json:"collected_via,omitempty"`
+	AgentName    string          `json:"agent_name,omitempty"` // relay agent the job was dispatched to
+	SSH          *scanSSHSummary `json:"ssh,omitempty"`        // Extreme XCC SSH CLI collection summary
 	// ClassNote explains a scan-stability decision: a known managed-infrastructure
 	// classification was preserved this run even though the fresh probe pointed
 	// elsewhere (transient SNMP failure or an operator lock). Empty in the normal case.

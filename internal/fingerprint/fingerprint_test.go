@@ -127,9 +127,9 @@ func TestRuckusZoneDirectorFingerprint(t *testing.T) {
 func TestModelFromSysDescr(t *testing.T) {
 	cases := map[string]string{
 		"Extreme Networks ExtremeCloud IQ Controller - VE6120 Medium, System Version 10.05.04.0006": "VE6120 Medium",
-		"Some Vendor Product - X1000, v2":                                                           "X1000",
-		"No model here":                                                                             "",
-		"Trailing - ":                                                                               "",
+		"Some Vendor Product - X1000, v2": "X1000",
+		"No model here":                   "",
+		"Trailing - ":                     "",
 	}
 	for in, want := range cases {
 		if got := ModelFromSysDescr(in); got != want {

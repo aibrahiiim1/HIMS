@@ -344,7 +344,7 @@ var linuxServiceRoles = map[string]string{
 	"isc-dhcp-server": "DHCP Server", "dhcpd": "DHCP Server", "kea-dhcp4": "DHCP Server",
 	"smbd": "File Server", "nfs-server": "File Server",
 	"docker": "Docker Host", "containerd": "Docker Host",
-	"kubelet": "Kubernetes Node",
+	"kubelet":  "Kubernetes Node",
 	"libvirtd": "Hypervisor", "qemu-kvm": "Hypervisor",
 	"prometheus": "Monitoring Server", "zabbix-server": "Monitoring Server", "grafana-server": "Monitoring Server",
 }

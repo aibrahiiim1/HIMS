@@ -14,7 +14,7 @@ func TestResolveClientAPNames(t *testing.T) {
 		{Name: "CSM Meeting Room", Mac: strptr("84:18:3A:10:19:A0"), Serial: "451452800279"},
 		{Name: "VillaB", Mac: strptr("f0:b0:52:37:f0:70"), Serial: "471484214131"},
 		{Name: "38:ff:36:19:ed:30", Mac: strptr("38:ff:36:19:ed:30"), Serial: "371502003768"}, // unnamed AP
-		{Name: "", Mac: strptr("aa:bb:cc:dd:ee:ff"), Serial: "NONAME"},                          // no friendly name → not indexed
+		{Name: "", Mac: strptr("aa:bb:cc:dd:ee:ff"), Serial: "NONAME"},                        // no friendly name → not indexed
 	}
 	clients := []db.WirelessClient{
 		{Mac: "c1", ApName: "84:18:3a:10:19:a0"}, // Ruckus: MAC (case-insensitive) → name

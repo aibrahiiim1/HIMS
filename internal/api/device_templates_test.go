@@ -15,13 +15,13 @@ func TestPlanChecks_SkipsExistingAndInvalid(t *testing.T) {
 		{Kind: "snmp", Oid: strp("1.3.6.1.2.1.1.3.0")},
 	}
 	checks := []templateCheck{
-		{Kind: "tcp", Port: 443},                  // already present → skip
-		{Kind: "tcp", Port: 22},                   // new → create
-		{Kind: "snmp", OID: "1.3.6.1.2.1.1.3.0"},  // already present → skip
+		{Kind: "tcp", Port: 443},                      // already present → skip
+		{Kind: "tcp", Port: 22},                       // new → create
+		{Kind: "snmp", OID: "1.3.6.1.2.1.1.3.0"},      // already present → skip
 		{Kind: "snmp", OID: "1.3.6.1.2.1.2.2.1.10.1"}, // new → create
-		{Kind: "tcp", Port: 0},                    // invalid → skip
-		{Kind: "snmp", OID: ""},                   // invalid → skip
-		{Kind: "telnet", Port: 23},                // invalid kind → skip
+		{Kind: "tcp", Port: 0},                        // invalid → skip
+		{Kind: "snmp", OID: ""},                       // invalid → skip
+		{Kind: "telnet", Port: 23},                    // invalid kind → skip
 	}
 	toCreate, skipped := planChecks(existing, checks)
 	if len(toCreate) != 2 {

@@ -69,7 +69,7 @@ func Parse(content string) ParsedMIB {
 type TableStatus string
 
 const (
-	StatusSupported    TableStatus = "supported"     // ≥1 row returned
+	StatusSupported    TableStatus = "supported"      // ≥1 row returned
 	StatusEmpty        TableStatus = "empty"          // walk ok, 0 rows
 	StatusTimeout      TableStatus = "timeout"        // request timed out
 	StatusNoSuchObject TableStatus = "no_such_object" // not implemented by agent

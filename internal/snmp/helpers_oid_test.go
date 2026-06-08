@@ -8,12 +8,12 @@ func TestOIDPrefixMatchBoundary(t *testing.T) {
 		oid  string
 		want bool
 	}{
-		{"1.3.6.1.4.1.5624.1.2.6.1", true},        // exact
+		{"1.3.6.1.4.1.5624.1.2.6.1", true},          // exact
 		{"1.3.6.1.4.1.5624.1.2.6.1.5.1.10.1", true}, // genuine child
-		{"1.3.6.1.4.1.5624.1.2.6.12.1.0", false},  // sibling — must NOT match (was the bug)
-		{"1.3.6.1.4.1.5624.1.2.6.11", false},      // sibling
-		{"1.3.6.1.4.1.5624.1.2.6.13.2.0", false},  // sibling
-		{".1.3.6.1.4.1.5624.1.2.6.1.2.0", true},   // leading dot tolerated
+		{"1.3.6.1.4.1.5624.1.2.6.12.1.0", false},    // sibling — must NOT match (was the bug)
+		{"1.3.6.1.4.1.5624.1.2.6.11", false},        // sibling
+		{"1.3.6.1.4.1.5624.1.2.6.13.2.0", false},    // sibling
+		{".1.3.6.1.4.1.5624.1.2.6.1.2.0", true},     // leading dot tolerated
 	}
 	for _, c := range cases {
 		if got := HasOIDPrefix(c.oid, root); got != c.want {

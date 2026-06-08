@@ -63,7 +63,7 @@ type Event struct {
 
 // EndpointOutcome records what happened for one roster endpoint (for honest UI).
 type EndpointOutcome struct {
-	Kind   string `json:"kind"`   // aps | ssids | clients
+	Kind   string `json:"kind"` // aps | ssids | clients
 	Path   string `json:"path"`
 	Status int    `json:"status"`
 	Count  int    `json:"count"`

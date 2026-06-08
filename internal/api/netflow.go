@@ -141,12 +141,12 @@ func (s *Server) flowOverview(w http.ResponseWriter, r *http.Request) {
 		s.flow.mu.Unlock()
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"listening":      s.flowAddr != "",
-		"listen_addr":    s.flowAddr,
-		"bytes":          ov.Bytes,
-		"packets":        ov.Packets,
-		"talkers":        ov.Talkers,
-		"last_at":        ov.LastAt,
+		"listening":        s.flowAddr != "",
+		"listen_addr":      s.flowAddr,
+		"bytes":            ov.Bytes,
+		"packets":          ov.Packets,
+		"talkers":          ov.Talkers,
+		"last_at":          ov.LastAt,
 		"packets_received": packetsSeen,
 	})
 }

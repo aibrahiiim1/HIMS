@@ -99,11 +99,11 @@ type Facts struct {
 	// Camera inventory (ONVIF).
 	Camera *CameraSnap
 	// Wireless controller + AP inventory (vendor REST: UniFi/Omada/Ruckus/Extreme).
-	WLAN     *WLANSnap
-	APs      []APSnap
-	SSIDs    []SSIDSnap
-	Stations []WirelessClientSnap
-	Radios   []RadioSnap
+	WLAN       *WLANSnap
+	APs        []APSnap
+	SSIDs      []SSIDSnap
+	Stations   []WirelessClientSnap
+	Radios     []RadioSnap
 	WLANEvents []WirelessEventSnap
 	// Printer marker supplies (Printer-MIB).
 	PrinterSupplies []PrinterSupplySnap

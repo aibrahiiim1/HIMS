@@ -10,11 +10,11 @@ func loadTestFS() ([]Migration, error) { return Load(migrations.FS) }
 
 func TestVersionOf(t *testing.T) {
 	cases := map[string]string{
-		"000034_netflow.up.sql":        "000034",
-		"000001_init.up.sql":           "000001",
-		"000010_operations.up.sql":     "000010",
-		"weird.sql":                    "weird",
-		"":                             "",
+		"000034_netflow.up.sql":    "000034",
+		"000001_init.up.sql":       "000001",
+		"000010_operations.up.sql": "000010",
+		"weird.sql":                "weird",
+		"":                         "",
 	}
 	for in, want := range cases {
 		if got := versionOf(in); got != want {

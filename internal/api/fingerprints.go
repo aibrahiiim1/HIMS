@@ -194,11 +194,11 @@ func (s *Server) deviceFingerprintSuggestion(w http.ResponseWriter, r *http.Requ
 	ev := fingerprint.Evidence{SysDescr: descr}
 	results := fingerprint.Match(ev, s.scanFingerprintLibrary(ctx))
 	writeJSON(w, http.StatusOK, map[string]any{
-		"device_id":      id.String(),
-		"current_vendor": derefStr(dev.Vendor),
+		"device_id":        id.String(),
+		"current_vendor":   derefStr(dev.Vendor),
 		"current_category": dev.Category,
-		"evidence":       ev,
-		"results":        results,
+		"evidence":         ev,
+		"results":          results,
 	})
 }
 
@@ -274,11 +274,11 @@ func (s *Server) testDeviceFingerprint(w http.ResponseWriter, r *http.Request) {
 		"current_vendor":   derefStr(dev.Vendor),
 		"current_model":    derefStr(dev.Model),
 		"raw_snmp": map[string]string{ // the exact values the rules were tested against
-			"sysobjectid":  ev.SysObjectID,
-			"sysdescr":     ev.SysDescr,
-			"sysname":      ev.SysName,
-			"syscontact":   fact("snmp.syscontact"),
-			"syslocation":  fact("snmp.syslocation"),
+			"sysobjectid": ev.SysObjectID,
+			"sysdescr":    ev.SysDescr,
+			"sysname":     ev.SysName,
+			"syscontact":  fact("snmp.syscontact"),
+			"syslocation": fact("snmp.syslocation"),
 		},
 		"matched": len(results) > 0,
 		"results": results,

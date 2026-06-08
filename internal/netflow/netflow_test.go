@@ -10,15 +10,15 @@ import (
 func buildV5(recs [][2]uint32 /* unused */) []byte { return nil }
 
 type rec struct {
-	src, dst       [4]byte
-	pkts, octets   uint32
-	sport, dport   uint16
-	proto          uint8
+	src, dst     [4]byte
+	pkts, octets uint32
+	sport, dport uint16
+	proto        uint8
 }
 
 func packet(recs []rec) []byte {
 	buf := make([]byte, v5HeaderLen+len(recs)*v5RecordLen)
-	binary.BigEndian.PutUint16(buf[0:2], 5)                // version
+	binary.BigEndian.PutUint16(buf[0:2], 5)                 // version
 	binary.BigEndian.PutUint16(buf[2:4], uint16(len(recs))) // count
 	binary.BigEndian.PutUint32(buf[8:12], 1700000000)       // unix_secs
 	for i, r := range recs {

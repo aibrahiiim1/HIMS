@@ -161,7 +161,7 @@ func (s *Server) collectRuckusSSHCLI(ctx context.Context, dev db.Device, overUse
 // zdIdentity holds the fields parsed from `show sysinfo`.
 type zdIdentity struct {
 	name, model, serial, version, ip, mac string
-	apCount, clientCount                   int
+	apCount, clientCount                  int
 }
 
 // parseZDSysinfo reads the `key= value` lines of `show sysinfo`.

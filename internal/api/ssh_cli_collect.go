@@ -156,16 +156,16 @@ func (d parseDiag) warnStr() string { return strings.Join(d.warnings, "; ") }
 
 // sshCLISummary is the run summary returned by the collect/test endpoints.
 type sshCLISummary struct {
-	OK           bool           `json:"ok"`
-	Reachable    bool           `json:"reachable"`
-	Detail       string         `json:"detail"`
-	Supported    int            `json:"supported"`
-	Unsupported  int            `json:"unsupported"`
-	ParsedRows   int            `json:"parsed_rows"`
-	APs          int            `json:"aps"`
-	SSIDs        int            `json:"ssids"`
-	Clients      int            `json:"clients"`
-	RosterExposed bool          `json:"roster_exposed"`
+	OK            bool   `json:"ok"`
+	Reachable     bool   `json:"reachable"`
+	Detail        string `json:"detail"`
+	Supported     int    `json:"supported"`
+	Unsupported   int    `json:"unsupported"`
+	ParsedRows    int    `json:"parsed_rows"`
+	APs           int    `json:"aps"`
+	SSIDs         int    `json:"ssids"`
+	Clients       int    `json:"clients"`
+	RosterExposed bool   `json:"roster_exposed"`
 	// Controller-reported totals + collection classification.
 	Status       string         `json:"status"` // complete|partial|summary_only|failed
 	APTotal      int            `json:"ap_total"`
@@ -1005,7 +1005,6 @@ func bandFromProto(p string) string {
 	return ""
 }
 
-
 func (s *Server) persistCLIIdentity(ctx context.Context, dev db.Device, out string) int {
 	ver, model := "", ""
 	if m := reVer.FindStringSubmatch(out); m != nil {
@@ -1099,10 +1098,14 @@ type sshCLIReq struct {
 }
 
 // runSSHCLICollection handles POST /devices/{id}/collect-ssh-cli (persists).
-func (s *Server) runSSHCLICollection(w http.ResponseWriter, r *http.Request) { s.sshCLIHandler(w, r, true) }
+func (s *Server) runSSHCLICollection(w http.ResponseWriter, r *http.Request) {
+	s.sshCLIHandler(w, r, true)
+}
 
 // testSSHCLICommands handles POST /devices/{id}/test-ssh-cli (no wireless persistence).
-func (s *Server) testSSHCLICommands(w http.ResponseWriter, r *http.Request) { s.sshCLIHandler(w, r, false) }
+func (s *Server) testSSHCLICommands(w http.ResponseWriter, r *http.Request) {
+	s.sshCLIHandler(w, r, false)
+}
 
 // sshCLIApplicable reports whether the SSH CLI roster path applies to this
 // controller. SSH CLI is an Extreme-XCC-specific collection method; a Ruckus

@@ -16,9 +16,9 @@ type fakeSNMP struct {
 	err  error
 }
 
-func (f *fakeSNMP) Connect(context.Context) error                  { return nil }
+func (f *fakeSNMP) Connect(context.Context) error                      { return nil }
 func (f *fakeSNMP) Get(context.Context, ...string) ([]snmp.PDU, error) { return nil, nil }
-func (f *fakeSNMP) Close() error                                   { return nil }
+func (f *fakeSNMP) Close() error                                       { return nil }
 func (f *fakeSNMP) Walk(ctx context.Context, root string, fn snmp.WalkFunc) error {
 	return f.BulkWalk(ctx, root, fn)
 }

@@ -11,24 +11,24 @@ import "time"
 type SLAStatus string
 
 const (
-	SLANone     SLAStatus = "none"      // no deadline applies
-	SLAOnTrack  SLAStatus = "on_track"  // open, comfortably before the deadline
-	SLADueSoon  SLAStatus = "due_soon"  // open, within the final quarter of the window
-	SLABreached SLAStatus = "breached"  // open past deadline, or resolved late
-	SLAMet      SLAStatus = "met"       // resolved on or before the deadline
+	SLANone     SLAStatus = "none"     // no deadline applies
+	SLAOnTrack  SLAStatus = "on_track" // open, comfortably before the deadline
+	SLADueSoon  SLAStatus = "due_soon" // open, within the final quarter of the window
+	SLABreached SLAStatus = "breached" // open past deadline, or resolved late
+	SLAMet      SLAStatus = "met"      // resolved on or before the deadline
 )
 
 // SLAMinutes is the resolution target per priority.
 func SLAMinutes(priority string) int {
 	switch priority {
 	case "critical":
-		return 4 * 60       // 4 hours
+		return 4 * 60 // 4 hours
 	case "high":
-		return 24 * 60      // 1 day
+		return 24 * 60 // 1 day
 	case "medium":
-		return 3 * 24 * 60  // 3 days
+		return 3 * 24 * 60 // 3 days
 	case "low":
-		return 7 * 24 * 60  // 7 days
+		return 7 * 24 * 60 // 7 days
 	default:
 		return 3 * 24 * 60
 	}

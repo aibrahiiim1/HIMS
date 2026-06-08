@@ -92,9 +92,9 @@ func (c *Counter) add(b, p uint64) { c.Bytes += b; c.Packets += p }
 
 // Summary is a rolling aggregation keyed by host, protocol, and conversation.
 type Summary struct {
-	Total         Counter
-	ByHost        map[string]*Counter // per IP (counts where it is src or dst)
-	ByProtocol    map[string]*Counter // per protocol name
+	Total          Counter
+	ByHost         map[string]*Counter // per IP (counts where it is src or dst)
+	ByProtocol     map[string]*Counter // per protocol name
 	ByConversation map[string]*Counter // "src→dst"
 }
 

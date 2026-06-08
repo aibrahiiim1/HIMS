@@ -34,13 +34,13 @@ type Report struct {
 }
 
 type Identity struct {
-	Hostname      string `json:"hostname"`
-	FQDN          string `json:"fqdn"`
-	Domain        string `json:"domain"`
-	Workgroup     string `json:"workgroup"`
-	LoggedOnUser  string `json:"logged_on_user"`
+	Hostname            string `json:"hostname"`
+	FQDN                string `json:"fqdn"`
+	Domain              string `json:"domain"`
+	Workgroup           string `json:"workgroup"`
+	LoggedOnUser        string `json:"logged_on_user"`
 	ADDistinguishedName string `json:"ad_distinguished_name"`
-	ADOUPath      string `json:"ad_ou_path"`
+	ADOUPath            string `json:"ad_ou_path"`
 }
 
 type OSInfo struct {

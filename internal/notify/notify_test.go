@@ -13,9 +13,9 @@ func TestInQuietHours(t *testing.T) {
 	}{
 		{"no window", nil, nil, 600, false},
 		{"equal bounds disables", p(60), p(60), 60, false},
-		{"inside same-day", p(540), p(1020), 600, true},   // 09:00-17:00, now 10:00
-		{"before same-day", p(540), p(1020), 480, false},  // 08:00
-		{"after same-day", p(540), p(1020), 1080, false},  // 18:00
+		{"inside same-day", p(540), p(1020), 600, true},     // 09:00-17:00, now 10:00
+		{"before same-day", p(540), p(1020), 480, false},    // 08:00
+		{"after same-day", p(540), p(1020), 1080, false},    // 18:00
 		{"inside wrap (late)", p(1320), p(420), 1380, true}, // 22:00-07:00, now 23:00
 		{"inside wrap (early)", p(1320), p(420), 120, true}, // now 02:00
 		{"outside wrap", p(1320), p(420), 600, false},       // now 10:00
@@ -29,7 +29,7 @@ func TestInQuietHours(t *testing.T) {
 
 func TestShouldNotify(t *testing.T) {
 	cases := []struct {
-		alert, min string
+		alert, min  string
 		quiet, want bool
 	}{
 		{"info", "warning", false, false},     // below threshold

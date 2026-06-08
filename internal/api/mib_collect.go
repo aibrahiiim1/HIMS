@@ -29,9 +29,9 @@ type tableResult struct {
 	Table   string           `json:"table"`
 	RootOID string           `json:"root_oid"`
 	Purpose string           `json:"purpose"`
-	Status  string           `json:"status"` // supported|empty|timeout|no_such_object|error
-	Count   int              `json:"count"`  // interpreted table rows (distinct indices)
-	RawVars int              `json:"raw_vars"` // raw varbinds captured under the root
+	Status  string           `json:"status"`           // supported|empty|timeout|no_such_object|error
+	Count   int              `json:"count"`            // interpreted table rows (distinct indices)
+	RawVars int              `json:"raw_vars"`         // raw varbinds captured under the root
 	Sample  []map[string]any `json:"sample,omitempty"` // first few rows (col→value), preview only
 	Mapped  int              `json:"mapped"`           // rows persisted into a wireless_* table
 	Detail  string           `json:"detail,omitempty"`

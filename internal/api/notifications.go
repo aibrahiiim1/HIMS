@@ -18,15 +18,15 @@ import (
 // target (webhook URL, bot token, SMTP password) is NEVER returned. A redacted
 // hint (non-secret bits only) is shown for recognizability.
 type notifChannelDTO struct {
-	ID            string  `json:"id"`
-	Name          string  `json:"name"`
-	Type          string  `json:"type"`
-	MinSeverity   string  `json:"min_severity"`
-	Enabled       bool    `json:"enabled"`
-	QuietStart    *string `json:"quiet_start,omitempty"`
-	QuietEnd      *string `json:"quiet_end,omitempty"`
-	TargetHint    string  `json:"target_hint"`
-	CreatedAt     string  `json:"created_at"`
+	ID          string  `json:"id"`
+	Name        string  `json:"name"`
+	Type        string  `json:"type"`
+	MinSeverity string  `json:"min_severity"`
+	Enabled     bool    `json:"enabled"`
+	QuietStart  *string `json:"quiet_start,omitempty"`
+	QuietEnd    *string `json:"quiet_end,omitempty"`
+	TargetHint  string  `json:"target_hint"`
+	CreatedAt   string  `json:"created_at"`
 }
 
 func minToHHMM(m *int32) *string {

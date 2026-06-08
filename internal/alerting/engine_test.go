@@ -11,12 +11,12 @@ import (
 )
 
 type fakeRepo struct {
-	rules     []db.AlertRule
-	checks    []db.ListEnabledChecksWithDeviceRow
-	recovered []db.ResolveRecoveredAlertsRow
-	open      map[string]bool // dedup key rule|check → open
-	opened    []db.OpenAlertParams
-	wos       []db.CreateWorkOrderParams
+	rules       []db.AlertRule
+	checks      []db.ListEnabledChecksWithDeviceRow
+	recovered   []db.ResolveRecoveredAlertsRow
+	open        map[string]bool // dedup key rule|check → open
+	opened      []db.OpenAlertParams
+	wos         []db.CreateWorkOrderParams
 	linked      []db.SetAlertWorkOrderParams
 	events      []db.AddWorkOrderEventParams
 	windows     []db.MaintenanceWindow
