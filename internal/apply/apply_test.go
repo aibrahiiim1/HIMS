@@ -26,6 +26,7 @@ type fakeWriter struct {
 	facts      []db.UpsertDeviceFactParams
 	ifaces     []db.UpsertInterfaceParams
 	vlans      []db.UpsertVlanParams
+	portVlans  []db.UpsertPortVlanParams
 	neighbors  []db.UpsertNeighborParams
 	bmcInfo    []db.UpsertBMCInfoParams
 	bmcSensors []db.UpsertBMCSensorParams
@@ -79,6 +80,13 @@ func (f *fakeWriter) UpsertVlan(_ context.Context, arg db.UpsertVlanParams) (db.
 }
 func (f *fakeWriter) DeleteStaleVlans(_ context.Context, _ db.DeleteStaleVlansParams) error {
 	f.staleCalls++
+	return nil
+}
+func (f *fakeWriter) UpsertPortVlan(_ context.Context, arg db.UpsertPortVlanParams) error {
+	f.portVlans = append(f.portVlans, arg)
+	return nil
+}
+func (f *fakeWriter) DeleteStalePortVlans(_ context.Context, _ db.DeleteStalePortVlansParams) error {
 	return nil
 }
 func (f *fakeWriter) UpsertMAC(_ context.Context, _ db.UpsertMACParams) error { return nil }

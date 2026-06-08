@@ -82,6 +82,7 @@ type Facts struct {
 	// Typed collections for switch inventory.
 	Interfaces []InterfaceSnap
 	VLANs      []VLANSnap
+	PortVLANs  []PortVlanSnap
 	MACs       []MACSnap
 	Neighbors  []NeighborSnap
 	// Server inventory (HOST-RESOURCES-MIB).
@@ -330,6 +331,15 @@ type InterfaceSnap struct {
 type VLANSnap struct {
 	VLANID int
 	Name   string
+}
+
+// PortVlanSnap is one (port, VLAN) membership from Q-BRIDGE egress/untagged
+// bitmaps. Tagged=false means the port carries this VLAN untagged (its access /
+// native VLAN); Tagged=true means it's a tagged member (trunk).
+type PortVlanSnap struct {
+	IfIndex int
+	VLANID  int
+	Tagged  bool
 }
 
 // StorageSnap is one server storage volume (RAM or filesystem) from

@@ -33,6 +33,7 @@ func (d *Driver) Collect(sess driver.Session, _ driver.Probe) (driver.Facts, err
 
 	f.Interfaces = swsnmp.CollectInterfaces(ctx, c)
 	f.VLANs = swsnmp.CollectVLANs(ctx, c)
+	f.PortVLANs = swsnmp.CollectPortVLANs(ctx, c)
 	f.MACs = swsnmp.CollectFDB(ctx, c)
 	f.Neighbors = swsnmp.CollectLLDP(ctx, c)
 	f.Interfaces = swsnmp.DerivePortRoles(f.Interfaces, f.Neighbors, f.MACs)

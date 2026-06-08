@@ -27,18 +27,28 @@ const (
 	IfXColAlias     = 18                     // ifAlias
 	IfXColHighSpeed = 15                     // ifHighSpeed (Mbps)
 
+	// --- BRIDGE-MIB (dot1d) -----------------------------------------------
+	// dot1dBasePortTable maps a bridge port number → its ifIndex. FDB tables and
+	// Q-BRIDGE egress/untagged bitmaps are indexed by bridge PORT, not ifIndex,
+	// so this map is required to attribute MACs/VLANs to the real interface.
+	Dot1dBasePortEntry      = "1.3.6.1.2.1.17.1.4.1" // base_port → ifIndex
+	Dot1dBasePortColIfIndex = 2                      // dot1dBasePortIfIndex
+
 	// --- Q-BRIDGE-MIB (VLANs) ---------------------------------------------
-	Dot1qVlanStaticEntry   = "1.3.6.1.2.1.17.7.1.4.3.1" // vlan_id → name/status
-	Dot1qVlanCurrentEntry  = "1.3.6.1.2.1.17.7.1.4.2.1" // vlan_id → egress/untagged ports bitmap
-	Dot1qPortVlanEntry     = "1.3.6.1.2.1.17.7.1.4.5.1" // port_num → pvid
-	Dot1qTpFdbEntry        = "1.3.6.1.2.1.17.7.1.2.2.1" // (vlan_id, mac) → port, status
-	Dot1qVlanStaticColName = 1                          // dot1qVlanStaticName
-	Dot1qTpFdbColPort      = 2                          // dot1qTpFdbPort
-	Dot1qTpFdbColStatus    = 3                          // dot1qTpFdbStatus
-	Dot1dTpFdbEntry        = "1.3.6.1.2.1.17.4.3.1"     // legacy bridge FDB (VLAN=0)
-	Dot1dTpFdbColAddr      = 1
-	Dot1dTpFdbColPort      = 2
-	Dot1dTpFdbColStatus    = 3
+	Dot1qVlanStaticEntry       = "1.3.6.1.2.1.17.7.1.4.3.1" // vlan_id → name/status/egress/untagged
+	Dot1qVlanCurrentEntry      = "1.3.6.1.2.1.17.7.1.4.2.1" // vlan_id → egress/untagged ports bitmap
+	Dot1qPortVlanEntry         = "1.3.6.1.2.1.17.7.1.4.5.1" // port_num → pvid
+	Dot1qTpFdbEntry            = "1.3.6.1.2.1.17.7.1.2.2.1" // (vlan_id, mac) → port, status
+	Dot1qVlanStaticColName     = 1                          // dot1qVlanStaticName
+	Dot1qVlanStaticColEgress   = 2                          // dot1qVlanStaticEgressPorts (port bitmap: tagged+untagged members)
+	Dot1qVlanStaticColUntagged = 4                          // dot1qVlanStaticUntaggedPorts (port bitmap: untagged members)
+	Dot1qPvidCol               = 1                          // dot1qPvid (within Dot1qPortVlanEntry)
+	Dot1qTpFdbColPort          = 2                          // dot1qTpFdbPort
+	Dot1qTpFdbColStatus        = 3                          // dot1qTpFdbStatus
+	Dot1dTpFdbEntry            = "1.3.6.1.2.1.17.4.3.1"     // legacy bridge FDB (VLAN=0)
+	Dot1dTpFdbColAddr          = 1
+	Dot1dTpFdbColPort          = 2
+	Dot1dTpFdbColStatus        = 3
 
 	// --- LLDP-MIB ----------------------------------------------------------
 	LldpLocPortEntry           = "1.0.8802.1.1.2.1.3.7.1" // local port table

@@ -145,8 +145,99 @@ func CollectVLANs(ctx context.Context, c snmp.Client) []driver.VLANSnap {
 	return out
 }
 
-// CollectFDB walks the Q-BRIDGE FDB then the legacy bridge FDB.
+// CollectBasePortMap walks dot1dBasePortIfIndex → map[bridgePort]ifIndex.
+// FDB tables and Q-BRIDGE port bitmaps are indexed by bridge PORT number, not
+// ifIndex, so this map is required to attribute MACs / VLAN membership to the
+// real interface. Empty when the device exposes no dot1dBasePortTable.
+func CollectBasePortMap(ctx context.Context, c snmp.Client) map[int]int {
+	m := map[int]int{}
+	_ = c.BulkWalk(ctx, mibs.Dot1dBasePortEntry, func(p snmp.PDU) error {
+		col, idx, ok := snmp.ColumnAndIndex(p.OID, mibs.Dot1dBasePortEntry)
+		if !ok || len(idx) != 1 || int(col) != mibs.Dot1dBasePortColIfIndex {
+			return nil
+		}
+		if v, ok := snmp.PDUInt64(p); ok && v > 0 {
+			m[int(idx[0])] = int(v)
+		}
+		return nil
+	})
+	return m
+}
+
+// CollectPortVLANs decodes per-port VLAN membership from the Q-BRIDGE static
+// egress + untagged port bitmaps, mapping bridge ports → ifIndex. A port in a
+// VLAN's egress set is a member; if it's also in the untagged set it carries
+// that VLAN untagged (its access / native VLAN), otherwise it's a tagged member
+// (trunk). Vendor-neutral: works for any Q-BRIDGE switch (ProCurve/Aruba, Cisco,
+// Huawei, …). Returns nothing when the device exposes no static VLAN table.
+func CollectPortVLANs(ctx context.Context, c snmp.Client) []driver.PortVlanSnap {
+	baseMap := CollectBasePortMap(ctx, c)
+	egress := map[int][]byte{}
+	untag := map[int][]byte{}
+	_ = c.BulkWalk(ctx, mibs.Dot1qVlanStaticEntry, func(p snmp.PDU) error {
+		col, idx, ok := snmp.ColumnAndIndex(p.OID, mibs.Dot1qVlanStaticEntry)
+		if !ok || len(idx) != 1 {
+			return nil
+		}
+		b, _ := p.Value.([]byte)
+		switch int(col) {
+		case mibs.Dot1qVlanStaticColEgress:
+			egress[int(idx[0])] = b
+		case mibs.Dot1qVlanStaticColUntagged:
+			untag[int(idx[0])] = b
+		}
+		return nil
+	})
+	out := make([]driver.PortVlanSnap, 0)
+	seen := map[[2]int]bool{}
+	for vlan, eb := range egress {
+		ub := untag[vlan]
+		for _, bp := range decodePortBitmap(eb) {
+			ifIdx := bp
+			if real, ok := baseMap[bp]; ok {
+				ifIdx = real
+			}
+			key := [2]int{ifIdx, vlan}
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			out = append(out, driver.PortVlanSnap{IfIndex: ifIdx, VLANID: vlan, Tagged: !bitSet(ub, bp)})
+		}
+	}
+	return out
+}
+
+// decodePortBitmap returns the 1-based bridge-port numbers set in a Q-BRIDGE
+// PortList octet string. Bit order: MSB of byte 0 = port 1.
+func decodePortBitmap(b []byte) []int {
+	ports := make([]int, 0)
+	for i, by := range b {
+		for bit := 0; bit < 8; bit++ {
+			if by&(0x80>>uint(bit)) != 0 {
+				ports = append(ports, i*8+bit+1)
+			}
+		}
+	}
+	return ports
+}
+
+// bitSet reports whether the given 1-based bridge port is set in a PortList.
+func bitSet(b []byte, port int) bool {
+	if port < 1 {
+		return false
+	}
+	i := (port - 1) / 8
+	if i >= len(b) {
+		return false
+	}
+	return b[i]&(0x80>>uint((port-1)%8)) != 0
+}
+
+// CollectFDB walks the Q-BRIDGE FDB then the legacy bridge FDB. FDB port values
+// are bridge PORT numbers; they are mapped to real ifIndex via dot1dBasePortTable.
 func CollectFDB(ctx context.Context, c snmp.Client) []driver.MACSnap {
+	baseMap := CollectBasePortMap(ctx, c)
 	macs := map[string]driver.MACSnap{}
 	_ = c.BulkWalk(ctx, mibs.Dot1qTpFdbEntry, func(p snmp.PDU) error {
 		col, idx, ok := snmp.ColumnAndIndex(p.OID, mibs.Dot1qTpFdbEntry)
@@ -193,9 +284,14 @@ func CollectFDB(ctx context.Context, c snmp.Client) []driver.MACSnap {
 	})
 	out := make([]driver.MACSnap, 0, len(macs))
 	for _, m := range macs {
-		if m.IfIndex > 0 {
-			out = append(out, m)
+		if m.IfIndex <= 0 {
+			continue
 		}
+		// FDB port is a bridge port number — map it to the real ifIndex.
+		if real, ok := baseMap[m.IfIndex]; ok {
+			m.IfIndex = real
+		}
+		out = append(out, m)
 	}
 	return out
 }
