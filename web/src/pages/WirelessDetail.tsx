@@ -99,6 +99,9 @@ export function WirelessDetail() {
   const apiLabel = d?.collection.source === 'ruckus_zd_xml' ? 'Ruckus ZoneDirector (Web-XML)'
     : d?.collection.source === 'extreme_xcc_api' ? 'Extreme XCC API'
     : 'Controller API (REST/XML)'
+  // SSH CLI is an Extreme-XCC-specific method; the backend reports 'not_applicable'
+  // for a Ruckus ZoneDirector (Web-XML primary) — hide the SSH actions for it.
+  const sshNA = d?.ssh.status === 'not_applicable'
 
   return (
     <div>
@@ -115,9 +118,9 @@ export function WirelessDetail() {
               { label: 'Last collection', value: d.summary.collected_at ? `${new Date(d.summary.collected_at).toLocaleString()} (${dataAge(d.summary.collected_at)})` : (d.collection.collected_at ? new Date(d.collection.collected_at).toLocaleString() : '—') },
             ]} />
             <div className="row" style={{ gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
-              <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => { setMsg(''); runSsh.mutate() }}><DownloadCloud size={14} /> {runSsh.isPending ? 'Collecting…' : 'Run SSH Collection'}</button>
+              {!sshNA && <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => { setMsg(''); runSsh.mutate() }}><DownloadCloud size={14} /> {runSsh.isPending ? 'Collecting…' : 'Run SSH Collection'}</button>}
               <button className="btn btn-ghost btn-sm" disabled={busy || !d.mib.has_pack} onClick={() => { setMsg(''); runMib.mutate() }}><DownloadCloud size={14} /> {runMib.isPending ? 'Walking…' : 'Run SNMP MIB Collection'}</button>
-              <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => { setMsg(''); testSsh.mutate() }}><FlaskConical size={14} /> {testSsh.isPending ? 'Probing…' : 'Test SSH'}</button>
+              {!sshNA && <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => { setMsg(''); testSsh.mutate() }}><FlaskConical size={14} /> {testSsh.isPending ? 'Probing…' : 'Test SSH'}</button>}
               <Link className="btn btn-ghost btn-sm" to={d.mib.pack_id ? `/mibs?pack=${d.mib.pack_id}` : '/mibs'}><FlaskConical size={14} /> Test MIB Pack</Link>
               {d.collection.has_api_profile
                 ? <button className="btn btn-ghost btn-sm" disabled={busy || !pid} onClick={() => { setMsg(''); runApi.mutate() }}><Plug size={14} /> Run Collection</button>
@@ -187,10 +190,10 @@ export function WirelessDetail() {
               </tr>
               <tr>
                 <td><strong>SSH CLI</strong></td>
-                <td><StatusPill status={sshTone2(d.ssh.status)} label={d.ssh.status} /></td>
-                <td style={{ fontSize: 12 }}>{d.ssh.aps} APs · {d.ssh.clients} clients · {d.ssh.supported.length} supported / {d.ssh.unsupported.length} unsupported cmds</td>
-                <td className="muted" style={{ fontSize: 11 }}>{d.ssh.last_run ? new Date(d.ssh.last_run).toLocaleString() : '—'}</td>
-                <td><button className="btn btn-ghost btn-xs" disabled={busy} onClick={() => { setMsg(''); runSsh.mutate() }}>Run</button></td>
+                <td><StatusPill status={sshTone2(d.ssh.status)} label={sshNA ? 'not applicable' : d.ssh.status} /></td>
+                <td style={{ fontSize: 12 }}>{sshNA ? 'Extreme XCC method — this controller uses Web-XML (primary)' : `${d.ssh.aps} APs · ${d.ssh.clients} clients · ${d.ssh.supported.length} supported / ${d.ssh.unsupported.length} unsupported cmds`}</td>
+                <td className="muted" style={{ fontSize: 11 }}>{!sshNA && d.ssh.last_run ? new Date(d.ssh.last_run).toLocaleString() : '—'}</td>
+                <td>{sshNA ? <span className="muted" style={{ fontSize: 11 }}>—</span> : <button className="btn btn-ghost btn-xs" disabled={busy} onClick={() => { setMsg(''); runSsh.mutate() }}>Run</button>}</td>
               </tr>
               <tr>
                 <td><strong>{apiLabel}</strong></td>
@@ -472,5 +475,5 @@ function sshTone(s: string): 'up' | 'down' | 'warning' | 'info' {
   switch (s) { case 'parsed': return 'up'; case 'unsupported': return 'warning'; case 'failed': case 'timeout': return 'down'; default: return 'info' }
 }
 function sshTone2(s: string): 'up' | 'down' | 'warning' | 'info' | 'unknown' {
-  switch (s) { case 'collected': return 'up'; case 'partial': return 'warning'; case 'failed': return 'down'; case 'not_run': return 'unknown'; default: return 'info' }
+  switch (s) { case 'collected': return 'up'; case 'partial': return 'warning'; case 'failed': return 'down'; case 'not_run': case 'not_applicable': return 'unknown'; default: return 'info' }
 }

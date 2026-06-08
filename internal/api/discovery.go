@@ -609,7 +609,9 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 					// when a working SSH credential resolves (bound or auto-tried). This
 					// is the path that exposes AP/client rosters on firmware where the
 					// SNMP MIB does not. Binds the SSH cred only if none is bound yet.
-					if s.cipher() != nil {
+					// Skipped for Ruckus ZoneDirector — it collects via Web-XML and does
+					// not speak these commands, so attempting SSH only yields "failed".
+					if s.cipher() != nil && s.sshCLIApplicable(ctx, dev) {
 						sctx, scancel := context.WithTimeout(ctx, 150*time.Second)
 						emit := func(stage, status, command, message string, parsed, skipped, warns int) {
 							s.publishSSHCmdEvent(jobID, ip, id, stage, status, command, message, parsed, skipped, warns)

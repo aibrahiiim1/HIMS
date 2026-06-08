@@ -1104,6 +1104,18 @@ func (s *Server) runSSHCLICollection(w http.ResponseWriter, r *http.Request) { s
 // testSSHCLICommands handles POST /devices/{id}/test-ssh-cli (no wireless persistence).
 func (s *Server) testSSHCLICommands(w http.ResponseWriter, r *http.Request) { s.sshCLIHandler(w, r, false) }
 
+// sshCLIApplicable reports whether the SSH CLI roster path applies to this
+// controller. SSH CLI is an Extreme-XCC-specific collection method; a Ruckus
+// ZoneDirector collects via Web-XML (primary) and does not speak these commands,
+// so SSH CLI is Not Applicable for it — attempting it only produces misleading
+// "failed" rows. Detected by a bound ruckus_zd profile or a Ruckus vendor label.
+func (s *Server) sshCLIApplicable(ctx context.Context, dev db.Device) bool {
+	if _, err := s.queries.GetVendorProfileForDeviceVendor(ctx, db.GetVendorProfileForDeviceVendorParams{DeviceID: &dev.ID, VendorType: "ruckus_zd"}); err == nil {
+		return false
+	}
+	return !strings.Contains(strings.ToLower(derefStr(dev.Vendor)), "ruckus")
+}
+
 func (s *Server) sshCLIHandler(w http.ResponseWriter, r *http.Request, persist bool) {
 	ctx, id, ok := pathDevice(w, r)
 	if !ok {
@@ -1112,6 +1124,11 @@ func (s *Server) sshCLIHandler(w http.ResponseWriter, r *http.Request, persist b
 	dev, err := s.queries.GetDevice(ctx, id)
 	if err != nil {
 		writeErr(w, err)
+		return
+	}
+	if !s.sshCLIApplicable(ctx, dev) {
+		writeJSON(w, http.StatusOK, sshCLISummary{Status: "not_applicable",
+			Detail: "SSH CLI is an Extreme XCC collection method; this controller uses Web-XML (REST/XML) as its primary source."})
 		return
 	}
 	var body sshCLIReq

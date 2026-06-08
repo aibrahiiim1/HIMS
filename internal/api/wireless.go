@@ -262,8 +262,14 @@ func (s *Server) deviceWireless(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// SSH CLI status: per-command support + what mapped, derived from stored results.
+	// SSH CLI is Extreme-XCC-specific; a Ruckus ZoneDirector uses Web-XML as its
+	// primary source and does not speak these commands, so the source is reported
+	// as Not Applicable (honest gate — never a misleading "failed").
 	dto.SSH = wirelessSSHStatus{Status: "not_run", Supported: []string{}, Unsupported: []string{}}
-	if rows, e := s.queries.ListSSHCliResults(ctx, id); e == nil && len(rows) > 0 {
+	ruckusController := dto.Collection.Source == ruckusZDSource || strings.Contains(strings.ToLower(ident.Vendor), "ruckus")
+	if ruckusController {
+		dto.SSH.Status = "not_applicable"
+	} else if rows, e := s.queries.ListSSHCliResults(ctx, id); e == nil && len(rows) > 0 {
 		var last time.Time
 		anyRan, anyFail := false, false
 		for _, rw := range rows {
