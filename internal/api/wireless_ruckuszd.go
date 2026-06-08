@@ -26,8 +26,29 @@ func ruckusZDDoer(cfg vpConfig, timeout time.Duration) *http.Client {
 		Timeout:       timeout,
 		Jar:           jar,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-		Transport:     &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: !cfg.SSLVerify, MinVersion: tls.VersionTLS10}}, //nolint:gosec
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{ //nolint:gosec
+			InsecureSkipVerify: !cfg.SSLVerify,
+			MinVersion:         tls.VersionTLS10,
+			// ZoneDirector's embedded Appweb server only offers legacy cipher
+			// suites that Go's default set excludes (→ "tls: handshake failure").
+			// Enable the full secure+legacy set for TLS ≤1.2 to match it (as curl does).
+			CipherSuites: legacyTLSCipherSuites(),
+		}},
 	}
+}
+
+// legacyTLSCipherSuites returns every cipher suite Go supports (secure + the
+// legacy/insecure ones), so the client can negotiate with old appliance TLS
+// stacks. Applies to TLS ≤1.2 only (TLS 1.3 suites are not configurable).
+func legacyTLSCipherSuites() []uint16 {
+	var ids []uint16
+	for _, s := range tls.CipherSuites() {
+		ids = append(ids, s.ID)
+	}
+	for _, s := range tls.InsecureCipherSuites() {
+		ids = append(ids, s.ID)
+	}
+	return ids
 }
 
 // collectRuckusZDProfile runs the ZoneDirector Web-XML deep collection and persists

@@ -82,7 +82,7 @@ func (c *Client) Login(ctx context.Context) error {
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := c.Doer.Do(req)
 	if err != nil {
-		return fmt.Errorf("ruckuszd: login transport error")
+		return fmt.Errorf("ruckuszd: login transport error: %w", err)
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	resp.Body.Close()
@@ -199,7 +199,7 @@ func (c *Client) postAjax(ctx context.Context, ep endpoint, xmlBody string, retr
 	}
 	resp, err := c.Doer.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("ruckuszd: ajax transport error")
+		return nil, fmt.Errorf("ruckuszd: ajax transport error: %w", err)
 	}
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 { // session expired
 		resp.Body.Close()
