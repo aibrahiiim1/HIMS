@@ -114,7 +114,7 @@ func (c *Client) Collect(ctx context.Context) (CollectResult, error) {
 	if b, err := c.postAjax(ctx, conf, wlanListXML, true); err == nil {
 		for _, m := range attrRows(b, "wlansvc") {
 			out.SSIDs = append(out.SSIDs, SSID{
-				Name: get(m, "name", "ssid", "description"), Status: "unknown",
+				Name: get(m, "name", "ssid", "description"), Status: ssidStatus(m),
 				Security: get(m, "authentication", "auth"), Band: get(m, "radio", "wlan-radio"),
 				VLAN: get(m, "vlan-id", "vlan", "x-vlan", "vlanid"),
 			})
@@ -161,6 +161,19 @@ func (c *Client) Ping(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	return len(apRows(b)), nil
+}
+
+// ssidStatus maps a ZD WLAN's admin state. The ZoneDirector wlansvc-list returns
+// the CONFIGURED WLANs without a reliable per-WLAN enable flag on this firmware —
+// a listed WLAN is an active one — so we report "enabled" and only downgrade when
+// an explicit disable flag is present (honest: listed = active, never fabricated).
+func ssidStatus(m map[string]string) string {
+	switch strings.ToLower(strings.TrimSpace(get(m, "enable", "enabled", "status", "state", "admin-state"))) {
+	case "false", "0", "no", "disabled", "disable", "down", "inactive":
+		return "disabled"
+	default:
+		return "enabled"
+	}
 }
 
 // apState maps the ZD AP `state` code to text (RUCKUS-ZD-WLAN-MIB

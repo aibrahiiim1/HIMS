@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
 import { Wifi, Router, Users, Radio, ShieldCheck, Activity, Plug, FlaskConical, DownloadCloud, Terminal, Layers, FileSearch, Pencil } from 'lucide-react'
-import { api, type WirelessDetailResp, type MibWalkRow, type MibExplorerResp, type SSHCliSummary, type SSHCliRow, type AccessPoint, type WirelessClient } from '../api'
+import { api, type WirelessDetailResp, type MibWalkRow, type MibExplorerResp, type SSHCliSummary, type SSHCliRow, type AccessPoint, type WirelessClient, type WirelessSSID } from '../api'
 import { DeviceHeader } from '../components/DeviceHeader'
 import { Panel, Kpi, DefList, EmptyState, StatusPill } from '../components/ui'
 import { DataTable, type DataCol, type DataFilter } from '../components/DataTable'
@@ -67,8 +67,8 @@ export function WirelessDetail() {
   // otherwise derive from the AP rows themselves, which carry per-AP status when a
   // source exposes it (e.g. Ruckus SNMP MIB). So the Active/Non-active KPIs reflect
   // reality for any vendor, not only the SSH-summary controllers.
-  const apRowOnline = aps.filter((a) => a.status === 'online').length
-  const apRowOffline = aps.filter((a) => a.status === 'offline').length
+  const apRowOnline = aps.filter((a) => { const s = apState(a.status); return s === 'up' || s === 'warn' }).length
+  const apRowOffline = aps.filter((a) => apState(a.status) === 'down').length
   const apStatusShown = (sm?.ap_status_exposed ?? false) || apRowOnline + apRowOffline > 0
   const apActive = sm?.ap_status_exposed ? sm.active_aps : apRowOnline
   const apNonActive = sm?.ap_status_exposed ? sm.non_active_aps : apRowOffline
@@ -211,8 +211,8 @@ export function WirelessDetail() {
           <DataTable<AccessPoint>
             rows={aps}
             getKey={(a) => a.id}
-            searchText={(a) => `${a.serial || ''} ${a.name} ${a.ip || ''} ${a.mac || ''} ${a.model || ''}`}
-            searchPlaceholder="Search serial / name / IP / MAC / model…"
+            searchText={(a) => `${a.serial || ''} ${a.name} ${a.ip || ''} ${a.mac || ''} ${a.model || ''} ${a.site || ''}`}
+            searchPlaceholder="Search serial / name / IP / MAC / model / site…"
             filters={apFilters(aps)}
             cols={apCols(sm?.ap_status_exposed ?? false)}
           />
@@ -242,9 +242,10 @@ export function WirelessDetail() {
           <DataTable
             rows={ssids}
             getKey={(s) => s.id}
-            searchText={(s) => `${s.name} ${s.security || ''} ${s.band || ''}`}
-            searchPlaceholder="Search SSID…"
+            searchText={(s) => `${s.name} ${s.security || ''} ${s.band || ''} ${s.vlan || ''}`}
+            searchPlaceholder="Search SSID / security / band / VLAN…"
             pageSizeDefault={25}
+            filters={ssidFilters(ssids)}
             cols={[
               { key: 'name', label: 'SSID', render: (s) => <strong>{s.name}</strong>, sortVal: (s) => s.name },
               { key: 'status', label: 'Status', render: (s) => <StatusPill status={s.status === 'active' || s.status === 'enabled' ? 'up' : s.status === 'disabled' ? 'down' : 'unknown'} label={s.status || 'unknown'} /> },
@@ -324,10 +325,25 @@ export function WirelessDetail() {
 
 // ---- AP/client column + filter builders ------------------------------------
 
+// apState normalises any vendor AP-status label to a canonical state so counts,
+// badges and filters work for every source: REST/XML stores real labels
+// (Ruckus "Connected"/"Disconnected", Extreme "In Service"/"Critical"/"Out of
+// Service"), SNMP/SSH store "online"/"offline".
+export function apState(status?: string): 'up' | 'down' | 'warn' | 'unknown' {
+  const s = (status || '').trim().toLowerCase()
+  if (!s) return 'unknown'
+  if (['online', 'up', 'active', 'connected', 'in service', 'inservice', 'operational', 'registered', 'running'].includes(s)) return 'up'
+  if (['offline', 'down', 'disconnected', 'out of service', 'outofservice', 'inactive', 'unreachable', 'failed'].includes(s)) return 'down'
+  if (['critical', 'degraded', 'warning', 'approval pending', 'upgrading', 'provisioning', 'rebooting', 'pending'].some((k) => s.includes(k))) return 'warn'
+  return 'unknown'
+}
+
 function apStatusCell(a: AccessPoint, exposed: boolean) {
-  if (a.status === 'online') return <StatusPill status="up" label="active" />
-  if (a.status === 'offline') return <StatusPill status="down" label="non-active" />
-  if (!exposed) return <span className="muted" title="Source did not expose per-AP status">status not exposed</span>
+  const st = apState(a.status)
+  if (st === 'up') return <StatusPill status="up" label={a.status || 'active'} />
+  if (st === 'down') return <StatusPill status="down" label={a.status || 'non-active'} />
+  if (st === 'warn') return <StatusPill status="warning" label={a.status || 'degraded'} />
+  if (!a.status && !exposed) return <span className="muted" title="Source did not expose per-AP status">status not exposed</span>
   return <StatusPill status="unknown" label={a.status || 'unknown'} />
 }
 
@@ -343,8 +359,8 @@ function apCols(exposed: boolean): DataCol<AccessPoint>[] {
     { key: 'model', label: 'Model', render: (a) => a.model || '—', sortVal: (a) => a.model || '' },
     { key: 'ip', label: 'IP', render: (a) => a.ip || '—', mono: true },
     { key: 'mac', label: 'MAC', render: (a) => a.mac || '—', mono: true },
-    { key: 'net', label: 'Network/Site', render: () => <span className="muted">—</span> },
-    { key: 'adoption', label: 'Adoption', render: () => <span className="muted">—</span> },
+    { key: 'net', label: 'Site', render: (a) => a.site || <span className="muted">—</span>, sortVal: (a) => a.site || '' },
+    { key: 'uptime', label: 'Uptime', render: (a) => a.uptime || <span className="muted">—</span>, sortVal: (a) => a.uptime || '' },
     { key: 'clients', label: 'Clients', render: (a) => a.client_count, sortVal: (a) => a.client_count },
     { key: 'seen', label: 'Last seen', render: (a) => tsShort(a.collected_at || a.last_seen_at), sortVal: (a) => a.collected_at || '' },
     { key: 'source', label: 'Source', render: (a) => srcLabel(a.source) },
@@ -354,12 +370,15 @@ function apCols(exposed: boolean): DataCol<AccessPoint>[] {
 function apFilters(aps: AccessPoint[]): DataFilter<AccessPoint>[] {
   const models = uniq(aps.map((a) => a.model || '').filter(Boolean))
   const sources = uniq(aps.map((a) => a.source || '').filter(Boolean))
-  return [
-    { key: 'status', label: 'Status', options: [{ value: 'online', label: 'active' }, { value: 'offline', label: 'non-active' }, { value: 'unknown', label: 'unknown' }], match: (a, v) => (a.status || 'unknown') === v },
+  const sites = uniq(aps.map((a) => a.site || '').filter(Boolean))
+  const f: DataFilter<AccessPoint>[] = [
+    { key: 'status', label: 'Status', options: [{ value: 'up', label: 'active' }, { value: 'down', label: 'non-active' }, { value: 'warn', label: 'degraded' }, { value: 'unknown', label: 'unknown' }], match: (a, v) => apState(a.status) === v },
     { key: 'clients', label: 'Clients', options: [{ value: 'has', label: 'has clients' }, { value: 'none', label: 'no clients' }], match: (a, v) => (v === 'has' ? a.client_count > 0 : a.client_count === 0) },
     { key: 'model', label: 'Model', options: models.map((m) => ({ value: m, label: m })), match: (a, v) => a.model === v },
-    { key: 'source', label: 'Source', options: sources.map((s) => ({ value: s, label: srcLabel(s) })), match: (a, v) => a.source === v },
   ]
+  if (sites.length) f.push({ key: 'site', label: 'Site', options: sites.map((s) => ({ value: s, label: s })), match: (a, v) => a.site === v })
+  if (sources.length > 1) f.push({ key: 'source', label: 'Source', options: sources.map((s) => ({ value: s, label: srcLabel(s) })), match: (a, v) => a.source === v })
+  return f
 }
 
 const clientCols: DataCol<WirelessClient>[] = [
@@ -367,7 +386,7 @@ const clientCols: DataCol<WirelessClient>[] = [
   { key: 'ip', label: 'IP', render: (c) => c.ip || '—', mono: true, sortVal: (c) => c.ip },
   { key: 'host', label: 'Hostname / user', render: (c) => c.hostname || '—', sortVal: (c) => c.hostname },
   { key: 'ssid', label: 'SSID', render: (c) => c.ssid || '—', sortVal: (c) => c.ssid },
-  { key: 'ap', label: 'AP (serial)', render: (c) => c.ap_name || '—', mono: true, sortVal: (c) => c.ap_name },
+  { key: 'ap', label: 'AP', render: (c) => c.ap_name || '—', sortVal: (c) => c.ap_name },
   { key: 'rssi', label: 'RSSI', render: (c) => (c.rssi != null ? `${c.rssi} dBm` : '—'), sortVal: (c) => c.rssi ?? 0 },
   { key: 'snr', label: 'SNR', render: (c) => (c.snr != null ? `${c.snr} dB` : '—'), sortVal: (c) => c.snr ?? 0 },
   { key: 'band', label: 'Band', render: (c) => c.band || '—' },
@@ -381,12 +400,33 @@ const clientCols: DataCol<WirelessClient>[] = [
 function clientFilters(clients: WirelessClient[]): DataFilter<WirelessClient>[] {
   const ssidOpts = uniq(clients.map((c) => c.ssid || '').filter(Boolean))
   const bands = uniq(clients.map((c) => c.band || '').filter(Boolean))
-  return [
+  const aps = uniq(clients.map((c) => c.ap_name || '').filter(Boolean))
+  const sources = uniq(clients.map((c) => c.source || '').filter(Boolean))
+  const f: DataFilter<WirelessClient>[] = [
     { key: 'ssid', label: 'SSID', options: ssidOpts.map((s) => ({ value: s, label: s })), match: (c, v) => c.ssid === v },
     { key: 'band', label: 'Band', options: bands.map((b) => ({ value: b, label: b })), match: (c, v) => c.band === v },
+  ]
+  if (aps.length) f.push({ key: 'ap', label: 'AP', options: aps.map((a) => ({ value: a, label: a })), match: (c, v) => c.ap_name === v })
+  f.push(
     { key: 'ip', label: 'IP', options: [{ value: 'has', label: 'has IP' }, { value: 'no', label: 'no IP' }], match: (c, v) => (v === 'has' ? !!c.ip : !c.ip) },
     { key: 'host', label: 'Hostname', options: [{ value: 'missing', label: 'missing hostname' }], match: (c, v) => (v === 'missing' ? !c.hostname : true) },
+  )
+  if (sources.length > 1) f.push({ key: 'source', label: 'Source', options: sources.map((s) => ({ value: s, label: srcLabel(s) })), match: (c, v) => c.source === v })
+  return f
+}
+
+function ssidFilters(ssids: WirelessSSID[]): DataFilter<WirelessSSID>[] {
+  const security = uniq(ssids.map((s) => s.security || '').filter(Boolean))
+  const bands = uniq(ssids.map((s) => s.band || '').filter(Boolean))
+  const sources = uniq(ssids.map((s) => s.source || '').filter(Boolean))
+  const ssidState = (s: WirelessSSID) => (s.status === 'active' || s.status === 'enabled') ? 'enabled' : s.status === 'disabled' ? 'disabled' : 'unknown'
+  const f: DataFilter<WirelessSSID>[] = [
+    { key: 'status', label: 'Status', options: [{ value: 'enabled', label: 'enabled' }, { value: 'disabled', label: 'disabled' }, { value: 'unknown', label: 'unknown' }], match: (s, v) => ssidState(s) === v },
   ]
+  if (security.length) f.push({ key: 'security', label: 'Security', options: security.map((x) => ({ value: x, label: x })), match: (s, v) => s.security === v })
+  if (bands.length) f.push({ key: 'band', label: 'Band', options: bands.map((b) => ({ value: b, label: b })), match: (s, v) => s.band === v })
+  if (sources.length > 1) f.push({ key: 'source', label: 'Source', options: sources.map((x) => ({ value: x, label: srcLabel(x) })), match: (s, v) => s.source === v })
+  return f
 }
 
 // ---- small helpers ---------------------------------------------------------
