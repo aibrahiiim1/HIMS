@@ -31,6 +31,8 @@ export function SwitchDetail() {
   const neighList = neighbors.data ?? []
   const lldpN = neighList.filter((n) => n.protocol === 'lldp').length
   const cdpN = neighList.filter((n) => n.protocol === 'cdp').length
+  const neighInfra = neighList.filter(neighIsInfra).length
+  const neighEndpoints = neighList.length - neighInfra
   const linkList = topo.data ?? []
   const macLinks = linkList.filter((l) => l.link_source === 'mac').length
   const roleCount = (role: string) => ifList.filter((i) => i.port_role === role).length
@@ -123,8 +125,13 @@ export function SwitchDetail() {
       )}
 
       {tab === 'neighbors' && (
-        <Panel title="LLDP / CDP Neighbors" subtitle={`${neighbors.data?.length ?? 0} · raw protocol neighbours`} pad={false}>
+        <Panel title="LLDP / CDP Neighbors" subtitle={neighList.length ? `${neighList.length} · ${neighInfra} switch/infra · ${neighEndpoints} endpoint${neighEndpoints === 1 ? '' : 's'}` : 'raw protocol neighbours'} pad={false}>
           {neighbors.isLoading && <div className="loading">Loading neighbors…</div>}
+          {neighList.length > 0 && (
+            <div className="enc-banner info" style={{ margin: '0 0 0 0', borderRadius: 0 }}>
+              LLDP/CDP is spoken by switches/APs <em>and</em> by directly-attached endpoints (PCs, IP phones, printers). Endpoints advertise only a MAC and no system name — they show as “endpoint” below. Switch-to-switch uplinks are the “switch / infra” rows.
+            </div>
+          )}
           {neighbors.data && neighbors.data.length === 0 && <EmptyState icon={Share2} title="No LLDP/CDP neighbors" message="Empty is normal in mixed-vendor segments (e.g. a Cisco port that only speaks CDP facing an Aruba that only reads LLDP). Cross-vendor links still appear under the Topology tab, derived from the MAC forwarding table." />}
           {(neighbors.data?.length ?? 0) > 0 && <NeighborTable data={neighbors.data!} full />}
         </Panel>
@@ -176,20 +183,40 @@ function InterfaceTable({ data, full }: { data: Interface[]; full?: boolean }) {
   )
 }
 
+// A neighbour is "infrastructure" (switch/AP/router) when it advertises a system
+// name; a bare endpoint (PC/phone/printer that just speaks LLDP-MED) advertises
+// only a MAC chassis-id + MAC port-id and no name.
+const isMacLike = (s?: string | null) => !!s && /^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/i.test(s.trim())
+const neighIsInfra = (n: Neighbor) => !!(n.rem_sys_name && n.rem_sys_name.trim()) || !!n.rem_mgmt_ip
+// Best human identity for the neighbour: its system name, else a readable
+// chassis-id (e.g. a hostname), else the chassis MAC.
+const neighName = (n: Neighbor) => (n.rem_sys_name && n.rem_sys_name.trim()) || n.rem_chassis_id || '—'
+// Prefer the port *description* (a readable interface name) over the raw port-id
+// (which is a MAC for endpoints that advertise a MAC port-id).
+const neighRemotePort = (n: Neighbor) => (n.rem_port_desc && n.rem_port_desc.trim()) || n.rem_port_id || '—'
+
 function NeighborTable({ data, full }: { data: Neighbor[]; full?: boolean }) {
   return (
     <table className="data-table">
-      <thead><tr><th>Local port</th><th>Neighbor</th><th>Remote port</th>{full && <th>Mgmt IP</th>}<th>Proto</th></tr></thead>
+      <thead><tr><th>Local port</th><th>Neighbor</th><th>Type</th><th>Remote port</th>{full && <th>Mgmt IP</th>}<th>Proto</th></tr></thead>
       <tbody>
-        {data.map((n) => (
-          <tr key={n.id}>
-            <td>{n.local_if_name ?? n.local_if_index ?? '—'}</td>
-            <td className="cell-name">{n.rem_sys_name ?? n.rem_chassis_id ?? '—'}</td>
-            <td>{n.rem_port_id ?? n.rem_port_desc ?? '—'}</td>
-            {full && <td className="mono">{n.rem_mgmt_ip ?? '—'}</td>}
-            <td><span className={`badge badge-${n.protocol}`}>{n.protocol}</span></td>
-          </tr>
-        ))}
+        {data.map((n) => {
+          const infra = neighIsInfra(n)
+          const nm = neighName(n)
+          const rp = neighRemotePort(n)
+          return (
+            <tr key={n.id}>
+              <td>{n.local_if_name ?? n.local_if_index ?? '—'}</td>
+              <td className={isMacLike(nm) ? 'mono' : 'cell-name'}>{nm}</td>
+              <td>{infra
+                ? <span className="badge badge-up" title="Advertises a system name / management IP — another switch, AP or router">switch / infra</span>
+                : <span className="badge badge-unknown" title="Bare LLDP-MED endpoint (PC / phone / printer) — advertises only a MAC, no system name">endpoint</span>}</td>
+              <td className={isMacLike(rp) ? 'mono' : ''}>{rp}</td>
+              {full && <td className="mono">{n.rem_mgmt_ip ?? '—'}</td>}
+              <td><span className={`badge badge-${n.protocol}`}>{n.protocol}</span></td>
+            </tr>
+          )
+        })}
       </tbody>
     </table>
   )

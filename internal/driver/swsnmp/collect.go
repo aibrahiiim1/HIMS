@@ -299,7 +299,10 @@ func CollectFDB(ctx context.Context, c snmp.Client) []driver.MACSnap {
 // CollectLLDP walks lldpRemTable into neighbor snapshots.
 func CollectLLDP(ctx context.Context, c snmp.Client) []driver.NeighborSnap {
 	type acc struct {
-		chassisID, portID, portDesc, sysName, sysDesc string
+		chassisSub, portSub    int
+		chassisRaw, portRaw    []byte
+		chassisStr, portStr    string
+		portDesc, sysName, sysDesc string
 	}
 	rows := map[string]*acc{}
 	localPort := map[string]int{}
@@ -316,14 +319,24 @@ func CollectLLDP(ctx context.Context, c snmp.Client) []driver.NeighborSnap {
 			rows[key] = a
 		}
 		switch int(col) {
+		case mibs.LldpRemColChassisIDSubtype:
+			if v, ok := snmp.PDUInt64(p); ok {
+				a.chassisSub = int(v)
+			}
 		case mibs.LldpRemColChassisID:
-			if b, ok := p.Value.([]byte); ok && len(b) == 6 {
-				a.chassisID = fmt.Sprintf("%02x:%02x:%02x:%02x:%02x:%02x", b[0], b[1], b[2], b[3], b[4], b[5])
-			} else {
-				a.chassisID = snmp.PDUString(p)
+			if b, ok := p.Value.([]byte); ok {
+				a.chassisRaw = b
+			}
+			a.chassisStr = snmp.PDUString(p)
+		case mibs.LldpRemColPortIDSubtype:
+			if v, ok := snmp.PDUInt64(p); ok {
+				a.portSub = int(v)
 			}
 		case mibs.LldpRemColPortID:
-			a.portID = snmp.PDUString(p)
+			if b, ok := p.Value.([]byte); ok {
+				a.portRaw = b
+			}
+			a.portStr = snmp.PDUString(p)
 		case mibs.LldpRemColPortDesc:
 			a.portDesc = snmp.PDUString(p)
 		case mibs.LldpRemColSysName:
@@ -337,8 +350,8 @@ func CollectLLDP(ctx context.Context, c snmp.Client) []driver.NeighborSnap {
 	for key, a := range rows {
 		out = append(out, driver.NeighborSnap{
 			LocalIfIndex: localPort[key],
-			RemChassisID: a.chassisID,
-			RemPortID:    a.portID,
+			RemChassisID: decodeLLDPID(a.chassisSub, a.chassisRaw, a.chassisStr),
+			RemPortID:    decodeLLDPID(a.portSub, a.portRaw, a.portStr),
 			RemPortDesc:  a.portDesc,
 			RemSysName:   a.sysName,
 			RemSysDesc:   a.sysDesc,
@@ -346,6 +359,50 @@ func CollectLLDP(ctx context.Context, c snmp.Client) []driver.NeighborSnap {
 		})
 	}
 	return out
+}
+
+// decodeLLDPID renders an LLDP chassis-id / port-id per its IEEE-802.1AB subtype:
+// macAddress(3) → MAC hex, networkAddress(4) → IP, and the string subtypes
+// (interfaceAlias/portComponent/interfaceName/agentCircuitId/local) → text. It
+// falls back to MAC/hex for non-printable bytes so the UI never shows control
+// characters (the cause of the garbled "Remote port" values).
+func decodeLLDPID(subtype int, raw []byte, str string) string {
+	if len(raw) == 0 {
+		return strings.TrimRight(str, "\x00 ")
+	}
+	switch subtype {
+	case 3: // macAddress
+		if len(raw) == 6 {
+			return macStr(raw)
+		}
+	case 4: // networkAddress: [addrFamily][address…]; family 1 = IPv4
+		if len(raw) >= 5 && raw[0] == 1 {
+			return fmt.Sprintf("%d.%d.%d.%d", raw[1], raw[2], raw[3], raw[4])
+		}
+	}
+	if isPrintableBytes(raw) {
+		return strings.TrimRight(string(raw), "\x00 ")
+	}
+	if len(raw) == 6 { // unlabelled MAC
+		return macStr(raw)
+	}
+	return fmt.Sprintf("%x", raw)
+}
+
+func macStr(b []byte) string {
+	return fmt.Sprintf("%02x:%02x:%02x:%02x:%02x:%02x", b[0], b[1], b[2], b[3], b[4], b[5])
+}
+
+func isPrintableBytes(b []byte) bool {
+	for _, c := range b {
+		if c == 0 {
+			continue
+		}
+		if c < 0x20 || c > 0x7e {
+			return false
+		}
+	}
+	return true
 }
 
 // DerivePortRoles classifies interfaces from neighbor + MAC evidence.

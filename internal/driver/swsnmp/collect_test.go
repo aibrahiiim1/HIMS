@@ -53,6 +53,30 @@ func TestBitSet(t *testing.T) {
 	}
 }
 
+func TestDecodeLLDPID(t *testing.T) {
+	mac := []byte{0x54, 0x80, 0x28, 0xcb, 0xbc, 0x8a}
+	cases := []struct {
+		name    string
+		subtype int
+		raw     []byte
+		str     string
+		want    string
+	}{
+		{"mac subtype → MAC hex", 3, mac, "", "54:80:28:cb:bc:8a"},
+		{"interfaceName subtype → text", 5, []byte("GigabitEthernet1/0/24"), "", "GigabitEthernet1/0/24"},
+		{"local subtype numeric → text", 7, []byte("25"), "", "25"},
+		{"networkAddress IPv4", 4, []byte{1, 192, 168, 1, 1}, "", "192.168.1.1"},
+		{"non-printable 6 bytes → MAC fallback", 0, mac, "", "54:80:28:cb:bc:8a"},
+		{"empty raw uses string fallback", 0, nil, "Gi1", "Gi1"},
+		{"trailing nulls trimmed", 5, []byte("Gi3\x00\x00"), "", "Gi3"},
+	}
+	for _, c := range cases {
+		if got := decodeLLDPID(c.subtype, c.raw, c.str); got != c.want {
+			t.Errorf("%s: decodeLLDPID(%d,%x,%q) = %q; want %q", c.name, c.subtype, c.raw, c.str, got, c.want)
+		}
+	}
+}
+
 // Tagged/untagged classification: a port present in egress but NOT in the
 // untagged set is a tagged (trunk) member; present in both is untagged (access).
 func TestEgressUntaggedClassification(t *testing.T) {
