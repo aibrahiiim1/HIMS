@@ -605,18 +605,22 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 						}
 						mcancel()
 					}
-					// Extreme XCC SSH CLI collection: read-only CLI roster collection
-					// when a working SSH credential resolves (bound or auto-tried). This
-					// is the path that exposes AP/client rosters on firmware where the
-					// SNMP MIB does not. Binds the SSH cred only if none is bound yet.
-					// Skipped for Ruckus ZoneDirector — it collects via Web-XML and does
-					// not speak these commands, so attempting SSH only yields "failed".
-					if s.cipher() != nil && s.sshCLIApplicable(ctx, dev) {
+					// SSH CLI roster collection when a working SSH credential resolves
+					// (bound or auto-tried). Extreme XCC uses the exec-per-command CLI
+					// collector; a Ruckus ZoneDirector uses the interactive-shell ZD
+					// collector (read-only connectivity/diagnostic — the Web-XML primary
+					// owns its rosters). Binds the SSH cred only if none is bound yet.
+					if s.cipher() != nil {
 						sctx, scancel := context.WithTimeout(ctx, 150*time.Second)
 						emit := func(stage, status, command, message string, parsed, skipped, warns int) {
 							s.publishSSHCmdEvent(jobID, ip, id, stage, status, command, message, parsed, skipped, warns)
 						}
-						sres := s.collectSSHCLI(sctx, dev, "", "", true, emit)
+						var sres sshCLISummary
+						if s.sshCLIApplicable(ctx, dev) {
+							sres = s.collectSSHCLI(sctx, dev, "", "", true, emit)
+						} else {
+							sres = s.collectRuckusSSHCLI(sctx, dev, "", "", emit)
+						}
 						scancel()
 						if sres.Reachable {
 							enrichment = strings.TrimSpace(enrichment + " | SSH CLI: " + sres.Detail)

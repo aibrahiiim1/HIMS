@@ -1126,14 +1126,17 @@ func (s *Server) sshCLIHandler(w http.ResponseWriter, r *http.Request, persist b
 		writeErr(w, err)
 		return
 	}
-	if !s.sshCLIApplicable(ctx, dev) {
-		writeJSON(w, http.StatusOK, sshCLISummary{Status: "not_applicable",
-			Detail: "SSH CLI is an Extreme XCC collection method; this controller uses Web-XML (REST/XML) as its primary source."})
-		return
-	}
 	var body sshCLIReq
 	_ = decodeJSONOptional(r, &body)
-	sum := s.collectSSHCLI(ctx, dev, strings.TrimSpace(body.Username), body.Password, persist, nil)
+	// Route by vendor: Extreme XCC uses the exec-per-command CLI collector; a
+	// Ruckus ZoneDirector needs the interactive-shell collector (in-band CLI login
+	// + ZD command set), run as a read-only connectivity/diagnostic source.
+	var sum sshCLISummary
+	if s.sshCLIApplicable(ctx, dev) {
+		sum = s.collectSSHCLI(ctx, dev, strings.TrimSpace(body.Username), body.Password, persist, nil)
+	} else {
+		sum = s.collectRuckusSSHCLI(ctx, dev, strings.TrimSpace(body.Username), body.Password, nil)
+	}
 	action := "wireless.ssh_test"
 	if persist {
 		action = "wireless.ssh_collect"

@@ -262,18 +262,21 @@ func (s *Server) deviceWireless(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// SSH CLI status: per-command support + what mapped, derived from stored results.
-	// SSH CLI is Extreme-XCC-specific; a Ruckus ZoneDirector uses Web-XML as its
-	// primary source and does not speak these commands, so the source is reported
-	// as Not Applicable (honest gate — never a misleading "failed").
+	// Vendor-aware: Extreme XCC uses the exec CLI collector (source=extreme_xcc_ssh,
+	// rosters persisted); a Ruckus ZoneDirector uses the interactive-shell collector
+	// (source=ruckus_zd_ssh) as a read-only diagnostic — its AP/client counts come
+	// from the parsed command rows, since the Web-XML primary owns the roster tables.
 	dto.SSH = wirelessSSHStatus{Status: "not_run", Supported: []string{}, Unsupported: []string{}}
 	ruckusController := dto.Collection.Source == ruckusZDSource || strings.Contains(strings.ToLower(ident.Vendor), "ruckus")
+	sshSrc := sshCLISource
 	if ruckusController {
-		dto.SSH.Status = "not_applicable"
-	} else if rows, e := s.queries.ListSSHCliResults(ctx, id); e == nil && len(rows) > 0 {
+		sshSrc = ruckusSSHSource
+	}
+	if rows, e := s.queries.ListSSHCliResults(ctx, id); e == nil && len(rows) > 0 {
 		var last time.Time
 		anyRan, anyFail := false, false
 		for _, rw := range rows {
-			if rw.Source != sshCLISource {
+			if rw.Source != sshSrc {
 				continue
 			}
 			if rw.CollectedAt.After(last) {
@@ -284,20 +287,30 @@ func (s *Server) deviceWireless(w http.ResponseWriter, r *http.Request) {
 				dto.SSH.Supported = append(dto.SSH.Supported, rw.Command)
 				dto.SSH.ParsedRows += int(rw.ParsedRows)
 				anyRan = true
+				if ruckusController {
+					switch {
+					case strings.Contains(rw.Command, "ap all"):
+						dto.SSH.APs = int(rw.ParsedRows)
+					case strings.Contains(rw.Command, "current-active-clients"):
+						dto.SSH.Clients = int(rw.ParsedRows)
+					}
+				}
 			case "unsupported":
 				dto.SSH.Unsupported = append(dto.SSH.Unsupported, rw.Command)
 			case "failed", "timeout":
 				anyFail = true
 			}
 		}
-		for _, a := range dto.APs {
-			if a.Source == sshCLISource {
-				dto.SSH.APs++
+		if !ruckusController {
+			for _, a := range dto.APs {
+				if a.Source == sshCLISource {
+					dto.SSH.APs++
+				}
 			}
-		}
-		for _, c := range dto.Clients {
-			if c.Source == sshCLISource {
-				dto.SSH.Clients++
+			for _, c := range dto.Clients {
+				if c.Source == sshCLISource {
+					dto.SSH.Clients++
+				}
 			}
 		}
 		switch {
