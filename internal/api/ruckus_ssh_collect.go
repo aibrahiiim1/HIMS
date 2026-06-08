@@ -153,6 +153,21 @@ func (s *Server) collectRuckusSSHCLI(ctx context.Context, dev db.Device, overUse
 	if ident.name != "" {
 		sum.Detail = ident.name + ": " + sum.Detail
 	}
+	// Persist the controller summary so the detail page's "Collection status" KPI
+	// reflects THIS diagnostic run instead of a stale Extreme-SSH attempt. The
+	// summary_source keeps it distinct, and it never touches the AP/client/SSID
+	// roster tables (still owned by the Web-XML primary). active/non-active stay 0
+	// because `show ap all` does not expose per-AP connection status.
+	apTotal := maxInt(sum.APTotal, sum.APs)
+	clientsTotal := maxInt(sum.ClientsTotal, sum.Clients)
+	_ = s.queries.UpsertWirelessControllerSummary(ctx, db.UpsertWirelessControllerSummaryParams{
+		DeviceID: dev.ID, SummarySource: ruckusSSHSource,
+		NetworksCount: int32(sum.SSIDs), SwitchesCount: 0, ApTotal: int32(apTotal),
+		AdoptionPrimary: 0, AdoptionBackup: 0,
+		ActiveAps: 0, NonActiveAps: 0, ClientsTotal: int32(clientsTotal),
+		ParsedApRows: int32(sum.APs), ParsedClientRows: int32(sum.Clients), ParsedSsidRows: int32(sum.SSIDs),
+		CollectionStatus: sum.Status, Detail: capStr(sum.Detail, 480),
+	})
 	_ = transcript // retained for future field mapping; not stored (may contain a PSK)
 	emit("ssh_cli_collection_finished", "finished", "", sum.Detail, sum.ParsedRows, 0, 0)
 	return sum
