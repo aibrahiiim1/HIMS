@@ -22,6 +22,7 @@ import (
 	"github.com/coralsearesorts/hims/internal/omada"
 	"github.com/coralsearesorts/hims/internal/onvif"
 	"github.com/coralsearesorts/hims/internal/ruckus"
+	"github.com/coralsearesorts/hims/internal/ruckuszd"
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
 	"github.com/coralsearesorts/hims/internal/unifi"
 	"github.com/coralsearesorts/hims/internal/vsphere"
@@ -300,6 +301,15 @@ func (s *Server) vendorProfileTest(ctx context.Context, p db.VendorConnectionPro
 		// of read-only API endpoints, reporting status/content-type only — never
 		// secrets or bodies. Saves the discovered API base into the profile config.
 		return s.exploreXCC(ctx, p, cfg, base, user, pass)
+	case "ruckus_zd":
+		// ZoneDirector Web-XML: log in (admin-path discovery + CSRF) and fetch the
+		// AP roster — exercises the full AJAX path as a fast connectivity check.
+		zc := ruckuszd.New(base, user, pass, ruckusZDDoer(cfg, 15*time.Second))
+		n, err := zc.Ping(cctx)
+		if err != nil {
+			return false, "Ruckus ZoneDirector login failed: " + shortErr(err)
+		}
+		return true, "Ruckus ZoneDirector authenticated (admin path /" + zc.AdminBase() + "/) — " + itoaN(n) + " AP(s)"
 	case "wireless_aruba":
 		return false, "Aruba controller integration not implemented yet — profile saved; detection + classification active, deep collection pending"
 	case "cucm":
@@ -373,6 +383,9 @@ func (s *Server) runVendorProfileCollection(w http.ResponseWriter, r *http.Reque
 		_ = s.queries.SetVendorProfileTest(ctx, db.SetVendorProfileTestParams{ID: id, LastTestOk: &ok, LastTestDetail: detail})
 	case "extreme_xcc":
 		ok, detail = s.collectXCCProfile(ctx, p, dev)
+		_ = s.queries.SetVendorProfileTest(ctx, db.SetVendorProfileTestParams{ID: id, LastTestOk: &ok, LastTestDetail: detail})
+	case "ruckus_zd":
+		ok, detail = s.collectRuckusZDProfile(ctx, p, dev)
 		_ = s.queries.SetVendorProfileTest(ctx, db.SetVendorProfileTestParams{ID: id, LastTestOk: &ok, LastTestDetail: detail})
 	case "cucm":
 		ok, detail = s.collectCUCMProfile(ctx, p, dev)
@@ -559,7 +572,7 @@ func (s *Server) resolveScanProfile(ctx context.Context, category string, devID 
 	case string(domain.CatCamera), string(domain.CatNVR):
 		vendorTypes = []string{"cctv"}
 	case string(domain.CatWirelessController), string(domain.CatAccessPoint):
-		vendorTypes = []string{"extreme_xcc", "wireless_unifi", "wireless_omada", "wireless_ruckus", "wireless_extreme", "wireless_aruba"}
+		vendorTypes = []string{"extreme_xcc", "ruckus_zd", "wireless_unifi", "wireless_omada", "wireless_ruckus", "wireless_extreme", "wireless_aruba"}
 	case string(domain.CatPBX), string(domain.CatVoiceGateway), string(domain.CatIPPhone):
 		vendorTypes = []string{"cucm", "alcatel"}
 	}

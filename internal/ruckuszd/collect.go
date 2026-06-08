@@ -150,6 +150,19 @@ func (c *Client) Collect(ctx context.Context) (CollectResult, error) {
 	return out, nil
 }
 
+// Ping logs in and fetches only the AP roster — a fast connectivity/auth check
+// (exercises the full login + CSRF + AJAX path) for the profile Test action.
+func (c *Client) Ping(ctx context.Context) (int, error) {
+	if err := c.Login(ctx); err != nil {
+		return 0, err
+	}
+	b, err := c.postAjax(ctx, cmdStat, apStatsXML, true)
+	if err != nil {
+		return 0, err
+	}
+	return len(apRows(b)), nil
+}
+
 // apState maps the ZD AP `state` code to text (RUCKUS-ZD-WLAN-MIB
 // ruckusZDWLANAPStatus). 0/1 confirmed live on ZD 10.x.
 func apState(code string) string {
