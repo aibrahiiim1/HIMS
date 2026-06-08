@@ -470,7 +470,9 @@ tr:hover td { background: var(--surface-2); }
 .btn-primary { background: var(--brand); border-color: var(--brand); color: #fff; }
 .btn-primary:hover { background: var(--brand-600); }
 .btn-danger { background: var(--crit); border-color: var(--crit); color: #fff; }
-.btn-danger:hover { filter: brightness(.93); }
+/* Re-assert the red background (the generic .btn:hover would otherwise turn it
+   surface-grey at equal specificity, hiding the white label) and darken it. */
+.btn-danger:hover { background: var(--crit); border-color: var(--crit); color: #fff; filter: brightness(.9); }
 .btn-ghost { background: transparent; border-color: var(--border-strong); color: var(--text-muted); }
 .btn-ghost:hover { background: var(--surface-3); color: var(--text); }
 .btn-sm { padding: 5px 10px; font-size: var(--fs-sm); }
