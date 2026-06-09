@@ -3,7 +3,9 @@ package api
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	"net/http"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -148,16 +150,19 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device) cctvResult 
 	}
 
 	// ONVIF unavailable (e.g. disabled, or no plain-HTTP/:80) — fall back to
-	// Hikvision ISAPI over HTTPS. /ISAPI/System/deviceInfo yields the definitive
-	// deviceType (NVR/DVR vs IPCamera) + model/serial, which BOTH classifies the
-	// device and provides its identity.
+	// Hikvision ISAPI over HTTPS. It yields the definitive deviceType (NVR/DVR vs
+	// IPCamera) + identity AND, for recorders, the full inventory (channels, HDDs,
+	// recording/health). Bound-credential-only (above) avoids the lockout.
 	for _, cd := range cands {
-		ictx, cancel := context.WithTimeout(ctx, 60*time.Second) // port ladder
-		info, err := isapi.CollectDeviceInfo(ictx, ip, cd.user, cd.pass, nil) // nil → permissive TLS (legacy device ciphers)
+		ictx, cancel := context.WithTimeout(ctx, 90*time.Second) // deviceInfo + channel/storage endpoints
+		nvr, err := isapi.Collect(ictx, ip, cd.user, cd.pass, nil)
 		cancel()
 		category, detail := "success", "ISAPI authenticated"
 		if err != nil {
 			category, detail = categorizeCollectErr("isapi", err.Error())
+			if category == "auth_failed" {
+				detail += " — use the device WEB login (the ONVIF user is separate); repeated failures can trigger a Hikvision IP lockout"
+			}
 		}
 		akind := domain.CredHTTPBasic
 		if cd.kind == string(domain.CredONVIF) {
@@ -171,6 +176,7 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device) cctvResult 
 			lastReason, lastDetail = category, detail
 			continue
 		}
+		info := nvr.Info
 		// deviceType is the definitive NVR vs camera signal (model corroborates).
 		cat := domain.CatCamera
 		dc := "ip_camera"
@@ -181,7 +187,7 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device) cctvResult 
 			}
 		}
 		if blob, merr := domain.MarshalEvidence(nil); merr == nil {
-			conf := int16(90)
+			conf := int16(92)
 			_, _ = s.queries.UpdateDeviceClassification(ctx, db.UpdateDeviceClassificationParams{
 				ID: d.ID, Category: string(cat), OsFamily: domain.OSFamilyEmbedded,
 				DeviceClass: &dc, ConfidenceScore: &conf, ClassificationEvidence: blob,
@@ -197,12 +203,13 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device) cctvResult 
 		_, _ = s.queries.UpsertCameraInfo(ctx, db.UpsertCameraInfoParams{
 			DeviceID: d.ID, Manufacturer: strPtrOrNil(vendor), Model: strPtrOrNil(info.Model),
 		})
+		s.persistNVR(ctx, d, vendor, nvr) // nvr_info + channels + HDDs (recorders)
 		cid := cd.id
 		_ = s.queries.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: d.ID, CredentialID: &cid})
 		_ = s.queries.UpdateDeviceMonitoringStatus(ctx, db.UpdateDeviceMonitoringStatusParams{ID: d.ID, Status: "up"})
 
 		res = cctvResult{Status: "collected", CredentialUsed: cd.name, Category: string(cat),
-			Detail: "collected via ISAPI (ONVIF unavailable) — " + strings.TrimSpace(vendor+" "+info.Model)}
+			Detail: nvrDetail(cat, vendor, info, nvr)}
 		s.persistScanCredAttempts(ctx, d, attempts)
 		return res
 	}
@@ -244,9 +251,9 @@ func (s *Server) collectCCTVProfile(ctx context.Context, p db.VendorConnectionPr
 		Success: err == nil, Category: category, Detail: detail,
 	}})
 	if err != nil {
-		// ONVIF unavailable — fall back to Hikvision ISAPI over HTTPS.
-		ictx, icancel := context.WithTimeout(ctx, 60*time.Second)
-		info2, ierr := isapi.CollectDeviceInfo(ictx, host, user, pass, nil) // nil → permissive TLS
+		// ONVIF unavailable — fall back to full Hikvision ISAPI collection over HTTPS.
+		ictx, icancel := context.WithTimeout(ctx, 90*time.Second)
+		nvr, ierr := isapi.Collect(ictx, host, user, pass, nil) // nil → permissive TLS
 		icancel()
 		icat, idet := "success", "ISAPI authenticated"
 		if ierr != nil {
@@ -261,6 +268,7 @@ func (s *Server) collectCCTVProfile(ctx context.Context, p db.VendorConnectionPr
 			return out
 		}
 		out.AuthOK = true
+		info2 := nvr.Info
 		cat := domain.CatCamera
 		dc := "ip_camera"
 		for _, e := range classify.ISAPIDeviceInfo(info2.DeviceType, info2.Model) {
@@ -270,7 +278,7 @@ func (s *Server) collectCCTVProfile(ctx context.Context, p db.VendorConnectionPr
 			}
 		}
 		if blob, merr := domain.MarshalEvidence(nil); merr == nil {
-			conf := int16(90)
+			conf := int16(92)
 			_, _ = s.queries.UpdateDeviceClassification(ctx, db.UpdateDeviceClassificationParams{
 				ID: d.ID, Category: string(cat), OsFamily: domain.OSFamilyEmbedded,
 				DeviceClass: &dc, ConfidenceScore: &conf, ClassificationEvidence: blob,
@@ -282,13 +290,14 @@ func (s *Server) collectCCTVProfile(ctx context.Context, p db.VendorConnectionPr
 		}
 		_ = s.queries.UpdateDeviceHardwareInfo(ctx, db.UpdateDeviceHardwareInfoParams{ID: d.ID, Vendor: vendor, Model: info2.Model, Serial: info2.Serial})
 		_, _ = s.queries.UpsertCameraInfo(ctx, db.UpsertCameraInfoParams{DeviceID: d.ID, Manufacturer: strPtrOrNil(vendor), Model: strPtrOrNil(info2.Model)})
+		s.persistNVR(ctx, d, vendor, nvr)
 		if p.CredentialID != nil {
 			_ = s.queries.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: d.ID, CredentialID: p.CredentialID})
 		}
 		_ = s.queries.UpdateDeviceMonitoringStatus(ctx, db.UpdateDeviceMonitoringStatusParams{ID: d.ID, Status: "up"})
 		out.CollectionOK = true
 		out.Category = string(cat)
-		out.Detail = string(cat) + " collected via ISAPI (profile " + p.Name + ") — " + strings.TrimSpace(vendor+" "+info2.Model)
+		out.Detail = "via profile " + p.Name + " — " + nvrDetail(cat, vendor, info2, nvr)
 		return out
 	}
 	out.AuthOK = true
@@ -333,6 +342,57 @@ func strPtrOrNil(s string) *string {
 		return nil
 	}
 	return &s
+}
+
+// persistNVR writes recorder inventory collected over ISAPI: NVR identity
+// (model/serial/firmware/deviceType + channel & HDD counts + recording/health),
+// per-channel camera rows, and per-HDD storage. A plain camera with no recorder
+// data is a no-op here (its identity already lives in camera_info).
+func (s *Server) persistNVR(ctx context.Context, d db.Device, vendor string, nvr isapi.NVR) {
+	if !nvr.IsRecorder() && len(nvr.Channels) == 0 && len(nvr.Storage) == 0 {
+		return
+	}
+	_, _ = s.queries.UpsertNVRInfo(ctx, db.UpsertNVRInfoParams{
+		DeviceID: d.ID, Manufacturer: strPtrOrNil(vendor), Model: strPtrOrNil(nvr.Info.Model),
+		Serial: strPtrOrNil(nvr.Info.Serial), Firmware: strPtrOrNil(nvr.Info.Firmware),
+		DeviceType:   strPtrOrNil(nvr.Info.DeviceType),
+		ChannelCount: int32(len(nvr.Channels)), HddCount: int32(len(nvr.Storage)),
+		Recording: nvr.Recording, Health: nvr.Health, Source: "isapi",
+	})
+	for _, ch := range nvr.Channels {
+		status := "unknown"
+		if ch.Online != nil {
+			if *ch.Online {
+				status = "online"
+			} else {
+				status = "offline"
+			}
+		}
+		var ipp *netip.Addr
+		if a, err := netip.ParseAddr(strings.TrimSpace(ch.IP)); err == nil {
+			ipp = &a
+		}
+		_, _ = s.queries.UpsertNVRChannel(ctx, db.UpsertNVRChannelParams{
+			NvrDeviceID: d.ID, ChannelNo: int32(ch.No), CameraName: strPtrOrNil(ch.Name),
+			CameraIp: ipp, Status: status, Enabled: ch.Enabled,
+		})
+	}
+	for _, h := range nvr.Storage {
+		_, _ = s.queries.UpsertNVRStorage(ctx, db.UpsertNVRStorageParams{
+			NvrDeviceID: d.ID, HddID: int32(h.ID), Name: strPtrOrNil(h.Name),
+			Status: nz(h.Status, "unknown"), CapacityMb: h.CapacityMB, FreeMb: h.FreeMB,
+			Property: h.Property, Source: "isapi",
+		})
+	}
+}
+
+// nvrDetail builds the operator-facing success line.
+func nvrDetail(cat domain.DeviceCategory, vendor string, info isapi.DeviceInfo, nvr isapi.NVR) string {
+	d := fmt.Sprintf("collected via ISAPI — %s", strings.TrimSpace(vendor+" "+info.Model))
+	if cat == domain.CatNVR {
+		d += fmt.Sprintf(" (%s): %d channel(s), %d HDD(s)", strings.ToUpper(info.DeviceType), len(nvr.Channels), len(nvr.Storage))
+	}
+	return d
 }
 
 // collectCCTV handles POST /devices/{id}/collect-cctv — operator-triggered ONVIF

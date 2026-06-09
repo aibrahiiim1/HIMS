@@ -265,6 +265,7 @@ type Querier interface {
 	GetLocation(ctx context.Context, id uuid.UUID) (Location, error)
 	GetMibPack(ctx context.Context, id uuid.UUID) (MibPack, error)
 	GetMonitoringCheck(ctx context.Context, id uuid.UUID) (MonitoringCheck, error)
+	GetNVRInfo(ctx context.Context, deviceID uuid.UUID) (NvrInfo, error)
 	GetNotificationChannel(ctx context.Context, id uuid.UUID) (NotificationChannel, error)
 	// Deep OS Inventory queries. The 1:1 summary is upserted per device; the 1:N
 	// collections follow the prune-on-poll pattern (Upsert all rows with last_seen_at
@@ -436,6 +437,7 @@ type Querier interface {
 	ListMonitoringSamplesByCheck(ctx context.Context, arg ListMonitoringSamplesByCheckParams) ([]MonitoringSample, error)
 	ListMonitoringSamplesByDevice(ctx context.Context, arg ListMonitoringSamplesByDeviceParams) ([]MonitoringSample, error)
 	ListNVRChannels(ctx context.Context, nvrDeviceID uuid.UUID) ([]NvrChannel, error)
+	ListNVRStorage(ctx context.Context, nvrDeviceID uuid.UUID) ([]NvrStorage, error)
 	ListNeighbors(ctx context.Context, deviceID uuid.UUID) ([]Neighbor, error)
 	// Alerts worth notifying about: still open or escalated, opened recently.
 	ListNotifiableAlerts(ctx context.Context) ([]ListNotifiableAlertsRow, error)
@@ -681,6 +683,8 @@ type Querier interface {
 	// updates the schedule knobs without resetting the live status counters.
 	UpsertMonitoringCheck(ctx context.Context, arg UpsertMonitoringCheckParams) (MonitoringCheck, error)
 	UpsertNVRChannel(ctx context.Context, arg UpsertNVRChannelParams) (NvrChannel, error)
+	UpsertNVRInfo(ctx context.Context, arg UpsertNVRInfoParams) (NvrInfo, error)
+	UpsertNVRStorage(ctx context.Context, arg UpsertNVRStorageParams) (NvrStorage, error)
 	// ---- Neighbors (LLDP/CDP) -----------------------------------------------
 	UpsertNeighbor(ctx context.Context, arg UpsertNeighborParams) (Neighbor, error)
 	UpsertOSDisk(ctx context.Context, arg UpsertOSDiskParams) error

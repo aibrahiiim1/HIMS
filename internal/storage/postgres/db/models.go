@@ -646,6 +646,35 @@ type NvrChannel struct {
 	CameraDeviceID *uuid.UUID  `json:"camera_device_id"`
 	Status         string      `json:"status"`
 	LastSeenAt     time.Time   `json:"last_seen_at"`
+	Enabled        bool        `json:"enabled"`
+}
+
+type NvrInfo struct {
+	DeviceID     uuid.UUID `json:"device_id"`
+	Manufacturer *string   `json:"manufacturer"`
+	Model        *string   `json:"model"`
+	Serial       *string   `json:"serial"`
+	Firmware     *string   `json:"firmware"`
+	DeviceType   *string   `json:"device_type"`
+	ChannelCount int32     `json:"channel_count"`
+	HddCount     int32     `json:"hdd_count"`
+	Recording    string    `json:"recording"`
+	Health       string    `json:"health"`
+	Source       string    `json:"source"`
+	CollectedAt  time.Time `json:"collected_at"`
+}
+
+type NvrStorage struct {
+	ID          uuid.UUID `json:"id"`
+	NvrDeviceID uuid.UUID `json:"nvr_device_id"`
+	HddID       int32     `json:"hdd_id"`
+	Name        *string   `json:"name"`
+	Status      string    `json:"status"`
+	CapacityMb  int64     `json:"capacity_mb"`
+	FreeMb      int64     `json:"free_mb"`
+	Property    string    `json:"property"`
+	Source      string    `json:"source"`
+	LastSeenAt  time.Time `json:"last_seen_at"`
 }
 
 type OidMapping struct {

@@ -1105,7 +1105,47 @@ export interface NVRChannel {
   channel_no: number
   camera_name?: string | null
   camera_ip?: string | null
+  camera_device_id?: string | null
   status: string
+  enabled?: boolean
+  last_seen_at?: string
+}
+
+// Recorder identity (nvr_info) — model/serial/firmware/deviceType + counts +
+// recording/health summaries (empty string = not exposed by the device firmware).
+export interface NVRInfo {
+  device_id: string
+  manufacturer?: string | null
+  model?: string | null
+  serial?: string | null
+  firmware?: string | null
+  device_type?: string | null
+  channel_count: number
+  hdd_count: number
+  recording: string
+  health: string
+  source: string
+  collected_at?: string
+}
+
+export interface NVRStorage {
+  id: string
+  nvr_device_id: string
+  hdd_id: number
+  name?: string | null
+  status: string
+  capacity_mb: number
+  free_mb: number
+  property: string
+  source: string
+  last_seen_at?: string
+}
+
+// GET /devices/{id}/nvr aggregate.
+export interface NVRDetail {
+  info?: NVRInfo | null
+  channels: NVRChannel[]
+  storage: NVRStorage[]
 }
 
 export interface VirtualMachine {

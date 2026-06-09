@@ -232,6 +232,7 @@ func (s *Server) routes() {
 		r.Get("/devices/{id}/vms", s.deviceVMs)
 		r.Get("/devices/{id}/camera", s.deviceCamera)
 		r.Get("/devices/{id}/nvr-channels", s.deviceNVRChannels)
+		r.Get("/devices/{id}/nvr", s.deviceNVR)
 		r.Get("/devices/{id}/wlan", s.deviceWLAN)
 		r.Get("/devices/{id}/access-points", s.deviceAccessPoints)
 		r.Get("/devices/{id}/wireless", s.deviceWireless)                        // consolidated wireless detail (identity + rosters)
@@ -755,6 +756,27 @@ func (s *Server) deviceNVRChannels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, rows)
+}
+
+// deviceNVR returns the full recorder view: identity (nvr_info), camera channels
+// and HDD/storage. Missing sections come back empty, not as errors, so a freshly
+// classified NVR still renders.
+func (s *Server) deviceNVR(w http.ResponseWriter, r *http.Request) {
+	ctx, id, ok := pathDevice(w, r)
+	if !ok {
+		return
+	}
+	out := map[string]any{"channels": []any{}, "storage": []any{}}
+	if info, err := s.queries.GetNVRInfo(ctx, id); err == nil {
+		out["info"] = info
+	}
+	if chs, err := s.queries.ListNVRChannels(ctx, id); err == nil && chs != nil {
+		out["channels"] = chs
+	}
+	if hdds, err := s.queries.ListNVRStorage(ctx, id); err == nil && hdds != nil {
+		out["storage"] = hdds
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) deviceWLAN(w http.ResponseWriter, r *http.Request) {

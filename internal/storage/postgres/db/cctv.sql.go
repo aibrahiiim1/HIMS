@@ -31,8 +31,32 @@ func (q *Queries) GetCameraInfo(ctx context.Context, deviceID uuid.UUID) (Camera
 	return i, err
 }
 
+const getNVRInfo = `-- name: GetNVRInfo :one
+SELECT device_id, manufacturer, model, serial, firmware, device_type, channel_count, hdd_count, recording, health, source, collected_at FROM nvr_info WHERE device_id = $1
+`
+
+func (q *Queries) GetNVRInfo(ctx context.Context, deviceID uuid.UUID) (NvrInfo, error) {
+	row := q.db.QueryRow(ctx, getNVRInfo, deviceID)
+	var i NvrInfo
+	err := row.Scan(
+		&i.DeviceID,
+		&i.Manufacturer,
+		&i.Model,
+		&i.Serial,
+		&i.Firmware,
+		&i.DeviceType,
+		&i.ChannelCount,
+		&i.HddCount,
+		&i.Recording,
+		&i.Health,
+		&i.Source,
+		&i.CollectedAt,
+	)
+	return i, err
+}
+
 const listNVRChannels = `-- name: ListNVRChannels :many
-SELECT id, nvr_device_id, channel_no, camera_name, camera_ip, camera_device_id, status, last_seen_at FROM nvr_channels WHERE nvr_device_id = $1 ORDER BY channel_no
+SELECT id, nvr_device_id, channel_no, camera_name, camera_ip, camera_device_id, status, last_seen_at, enabled FROM nvr_channels WHERE nvr_device_id = $1 ORDER BY channel_no
 `
 
 func (q *Queries) ListNVRChannels(ctx context.Context, nvrDeviceID uuid.UUID) ([]NvrChannel, error) {
@@ -52,6 +76,42 @@ func (q *Queries) ListNVRChannels(ctx context.Context, nvrDeviceID uuid.UUID) ([
 			&i.CameraIp,
 			&i.CameraDeviceID,
 			&i.Status,
+			&i.LastSeenAt,
+			&i.Enabled,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listNVRStorage = `-- name: ListNVRStorage :many
+SELECT id, nvr_device_id, hdd_id, name, status, capacity_mb, free_mb, property, source, last_seen_at FROM nvr_storage WHERE nvr_device_id = $1 ORDER BY hdd_id
+`
+
+func (q *Queries) ListNVRStorage(ctx context.Context, nvrDeviceID uuid.UUID) ([]NvrStorage, error) {
+	rows, err := q.db.Query(ctx, listNVRStorage, nvrDeviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []NvrStorage{}
+	for rows.Next() {
+		var i NvrStorage
+		if err := rows.Scan(
+			&i.ID,
+			&i.NvrDeviceID,
+			&i.HddID,
+			&i.Name,
+			&i.Status,
+			&i.CapacityMb,
+			&i.FreeMb,
+			&i.Property,
+			&i.Source,
 			&i.LastSeenAt,
 		); err != nil {
 			return nil, err
@@ -109,15 +169,16 @@ func (q *Queries) UpsertCameraInfo(ctx context.Context, arg UpsertCameraInfoPara
 }
 
 const upsertNVRChannel = `-- name: UpsertNVRChannel :one
-INSERT INTO nvr_channels (nvr_device_id, channel_no, camera_name, camera_ip, camera_device_id, status)
-VALUES ($1,$2,$3,$4,$5,$6)
+INSERT INTO nvr_channels (nvr_device_id, channel_no, camera_name, camera_ip, camera_device_id, status, enabled)
+VALUES ($1,$2,$3,$4,$5,$6,$7)
 ON CONFLICT (nvr_device_id, channel_no) DO UPDATE SET
     camera_name = EXCLUDED.camera_name,
     camera_ip = EXCLUDED.camera_ip,
     camera_device_id = EXCLUDED.camera_device_id,
     status = EXCLUDED.status,
+    enabled = EXCLUDED.enabled,
     last_seen_at = now()
-RETURNING id, nvr_device_id, channel_no, camera_name, camera_ip, camera_device_id, status, last_seen_at
+RETURNING id, nvr_device_id, channel_no, camera_name, camera_ip, camera_device_id, status, last_seen_at, enabled
 `
 
 type UpsertNVRChannelParams struct {
@@ -127,6 +188,7 @@ type UpsertNVRChannelParams struct {
 	CameraIp       *netip.Addr `json:"camera_ip"`
 	CameraDeviceID *uuid.UUID  `json:"camera_device_id"`
 	Status         string      `json:"status"`
+	Enabled        bool        `json:"enabled"`
 }
 
 func (q *Queries) UpsertNVRChannel(ctx context.Context, arg UpsertNVRChannelParams) (NvrChannel, error) {
@@ -137,6 +199,7 @@ func (q *Queries) UpsertNVRChannel(ctx context.Context, arg UpsertNVRChannelPara
 		arg.CameraIp,
 		arg.CameraDeviceID,
 		arg.Status,
+		arg.Enabled,
 	)
 	var i NvrChannel
 	err := row.Scan(
@@ -147,6 +210,123 @@ func (q *Queries) UpsertNVRChannel(ctx context.Context, arg UpsertNVRChannelPara
 		&i.CameraIp,
 		&i.CameraDeviceID,
 		&i.Status,
+		&i.LastSeenAt,
+		&i.Enabled,
+	)
+	return i, err
+}
+
+const upsertNVRInfo = `-- name: UpsertNVRInfo :one
+INSERT INTO nvr_info (device_id, manufacturer, model, serial, firmware, device_type, channel_count, hdd_count, recording, health, source)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+ON CONFLICT (device_id) DO UPDATE SET
+    manufacturer = EXCLUDED.manufacturer,
+    model = EXCLUDED.model,
+    serial = EXCLUDED.serial,
+    firmware = EXCLUDED.firmware,
+    device_type = EXCLUDED.device_type,
+    channel_count = EXCLUDED.channel_count,
+    hdd_count = EXCLUDED.hdd_count,
+    recording = EXCLUDED.recording,
+    health = EXCLUDED.health,
+    source = EXCLUDED.source,
+    collected_at = now()
+RETURNING device_id, manufacturer, model, serial, firmware, device_type, channel_count, hdd_count, recording, health, source, collected_at
+`
+
+type UpsertNVRInfoParams struct {
+	DeviceID     uuid.UUID `json:"device_id"`
+	Manufacturer *string   `json:"manufacturer"`
+	Model        *string   `json:"model"`
+	Serial       *string   `json:"serial"`
+	Firmware     *string   `json:"firmware"`
+	DeviceType   *string   `json:"device_type"`
+	ChannelCount int32     `json:"channel_count"`
+	HddCount     int32     `json:"hdd_count"`
+	Recording    string    `json:"recording"`
+	Health       string    `json:"health"`
+	Source       string    `json:"source"`
+}
+
+func (q *Queries) UpsertNVRInfo(ctx context.Context, arg UpsertNVRInfoParams) (NvrInfo, error) {
+	row := q.db.QueryRow(ctx, upsertNVRInfo,
+		arg.DeviceID,
+		arg.Manufacturer,
+		arg.Model,
+		arg.Serial,
+		arg.Firmware,
+		arg.DeviceType,
+		arg.ChannelCount,
+		arg.HddCount,
+		arg.Recording,
+		arg.Health,
+		arg.Source,
+	)
+	var i NvrInfo
+	err := row.Scan(
+		&i.DeviceID,
+		&i.Manufacturer,
+		&i.Model,
+		&i.Serial,
+		&i.Firmware,
+		&i.DeviceType,
+		&i.ChannelCount,
+		&i.HddCount,
+		&i.Recording,
+		&i.Health,
+		&i.Source,
+		&i.CollectedAt,
+	)
+	return i, err
+}
+
+const upsertNVRStorage = `-- name: UpsertNVRStorage :one
+INSERT INTO nvr_storage (nvr_device_id, hdd_id, name, status, capacity_mb, free_mb, property, source)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+ON CONFLICT (nvr_device_id, hdd_id) DO UPDATE SET
+    name = EXCLUDED.name,
+    status = EXCLUDED.status,
+    capacity_mb = EXCLUDED.capacity_mb,
+    free_mb = EXCLUDED.free_mb,
+    property = EXCLUDED.property,
+    source = EXCLUDED.source,
+    last_seen_at = now()
+RETURNING id, nvr_device_id, hdd_id, name, status, capacity_mb, free_mb, property, source, last_seen_at
+`
+
+type UpsertNVRStorageParams struct {
+	NvrDeviceID uuid.UUID `json:"nvr_device_id"`
+	HddID       int32     `json:"hdd_id"`
+	Name        *string   `json:"name"`
+	Status      string    `json:"status"`
+	CapacityMb  int64     `json:"capacity_mb"`
+	FreeMb      int64     `json:"free_mb"`
+	Property    string    `json:"property"`
+	Source      string    `json:"source"`
+}
+
+func (q *Queries) UpsertNVRStorage(ctx context.Context, arg UpsertNVRStorageParams) (NvrStorage, error) {
+	row := q.db.QueryRow(ctx, upsertNVRStorage,
+		arg.NvrDeviceID,
+		arg.HddID,
+		arg.Name,
+		arg.Status,
+		arg.CapacityMb,
+		arg.FreeMb,
+		arg.Property,
+		arg.Source,
+	)
+	var i NvrStorage
+	err := row.Scan(
+		&i.ID,
+		&i.NvrDeviceID,
+		&i.HddID,
+		&i.Name,
+		&i.Status,
+		&i.CapacityMb,
+		&i.FreeMb,
+		&i.Property,
+		&i.Source,
 		&i.LastSeenAt,
 	)
 	return i, err

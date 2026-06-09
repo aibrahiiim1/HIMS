@@ -110,12 +110,31 @@ func (c *Client) DeviceInfo(ctx context.Context) (DeviceInfo, error) {
 	return info, nil
 }
 
-// get issues an authenticated GET: it sends once unauthenticated, and on a 401
-// re-issues with Digest (or Basic) per the WWW-Authenticate challenge.
-func (c *Client) get(ctx context.Context, path string) ([]byte, error) {
-	resp, body, err := c.do(ctx, path, "")
+// Get issues an authenticated GET of an arbitrary ISAPI path (Digest/Basic),
+// returning the raw response body and erroring on any non-2xx. Used for required
+// resources.
+func (c *Client) Get(ctx context.Context, path string) ([]byte, error) {
+	body, status, err := c.GetStatus(ctx, path)
 	if err != nil {
 		return nil, err
+	}
+	if status == http.StatusUnauthorized {
+		return nil, fmt.Errorf("isapi: authentication rejected")
+	}
+	if status < 200 || status >= 300 {
+		return nil, fmt.Errorf("isapi: %s → %d", path, status)
+	}
+	return body, nil
+}
+
+// GetStatus issues an authenticated GET and returns the body + final HTTP status
+// WITHOUT erroring on non-2xx (so a 403/404 on an optional endpoint can be reported
+// honestly as "not exposed" rather than a generic failure). It errors only on a
+// transport failure or an unsupported auth challenge.
+func (c *Client) GetStatus(ctx context.Context, path string) ([]byte, int, error) {
+	resp, body, err := c.do(ctx, path, "")
+	if err != nil {
+		return nil, 0, err
 	}
 	if resp.StatusCode == http.StatusUnauthorized && c.Username != "" {
 		ch := resp.Header.Get("WWW-Authenticate")
@@ -126,21 +145,18 @@ func (c *Client) get(ctx context.Context, path string) ([]byte, error) {
 		case strings.HasPrefix(strings.ToLower(ch), "basic"):
 			auth = basicHeader(c.Username, c.Password)
 		default:
-			return nil, fmt.Errorf("isapi: unsupported auth challenge %q", firstWord(ch))
+			return nil, 0, fmt.Errorf("isapi: unsupported auth challenge %q", firstWord(ch))
 		}
 		resp, body, err = c.do(ctx, path, auth)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 	}
-	if resp.StatusCode == http.StatusUnauthorized {
-		return nil, fmt.Errorf("isapi: authentication rejected")
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("isapi: %s → %d", path, resp.StatusCode)
-	}
-	return body, nil
+	return body, resp.StatusCode, nil
 }
+
+// get is the internal required-GET used by DeviceInfo.
+func (c *Client) get(ctx context.Context, path string) ([]byte, error) { return c.Get(ctx, path) }
 
 func (c *Client) do(ctx context.Context, path, authHeader string) (*http.Response, []byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+path, nil)
