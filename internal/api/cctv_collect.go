@@ -73,13 +73,19 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device) cctvResult 
 			add(c)
 		}
 	}
-	if all, err := s.queries.ListCredentials(ctx); err == nil {
-		for _, c := range all {
-			add(c)
+	// Only spray ALL stored credentials when none is bound to the device. Cameras/
+	// NVRs (notably Hikvision) lock out a source IP after a few failed logins, so
+	// once an operator binds the correct credential we try ONLY that one — both to
+	// avoid the lockout and to respect the operator's choice.
+	if len(cands) == 0 {
+		if all, err := s.queries.ListCredentials(ctx); err == nil {
+			for _, c := range all {
+				add(c)
+			}
 		}
 	}
 	if len(cands) == 0 {
-		res.Reason, res.Detail = "no_credential", "no usable ONVIF/HTTP credential — add one"
+		res.Reason, res.Detail = "no_credential", "no usable ONVIF/HTTP credential — add one and bind it to this device"
 		return res
 	}
 
