@@ -399,6 +399,45 @@ func TestInferLinksFromFDB_SkipsLLDPProvenPair(t *testing.T) {
 	}
 }
 
+// TestSearchMAC_PrefersLowestFanoutPort: a MAC learned on many switch ports must
+// resolve to the EDGE port (lowest MAC fan-out) it is actually cabled to — not a
+// transit uplink/trunk that merely forwarded it — even when the true edge port is
+// mislabelled "uplink" and a transit port is labelled "access". This is the bug
+// where an AP learned on 32 ports resolved to the wrong switch.
+func TestSearchMAC_PrefersLowestFanoutPort(t *testing.T) {
+	mac := "f0:b0:52:08:0c:70"
+	edge, transit := uuid.New(), uuid.New()
+	edgeIdx, transitIdx := int32(22), int32(10)
+	edgeName, transitName := "22", "10"
+	edgeRole, transitRole := "uplink", "access" // deliberately "wrong" roles
+	edgeIP := netip.MustParseAddr("172.21.96.9")
+	transitIP := netip.MustParseAddr("172.21.96.26")
+	q := &fakeQuerier{
+		macRows: []db.SearchByMACRow{
+			{Mac: mac, VlanID: 10, IfIndex: &transitIdx, DeviceID: transit, SwitchName: "SPA-SW", SwitchIp: &transitIP, IfName: &transitName, PortRole: &transitRole},
+			{Mac: mac, VlanID: 10, IfIndex: &edgeIdx, DeviceID: edge, SwitchName: "CHV-B04-1", SwitchIp: &edgeIP, IfName: &edgeName, PortRole: &edgeRole},
+		},
+		portCounts: map[uuid.UUID][]db.MACCountByPortRow{
+			transit: {{IfIndex: &transitIdx, MacCount: 460}}, // transit uplink — many MACs
+			edge:    {{IfIndex: &edgeIdx, MacCount: 7}},      // true edge — few MACs
+		},
+	}
+	res, err := New(q).SearchMAC(context.Background(), mac)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.SwitchPort) != 2 {
+		t.Fatalf("want 2 ports, got %d", len(res.SwitchPort))
+	}
+	top := res.SwitchPort[0]
+	if top.SwitchName != "CHV-B04-1" || top.IfIndex == nil || *top.IfIndex != 22 {
+		t.Fatalf("attachment = %s:%v, want CHV-B04-1:22 (lowest fan-out)", top.SwitchName, top.IfIndex)
+	}
+	if top.MACCount == nil || *top.MACCount != 7 {
+		t.Errorf("MACCount = %v, want 7", top.MACCount)
+	}
+}
+
 // TestSearchMAC_WirelessStartsAtAP: a searched Wi-Fi client's MAC must trace
 // client → AP → controller → (the AP's wired uplink switch, found via the AP's MAC
 // in the FDB) → upstream walk to the edge.

@@ -423,6 +423,7 @@ export interface SwitchPortEntry {
   port_role?: string | null
   source?: string | null
   last_seen_at?: string | null
+  mac_count?: number | null // MACs learned on this port (low = true edge attachment)
 }
 
 export interface SearchResult {

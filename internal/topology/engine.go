@@ -15,6 +15,7 @@ package topology
 import (
 	"context"
 	"net/netip"
+	"sort"
 	"strings"
 	"time"
 
@@ -135,6 +136,10 @@ type SwitchPortEntry struct {
 	PortRole   *string   `json:"port_role,omitempty"`
 	Source     *string   `json:"source,omitempty"`       // mac-table collection_source: snmp|cli|api
 	LastSeenAt *string   `json:"last_seen_at,omitempty"` // mac-table last_seen_at (RFC3339)
+	// MACCount is how many MACs are learned on this switch port. The true point of
+	// attachment is the port with the FEWEST (an edge port carrying just this
+	// device); a transit uplink/trunk that also learned the MAC carries hundreds.
+	MACCount *int64 `json:"mac_count,omitempty"`
 }
 
 // Engine wraps the Querier and provides topology operations.
@@ -512,6 +517,9 @@ func (e *Engine) macToPort(ctx context.Context, mac string) []SwitchPortEntry {
 	// Cache per-device MAC tables so we attribute source/last-seen without
 	// re-querying for MACs that appear on the same switch multiple times.
 	macCache := map[uuid.UUID][]db.ListMACForDeviceRow{}
+	// Cache per-device, per-port MAC fan-out (count of MACs on each port) so we can
+	// pick the true point of attachment (lowest fan-out) over transit uplinks.
+	fanCache := map[uuid.UUID]map[int32]int64{}
 	out := make([]SwitchPortEntry, 0, len(rows))
 	for _, r := range rows {
 		entry := SwitchPortEntry{
@@ -541,16 +549,49 @@ func (e *Engine) macToPort(ctx context.Context, mac string) []SwitchPortEntry {
 				break
 			}
 		}
+		// Per-port MAC fan-out — the lowest is the edge port the device is actually
+		// cabled to; high counts are transit uplinks/trunks that merely carry it.
+		if r.IfIndex != nil {
+			fc, ok := fanCache[r.DeviceID]
+			if !ok {
+				fc = map[int32]int64{}
+				if counts, cerr := e.q.MACCountByPort(ctx, r.DeviceID); cerr == nil {
+					for _, c := range counts {
+						if c.IfIndex != nil {
+							fc[*c.IfIndex] = c.MacCount
+						}
+					}
+				}
+				fanCache[r.DeviceID] = fc
+			}
+			if n, ok := fc[*r.IfIndex]; ok {
+				nn := n
+				entry.MACCount = &nn
+			}
+		}
 		out = append(out, entry)
 	}
-	// Access/edge ports first, then most-recently-seen.
-	sortAccessFirst(out)
+	// Lowest fan-out (true attachment) first, then access/edge role, then freshest.
+	sortByAttachment(out)
 	return out
 }
 
-// sortAccessFirst orders FDB matches so access/edge ports lead, then freshest.
-func sortAccessFirst(p []SwitchPortEntry) {
-	rank := func(e SwitchPortEntry) int {
+// sortByAttachment orders FDB matches so the true point of attachment leads. The
+// primary signal is MAC fan-out: the port carrying the FEWEST MACs is the edge port
+// the device is cabled to, while a transit uplink/trunk that merely forwarded the
+// MAC carries hundreds. (port_role is an unreliable secondary signal — real edge
+// ports are sometimes labelled "uplink".) Ties break by access/edge role then
+// freshness. When fan-out is unknown for every match (counts not collected, e.g. in
+// tests), it falls back to the previous role-then-freshness ordering.
+func sortByAttachment(p []SwitchPortEntry) {
+	const unknownFan = int64(1) << 62 // sorts after any real count
+	fan := func(e SwitchPortEntry) int64 {
+		if e.MACCount != nil {
+			return *e.MACCount
+		}
+		return unknownFan
+	}
+	roleRank := func(e SwitchPortEntry) int {
 		if e.PortRole == nil {
 			return 2
 		}
@@ -563,19 +604,18 @@ func sortAccessFirst(p []SwitchPortEntry) {
 			return 1
 		}
 	}
-	for i := 1; i < len(p); i++ {
-		for j := i; j > 0; j-- {
-			a, b := p[j-1], p[j]
-			swap := rank(b) < rank(a)
-			if rank(a) == rank(b) && b.LastSeenAt != nil && a.LastSeenAt != nil {
-				swap = *b.LastSeenAt > *a.LastSeenAt
-			}
-			if !swap {
-				break
-			}
-			p[j-1], p[j] = p[j], p[j-1]
+	sort.SliceStable(p, func(i, j int) bool {
+		if fi, fj := fan(p[i]), fan(p[j]); fi != fj {
+			return fi < fj
 		}
-	}
+		if ri, rj := roleRank(p[i]), roleRank(p[j]); ri != rj {
+			return ri < rj
+		}
+		if p[i].LastSeenAt != nil && p[j].LastSeenAt != nil {
+			return *p[i].LastSeenAt > *p[j].LastSeenAt
+		}
+		return false
+	})
 }
 
 // attributeARP records which device's ARP table resolved the IP→MAC mapping and
