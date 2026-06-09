@@ -195,6 +195,11 @@ func (s *Server) routes() {
 		r.Post("/devices", s.createManualDevice)
 		r.Post("/devices/import-csv", s.importDevicesCSV)
 		r.Post("/devices/import-file", s.importDevicesFile)
+		// Virtual devices: operator-entered placeholders for non-integratable gear.
+		r.Post("/devices/virtual", s.createVirtualDevice)
+		r.Get("/devices/virtual/template.xlsx", s.virtualTemplateXLSX)
+		r.Post("/devices/virtual/import", s.importVirtualXLSX)
+		r.Put("/devices/virtual/{id}", s.updateVirtualDevice)
 		r.Post("/devices/bulk-delete", s.bulkDeleteDevices)
 		r.Post("/devices/bulk-assign", s.bulkAssignDevices)
 		r.Patch("/devices/{id}", s.updateDevice)

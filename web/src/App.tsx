@@ -35,6 +35,7 @@ import { AgentDetail } from './pages/AgentDetail'
 import { Mibs } from './pages/Mibs'
 import { Settings } from './pages/Settings'
 import { Inventory } from './pages/Inventory'
+import { VirtualDeviceForm } from './pages/VirtualDeviceForm'
 import { MissingClassification } from './pages/MissingClassification'
 import { UnmanagedDevices } from './pages/UnmanagedDevices'
 import { UnmappedDevices } from './pages/UnmappedDevices'
@@ -116,6 +117,7 @@ function Shell({ me, onLogout }: { me?: AuthMe; onLogout: () => void }) {
             <Route path="/" element={<DeviceList category="switch" title="Switches" detailBase="/devices" />} />
             <Route path="/servers" element={<DeviceList category="server" title="Servers" detailBase="/servers" />} />
             <Route path="/firewalls" element={<DeviceList category="firewall" title="Firewalls" detailBase="/firewalls" />} />
+            <Route path="/devices/virtual/new" element={<VirtualDeviceForm />} />
             <Route path="/devices/:id" element={<DeviceDetailDispatch />} />
             <Route path="/servers/:id" element={<ServerDetail />} />
             <Route path="/virtual-hosts" element={<DeviceList category="virtual_host" title="Virtual Hosts" detailBase="/virtual-hosts" />} />

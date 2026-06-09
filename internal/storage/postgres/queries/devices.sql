@@ -171,3 +171,11 @@ RETURNING *;
 SELECT * FROM devices
 WHERE os_family = $1 AND deleted_at IS NULL
 ORDER BY category, name;
+
+-- name: MarkDeviceVirtual :exec
+-- Flag (or unflag) a device as a manually-entered virtual placeholder.
+UPDATE devices SET is_virtual = $2, updated_at = now() WHERE id = $1;
+
+-- name: CountVirtualDevices :one
+-- Headline count for the "N devices, M virtual" indicator.
+SELECT COUNT(*)::bigint FROM devices WHERE is_virtual AND deleted_at IS NULL;

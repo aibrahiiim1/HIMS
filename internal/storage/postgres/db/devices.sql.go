@@ -62,13 +62,25 @@ func (q *Queries) BulkAssignClassification(ctx context.Context, arg BulkAssignCl
 	return result.RowsAffected(), nil
 }
 
+const countVirtualDevices = `-- name: CountVirtualDevices :one
+SELECT COUNT(*)::bigint FROM devices WHERE is_virtual AND deleted_at IS NULL
+`
+
+// Headline count for the "N devices, M virtual" indicator.
+func (q *Queries) CountVirtualDevices(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countVirtualDevices)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const createDevice = `-- name: CreateDevice :one
 INSERT INTO devices (
     location_id, primary_ip, hostname, name, vendor, model, serial,
     os_version, category, status, driver, credential_id, metadata,
     vlan, device_class, location
 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
-RETURNING id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason
+RETURNING id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason, is_virtual
 `
 
 type CreateDeviceParams struct {
@@ -142,6 +154,7 @@ func (q *Queries) CreateDevice(ctx context.Context, arg CreateDeviceParams) (Dev
 		&i.Criticality,
 		&i.MonitoringEnabled,
 		&i.ManualClassificationReason,
+		&i.IsVirtual,
 	)
 	return i, err
 }
@@ -170,7 +183,7 @@ func (q *Queries) DeleteDevices(ctx context.Context, dollar_1 []uuid.UUID) (int6
 }
 
 const getDevice = `-- name: GetDevice :one
-SELECT id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason FROM devices WHERE id = $1 AND deleted_at IS NULL
+SELECT id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason, is_virtual FROM devices WHERE id = $1 AND deleted_at IS NULL
 `
 
 func (q *Queries) GetDevice(ctx context.Context, id uuid.UUID) (Device, error) {
@@ -208,12 +221,13 @@ func (q *Queries) GetDevice(ctx context.Context, id uuid.UUID) (Device, error) {
 		&i.Criticality,
 		&i.MonitoringEnabled,
 		&i.ManualClassificationReason,
+		&i.IsVirtual,
 	)
 	return i, err
 }
 
 const listAllDevices = `-- name: ListAllDevices :many
-SELECT id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason FROM devices
+SELECT id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason, is_virtual FROM devices
 WHERE deleted_at IS NULL
 ORDER BY category, name
 `
@@ -260,6 +274,7 @@ func (q *Queries) ListAllDevices(ctx context.Context) ([]Device, error) {
 			&i.Criticality,
 			&i.MonitoringEnabled,
 			&i.ManualClassificationReason,
+			&i.IsVirtual,
 		); err != nil {
 			return nil, err
 		}
@@ -333,7 +348,7 @@ func (q *Queries) ListDeviceRoles(ctx context.Context, deviceID uuid.UUID) ([]De
 }
 
 const listDevicesByCategory = `-- name: ListDevicesByCategory :many
-SELECT id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason FROM devices
+SELECT id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason, is_virtual FROM devices
 WHERE category = $1 AND deleted_at IS NULL
 ORDER BY name
 `
@@ -379,6 +394,7 @@ func (q *Queries) ListDevicesByCategory(ctx context.Context, category string) ([
 			&i.Criticality,
 			&i.MonitoringEnabled,
 			&i.ManualClassificationReason,
+			&i.IsVirtual,
 		); err != nil {
 			return nil, err
 		}
@@ -391,7 +407,7 @@ func (q *Queries) ListDevicesByCategory(ctx context.Context, category string) ([
 }
 
 const listDevicesByOSFamily = `-- name: ListDevicesByOSFamily :many
-SELECT id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason FROM devices
+SELECT id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason, is_virtual FROM devices
 WHERE os_family = $1 AND deleted_at IS NULL
 ORDER BY category, name
 `
@@ -437,6 +453,7 @@ func (q *Queries) ListDevicesByOSFamily(ctx context.Context, osFamily string) ([
 			&i.Criticality,
 			&i.MonitoringEnabled,
 			&i.ManualClassificationReason,
+			&i.IsVirtual,
 		); err != nil {
 			return nil, err
 		}
@@ -449,7 +466,7 @@ func (q *Queries) ListDevicesByOSFamily(ctx context.Context, osFamily string) ([
 }
 
 const listDevicesByRole = `-- name: ListDevicesByRole :many
-SELECT d.id, d.location_id, d.primary_ip, d.hostname, d.name, d.vendor, d.model, d.serial, d.os_version, d.category, d.status, d.driver, d.credential_id, d.last_discovery_at, d.last_monitoring_at, d.metadata, d.created_at, d.updated_at, d.deleted_at, d.vlan, d.device_class, d.location, d.os_family, d.confidence_score, d.classification_evidence, d.classification_locked, d.subtype, d.notes, d.criticality, d.monitoring_enabled, d.manual_classification_reason FROM devices d
+SELECT d.id, d.location_id, d.primary_ip, d.hostname, d.name, d.vendor, d.model, d.serial, d.os_version, d.category, d.status, d.driver, d.credential_id, d.last_discovery_at, d.last_monitoring_at, d.metadata, d.created_at, d.updated_at, d.deleted_at, d.vlan, d.device_class, d.location, d.os_family, d.confidence_score, d.classification_evidence, d.classification_locked, d.subtype, d.notes, d.criticality, d.monitoring_enabled, d.manual_classification_reason, d.is_virtual FROM devices d
 JOIN device_roles r ON r.device_id = d.id
 WHERE r.role = $1
 ORDER BY d.name
@@ -496,6 +513,7 @@ func (q *Queries) ListDevicesByRole(ctx context.Context, role string) ([]Device,
 			&i.Criticality,
 			&i.MonitoringEnabled,
 			&i.ManualClassificationReason,
+			&i.IsVirtual,
 		); err != nil {
 			return nil, err
 		}
@@ -542,7 +560,7 @@ func (q *Queries) ListSNMPIdentityFacts(ctx context.Context) ([]ListSNMPIdentity
 }
 
 const liveDeviceByIP = `-- name: LiveDeviceByIP :one
-SELECT id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason FROM devices
+SELECT id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason, is_virtual FROM devices
 WHERE primary_ip = $1 AND deleted_at IS NULL
 ORDER BY updated_at DESC
 LIMIT 1
@@ -586,12 +604,13 @@ func (q *Queries) LiveDeviceByIP(ctx context.Context, primaryIp *netip.Addr) (De
 		&i.Criticality,
 		&i.MonitoringEnabled,
 		&i.ManualClassificationReason,
+		&i.IsVirtual,
 	)
 	return i, err
 }
 
 const liveDeviceByIPAndLocation = `-- name: LiveDeviceByIPAndLocation :one
-SELECT id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason FROM devices
+SELECT id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason, is_virtual FROM devices
 WHERE primary_ip = $1 AND location_id IS NOT DISTINCT FROM $2 AND deleted_at IS NULL
 `
 
@@ -639,8 +658,24 @@ func (q *Queries) LiveDeviceByIPAndLocation(ctx context.Context, arg LiveDeviceB
 		&i.Criticality,
 		&i.MonitoringEnabled,
 		&i.ManualClassificationReason,
+		&i.IsVirtual,
 	)
 	return i, err
+}
+
+const markDeviceVirtual = `-- name: MarkDeviceVirtual :exec
+UPDATE devices SET is_virtual = $2, updated_at = now() WHERE id = $1
+`
+
+type MarkDeviceVirtualParams struct {
+	ID        uuid.UUID `json:"id"`
+	IsVirtual bool      `json:"is_virtual"`
+}
+
+// Flag (or unflag) a device as a manually-entered virtual placeholder.
+func (q *Queries) MarkDeviceVirtual(ctx context.Context, arg MarkDeviceVirtualParams) error {
+	_, err := q.db.Exec(ctx, markDeviceVirtual, arg.ID, arg.IsVirtual)
+	return err
 }
 
 const roleSummary = `-- name: RoleSummary :many
@@ -681,7 +716,7 @@ UPDATE devices SET
     classification_locked = $2,
     updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
-RETURNING id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason
+RETURNING id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason, is_virtual
 `
 
 type SetClassificationLockParams struct {
@@ -726,6 +761,7 @@ func (q *Queries) SetClassificationLock(ctx context.Context, arg SetClassificati
 		&i.Criticality,
 		&i.MonitoringEnabled,
 		&i.ManualClassificationReason,
+		&i.IsVirtual,
 	)
 	return i, err
 }
@@ -768,7 +804,7 @@ UPDATE devices SET
     classification_locked = $17, manual_classification_reason = $18,
     updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
-RETURNING id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason
+RETURNING id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason, is_virtual
 `
 
 type UpdateDeviceParams struct {
@@ -850,6 +886,7 @@ func (q *Queries) UpdateDevice(ctx context.Context, arg UpdateDeviceParams) (Dev
 		&i.Criticality,
 		&i.MonitoringEnabled,
 		&i.ManualClassificationReason,
+		&i.IsVirtual,
 	)
 	return i, err
 }
@@ -863,7 +900,7 @@ UPDATE devices SET
     classification_evidence = $6,
     updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL AND classification_locked = false
-RETURNING id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason
+RETURNING id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason, is_virtual
 `
 
 type UpdateDeviceClassificationParams struct {
@@ -921,6 +958,7 @@ func (q *Queries) UpdateDeviceClassification(ctx context.Context, arg UpdateDevi
 		&i.Criticality,
 		&i.MonitoringEnabled,
 		&i.ManualClassificationReason,
+		&i.IsVirtual,
 	)
 	return i, err
 }
@@ -968,7 +1006,7 @@ UPDATE devices SET
     os_version = $7, category = $8, driver = $9, status = $10,
     last_discovery_at = now(), updated_at = now()
 WHERE id = $1
-RETURNING id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason
+RETURNING id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason, is_virtual
 `
 
 type UpdateDiscoveredDeviceParams struct {
@@ -1032,6 +1070,7 @@ func (q *Queries) UpdateDiscoveredDevice(ctx context.Context, arg UpdateDiscover
 		&i.Criticality,
 		&i.MonitoringEnabled,
 		&i.ManualClassificationReason,
+		&i.IsVirtual,
 	)
 	return i, err
 }

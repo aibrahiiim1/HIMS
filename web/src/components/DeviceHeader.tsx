@@ -1,7 +1,7 @@
 import { useMemo, useState, type ComponentType } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { HardDrive, Radar, ShieldCheck, MapPin, Wifi, Wrench, Pencil, Lock } from 'lucide-react'
+import { HardDrive, Radar, ShieldCheck, MapPin, Wifi, Wrench, Pencil, Lock, Ghost } from 'lucide-react'
 import { api, type Device, type Location, type MonitoringCheck, locationPaths } from '../api'
 import { HealthRing, colorFor, timeAgo } from './ui'
 import { ReachabilityBadge, ManagementBadge } from './StatusBadges'
@@ -134,6 +134,9 @@ export function DeviceHeader({ deviceId, icon: Icon = HardDrive, showCredential 
               )}
               {d.classification_locked && (
                 <span className="badge badge-warning" title={d.manual_classification_reason || 'Classification locked — scans will not overwrite identity'}><Lock size={11} style={{ verticalAlign: -1 }} /> manual</span>
+              )}
+              {d.is_virtual && (
+                <span className="badge" title="Virtual device — manually entered, not probed" style={{ background: 'rgba(139,92,246,.15)', color: '#8b5cf6' }}><Ghost size={11} style={{ verticalAlign: -1 }} /> Virtual</span>
               )}
               <button className="btn btn-ghost btn-xs" onClick={() => setEditing(true)} title="Edit device identity, location, criticality, classification lock"><Pencil size={12} /> Edit</button>
             </span>

@@ -42,6 +42,9 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	if v, err := s.queries.TotalExpenses(ctx); err == nil {
 		headline["total_expenses"] = v
 	}
+	if n, err := s.queries.CountVirtualDevices(ctx); err == nil {
+		headline["virtual_devices"] = n // "N devices, M virtual"
+	}
 	out["headline"] = headline
 
 	writeJSON(w, http.StatusOK, out)

@@ -76,6 +76,8 @@ type Querier interface {
 	// How many profiles still reference a credential (for orphan-credential cleanup on
 	// profile delete).
 	CountVendorProfilesUsingCredential(ctx context.Context, credentialID *uuid.UUID) (int64, error)
+	// Headline count for the "N devices, M virtual" indicator.
+	CountVirtualDevices(ctx context.Context) (int64, error)
 	CreateAgentJob(ctx context.Context, arg CreateAgentJobParams) (AgentJob, error)
 	// ---- Alert rules ----------------------------------------------------------
 	CreateAlertRule(ctx context.Context, arg CreateAlertRuleParams) (AlertRule, error)
@@ -498,6 +500,8 @@ type Querier interface {
 	LiveDeviceByIPAndLocation(ctx context.Context, arg LiveDeviceByIPAndLocationParams) (Device, error)
 	MACCountByPort(ctx context.Context, deviceID uuid.UUID) ([]MACCountByPortRow, error)
 	MarkAgentJobDispatched(ctx context.Context, id uuid.UUID) error
+	// Flag (or unflag) a device as a manually-entered virtual placeholder.
+	MarkDeviceVirtual(ctx context.Context, arg MarkDeviceVirtualParams) error
 	// Freshness of the most recent LLDP/CDP neighbor observation (topology age).
 	MaxNeighborSeenAt(ctx context.Context) (time.Time, error)
 	// Fleet health rollup, DEVICE-based: how many MONITORED devices sit in each

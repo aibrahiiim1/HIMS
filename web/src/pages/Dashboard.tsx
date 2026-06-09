@@ -41,6 +41,7 @@ interface DashboardData {
     expiring_systems?: number
     devices_needing_attention?: number
     total_expenses?: number
+    virtual_devices?: number
   }
 }
 
@@ -256,7 +257,7 @@ export function Dashboard() {
 
       {/* KPI row */}
       <div className="kpi-grid kpi-6">
-        <Kpi label="Total Devices" value={total} icon={Boxes} tone="info" sub={`${byType.length} categories`} />
+        <Kpi label="Total Devices" value={total} icon={Boxes} tone="info" sub={h.virtual_devices ? `${byType.length} categories · ${h.virtual_devices} virtual` : `${byType.length} categories`} />
         <Kpi
           label="Online"
           value={up}

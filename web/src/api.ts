@@ -169,6 +169,50 @@ export interface Device {
   classification_locked?: boolean // manual identity lock — scans won't overwrite
   manual_classification_reason?: string
   confidence_score?: number | null
+  is_virtual?: boolean // operator-entered placeholder (not auto-discovered/probed)
+}
+
+// Virtual device create/import payloads — operator-entered placeholders for gear
+// HIMS can't integrate with. The full config is stored in the same tables a real
+// collection fills, so the device renders everywhere with a "virtual" badge.
+export interface VirtualPort {
+  if_index: number
+  name?: string
+  alias?: string
+  up?: boolean
+  admin_down?: boolean
+  speed_mbps?: number
+  vlan?: number
+  role?: string // access | trunk | uplink | unknown
+  mac?: string
+}
+export interface VirtualVlan { id: number; name?: string }
+export interface VirtualNeighbor {
+  local_port?: string
+  local_if_index?: number
+  remote_name?: string
+  remote_port?: string
+  remote_mgmt_ip?: string
+  protocol?: string // lldp | cdp | manual
+}
+export interface VirtualMac { mac: string; vlan?: number; if_index?: number }
+export interface VirtualDeviceReq {
+  name: string
+  category: string
+  vendor?: string
+  model?: string
+  serial?: string
+  os_version?: string
+  primary_ip?: string
+  location_id?: string | null
+  vlan?: string
+  class?: string
+  status?: string // up | down | warning | unknown
+  site?: string
+  ports?: VirtualPort[]
+  vlans?: VirtualVlan[]
+  neighbors?: VirtualNeighbor[]
+  macs?: VirtualMac[]
 }
 
 // Fleet rollup (GET /devices/status-summary) — Online and Managed kept separate.
