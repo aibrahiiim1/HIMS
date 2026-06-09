@@ -44,10 +44,23 @@ function SourceChip({ source }: { source?: string | null }) {
   )
 }
 
-// vlanLabel renders the FDB VLAN honestly: a configured VLAN shows its number (and
-// name); a VLAN the switch doesn't actually have (an FDB/FdbId artifact) is flagged
+// vlanLabel renders the attachment port's VLAN honestly. It prefers the switch's
+// authoritative port-VLAN config (untagged/native + tagged) over the FDB-derived
+// value; a VLAN the switch doesn't actually have (an FDB/FdbId artifact) is flagged
 // rather than asserted.
 function vlanLabel(sp: SwitchPortEntry): React.ReactNode {
+  if (sp.untagged_vlan != null || (sp.tagged_vlans && sp.tagged_vlans.length > 0)) {
+    return (
+      <span>
+        {sp.untagged_vlan != null && (
+          <>untagged {sp.untagged_vlan}{sp.untagged_vlan_name ? ` (${sp.untagged_vlan_name})` : ''}</>
+        )}
+        {sp.tagged_vlans && sp.tagged_vlans.length > 0 && (
+          <span className="muted"> · tagged {sp.tagged_vlans.join(', ')}</span>
+        )}
+      </span>
+    )
+  }
   if (!sp.vlan_id) return '—'
   if (sp.vlan_suspect) {
     return <span>{sp.vlan_id} <span className="muted" style={{ fontSize: 12 }}>· not a configured VLAN on this switch</span></span>
@@ -226,6 +239,7 @@ function ResultCard({ res }: { res: SearchResult }) {
               <Row k="Switch" v={acc.switch_name} />
               <Row k="Switch IP" v={acc.switch_ip || '—'} mono />
               <Row k="Port" v={acc.if_name || (acc.if_index != null ? `ifIndex ${acc.if_index}` : '—')} mono />
+              {acc.if_alias && <Row k="Port name" v={acc.if_alias} />}
               <Row k="VLAN" v={vlanLabel(acc)} />
               <Row k="Port role" v={acc.port_role || 'unknown'} />
               <Row k="MAC-table source" v={<SourceChip source={acc.source} />} />

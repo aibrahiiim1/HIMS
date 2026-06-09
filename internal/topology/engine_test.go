@@ -34,6 +34,7 @@ type fakeQuerier struct {
 	wirelessRows []db.FindWirelessClientRow
 	aps          map[string]db.GetAccessPointByNameRow // keyed by AP name
 	vlans        map[uuid.UUID][]db.Vlan                // configured VLANs per device
+	portVlans    map[uuid.UUID][]db.PortVlan            // per-port VLAN membership
 }
 
 func (f *fakeQuerier) GetDevice(_ context.Context, id uuid.UUID) (db.Device, error) {
@@ -106,6 +107,9 @@ func (f *fakeQuerier) GetAccessPointByName(_ context.Context, arg db.GetAccessPo
 }
 func (f *fakeQuerier) ListVlans(_ context.Context, id uuid.UUID) ([]db.Vlan, error) {
 	return f.vlans[id], nil
+}
+func (f *fakeQuerier) ListPortVlans(_ context.Context, id uuid.UUID) ([]db.PortVlan, error) {
+	return f.portVlans[id], nil
 }
 
 func TestSearchMAC_NoResults(t *testing.T) {
@@ -509,6 +513,58 @@ func TestSearchMAC_KeepsConfiguredFDBVlan(t *testing.T) {
 	}
 	if got != 96 {
 		t.Errorf("access hop VLAN = %d, want 96", got)
+	}
+}
+
+// TestSearchMAC_PortVlanMembership: the attachment port's authoritative VLAN config
+// (untagged/native + tagged, from the port-VLAN table) is surfaced, and the path's
+// access hop uses the untagged/native VLAN — not the FDB-derived value. Mirrors
+// CHV-B04-1 port 22: untagged 96 (MGT), tagged 97, with a bogus FDB VLAN of 2.
+func TestSearchMAC_PortVlanMembership(t *testing.T) {
+	mac := "f0:b0:52:08:0c:70"
+	sw := uuid.New()
+	idx := int32(22)
+	ifName := "22"
+	alias := "ROOM_4105_AP"
+	role := "uplink"
+	mgt := "MGT"
+	q := &fakeQuerier{
+		macRows: []db.SearchByMACRow{
+			{Mac: mac, VlanID: 2, IfIndex: &idx, DeviceID: sw, SwitchName: "CHV-B04-1", IfName: &ifName, IfAlias: &alias, PortRole: &role},
+		},
+		portCounts: map[uuid.UUID][]db.MACCountByPortRow{sw: {{IfIndex: &idx, MacCount: 7}}},
+		vlans:      map[uuid.UUID][]db.Vlan{sw: {{VlanID: 96, Name: &mgt}, {VlanID: 97}}},
+		portVlans: map[uuid.UUID][]db.PortVlan{sw: {
+			{IfIndex: 22, VlanID: 96, Tagged: false},
+			{IfIndex: 22, VlanID: 97, Tagged: true},
+		}},
+	}
+	res, err := New(q).SearchMAC(context.Background(), mac)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp := res.SwitchPort[0]
+	if sp.UntaggedVLAN == nil || *sp.UntaggedVLAN != 96 {
+		t.Fatalf("untagged VLAN = %v, want 96", sp.UntaggedVLAN)
+	}
+	if sp.UntaggedVLANName == nil || *sp.UntaggedVLANName != "MGT" {
+		t.Errorf("untagged VLAN name = %v, want MGT", sp.UntaggedVLANName)
+	}
+	if !reflect.DeepEqual(sp.TaggedVLANs, []int32{97}) {
+		t.Errorf("tagged VLANs = %v, want [97]", sp.TaggedVLANs)
+	}
+	if sp.IfAlias == nil || *sp.IfAlias != "ROOM_4105_AP" {
+		t.Errorf("if_alias = %v, want ROOM_4105_AP", sp.IfAlias)
+	}
+	// Path access hop uses the untagged/native VLAN (96), not the bogus FDB VLAN 2.
+	got := int32(-1)
+	for _, p := range res.Path {
+		if p.Role == "access" && p.VLANID != nil {
+			got = *p.VLANID
+		}
+	}
+	if got != 96 {
+		t.Errorf("access hop VLAN = %d, want 96 (untagged/native)", got)
 	}
 }
 

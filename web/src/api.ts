@@ -419,7 +419,12 @@ export interface SwitchPortEntry {
   switch_ip?: string | null
   if_index?: number | null
   if_name?: string | null
+  if_alias?: string | null // port description (e.g. "ROOM_4105_AP")
   vlan_id: number
+  // Authoritative per-port VLAN membership (from the switch's port-VLAN table).
+  untagged_vlan?: number | null // native/access VLAN
+  untagged_vlan_name?: string | null
+  tagged_vlans?: number[] | null // trunked VLANs
   vlan_configured?: boolean // FDB VLAN is a real 802.1Q VLAN configured on the switch
   vlan_suspect?: boolean // switch HAS VLANs but this FDB VLAN isn't one (FdbId artifact)
   vlan_name?: string | null // configured VLAN name when known

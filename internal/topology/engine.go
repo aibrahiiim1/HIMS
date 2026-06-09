@@ -53,6 +53,9 @@ type Querier interface {
 	// Configured VLANs per switch (to validate an FDB VLAN is a real 802.1Q VLAN
 	// and not a bridge/FdbId artifact).
 	ListVlans(ctx context.Context, deviceID uuid.UUID) ([]db.Vlan, error)
+	// Per-port VLAN membership (untagged/native + tagged) — the authoritative VLAN
+	// config for a switch port, preferred over the FDB-derived VLAN.
+	ListPortVlans(ctx context.Context, deviceID uuid.UUID) ([]db.PortVlan, error)
 }
 
 // Link is a directed network link for API/UI consumption.
@@ -135,7 +138,14 @@ type SwitchPortEntry struct {
 	SwitchIP   *string   `json:"switch_ip,omitempty"`
 	IfIndex    *int32    `json:"if_index,omitempty"`
 	IfName     *string   `json:"if_name,omitempty"`
+	IfAlias    *string   `json:"if_alias,omitempty"` // port description (e.g. "ROOM_4105_AP")
 	VLANID     int32     `json:"vlan_id"`
+	// Authoritative per-port VLAN membership from the switch's port-VLAN table
+	// (preferred over the FDB-derived VLANID): the untagged/native VLAN and the
+	// tagged/trunked VLANs. UntaggedVLANName is the configured name when known.
+	UntaggedVLAN     *int32  `json:"untagged_vlan,omitempty"`
+	UntaggedVLANName *string `json:"untagged_vlan_name,omitempty"`
+	TaggedVLANs      []int32 `json:"tagged_vlans,omitempty"`
 	// VLANConfigured is true when VLANID is a real 802.1Q VLAN configured on the
 	// switch; VLANName is its configured name when known. VLANSuspect is true when
 	// the switch HAS VLANs collected but VLANID is not among them — i.e. the FDB
@@ -535,6 +545,49 @@ func (e *Engine) macToPort(ctx context.Context, mac string) []SwitchPortEntry {
 	// Cache per-device configured VLANs (id → name) to validate that an FDB VLAN is
 	// a real 802.1Q VLAN and not a bridge/FdbId artifact.
 	vlanCache := map[uuid.UUID]map[int32]*string{}
+	type portVLANs struct {
+		untagged *int32
+		tagged   []int32
+	}
+	pvCache := map[uuid.UUID]map[int32]*portVLANs{}
+	// vlanNamesFor returns (and caches) the device's configured VLAN id→name map.
+	vlanNamesFor := func(id uuid.UUID) map[int32]*string {
+		if vc, ok := vlanCache[id]; ok {
+			return vc
+		}
+		vc := map[int32]*string{}
+		if vlans, verr := e.q.ListVlans(ctx, id); verr == nil {
+			for _, v := range vlans {
+				vc[v.VlanID] = v.Name
+			}
+		}
+		vlanCache[id] = vc
+		return vc
+	}
+	// portVlansFor returns (and caches) the device's per-port VLAN membership.
+	portVlansFor := func(id uuid.UUID) map[int32]*portVLANs {
+		if pm, ok := pvCache[id]; ok {
+			return pm
+		}
+		pm := map[int32]*portVLANs{}
+		if pvs, perr := e.q.ListPortVlans(ctx, id); perr == nil {
+			for _, pv := range pvs {
+				g := pm[pv.IfIndex]
+				if g == nil {
+					g = &portVLANs{}
+					pm[pv.IfIndex] = g
+				}
+				if pv.Tagged {
+					g.tagged = append(g.tagged, pv.VlanID)
+				} else {
+					u := pv.VlanID
+					g.untagged = &u
+				}
+			}
+		}
+		pvCache[id] = pm
+		return pm
+	}
 	out := make([]SwitchPortEntry, 0, len(rows))
 	for _, r := range rows {
 		entry := SwitchPortEntry{
@@ -548,6 +601,7 @@ func (e *Engine) macToPort(ctx context.Context, mac string) []SwitchPortEntry {
 		}
 		entry.IfIndex = r.IfIndex
 		entry.IfName = r.IfName
+		entry.IfAlias = r.IfAlias
 		entry.PortRole = r.PortRole
 
 		mt, ok := macCache[r.DeviceID]
@@ -588,16 +642,7 @@ func (e *Engine) macToPort(ctx context.Context, mac string) []SwitchPortEntry {
 		// report a bridge/FdbId index that is not a real 802.1Q VLAN (e.g. "2" on a
 		// switch with no VLAN 2); only assert the VLAN when it is actually configured.
 		if entry.VLANID > 0 {
-			vc, ok := vlanCache[r.DeviceID]
-			if !ok {
-				vc = map[int32]*string{}
-				if vlans, verr := e.q.ListVlans(ctx, r.DeviceID); verr == nil {
-					for _, v := range vlans {
-						vc[v.VlanID] = v.Name
-					}
-				}
-				vlanCache[r.DeviceID] = vc
-			}
+			vc := vlanNamesFor(r.DeviceID)
 			// Only judge the FDB VLAN if the switch has any VLANs collected at all;
 			// without that list we can't validate, so leave it unmarked (still shown).
 			if len(vc) > 0 {
@@ -606,6 +651,20 @@ func (e *Engine) macToPort(ctx context.Context, mac string) []SwitchPortEntry {
 					entry.VLANName = name
 				} else {
 					entry.VLANSuspect = true // present FDB VLAN is not a configured VLAN
+				}
+			}
+		}
+		// Authoritative per-port VLAN membership (untagged/native + tagged) from the
+		// switch's port-VLAN table — the real config of the attachment port, preferred
+		// over the FDB-derived VLAN for display.
+		if r.IfIndex != nil {
+			if g := portVlansFor(r.DeviceID)[*r.IfIndex]; g != nil {
+				entry.UntaggedVLAN = g.untagged
+				entry.TaggedVLANs = g.tagged
+				if g.untagged != nil {
+					if name, ok := vlanNamesFor(r.DeviceID)[*g.untagged]; ok {
+						entry.UntaggedVLANName = name
+					}
 				}
 			}
 		}
@@ -714,7 +773,9 @@ func (e *Engine) buildPath(ctx context.Context, res *SearchResult) []PathStep {
 		DeviceID: &acc.SwitchID, DeviceName: &acc.SwitchName, IP: acc.SwitchIP,
 		IfIndex: acc.IfIndex, IfName: acc.IfName, PortRole: acc.PortRole, Source: &src,
 	}
-	if acc.VLANID > 0 && !acc.VLANSuspect { // don't assert an FDB VLAN that isn't a real VLAN
+	if acc.UntaggedVLAN != nil { // authoritative native/access VLAN from the port config
+		accStep.VLANID = acc.UntaggedVLAN
+	} else if acc.VLANID > 0 && !acc.VLANSuspect { // else FDB VLAN, only if it's a real VLAN
 		v := acc.VLANID
 		accStep.VLANID = &v
 	}
@@ -908,7 +969,9 @@ func (e *Engine) buildWirelessPath(ctx context.Context, res *SearchResult) []Pat
 			DeviceID: &acc.SwitchID, DeviceName: &acc.SwitchName, IP: acc.SwitchIP,
 			IfIndex: acc.IfIndex, IfName: acc.IfName, PortRole: acc.PortRole, Source: &msrc,
 		}
-		if acc.VLANConfigured { // only assert a real, configured VLAN (not an FDB artifact)
+		if acc.UntaggedVLAN != nil { // authoritative native/access VLAN from the port config
+			accStep.VLANID = acc.UntaggedVLAN
+		} else if acc.VLANID > 0 && !acc.VLANSuspect { // else FDB VLAN, only if it's a real VLAN
 			v := acc.VLANID
 			accStep.VLANID = &v
 		}
