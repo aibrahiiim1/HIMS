@@ -13,6 +13,7 @@ import (
 	"github.com/coralsearesorts/hims/internal/credtest"
 	"github.com/coralsearesorts/hims/internal/discovery"
 	"github.com/coralsearesorts/hims/internal/domain"
+	"github.com/coralsearesorts/hims/internal/isapi"
 	"github.com/coralsearesorts/hims/internal/onvif"
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
 )
@@ -138,6 +139,63 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device) cctvResult 
 		s.persistScanCredAttempts(ctx, d, attempts)
 		return res
 	}
+
+	// ONVIF unavailable (e.g. disabled, or no plain-HTTP/:80) — fall back to
+	// Hikvision ISAPI over HTTPS. /ISAPI/System/deviceInfo yields the definitive
+	// deviceType (NVR/DVR vs IPCamera) + model/serial, which BOTH classifies the
+	// device and provides its identity.
+	for _, cd := range cands {
+		ictx, cancel := context.WithTimeout(ctx, 40*time.Second) // 4-endpoint ladder
+		info, err := isapi.CollectDeviceInfo(ictx, ip, cd.user, cd.pass, doer)
+		cancel()
+		category, detail := "success", "ISAPI authenticated"
+		if err != nil {
+			category, detail = categorizeCollectErr("isapi", err.Error())
+		}
+		attempts = append(attempts, discovery.CredAttempt{
+			CredentialID: cd.id, Kind: domain.CredHTTPBasic, Protocol: "isapi",
+			Success: err == nil, Category: category, Detail: detail,
+		})
+		if err != nil {
+			lastReason, lastDetail = category, detail
+			continue
+		}
+		// deviceType is the definitive NVR vs camera signal (model corroborates).
+		cat := domain.CatCamera
+		dc := "ip_camera"
+		for _, e := range classify.ISAPIDeviceInfo(info.DeviceType, info.Model) {
+			if e.Category == string(domain.CatNVR) {
+				cat, dc = domain.CatNVR, "nvr"
+				break
+			}
+		}
+		if blob, merr := domain.MarshalEvidence(nil); merr == nil {
+			conf := int16(90)
+			_, _ = s.queries.UpdateDeviceClassification(ctx, db.UpdateDeviceClassificationParams{
+				ID: d.ID, Category: string(cat), OsFamily: domain.OSFamilyEmbedded,
+				DeviceClass: &dc, ConfidenceScore: &conf, ClassificationEvidence: blob,
+			})
+		}
+		vendor := info.Manufacturer
+		if vendor == "" {
+			vendor = "Hikvision"
+		}
+		_ = s.queries.UpdateDeviceHardwareInfo(ctx, db.UpdateDeviceHardwareInfoParams{
+			ID: d.ID, Vendor: vendor, Model: info.Model, Serial: info.Serial,
+		})
+		_, _ = s.queries.UpsertCameraInfo(ctx, db.UpsertCameraInfoParams{
+			DeviceID: d.ID, Manufacturer: strPtrOrNil(vendor), Model: strPtrOrNil(info.Model),
+		})
+		cid := cd.id
+		_ = s.queries.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: d.ID, CredentialID: &cid})
+		_ = s.queries.UpdateDeviceMonitoringStatus(ctx, db.UpdateDeviceMonitoringStatusParams{ID: d.ID, Status: "up"})
+
+		res = cctvResult{Status: "collected", CredentialUsed: cd.name, Category: string(cat),
+			Detail: "collected via ISAPI (ONVIF unavailable) — " + strings.TrimSpace(vendor+" "+info.Model)}
+		s.persistScanCredAttempts(ctx, d, attempts)
+		return res
+	}
+
 	s.persistScanCredAttempts(ctx, d, attempts)
 	res.Reason, res.Detail = lastReason, lastDetail
 	return res
@@ -175,7 +233,51 @@ func (s *Server) collectCCTVProfile(ctx context.Context, p db.VendorConnectionPr
 		Success: err == nil, Category: category, Detail: detail,
 	}})
 	if err != nil {
-		out.Detail = "ONVIF failed: " + detail
+		// ONVIF unavailable — fall back to Hikvision ISAPI over HTTPS.
+		ictx, icancel := context.WithTimeout(ctx, 40*time.Second)
+		info2, ierr := isapi.CollectDeviceInfo(ictx, host, user, pass, doer)
+		icancel()
+		icat, idet := "success", "ISAPI authenticated"
+		if ierr != nil {
+			icat, idet = categorizeCollectErr("isapi", ierr.Error())
+		}
+		s.persistScanCredAttempts(ctx, d, []discovery.CredAttempt{{
+			CredentialID: credID, Kind: kind, Protocol: "isapi",
+			Success: ierr == nil, Category: icat, Detail: idet,
+		}})
+		if ierr != nil {
+			out.Detail = "ONVIF failed: " + detail + "; ISAPI failed: " + idet
+			return out
+		}
+		out.AuthOK = true
+		cat := domain.CatCamera
+		dc := "ip_camera"
+		for _, e := range classify.ISAPIDeviceInfo(info2.DeviceType, info2.Model) {
+			if e.Category == string(domain.CatNVR) {
+				cat, dc = domain.CatNVR, "nvr"
+				break
+			}
+		}
+		if blob, merr := domain.MarshalEvidence(nil); merr == nil {
+			conf := int16(90)
+			_, _ = s.queries.UpdateDeviceClassification(ctx, db.UpdateDeviceClassificationParams{
+				ID: d.ID, Category: string(cat), OsFamily: domain.OSFamilyEmbedded,
+				DeviceClass: &dc, ConfidenceScore: &conf, ClassificationEvidence: blob,
+			})
+		}
+		vendor := info2.Manufacturer
+		if vendor == "" {
+			vendor = "Hikvision"
+		}
+		_ = s.queries.UpdateDeviceHardwareInfo(ctx, db.UpdateDeviceHardwareInfoParams{ID: d.ID, Vendor: vendor, Model: info2.Model, Serial: info2.Serial})
+		_, _ = s.queries.UpsertCameraInfo(ctx, db.UpsertCameraInfoParams{DeviceID: d.ID, Manufacturer: strPtrOrNil(vendor), Model: strPtrOrNil(info2.Model)})
+		if p.CredentialID != nil {
+			_ = s.queries.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: d.ID, CredentialID: p.CredentialID})
+		}
+		_ = s.queries.UpdateDeviceMonitoringStatus(ctx, db.UpdateDeviceMonitoringStatusParams{ID: d.ID, Status: "up"})
+		out.CollectionOK = true
+		out.Category = string(cat)
+		out.Detail = string(cat) + " collected via ISAPI (profile " + p.Name + ") — " + strings.TrimSpace(vendor+" "+info2.Model)
 		return out
 	}
 	out.AuthOK = true
