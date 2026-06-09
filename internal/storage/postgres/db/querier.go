@@ -533,6 +533,11 @@ type Querier interface {
 	// pure resolver (internal/credresolver) can order them.
 	//   specificity 2 = subnet binding, 1 = location binding.
 	ResolveCandidatesForIP(ctx context.Context, arg ResolveCandidatesForIPParams) ([]ResolveCandidatesForIPRow, error)
+	// Path Finder fallback for when the ARP table is empty/sparse: resolve an IP to a
+	// MAC (and an identity) from the wireless-client roster and the AP inventory, so a
+	// wireless endpoint's IP still traces to its switch port via the FDB. Clients are
+	// preferred over APs ($1 = IP as text).
+	ResolveIPToMAC(ctx context.Context, ip string) ([]ResolveIPToMACRow, error)
 	// Auto-resolve: any un-resolved alert whose check has recovered to 'up'.
 	ResolveRecoveredAlerts(ctx context.Context) ([]ResolveRecoveredAlertsRow, error)
 	// The newest enabled, recently-online agent assigned to a location — used to
@@ -545,13 +550,23 @@ type Querier interface {
 	// Fleet-wide role rollup: how many devices hold each role (the CMDB role cut).
 	RoleSummary(ctx context.Context) ([]RoleSummaryRow, error)
 	RolesForUser(ctx context.Context, userID uuid.UUID) ([]Role, error)
+	// Global-search: access points by name / MAC / IP / serial / model. Returns the
+	// owning controller so an AP MAC or IP found anywhere resolves to a device.
+	SearchAccessPoints(ctx context.Context, dollar_1 *string) ([]SearchAccessPointsRow, error)
+	// Global-search: ARP table (IP↔MAC) by IP or MAC — which L3 device resolved an IP.
+	SearchArpEntries(ctx context.Context, dollar_1 *string) ([]SearchArpEntriesRow, error)
 	SearchByHostname(ctx context.Context, hostname *string) ([]SearchByHostnameRow, error)
 	// Primary search entry point for the IP → MAC → port path resolution.
 	SearchByIP(ctx context.Context, primaryIp *netip.Addr) (SearchByIPRow, error)
 	// Finds the switch(es) that have this MAC in their FDB, then joins the
 	// interface for port + VLAN detail.
 	SearchByMAC(ctx context.Context, mac string) ([]SearchByMACRow, error)
+	// Global-search: learned MAC addresses (bridge FDB) by MAC — which switch + port
+	// a MAC was seen on, anywhere in the fabric.
+	SearchFdbMacs(ctx context.Context, dollar_1 *string) ([]SearchFdbMacsRow, error)
 	SearchMibObjects(ctx context.Context, name string) ([]MibObject, error)
+	// Global-search: associated wireless clients by MAC / IP / hostname / SSID / AP.
+	SearchWirelessClients(ctx context.Context, dollar_1 *string) ([]SearchWirelessClientsRow, error)
 	SetAlertRuleEnabled(ctx context.Context, arg SetAlertRuleEnabledParams) (AlertRule, error)
 	SetAlertWorkOrder(ctx context.Context, arg SetAlertWorkOrderParams) error
 	// Operator manual override: lock (true) freezes auto-classification for this

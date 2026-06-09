@@ -84,6 +84,7 @@ type Facts struct {
 	VLANs      []VLANSnap
 	PortVLANs  []PortVlanSnap
 	MACs       []MACSnap
+	ARP        []ARPSnap
 	Neighbors  []NeighborSnap
 	// Server inventory (HOST-RESOURCES-MIB).
 	Storage []StorageSnap
@@ -358,6 +359,15 @@ type MACSnap struct {
 	VLANID  int
 	IfIndex int
 	Status  int
+}
+
+// ARPSnap is one ARP / ipNetToMedia row (IP ↔ MAC) learned by an L3 device. The
+// L3 switch / router that holds these is the IP→MAC resolver the Path Finder
+// needs to trace a wired endpoint's IP to its switch port.
+type ARPSnap struct {
+	IP      string // dotted IPv4 (e.g. 172.21.15.44)
+	MAC     string // aa:bb:cc:dd:ee:ff
+	IfIndex int
 }
 
 // NeighborSnap is one LLDP/CDP neighbor.

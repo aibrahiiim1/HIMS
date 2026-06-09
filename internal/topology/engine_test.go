@@ -15,6 +15,7 @@ import (
 type fakeQuerier struct {
 	arpRows      []db.FindMACByIPRow
 	macRows      []db.SearchByMACRow
+	resolveRows  []db.ResolveIPToMACRow
 	devRow       *db.SearchByIPRow
 	hostnameRows []db.SearchByHostnameRow
 	devices      map[uuid.UUID]db.Device
@@ -59,6 +60,9 @@ func (f *fakeQuerier) SearchByHostname(_ context.Context, _ *string) ([]db.Searc
 }
 func (f *fakeQuerier) SearchByMAC(_ context.Context, _ string) ([]db.SearchByMACRow, error) {
 	return f.macRows, nil
+}
+func (f *fakeQuerier) ResolveIPToMAC(_ context.Context, _ string) ([]db.ResolveIPToMACRow, error) {
+	return f.resolveRows, nil
 }
 func (f *fakeQuerier) ListTopologyLinks(_ context.Context, id uuid.UUID) ([]db.TopologyLink, error) {
 	return f.links[id], nil

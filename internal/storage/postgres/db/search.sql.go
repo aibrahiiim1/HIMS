@@ -370,6 +370,172 @@ func (q *Queries) ListKnownDeviceScanDispositions(ctx context.Context) ([]ListKn
 	return items, nil
 }
 
+const resolveIPToMAC = `-- name: ResolveIPToMAC :many
+SELECT mac, source, device_id, device_name
+FROM (
+    SELECT wc.mac AS mac,
+           'wireless_client'::text AS source,
+           wc.controller_device_id AS device_id,
+           COALESCE(NULLIF(wc.hostname, ''), wc.mac) AS device_name,
+           1 AS pri
+    FROM wireless_clients wc
+    WHERE wc.ip = $1 AND wc.mac <> ''
+    UNION ALL
+    SELECT ap.mac AS mac,
+           'access_point'::text AS source,
+           ap.controller_device_id AS device_id,
+           ap.name AS device_name,
+           2 AS pri
+    FROM access_points ap
+    WHERE host(ap.ip) = $1 AND ap.mac IS NOT NULL
+) x
+ORDER BY pri
+LIMIT 5
+`
+
+type ResolveIPToMACRow struct {
+	Mac        string    `json:"mac"`
+	Source     string    `json:"source"`
+	DeviceID   uuid.UUID `json:"device_id"`
+	DeviceName string    `json:"device_name"`
+}
+
+// Path Finder fallback for when the ARP table is empty/sparse: resolve an IP to a
+// MAC (and an identity) from the wireless-client roster and the AP inventory, so a
+// wireless endpoint's IP still traces to its switch port via the FDB. Clients are
+// preferred over APs ($1 = IP as text).
+func (q *Queries) ResolveIPToMAC(ctx context.Context, ip string) ([]ResolveIPToMACRow, error) {
+	rows, err := q.db.Query(ctx, resolveIPToMAC, ip)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ResolveIPToMACRow{}
+	for rows.Next() {
+		var i ResolveIPToMACRow
+		if err := rows.Scan(
+			&i.Mac,
+			&i.Source,
+			&i.DeviceID,
+			&i.DeviceName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const searchAccessPoints = `-- name: SearchAccessPoints :many
+SELECT ap.controller_device_id, d.name AS controller_name, d.category AS controller_category,
+       ap.name, ap.mac, ap.model, host(ap.ip)::text AS ip, ap.site, ap.status
+FROM access_points ap
+LEFT JOIN devices d ON d.id = ap.controller_device_id AND d.deleted_at IS NULL
+WHERE ap.name ILIKE '%'||$1||'%'
+   OR COALESCE(ap.mac,'') ILIKE '%'||$1||'%'
+   OR COALESCE(ap.serial,'') ILIKE '%'||$1||'%'
+   OR COALESCE(ap.model,'') ILIKE '%'||$1||'%'
+   OR COALESCE(host(ap.ip),'') ILIKE '%'||$1||'%'
+ORDER BY ap.name
+LIMIT 30
+`
+
+type SearchAccessPointsRow struct {
+	ControllerDeviceID uuid.UUID `json:"controller_device_id"`
+	ControllerName     *string   `json:"controller_name"`
+	ControllerCategory *string   `json:"controller_category"`
+	Name               string    `json:"name"`
+	Mac                *string   `json:"mac"`
+	Model              *string   `json:"model"`
+	Ip                 string    `json:"ip"`
+	Site               string    `json:"site"`
+	Status             string    `json:"status"`
+}
+
+// Global-search: access points by name / MAC / IP / serial / model. Returns the
+// owning controller so an AP MAC or IP found anywhere resolves to a device.
+func (q *Queries) SearchAccessPoints(ctx context.Context, dollar_1 *string) ([]SearchAccessPointsRow, error) {
+	rows, err := q.db.Query(ctx, searchAccessPoints, dollar_1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SearchAccessPointsRow{}
+	for rows.Next() {
+		var i SearchAccessPointsRow
+		if err := rows.Scan(
+			&i.ControllerDeviceID,
+			&i.ControllerName,
+			&i.ControllerCategory,
+			&i.Name,
+			&i.Mac,
+			&i.Model,
+			&i.Ip,
+			&i.Site,
+			&i.Status,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const searchArpEntries = `-- name: SearchArpEntries :many
+SELECT a.device_id, d.name AS device_name, d.category AS device_category,
+       host(a.ip_address)::text AS ip, a.mac, a.if_index, a.last_seen_at
+FROM arp_entries a
+JOIN devices d ON d.id = a.device_id AND d.deleted_at IS NULL
+WHERE host(a.ip_address) ILIKE '%'||$1||'%' OR a.mac ILIKE '%'||$1||'%'
+ORDER BY a.last_seen_at DESC
+LIMIT 40
+`
+
+type SearchArpEntriesRow struct {
+	DeviceID       uuid.UUID `json:"device_id"`
+	DeviceName     string    `json:"device_name"`
+	DeviceCategory string    `json:"device_category"`
+	Ip             string    `json:"ip"`
+	Mac            string    `json:"mac"`
+	IfIndex        *int32    `json:"if_index"`
+	LastSeenAt     time.Time `json:"last_seen_at"`
+}
+
+// Global-search: ARP table (IP↔MAC) by IP or MAC — which L3 device resolved an IP.
+func (q *Queries) SearchArpEntries(ctx context.Context, dollar_1 *string) ([]SearchArpEntriesRow, error) {
+	rows, err := q.db.Query(ctx, searchArpEntries, dollar_1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SearchArpEntriesRow{}
+	for rows.Next() {
+		var i SearchArpEntriesRow
+		if err := rows.Scan(
+			&i.DeviceID,
+			&i.DeviceName,
+			&i.DeviceCategory,
+			&i.Ip,
+			&i.Mac,
+			&i.IfIndex,
+			&i.LastSeenAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const searchByHostname = `-- name: SearchByHostname :many
 SELECT id, name, primary_ip, hostname, category, status, location_id
 FROM devices
@@ -500,6 +666,118 @@ func (q *Queries) SearchByMAC(ctx context.Context, mac string) ([]SearchByMACRow
 			&i.IfAlias,
 			&i.PortRole,
 			&i.KnownIp,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const searchFdbMacs = `-- name: SearchFdbMacs :many
+SELECT m.device_id, d.name AS device_name, d.category AS device_category,
+       m.mac, m.vlan_id, m.if_index, i.if_name, i.if_alias, m.last_seen_at
+FROM mac_addresses m
+JOIN devices d ON d.id = m.device_id AND d.deleted_at IS NULL
+LEFT JOIN interfaces i ON i.device_id = m.device_id AND i.if_index = m.if_index
+WHERE m.mac ILIKE '%'||$1||'%'
+ORDER BY m.last_seen_at DESC
+LIMIT 40
+`
+
+type SearchFdbMacsRow struct {
+	DeviceID       uuid.UUID `json:"device_id"`
+	DeviceName     string    `json:"device_name"`
+	DeviceCategory string    `json:"device_category"`
+	Mac            string    `json:"mac"`
+	VlanID         int32     `json:"vlan_id"`
+	IfIndex        *int32    `json:"if_index"`
+	IfName         *string   `json:"if_name"`
+	IfAlias        *string   `json:"if_alias"`
+	LastSeenAt     time.Time `json:"last_seen_at"`
+}
+
+// Global-search: learned MAC addresses (bridge FDB) by MAC — which switch + port
+// a MAC was seen on, anywhere in the fabric.
+func (q *Queries) SearchFdbMacs(ctx context.Context, dollar_1 *string) ([]SearchFdbMacsRow, error) {
+	rows, err := q.db.Query(ctx, searchFdbMacs, dollar_1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SearchFdbMacsRow{}
+	for rows.Next() {
+		var i SearchFdbMacsRow
+		if err := rows.Scan(
+			&i.DeviceID,
+			&i.DeviceName,
+			&i.DeviceCategory,
+			&i.Mac,
+			&i.VlanID,
+			&i.IfIndex,
+			&i.IfName,
+			&i.IfAlias,
+			&i.LastSeenAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const searchWirelessClients = `-- name: SearchWirelessClients :many
+SELECT wc.controller_device_id, d.name AS controller_name, d.category AS controller_category,
+       wc.mac, wc.ip, wc.hostname, wc.ap_name, wc.ssid, wc.band
+FROM wireless_clients wc
+LEFT JOIN devices d ON d.id = wc.controller_device_id AND d.deleted_at IS NULL
+WHERE wc.mac ILIKE '%'||$1||'%'
+   OR wc.ip ILIKE '%'||$1||'%'
+   OR wc.hostname ILIKE '%'||$1||'%'
+   OR wc.ssid ILIKE '%'||$1||'%'
+   OR wc.ap_name ILIKE '%'||$1||'%'
+ORDER BY wc.hostname, wc.mac
+LIMIT 30
+`
+
+type SearchWirelessClientsRow struct {
+	ControllerDeviceID uuid.UUID `json:"controller_device_id"`
+	ControllerName     *string   `json:"controller_name"`
+	ControllerCategory *string   `json:"controller_category"`
+	Mac                string    `json:"mac"`
+	Ip                 string    `json:"ip"`
+	Hostname           string    `json:"hostname"`
+	ApName             string    `json:"ap_name"`
+	Ssid               string    `json:"ssid"`
+	Band               string    `json:"band"`
+}
+
+// Global-search: associated wireless clients by MAC / IP / hostname / SSID / AP.
+func (q *Queries) SearchWirelessClients(ctx context.Context, dollar_1 *string) ([]SearchWirelessClientsRow, error) {
+	rows, err := q.db.Query(ctx, searchWirelessClients, dollar_1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SearchWirelessClientsRow{}
+	for rows.Next() {
+		var i SearchWirelessClientsRow
+		if err := rows.Scan(
+			&i.ControllerDeviceID,
+			&i.ControllerName,
+			&i.ControllerCategory,
+			&i.Mac,
+			&i.Ip,
+			&i.Hostname,
+			&i.ApName,
+			&i.Ssid,
+			&i.Band,
 		); err != nil {
 			return nil, err
 		}

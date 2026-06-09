@@ -296,6 +296,39 @@ func CollectFDB(ctx context.Context, c snmp.Client) []driver.MACSnap {
 	return out
 }
 
+// CollectARP walks ipNetToMediaTable (the ARP cache) into IP↔MAC snapshots. This
+// is the L3 binding the Path Finder needs to resolve a wired endpoint's IP to a
+// MAC (and from there, via the FDB, to a switch port). Only L3 devices (routers /
+// SVIs / gateways) answer with rows; pure L2 switches return an empty table.
+//
+// The PhysAddress column's row index is ifIndex.ipv4(4 octets), and the value is
+// the 6-byte MAC — so a single column walk yields ifIndex + IP + MAC per entry.
+func CollectARP(ctx context.Context, c snmp.Client) []driver.ARPSnap {
+	out := []driver.ARPSnap{}
+	_ = c.BulkWalk(ctx, mibs.IPNetToMediaPhysAddr, func(p snmp.PDU) error {
+		_, idx, ok := snmp.ColumnAndIndex(p.OID, mibs.IPNetToMediaEntry)
+		if !ok || len(idx) < 5 { // [ifIndex, o1, o2, o3, o4]
+			return nil
+		}
+		b, ok := p.Value.([]byte)
+		if !ok || len(b) != 6 {
+			return nil
+		}
+		mac := macStr(b)
+		// Incomplete / placeholder entries some agents return — not real bindings.
+		if mac == "00:00:00:00:00:00" || mac == "ff:ff:ff:ff:ff:ff" {
+			return nil
+		}
+		out = append(out, driver.ARPSnap{
+			IfIndex: int(idx[0]),
+			IP:      fmt.Sprintf("%d.%d.%d.%d", idx[1], idx[2], idx[3], idx[4]),
+			MAC:     mac,
+		})
+		return nil
+	})
+	return out
+}
+
 // CollectLLDP walks lldpRemTable into neighbor snapshots.
 func CollectLLDP(ctx context.Context, c snmp.Client) []driver.NeighborSnap {
 	type acc struct {

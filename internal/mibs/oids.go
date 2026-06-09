@@ -50,6 +50,14 @@ const (
 	Dot1dTpFdbColPort          = 2
 	Dot1dTpFdbColStatus        = 3
 
+	// --- IP-MIB ipNetToMediaTable (ARP: IP↔MAC on L3 devices) -------------
+	// Index = ifIndex.ipv4(4 octets); column 2 = phys address (MAC). Deprecated
+	// but the most broadly supported ARP table across vendors. We walk the
+	// PhysAddress column directly so one walk yields ifIndex + IP + MAC.
+	IPNetToMediaPhysAddr = "1.3.6.1.2.1.4.22.1.2" // ipNetToMediaPhysAddress column
+	IPNetToMediaEntry    = "1.3.6.1.2.1.4.22.1"   // ipNetToMediaEntry (for index parsing)
+	IPNetToMediaColPhys  = 2
+
 	// --- LLDP-MIB ----------------------------------------------------------
 	LldpLocPortEntry           = "1.0.8802.1.1.2.1.3.7.1" // local port table
 	LldpRemEntry               = "1.0.8802.1.1.2.1.4.1.1" // remote table (composite index)

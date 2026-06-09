@@ -66,6 +66,7 @@ func (d *Driver) Collect(sess driver.Session, _ driver.Probe) (driver.Facts, err
 	f.VLANs = swsnmp.CollectVLANs(ctx, c)
 	f.PortVLANs = swsnmp.CollectPortVLANs(ctx, c)
 	f.MACs = swsnmp.CollectFDB(ctx, c)
+	f.ARP = swsnmp.CollectARP(ctx, c)
 
 	// Neighbors: CDP (Cisco-native) + LLDP, merged. Cisco often runs both.
 	neighbors := swsnmp.CollectCDP(ctx, c)

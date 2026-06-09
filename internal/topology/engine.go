@@ -39,6 +39,9 @@ type Querier interface {
 	GetDevice(ctx context.Context, id uuid.UUID) (db.Device, error)
 	ListMACForDevice(ctx context.Context, deviceID uuid.UUID) ([]db.ListMACForDeviceRow, error)
 	ListARPForDevice(ctx context.Context, deviceID uuid.UUID) ([]db.ListARPForDeviceRow, error)
+	// IP→MAC fallback via the wireless-client roster + AP inventory (used when the
+	// ARP table has no entry for the searched IP).
+	ResolveIPToMAC(ctx context.Context, ip string) ([]db.ResolveIPToMACRow, error)
 	// FDB-based (vendor-neutral) link inference.
 	ListAllDevices(ctx context.Context) ([]db.Device, error)
 	ListFabricInterfaceMACs(ctx context.Context) ([]db.ListFabricInterfaceMACsRow, error)
@@ -349,12 +352,43 @@ func (e *Engine) SearchIP(ctx context.Context, ip netip.Addr) (SearchResult, err
 		e.attributeARP(ctx, &res, ip, mac, arpRows[0].DeviceID)
 	}
 
+	// Step 2b: ARP fallback — if no ARP entry mapped this IP to a MAC (e.g. ARP
+	// collection is sparse or absent), resolve it from the wireless-client roster
+	// or the AP inventory. The resolved MAC then flows through the same FDB lookup
+	// below, so a wireless endpoint or AP still traces to its switch port.
+	var resolvedVia string
+	if res.MAC == nil {
+		if rows, rerr := e.q.ResolveIPToMAC(ctx, ip.String()); rerr == nil && len(rows) > 0 {
+			// FDB stores MACs lowercase-colon; AP/client rosters may store them
+			// uppercase. Fold to lowercase so the exact-match FDB lookup below hits.
+			mac := strings.ToLower(rows[0].Mac)
+			res.MAC = &mac
+			resolvedVia = rows[0].Source
+			if res.DeviceName == nil && rows[0].DeviceName != "" {
+				dn := rows[0].DeviceName
+				res.DeviceName = &dn
+			}
+		}
+	}
+
 	// Step 3: MAC → switch + port + VLAN, then the upstream path.
 	if res.MAC != nil {
 		res.SwitchPort = e.macToPort(ctx, *res.MAC)
 	}
 	res.Path = e.buildPath(ctx, &res)
 	res.Confidence, res.ConfidenceReasons = assessConfidence(&res)
+	if resolvedVia != "" {
+		via := map[string]string{
+			"wireless_client": "the wireless-client roster",
+			"access_point":    "the access-point inventory",
+		}[resolvedVia]
+		if via == "" {
+			via = resolvedVia
+		}
+		res.ConfidenceReasons = append([]string{
+			"IP resolved to its MAC via " + via + " (no ARP entry for this IP)",
+		}, res.ConfidenceReasons...)
+	}
 	res.normalizeSlices()
 	return res, nil
 }

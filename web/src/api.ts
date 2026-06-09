@@ -361,6 +361,28 @@ export interface PathStep {
   source?: string | null
 }
 
+// Unified global-search hit — a MAC/IP/name observed anywhere (access point,
+// wireless client, bridge FDB, ARP table) linked back to the device that owns it.
+export interface EntityHit {
+  kind: 'access_point' | 'wireless_client' | 'fdb' | 'arp'
+  title: string
+  subtitle: string
+  ip?: string
+  mac?: string
+  device_id?: string
+  device_name?: string
+  device_category?: string
+}
+
+export interface SearchEntities {
+  query: string
+  total: number
+  access_points: EntityHit[]
+  wireless_clients: EntityHit[]
+  fdb: EntityHit[]
+  arp: EntityHit[]
+}
+
 export interface ServerStorage {
   id: string
   device_id: string

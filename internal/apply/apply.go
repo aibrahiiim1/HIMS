@@ -49,6 +49,8 @@ type Writer interface {
 	DeleteStalePortVlans(ctx context.Context, arg db.DeleteStalePortVlansParams) error
 	UpsertMAC(ctx context.Context, arg db.UpsertMACParams) error
 	DeleteStaleMACEntries(ctx context.Context, arg db.DeleteStaleMACEntriesParams) error
+	UpsertARP(ctx context.Context, arg db.UpsertARPParams) error
+	DeleteStaleARP(ctx context.Context, arg db.DeleteStaleARPParams) error
 	UpsertNeighbor(ctx context.Context, arg db.UpsertNeighborParams) (db.Neighbor, error)
 	DeleteStaleNeighbors(ctx context.Context, arg db.DeleteStaleNeighborsParams) error
 	UpsertServerStorage(ctx context.Context, arg db.UpsertServerStorageParams) error
@@ -285,6 +287,22 @@ func (a *Applier) applyFacts(ctx context.Context, devID uuid.UUID, f *driver.Fac
 			})
 		}
 		_ = a.w.DeleteStaleMACEntries(ctx, db.DeleteStaleMACEntriesParams{DeviceID: devID, LastSeenAt: poll, CollectionSource: sourceSNMP})
+	}
+
+	// ARP (ipNetToMedia): IP↔MAC bindings from L3 devices. This is what lets the
+	// Path Finder resolve a wired endpoint's IP → MAC → switch port.
+	if len(f.ARP) > 0 {
+		for _, e := range f.ARP {
+			ip, err := netip.ParseAddr(e.IP)
+			if err != nil || !ip.IsValid() {
+				continue
+			}
+			_ = a.w.UpsertARP(ctx, db.UpsertARPParams{
+				DeviceID: devID, IpAddress: ip, Mac: e.MAC, IfIndex: i32ptr(int32(e.IfIndex)),
+				CollectionSource: sourceSNMP, LastSeenAt: poll,
+			})
+		}
+		_ = a.w.DeleteStaleARP(ctx, db.DeleteStaleARPParams{DeviceID: devID, LastSeenAt: poll, CollectionSource: sourceSNMP})
 	}
 
 	// Neighbors (LLDP/CDP).

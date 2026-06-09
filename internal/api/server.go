@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -275,7 +276,8 @@ func (s *Server) routes() {
 
 		// --- Topology & search ----------------------------------------
 		// IP/MAC/name → switch+port+path (the headline Phase 1 feature).
-		r.Get("/search", s.search) // ?q=<IP|MAC|name>
+		r.Get("/search", s.search)                  // ?q=<IP|MAC|name> → topology path trace
+		r.Get("/search/entities", s.searchEntities) // ?q= → unified hits across APs/clients/FDB/ARP
 		r.Get("/topology/links", s.allLinks)
 		r.Get("/topology/graph", s.topologyGraph)
 		r.Post("/topology/rebuild", s.rebuildTopology)
@@ -1134,7 +1136,33 @@ func isMACLike(s string) bool {
 	return len(s) >= 12 && (len(s) == 17 || len(s) == 12 || len(s) == 14)
 }
 
+// normMAC canonicalizes a MAC to lowercase colon-separated form
+// (aa:bb:cc:dd:ee:ff) so it matches the stored FDB/ARP format no matter how the
+// operator typed it — uppercase, dashes, Cisco dotted (aabb.ccdd.eeff), or no
+// separators at all. If the input doesn't contain exactly 12 hex digits it is
+// returned lowercased/trimmed unchanged (so hostname-ish queries pass through).
 func normMAC(s string) string {
-	// Normalize aa:bb:cc:dd:ee:ff or aabbccddeff → lowercase colon-sep.
-	return s // simplified; Phase 2 adds proper normalization
+	var hex strings.Builder
+	hex.Grow(12)
+	for _, r := range s {
+		switch {
+		case r >= '0' && r <= '9', r >= 'a' && r <= 'f':
+			hex.WriteRune(r)
+		case r >= 'A' && r <= 'F':
+			hex.WriteRune(r + 32) // fold to lowercase
+		}
+	}
+	h := hex.String()
+	if len(h) != 12 {
+		return strings.ToLower(strings.TrimSpace(s))
+	}
+	var b strings.Builder
+	b.Grow(17)
+	for i := 0; i < 12; i += 2 {
+		if i > 0 {
+			b.WriteByte(':')
+		}
+		b.WriteString(h[i : i+2])
+	}
+	return b.String()
 }

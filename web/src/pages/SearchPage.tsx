@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
-import { Search as SearchIcon, Boxes, Building2, ClipboardList, Wrench, Network, Route as RouteIcon, Clock, X } from 'lucide-react'
-import { api, type Device, type WorkOrder, type SystemLicense, type Location, type SearchResult, locationPaths } from '../api'
+import { Search as SearchIcon, Boxes, Building2, ClipboardList, Wrench, Network, Route as RouteIcon, Clock, X, Wifi, Smartphone, Cpu, Globe } from 'lucide-react'
+import { api, type Device, type WorkOrder, type SystemLicense, type Location, type SearchResult, type SearchEntities, type EntityHit, locationPaths } from '../api'
 import { PageHeader, Panel, StatusPill, EmptyState, colorFor } from '../components/ui'
 
 const RECENT_KEY = 'hims-recent-search'
@@ -34,6 +34,16 @@ export function SearchPage() {
     retry: 0,
   })
 
+  // Unified entity sweep — catches a MAC/IP/name anywhere it was observed (access
+  // points, wireless clients, learned MACs / bridge FDB, ARP tables) even when it
+  // belongs to no managed device of its own. Server-side ILIKE across subsystems.
+  const ent = useQuery({
+    queryKey: ['search-entities', q],
+    queryFn: () => api.get<SearchEntities>(`/search/entities?q=${encodeURIComponent(q)}`),
+    enabled: q.trim().length >= 2,
+    retry: 0,
+  })
+
   const t = q.trim().toLowerCase()
   const devHits = (devices.data ?? []).filter((d) =>
     t && (d.name.toLowerCase().includes(t) || (d.primary_ip ?? '').includes(t) || (d.vendor ?? '').toLowerCase().includes(t)
@@ -43,7 +53,17 @@ export function SearchPage() {
   const woHits = (workOrders.data ?? []).filter((w) => t && (w.title.toLowerCase().includes(t) || (w.assigned_to ?? '').toLowerCase().includes(t) || w.problem_type.includes(t))).slice(0, 15)
   const sysHits = (systems.data ?? []).filter((s) => t && (s.name.toLowerCase().includes(t) || (s.vendor ?? '').toLowerCase().includes(t))).slice(0, 15)
   const netList: SearchResult[] = net.data == null ? [] : Array.isArray(net.data) ? net.data : [net.data]
-  const totalHits = devHits.length + locHits.length + woHits.length + sysHits.length
+  const aps = ent.data?.access_points ?? []
+  const wcs = ent.data?.wireless_clients ?? []
+  const fdb = ent.data?.fdb ?? []
+  const arp = ent.data?.arp ?? []
+  const entTotal = aps.length + wcs.length + fdb.length + arp.length
+  const totalHits = devHits.length + locHits.length + woHits.length + sysHits.length + entTotal
+
+  // Deep-link an entity hit to the device that owns the observation (controller
+  // for APs/clients, switch for FDB/ARP). Unmapped categories fall to the
+  // /devices dispatcher.
+  const entLink = (h: EntityHit) => (h.device_id ? `${detailBase[h.device_category ?? ''] ?? '/devices'}/${h.device_id}` : null)
 
   const pushRecent = (v: string) => {
     const next = [v, ...recent.filter((x) => x !== v)].slice(0, 8)
@@ -61,7 +81,7 @@ export function SearchPage() {
 
   return (
     <div>
-      <PageHeader title="Global Search" icon={SearchIcon} subtitle="Devices, IPs, MACs, serials, vendors, locations, work orders and systems" />
+      <PageHeader title="Global Search" icon={SearchIcon} subtitle="Any MAC, IP or name across the whole system — devices, access points, wireless clients, learned MACs, ARP, locations, work orders and systems" />
       <div className="card">
         <div className="search-box" style={{ marginBottom: 0 }}>
           <input autoFocus value={term} onChange={(e) => setTerm(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && run()}
@@ -107,7 +127,7 @@ export function SearchPage() {
             </Panel>
           )}
 
-          {totalHits === 0 && !looksNetworky(q) && <EmptyState icon={SearchIcon} title="No matches" message={`Nothing matched "${q}".`} />}
+          {totalHits === 0 && !looksNetworky(q) && !ent.isLoading && <EmptyState icon={SearchIcon} title="No matches" message={`Nothing matched "${q}".`} />}
 
           {devHits.length > 0 && (
             <Panel title="Devices" icon={Boxes} subtitle={`${devHits.length}`} pad={false}>
@@ -144,6 +164,57 @@ export function SearchPage() {
             <Panel title="Systems" icon={Wrench} subtitle={`${sysHits.length}`} pad={false}>
               <table className="data-table"><thead><tr><th>System</th><th>Vendor</th><th>Status</th></tr></thead>
                 <tbody>{sysHits.map((s) => <tr key={s.id}><td><Link className="cell-name" to="/systems">{s.name}</Link></td><td>{s.vendor ?? '—'}</td><td>{s.overall_status}</td></tr>)}</tbody>
+              </table>
+            </Panel>
+          )}
+
+          {aps.length > 0 && (
+            <Panel title="Access Points" icon={Wifi} subtitle={`${aps.length}`} pad={false}>
+              <table className="data-table"><thead><tr><th>Access Point</th><th>IP</th><th>MAC</th><th>Details</th><th>Controller</th></tr></thead>
+                <tbody>{aps.map((h, i) => { const lk = entLink(h); return (
+                  <tr key={`ap-${i}`}>
+                    <td className="cell-name">{lk ? <Link className="cell-name" to={lk}>{h.title}</Link> : h.title}</td>
+                    <td className="mono">{h.ip || '—'}</td><td className="mono">{h.mac || '—'}</td>
+                    <td className="muted">{h.subtitle || '—'}</td><td>{h.device_name || '—'}</td>
+                  </tr>)})}</tbody>
+              </table>
+            </Panel>
+          )}
+
+          {wcs.length > 0 && (
+            <Panel title="Wireless Clients" icon={Smartphone} subtitle={`${wcs.length}`} pad={false}>
+              <table className="data-table"><thead><tr><th>Client</th><th>IP</th><th>MAC</th><th>Association</th><th>Controller</th></tr></thead>
+                <tbody>{wcs.map((h, i) => { const lk = entLink(h); return (
+                  <tr key={`wc-${i}`}>
+                    <td className="cell-name">{h.title}</td>
+                    <td className="mono">{h.ip || '—'}</td><td className="mono">{h.mac || '—'}</td>
+                    <td className="muted">{h.subtitle || '—'}</td>
+                    <td>{lk ? <Link className="cell-name" to={lk}>{h.device_name || '—'}</Link> : (h.device_name || '—')}</td>
+                  </tr>)})}</tbody>
+              </table>
+            </Panel>
+          )}
+
+          {fdb.length > 0 && (
+            <Panel title="Learned MACs (Bridge FDB)" icon={Cpu} subtitle={`${fdb.length}`} pad={false}>
+              <table className="data-table"><thead><tr><th>MAC</th><th>VLAN / Port</th><th>Seen on switch</th></tr></thead>
+                <tbody>{fdb.map((h, i) => { const lk = entLink(h); return (
+                  <tr key={`fdb-${i}`}>
+                    <td className="mono">{h.mac}</td><td className="muted">{h.subtitle || '—'}</td>
+                    <td>{lk ? <Link className="cell-name" to={lk}>{h.device_name || '—'}</Link> : (h.device_name || '—')}</td>
+                  </tr>)})}</tbody>
+              </table>
+            </Panel>
+          )}
+
+          {arp.length > 0 && (
+            <Panel title="ARP Entries (IP ↔ MAC)" icon={Globe} subtitle={`${arp.length}`} pad={false}>
+              <table className="data-table"><thead><tr><th>IP</th><th>MAC</th><th>Resolved by</th></tr></thead>
+                <tbody>{arp.map((h, i) => { const lk = entLink(h); return (
+                  <tr key={`arp-${i}`}>
+                    <td className="mono">{h.ip}</td><td className="mono">{h.mac}</td>
+                    <td>{lk ? <Link className="cell-name" to={lk}>{h.device_name || '—'}</Link> : (h.device_name || '—')}</td>
+                  </tr>)})}</tbody>
               </table>
             </Panel>
           )}
