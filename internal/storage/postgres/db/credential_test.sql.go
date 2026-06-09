@@ -87,6 +87,33 @@ func (q *Queries) InsertCredentialTestRun(ctx context.Context, arg InsertCredent
 	return i, err
 }
 
+const latestCCTVCredTest = `-- name: LatestCCTVCredTest :one
+SELECT category, success, tested_at
+  FROM credential_test_results
+  WHERE device_id = $1 AND protocol IN ('onvif', 'isapi')
+  ORDER BY tested_at DESC, (category = 'auth_failed') DESC
+  LIMIT 1
+`
+
+type LatestCCTVCredTestRow struct {
+	Category string    `json:"category"`
+	Success  bool      `json:"success"`
+	TestedAt time.Time `json:"tested_at"`
+}
+
+// The most recent ONVIF/ISAPI credential-test outcome for a device — the CCTV
+// fleet skip-guard reads this to avoid re-attempting a device that recently
+// auth-failed (which would accumulate failed logins toward a Hikvision IP
+// lockout). When two attempts share a timestamp (ONVIF + ISAPI in one batch) the
+// auth_failed row wins the tie, so a transport failure on one protocol never
+// masks an auth rejection on the other. No rows ⇒ never tested ⇒ safe to attempt.
+func (q *Queries) LatestCCTVCredTest(ctx context.Context, deviceID uuid.UUID) (LatestCCTVCredTestRow, error) {
+	row := q.db.QueryRow(ctx, latestCCTVCredTest, deviceID)
+	var i LatestCCTVCredTestRow
+	err := row.Scan(&i.Category, &i.Success, &i.TestedAt)
+	return i, err
+}
+
 const latestDeviceKindResults = `-- name: LatestDeviceKindResults :many
 SELECT DISTINCT ON (device_id, kind)
        device_id, kind, protocol, success, category, tested_at

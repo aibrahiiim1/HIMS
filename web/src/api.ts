@@ -527,7 +527,7 @@ export interface CCTVFleetItem {
   was_category: string
   now_category: string
   status: 'collected' | 'failed'
-  outcome: 'collected' | 'auth' | 'lockout' | 'unsupported' | 'unreachable' | 'no_credential' | 'error' | string
+  outcome: 'collected' | 'auth' | 'lockout' | 'unsupported' | 'unreachable' | 'no_credential' | 'skipped' | 'error' | string
   detail: string
   channels: number
   storage: number
@@ -541,6 +541,7 @@ export interface CCTVFleetRun {
   done: number
   collected: number
   failed: number
+  skipped: number
   nvrs: number
   dvrs: number
   cameras: number

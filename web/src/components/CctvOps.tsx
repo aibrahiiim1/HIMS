@@ -10,7 +10,7 @@ import { Panel, StatusPill } from './ui'
 // credential only (no spraying, so it cannot trigger a Hikvision lockout).
 const OUTCOME_TONE: Record<string, 'up' | 'down' | 'warning' | 'unknown'> = {
   collected: 'up', auth: 'down', lockout: 'warning', unsupported: 'warning',
-  unreachable: 'unknown', no_credential: 'warning', error: 'down',
+  unreachable: 'unknown', no_credential: 'warning', skipped: 'unknown', error: 'down',
 }
 
 export function CctvOps() {
@@ -56,7 +56,7 @@ export function CctvOps() {
       {run && (running || run.done > 0) && (
         <div style={{ marginTop: 14 }}>
           <div className="row" style={{ justifyContent: 'space-between', fontSize: 13, marginBottom: 6 }}>
-            <span>{running ? 'Collecting' : 'Last run'}: {run.done}/{run.total} · <strong style={{ color: 'var(--ok)' }}>{run.collected} collected</strong> · <strong style={{ color: 'var(--crit)' }}>{run.failed} failed</strong></span>
+            <span>{running ? 'Collecting' : 'Last run'}: {run.done}/{run.total} · <strong style={{ color: 'var(--ok)' }}>{run.collected} collected</strong> · <strong style={{ color: 'var(--crit)' }}>{run.failed} failed</strong>{run.skipped > 0 ? <> · <strong>{run.skipped} skipped</strong></> : null}</span>
             <button className="btn btn-ghost btn-xs" onClick={() => setShowItems((v) => !v)}>{showItems ? 'Hide' : 'Show'} per-device results</button>
           </div>
           <div style={{ height: 6, background: 'var(--surface-2, #1c2730)', borderRadius: 4, overflow: 'hidden' }}>

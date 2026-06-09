@@ -44,6 +44,19 @@ SELECT r.id, r.run_id, r.device_id, d.name AS device_name, r.credential_id,
   ORDER BY r.tested_at DESC
   LIMIT $2;
 
+-- name: LatestCCTVCredTest :one
+-- The most recent ONVIF/ISAPI credential-test outcome for a device — the CCTV
+-- fleet skip-guard reads this to avoid re-attempting a device that recently
+-- auth-failed (which would accumulate failed logins toward a Hikvision IP
+-- lockout). When two attempts share a timestamp (ONVIF + ISAPI in one batch) the
+-- auth_failed row wins the tie, so a transport failure on one protocol never
+-- masks an auth rejection on the other. No rows ⇒ never tested ⇒ safe to attempt.
+SELECT category, success, tested_at
+  FROM credential_test_results
+  WHERE device_id = $1 AND protocol IN ('onvif', 'isapi')
+  ORDER BY tested_at DESC, (category = 'auth_failed') DESC
+  LIMIT 1;
+
 -- name: LatestDeviceKindResults :many
 -- The most recent result per (device, credential-kind). This is the read model
 -- behind Management Access Coverage's test-result source, the unmanaged reasons

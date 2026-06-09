@@ -317,6 +317,13 @@ type Querier interface {
 	InsertNotificationLog(ctx context.Context, arg InsertNotificationLogParams) (NotificationLog, error)
 	InsertWirelessEvent(ctx context.Context, arg InsertWirelessEventParams) error
 	LastSuccessfulBackup(ctx context.Context) (BackupRun, error)
+	// The most recent ONVIF/ISAPI credential-test outcome for a device — the CCTV
+	// fleet skip-guard reads this to avoid re-attempting a device that recently
+	// auth-failed (which would accumulate failed logins toward a Hikvision IP
+	// lockout). When two attempts share a timestamp (ONVIF + ISAPI in one batch) the
+	// auth_failed row wins the tie, so a transport failure on one protocol never
+	// masks an auth rejection on the other. No rows ⇒ never tested ⇒ safe to attempt.
+	LatestCCTVCredTest(ctx context.Context, deviceID uuid.UUID) (LatestCCTVCredTestRow, error)
 	// The most recent result per (device, credential-kind). This is the read model
 	// behind Management Access Coverage's test-result source, the unmanaged reasons
 	// (failed / not-tested / stale), and the Inventory access filters. One row per

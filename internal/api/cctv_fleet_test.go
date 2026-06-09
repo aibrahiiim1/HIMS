@@ -1,6 +1,38 @@
 package api
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
+
+// TestShouldSkipCCTV pins the fleet skip-guard: a device that auth-failed over
+// ONVIF/ISAPI within the window is skipped (so repeated fleet runs don't keep
+// hammering a wrong credential toward a Hikvision lockout), but an old failure, a
+// success, or a non-auth failure is still attempted.
+func TestShouldSkipCCTV(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	const window = 6 * time.Hour
+	cases := []struct {
+		name      string
+		category  string
+		success   bool
+		age       time.Duration
+		wantSkip  bool
+	}{
+		{"recent auth failure", "auth_failed", false, 1 * time.Hour, true},
+		{"auth failure at edge (still inside)", "auth_failed", false, 5*time.Hour + 59*time.Minute, true},
+		{"stale auth failure", "auth_failed", false, 8 * time.Hour, false},
+		{"recent success", "success", true, 1 * time.Hour, false},
+		{"recent unreachable (not auth)", "isapi_timeout", false, 1 * time.Hour, false},
+		{"recent connection refused (not auth)", "connection_refused", false, 30 * time.Minute, false},
+	}
+	for _, c := range cases {
+		got := shouldSkipCCTV(c.category, c.success, now.Add(-c.age), now, window)
+		if got != c.wantSkip {
+			t.Errorf("%s: shouldSkipCCTV=%v, want %v", c.name, got, c.wantSkip)
+		}
+	}
+}
 
 // TestISAPIAuthRejectedIsAuthFailed pins the CCTV Phase 2 fix: the ISAPI error
 // string "authentication rejected" must categorise as auth_failed (not the

@@ -46,6 +46,7 @@ type cctvFleetRun struct {
 	Done       int             `json:"done"`
 	Collected  int             `json:"collected"`
 	Failed     int             `json:"failed"`
+	Skipped    int             `json:"skipped"`  // skipped to avoid re-hammering a recently auth-failed device
 	NVRs       int             `json:"nvrs"`     // recorders classified nvr this run
 	DVRs       int             `json:"dvrs"`     // recorders classified dvr this run
 	Cameras    int             `json:"cameras"`  // standalone cameras collected this run
@@ -54,6 +55,44 @@ type cctvFleetRun struct {
 }
 
 func fleetNow() string { return time.Now().UTC().Format(time.RFC3339) }
+
+// cctvAuthSkipWindow is how long the FLEET collector leaves a device alone after
+// it auth-failed. Long enough that repeated fleet runs within one operating
+// session never re-hammer a device whose bound credential is wrong (the path to
+// a Hikvision IP lockout); short enough that a daily run still re-checks. The
+// single-device manual Collect ignores this — operator intent overrides the
+// guard (e.g. immediately after rebinding the credential).
+const cctvAuthSkipWindow = 6 * time.Hour
+
+// shouldSkipCCTV reports whether a device's most recent ONVIF/ISAPI credential
+// test was an auth rejection within the window, meaning a fresh fleet attempt
+// would only add another failed login. Pure, for testability.
+func shouldSkipCCTV(category string, success bool, testedAt, now time.Time, window time.Duration) bool {
+	return category == "auth_failed" && !success && now.Sub(testedAt) < window
+}
+
+// fleetSkipItem returns a "skipped" row (and true) when the device recently
+// auth-failed over ONVIF/ISAPI, so the fleet run reports it honestly without
+// re-attempting. A device that was never tested (no row) is always attempted.
+func (s *Server) fleetSkipItem(ctx context.Context, d db.Device) (cctvFleetItem, bool) {
+	last, err := s.queries.LatestCCTVCredTest(ctx, d.ID)
+	if err != nil {
+		return cctvFleetItem{}, false // never tested (or lookup failed) → safe to attempt
+	}
+	if !shouldSkipCCTV(last.Category, last.Success, last.TestedAt, time.Now(), cctvAuthSkipWindow) {
+		return cctvFleetItem{}, false
+	}
+	ip := ""
+	if d.PrimaryIp != nil && d.PrimaryIp.IsValid() {
+		ip = d.PrimaryIp.String()
+	}
+	return cctvFleetItem{
+		DeviceID: d.ID.String(), Name: d.Name, IP: ip,
+		WasCategory: d.Category, NowCategory: d.Category,
+		Status: "skipped", Outcome: "skipped",
+		Detail: "skipped — credential was rejected within the last 6h; rebind the device's web login, then collect (avoids a Hikvision IP lockout)",
+	}, true
+}
 
 // collectCCTVFleet handles POST /cctv/collect-fleet — start a fleet-wide CCTV
 // collection across all camera/NVR/DVR devices (bound-credential-only, no spray).
@@ -139,6 +178,17 @@ func (s *Server) runCCTVFleet(ctx context.Context, devices []db.Device) {
 		go func(d db.Device) {
 			defer wg.Done()
 			defer func() { <-sem }()
+			// Skip a device that recently auth-failed — a fresh attempt would only
+			// add another failed login (lockout risk) with no chance of success
+			// until the operator rebinds its credential.
+			if it, skip := s.fleetSkipItem(ctx, d); skip {
+				update(func(run *cctvFleetRun) {
+					run.Items = append(run.Items, it)
+					run.Done++
+					run.Skipped++
+				})
+				return
+			}
 			dctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 			res := s.runCCTVCollection(dctx, d)
 			cancel()
