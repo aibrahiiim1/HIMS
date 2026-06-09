@@ -283,6 +283,25 @@ func normVirtualStatus(in, fallback string) string {
 	return s
 }
 
+// normPortRole canonicalises a port role to the set the UI counts on
+// (access / trunk / uplink / unknown). The form's role field is a fixed dropdown,
+// but Excel imports accept free text — so casing, common synonyms and the very
+// common "acess" misspelling are folded here; anything unrecognised becomes
+// "unknown" (the importer also warns on it). Without this, e.g. "Acess" was stored
+// verbatim and the Access/Trunk card counted 0 access ports.
+func normPortRole(s string) string {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "access", "acess", "acces", "accesss", "edge", "host", "untagged":
+		return "access"
+	case "trunk", "tagged", "trunked", "dot1q":
+		return "trunk"
+	case "uplink", "up-link", "uplinks", "trunk-uplink", "core":
+		return "uplink"
+	default:
+		return "unknown"
+	}
+}
+
 // setVirtualIdentityExtras applies notes/criticality on create (CreateDevice has
 // no columns for them) via a follow-up UpdateDevice.
 func (s *Server) setVirtualIdentityExtras(ctx context.Context, dev db.Device, req *virtualDeviceReq) {
@@ -378,10 +397,7 @@ func (s *Server) writeVirtualPorts(ctx context.Context, devID uuid.UUID, ports [
 		if p.AdminDown {
 			admin = 2
 		}
-		role := strings.TrimSpace(p.Role)
-		if role == "" {
-			role = "unknown"
-		}
+		role := normPortRole(p.Role)
 		_, _ = s.queries.UpsertInterface(ctx, db.UpsertInterfaceParams{
 			DeviceID: devID, IfIndex: int32(p.IfIndex), IfName: strPtr(p.Name), IfAlias: strPtr(p.Alias),
 			Mac: strPtr(p.MAC), SpeedMbps: vdI32(p.SpeedMbps), AdminStatus: &admin, OperStatus: &oper,
@@ -1013,14 +1029,20 @@ func parseVirtualWorkbook(xl *excelize.File) (reqs []virtualDeviceReq, rows []in
 
 	// Group every child sheet by device_key.
 	ports := map[string][]vdPort{}
-	forEachRow(sheetRows(xl, "Ports"), func(_ int, g func(string) string) {
+	forEachRow(sheetRows(xl, "Ports"), func(rn int, g func(string) string) {
 		if vdAtoi(g("if_index")) <= 0 {
 			return
+		}
+		rawRole := strings.TrimSpace(g("role"))
+		role := normPortRole(rawRole)
+		if rawRole != "" && role == "unknown" && strings.ToLower(rawRole) != "unknown" {
+			errs = append(errs, vdImportError{Sheet: "Ports", Row: rn, Field: "role",
+				Message: "role " + strconv.Quote(rawRole) + " not recognized — use access, trunk or uplink (stored as unknown)"})
 		}
 		ports[keyOf(g)] = append(ports[keyOf(g)], vdPort{
 			IfIndex: vdAtoi(g("if_index")), Name: g("name"), Alias: g("alias"),
 			Up: yesish(g("up")), AdminDown: yesish(g("admin_down")), SpeedMbps: vdAtoi(g("speed_mbps")),
-			VLAN: vdAtoi(g("vlan")), TrunkVLANs: vdAtoiList(g("trunk_vlans")), Role: g("role"), MAC: g("mac"),
+			VLAN: vdAtoi(g("vlan")), TrunkVLANs: vdAtoiList(g("trunk_vlans")), Role: role, MAC: g("mac"),
 		})
 	})
 	vlans := map[string][]vdVlan{}

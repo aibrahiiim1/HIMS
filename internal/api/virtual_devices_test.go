@@ -235,6 +235,21 @@ func TestParseVirtualWorkbookOrphanChildRow(t *testing.T) {
 	}
 }
 
+func TestNormPortRole(t *testing.T) {
+	cases := map[string]string{
+		"access": "access", "Access": "access", " ACCESS ": "access",
+		"Acess": "access", "acess": "access", "edge": "access", "untagged": "access",
+		"trunk": "trunk", "Trunk": "trunk", "tagged": "trunk",
+		"uplink": "uplink", "Up-Link": "uplink", "core": "uplink",
+		"": "unknown", "weird": "unknown",
+	}
+	for in, want := range cases {
+		if got := normPortRole(in); got != want {
+			t.Errorf("normPortRole(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func itoaTest(n int) string {
 	if n == 0 {
 		return "0"
