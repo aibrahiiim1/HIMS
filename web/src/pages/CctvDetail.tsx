@@ -49,7 +49,7 @@ export function CctvDetail() {
       <div>
         <DeviceHeader deviceId={id!} icon={Camera} />
         <Panel>
-          <CctvCollect deviceId={id!} boundCredId={dev?.credential_id} compact label="Collect" />
+          <CctvCollect deviceId={id!} boundCredId={dev?.cctv_credential_id ?? dev?.credential_id} generalCredId={dev?.credential_id} compact label="Collect" />
         </Panel>
         <div className="kpi-grid">
           <Kpi label="Manufacturer" value={c?.manufacturer || '—'} icon={Camera} tone="info" />
@@ -210,7 +210,7 @@ export function CctvDetail() {
           <p className="muted" style={{ fontSize: 13, marginBottom: 12 }}>
             Pick the NVR's <strong>web admin</strong> login credential(s) to try — the ONVIF integration user is separate and is rejected by ISAPI. HIMS tries each selected credential and binds the first that authenticates. Selecting more than 3 of the same type warns first, since repeated wrong logins can trigger a Hikvision IP lockout.
           </p>
-          <CctvCollect deviceId={id!} boundCredId={dev?.credential_id} label="Collect NVR data" />
+          <CctvCollect deviceId={id!} boundCredId={dev?.cctv_credential_id ?? dev?.credential_id} generalCredId={dev?.credential_id} label="Collect NVR data" />
         </Panel>
       )}
     </div>

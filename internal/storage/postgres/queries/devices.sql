@@ -100,6 +100,12 @@ DELETE FROM devices WHERE id = ANY($1::uuid[]);
 -- Bind-on-success: record the credential that last authenticated.
 UPDATE devices SET credential_id = $2, updated_at = now() WHERE id = $1;
 
+-- name: SetDeviceCCTVCredential :exec
+-- Bind the WEB credential that last authenticated for CCTV (ONVIF/ISAPI)
+-- collection. Kept separate from credential_id so an SNMP discovery/monitor
+-- success can never overwrite the credential CCTV collection depends on.
+UPDATE devices SET cctv_credential_id = $2, updated_at = now() WHERE id = $1;
+
 -- name: TouchDeviceDiscovery :exec
 UPDATE devices SET last_discovery_at = $2, updated_at = now() WHERE id = $1;
 

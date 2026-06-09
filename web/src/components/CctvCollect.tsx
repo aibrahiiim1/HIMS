@@ -14,15 +14,19 @@ type CollectResp = { collected: boolean; reason?: string; detail?: string; categ
 const WEB_KINDS = ['onvif', 'http_basic']
 const SAME_KIND_WARN = 3
 
-export function CctvCollect({ deviceId, boundCredId, compact, label }: {
+export function CctvCollect({ deviceId, boundCredId, generalCredId, compact, label }: {
   deviceId: string
-  boundCredId?: string | null
+  boundCredId?: string | null // preferred CCTV (ONVIF/ISAPI) credential
+  generalCredId?: string | null // general/SNMP bound credential (for the dual-credential display)
   compact?: boolean
   label?: string
 }) {
   const qc = useQueryClient()
   const creds = useQuery({ queryKey: ['credentials'], queryFn: () => api.get<Credential[]>('/credentials') })
   const webCreds = useMemo(() => (creds.data ?? []).filter((c) => WEB_KINDS.includes(c.kind)), [creds.data])
+  const credName = (id?: string | null) => (id ? (creds.data ?? []).find((c) => c.id === id) : undefined)
+  const cctvCred = credName(boundCredId)
+  const genCred = credName(generalCredId)
 
   // Default selection = the credential bound to the device (if it's a web cred).
   const [sel, setSel] = useState<Set<string> | null>(null)
@@ -67,9 +71,15 @@ export function CctvCollect({ deviceId, boundCredId, compact, label }: {
 
   return (
     <div>
+      {!compact && (genCred || cctvCred) && (
+        <div className="row" style={{ flexWrap: 'wrap', gap: 16, fontSize: 12.5, marginBottom: 10 }}>
+          <span><KeyRound size={12} /> <strong>CCTV / ISAPI credential:</strong> {cctvCred ? `${cctvCred.name} · ${cctvCred.kind}` : <span className="muted">none yet — pick one below</span>}</span>
+          <span className="muted"><KeyRound size={12} /> General / SNMP bound: {genCred ? `${genCred.name} · ${genCred.kind}` : '—'}</span>
+        </div>
+      )}
       {!compact && (
         <p className="muted" style={{ fontSize: 13, marginBottom: 10 }}>
-          Select the web credential(s) to try. HIMS tries each in turn over ONVIF/ISAPI and binds the first that authenticates — the ONVIF integration user is separate from the device web login.
+          Select the web credential(s) to try. HIMS tries each in turn over ONVIF/ISAPI and binds the first that authenticates — the ONVIF integration user is separate from the device web login. This CCTV credential is kept separate from the SNMP credential, so SNMP discovery never overwrites it.
         </p>
       )}
 

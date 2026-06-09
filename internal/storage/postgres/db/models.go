@@ -274,7 +274,8 @@ type Device struct {
 	MonitoringEnabled          bool        `json:"monitoring_enabled"`
 	ManualClassificationReason string      `json:"manual_classification_reason"`
 	// Operator-entered placeholder device (not auto-discovered/probed); its inventory data is manual.
-	IsVirtual bool `json:"is_virtual"`
+	IsVirtual        bool       `json:"is_virtual"`
+	CctvCredentialID *uuid.UUID `json:"cctv_credential_id"`
 }
 
 type DeviceFact struct {

@@ -138,9 +138,18 @@ func (a *Applier) Apply(ctx context.Context, res discovery.HostResult, locationI
 		return uuid.Nil, err
 	}
 
-	// Bind the authenticating credential (bind-on-success).
+	// Bind the authenticating credential (bind-on-success) — but NEVER let an SNMP
+	// discovery success overwrite the credential on a camera/NVR/DVR. Those devices
+	// are collected over ONVIF/ISAPI with a WEB credential; clobbering it with the
+	// SNMP community breaks CCTV collection (the drift bug). SNMP identity is still
+	// captured below via applySNMPIdentity, and SNMP monitoring resolves its
+	// community from scope, so nothing is lost by leaving the binding alone.
 	if res.BoundCred != nil {
-		_ = a.w.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: dev.ID, CredentialID: &res.BoundCred.ID})
+		snmpCred := res.BoundCred.Kind == domain.CredSNMPv2c || res.BoundCred.Kind == domain.CredSNMPv3
+		cctvDev := dev.Category == string(domain.CatCamera) || dev.Category == string(domain.CatNVR) || dev.Category == string(domain.CatDVR)
+		if !(cctvDev && snmpCred) {
+			_ = a.w.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: dev.ID, CredentialID: &res.BoundCred.ID})
+		}
 	}
 
 	// Inferred roles (port-based candidates; source = "port").

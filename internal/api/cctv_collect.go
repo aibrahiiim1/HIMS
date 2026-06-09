@@ -90,9 +90,19 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device, selectedCre
 				add(c)
 			}
 		}
-	} else if d.CredentialID != nil {
-		if c, err := s.queries.GetCredential(ctx, *d.CredentialID); err == nil {
-			add(c)
+	} else {
+		// No explicit selection → prefer the durable CCTV web credential, then fall
+		// back to the generic bound credential. The generic one may have drifted to
+		// an SNMP credential (discovery/monitoring bind-on-success), which add()
+		// filters out — so cctv_credential_id is what keeps CCTV collection working.
+		pref := d.CctvCredentialID
+		if pref == nil {
+			pref = d.CredentialID
+		}
+		if pref != nil {
+			if c, err := s.queries.GetCredential(ctx, *pref); err == nil {
+				add(c)
+			}
 		}
 	}
 	if len(cands) == 0 {
@@ -145,6 +155,7 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device, selectedCre
 		})
 		cid := cd.id
 		_ = s.queries.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: d.ID, CredentialID: &cid})
+		_ = s.queries.SetDeviceCCTVCredential(ctx, db.SetDeviceCCTVCredentialParams{ID: d.ID, CctvCredentialID: &cid}) // durable CCTV web credential
 		_ = s.queries.UpdateDeviceMonitoringStatus(ctx, db.UpdateDeviceMonitoringStatusParams{ID: d.ID, Status: "up"})
 
 		res = cctvResult{Status: "collected", CredentialUsed: cd.name, Category: string(cat),
@@ -203,6 +214,7 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device, selectedCre
 		s.persistNVR(ctx, d, vendor, nvr) // nvr_info + channels + HDDs (recorders)
 		cid := cd.id
 		_ = s.queries.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: d.ID, CredentialID: &cid})
+		_ = s.queries.SetDeviceCCTVCredential(ctx, db.SetDeviceCCTVCredentialParams{ID: d.ID, CctvCredentialID: &cid}) // durable CCTV web credential
 		_ = s.queries.UpdateDeviceMonitoringStatus(ctx, db.UpdateDeviceMonitoringStatusParams{ID: d.ID, Status: "up"})
 
 		res = cctvResult{Status: "collected", CredentialUsed: cd.name, Category: string(cat),
@@ -283,6 +295,7 @@ func (s *Server) collectCCTVProfile(ctx context.Context, p db.VendorConnectionPr
 		s.persistNVR(ctx, d, vendor, nvr)
 		if p.CredentialID != nil {
 			_ = s.queries.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: d.ID, CredentialID: p.CredentialID})
+			_ = s.queries.SetDeviceCCTVCredential(ctx, db.SetDeviceCCTVCredentialParams{ID: d.ID, CctvCredentialID: p.CredentialID}) // durable CCTV web credential
 		}
 		_ = s.queries.UpdateDeviceMonitoringStatus(ctx, db.UpdateDeviceMonitoringStatusParams{ID: d.ID, Status: "up"})
 		out.CollectionOK = true
@@ -311,6 +324,7 @@ func (s *Server) collectCCTVProfile(ctx context.Context, p db.VendorConnectionPr
 	})
 	if p.CredentialID != nil {
 		_ = s.queries.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: d.ID, CredentialID: p.CredentialID})
+		_ = s.queries.SetDeviceCCTVCredential(ctx, db.SetDeviceCCTVCredentialParams{ID: d.ID, CctvCredentialID: p.CredentialID}) // durable CCTV web credential
 	}
 	_ = s.queries.UpdateDeviceMonitoringStatus(ctx, db.UpdateDeviceMonitoringStatusParams{ID: d.ID, Status: "up"})
 

@@ -49,11 +49,11 @@ func (f *fakeWriter) LiveDeviceByIP(_ context.Context, _ *netip.Addr) (db.Device
 }
 func (f *fakeWriter) CreateDevice(_ context.Context, arg db.CreateDeviceParams) (db.Device, error) {
 	f.created = append(f.created, arg)
-	return db.Device{ID: uuid.New(), Name: arg.Name}, nil
+	return db.Device{ID: uuid.New(), Name: arg.Name, Category: arg.Category, PrimaryIp: arg.PrimaryIp}, nil
 }
 func (f *fakeWriter) UpdateDiscoveredDevice(_ context.Context, arg db.UpdateDiscoveredDeviceParams) (db.Device, error) {
 	f.updated = append(f.updated, arg)
-	return db.Device{ID: arg.ID, Name: arg.Name}, nil
+	return db.Device{ID: arg.ID, Name: arg.Name, Category: arg.Category}, nil
 }
 func (f *fakeWriter) SetDeviceCredential(_ context.Context, arg db.SetDeviceCredentialParams) error {
 	f.creds = append(f.creds, arg)
@@ -394,6 +394,36 @@ func TestApply_LockedClassificationStillPreserved(t *testing.T) {
 	}
 	if len(f.updated) != 1 || f.updated[0].Category != string(domain.CatPrinter) {
 		t.Fatalf("operator lock not honored: %+v", f.updated)
+	}
+}
+
+// TestApply_SNMPDoesNotRebindCCTVCredential pins the credential-drift fix: an SNMP
+// discovery success on a camera/NVR/DVR must NOT bind/overwrite credential_id —
+// that would clobber the ONVIF/ISAPI web credential CCTV collection depends on.
+// A switch (non-CCTV) with the same SNMP credential is still bound normally.
+func TestApply_SNMPDoesNotRebindCCTVCredential(t *testing.T) {
+	for _, cat := range []domain.DeviceCategory{domain.CatNVR, domain.CatCamera, domain.CatDVR} {
+		f := &fakeWriter{}
+		res := discovery.HostResult{
+			IP:        netip.MustParseAddr("172.21.210.10"),
+			Alive:     true,
+			Match:     driver.Match{Confidence: 90, Category: cat},
+			BoundCred: &credresolver.CredRef{ID: uuid.New(), Kind: domain.CredSNMPv2c},
+		}
+		if _, err := New(f).Apply(context.Background(), res, nil); err != nil {
+			t.Fatalf("%s: Apply err %v", cat, err)
+		}
+		if len(f.creds) != 0 {
+			t.Errorf("%s: SNMP credential was bound (%d binds) — must be skipped on CCTV devices", cat, len(f.creds))
+		}
+	}
+	// Control: a switch authenticating via SNMP IS bound (guard only protects CCTV).
+	f := &fakeWriter{}
+	if _, err := New(f).Apply(context.Background(), switchResult(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.creds) != 1 {
+		t.Errorf("switch SNMP credential not bound (%d); guard must only protect camera/nvr/dvr", len(f.creds))
 	}
 }
 

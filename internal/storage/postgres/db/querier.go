@@ -610,6 +610,10 @@ type Querier interface {
 	// Operator manual override: lock (true) freezes auto-classification for this
 	// device; unlock (false) lets the next discovery re-classify it.
 	SetClassificationLock(ctx context.Context, arg SetClassificationLockParams) (Device, error)
+	// Bind the WEB credential that last authenticated for CCTV (ONVIF/ISAPI)
+	// collection. Kept separate from credential_id so an SNMP discovery/monitor
+	// success can never overwrite the credential CCTV collection depends on.
+	SetDeviceCCTVCredential(ctx context.Context, arg SetDeviceCCTVCredentialParams) error
 	// Bind-on-success: record the credential that last authenticated.
 	SetDeviceCredential(ctx context.Context, arg SetDeviceCredentialParams) error
 	// Stores the scan spec (mode/targets/creds) so the job can be re-run as-is.

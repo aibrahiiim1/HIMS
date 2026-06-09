@@ -149,6 +149,7 @@ export interface Device {
   status: string
   driver?: string | null
   credential_id?: string | null // bound credential (null = none); see PUT /devices/{id}/credential
+  cctv_credential_id?: string | null // CCTV (ONVIF/ISAPI) web credential, kept separate so SNMP can't overwrite it
   location_id?: string | null
   last_discovery_at?: string | null
   vlan?: string | null
