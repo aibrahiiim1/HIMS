@@ -13,6 +13,7 @@ import (
 	"context"
 	"crypto/md5" //nolint:gosec // HTTP Digest (RFC 2617) mandates MD5
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/xml"
@@ -242,16 +243,48 @@ func randHex(n int) string {
 	return hex.EncodeToString(b)
 }
 
+// PermissiveClient is an http.Client tuned for embedded devices: it skips cert
+// verification (NVRs/cameras ship self-signed certs) and offers the full cipher
+// set incl. legacy suites, since Go's modern defaults won't negotiate with the old
+// TLS stacks these devices run (e.g. RSA-kex GCM). Without this, HTTPS to a
+// Hikvision NVR fails with "tls: handshake failure".
+func PermissiveClient(timeout time.Duration) *http.Client {
+	var ids []uint16
+	for _, s := range tls.CipherSuites() {
+		ids = append(ids, s.ID)
+	}
+	for _, s := range tls.InsecureCipherSuites() {
+		ids = append(ids, s.ID)
+	}
+	return &http.Client{
+		Timeout: timeout,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{ //nolint:gosec // embedded devices use self-signed certs + legacy ciphers
+				InsecureSkipVerify: true,
+				MinVersion:         tls.VersionTLS10,
+				CipherSuites:       ids,
+			},
+		},
+	}
+}
+
 // CollectDeviceInfo identifies a Hikvision device by trying ISAPI deviceInfo over a
 // scheme/port ladder (HTTPS first, since NVRs commonly disable plain HTTP), and
-// returns the first endpoint that answers. Each attempt is bounded so a closed/hung
-// port doesn't stall the whole ladder.
+// returns the first endpoint that answers. A nil doer uses PermissiveClient so the
+// HTTPS rungs negotiate with the device's legacy TLS. Each attempt is bounded so a
+// closed/hung port doesn't stall the ladder; an authentication rejection short-
+// circuits (we found ISAPI — another port won't fix a wrong password).
 func CollectDeviceInfo(ctx context.Context, ip, user, pass string, doer Doer) (DeviceInfo, error) {
+	if doer == nil {
+		doer = PermissiveClient(15 * time.Second)
+	}
 	ladder := []string{
 		"https://" + ip,
 		"https://" + ip + ":8443",
 		"http://" + ip,
 		"http://" + ip + ":8000",
+		"http://" + ip + ":8080",
+		"http://" + ip + ":8010",
 	}
 	var lastErr error
 	for _, base := range ladder {
@@ -260,6 +293,9 @@ func CollectDeviceInfo(ctx context.Context, ip, user, pass string, doer Doer) (D
 		cancel()
 		if err == nil {
 			return info, nil
+		}
+		if strings.Contains(err.Error(), "authentication rejected") {
+			return DeviceInfo{}, err // ISAPI reachable; the credential is wrong
 		}
 		lastErr = err
 	}

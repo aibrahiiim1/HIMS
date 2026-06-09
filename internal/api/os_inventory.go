@@ -126,6 +126,8 @@ func categorizeCollectErr(method, errStr string) (reason, detail string) {
 			return "connection_refused", "vSphere connection refused — check the vCenter/ESXi URL and that 443 is open"
 		case "onvif":
 			return "connection_refused", "ONVIF/HTTP connection refused — check the device address and that the HTTP port is open"
+		case "isapi":
+			return "connection_refused", "ISAPI connection refused — check the device address and that its HTTP/HTTPS port is open"
 		}
 		return "ssh_unreachable", "SSH connection refused on 22 — enable sshd / open the port"
 	case strings.Contains(e, "timeout") || strings.Contains(e, "deadline") || strings.Contains(e, "i/o timeout"):
@@ -136,6 +138,8 @@ func categorizeCollectErr(method, errStr string) (reason, detail string) {
 			return "vsphere_timeout", "vSphere timed out (host slow, firewalled, or 443 filtered)"
 		case "onvif":
 			return "onvif_timeout", "ONVIF timed out (host slow, firewalled, or HTTP port filtered)"
+		case "isapi":
+			return "isapi_timeout", "ISAPI timed out (host slow, firewalled, or HTTP/HTTPS port filtered)"
 		}
 		return "ssh_timeout", "SSH timed out (host slow, firewalled, or 22 filtered)"
 	case strings.Contains(e, "no route") || strings.Contains(e, "no such host") || strings.Contains(e, "unreachable"):

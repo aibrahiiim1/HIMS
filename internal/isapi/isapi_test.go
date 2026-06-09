@@ -119,6 +119,29 @@ func (f *fakeDoer) Do(req *http.Request) (*http.Response, error) {
 	return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(nvrXML))}, nil
 }
 
+// always401 rejects every authenticated request (wrong password).
+type always401 struct{ calls int }
+
+func (a *always401) Do(req *http.Request) (*http.Response, error) {
+	a.calls++
+	h := http.Header{}
+	h.Set("WWW-Authenticate", `Digest realm="x", qop="auth", nonce="n"`)
+	return &http.Response{StatusCode: 401, Header: h, Body: io.NopCloser(strings.NewReader(""))}, nil
+}
+
+// A wrong credential must surface "authentication rejected" and short-circuit the
+// port ladder (reaching a 401 means ISAPI was found — other ports won't help).
+func TestCollectDeviceInfo_ShortCircuitsOnAuthReject(t *testing.T) {
+	d := &always401{}
+	_, err := CollectDeviceInfo(context.Background(), "10.0.0.10", "u", "wrong", d)
+	if err == nil || !strings.Contains(err.Error(), "authentication rejected") {
+		t.Fatalf("err = %v, want authentication rejected", err)
+	}
+	if d.calls != 2 { // one unauth + one digest on the first rung, then stop
+		t.Fatalf("calls = %d, want 2 (short-circuit, not the whole ladder)", d.calls)
+	}
+}
+
 func TestClient_DeviceInfo_DigestRoundTrip(t *testing.T) {
 	f := &fakeDoer{}
 	info, err := NewClient("https://10.0.0.10", "admin", "pw", f).DeviceInfo(context.Background())

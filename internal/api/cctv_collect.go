@@ -145,8 +145,8 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device) cctvResult 
 	// deviceType (NVR/DVR vs IPCamera) + model/serial, which BOTH classifies the
 	// device and provides its identity.
 	for _, cd := range cands {
-		ictx, cancel := context.WithTimeout(ctx, 40*time.Second) // 4-endpoint ladder
-		info, err := isapi.CollectDeviceInfo(ictx, ip, cd.user, cd.pass, doer)
+		ictx, cancel := context.WithTimeout(ctx, 60*time.Second) // port ladder
+		info, err := isapi.CollectDeviceInfo(ictx, ip, cd.user, cd.pass, nil) // nil → permissive TLS (legacy device ciphers)
 		cancel()
 		category, detail := "success", "ISAPI authenticated"
 		if err != nil {
@@ -234,8 +234,8 @@ func (s *Server) collectCCTVProfile(ctx context.Context, p db.VendorConnectionPr
 	}})
 	if err != nil {
 		// ONVIF unavailable — fall back to Hikvision ISAPI over HTTPS.
-		ictx, icancel := context.WithTimeout(ctx, 40*time.Second)
-		info2, ierr := isapi.CollectDeviceInfo(ictx, host, user, pass, doer)
+		ictx, icancel := context.WithTimeout(ctx, 60*time.Second)
+		info2, ierr := isapi.CollectDeviceInfo(ictx, host, user, pass, nil) // nil → permissive TLS
 		icancel()
 		icat, idet := "success", "ISAPI authenticated"
 		if ierr != nil {
