@@ -29,17 +29,22 @@ const sourceManual = "manual"
 
 var validDeviceStatus = map[string]bool{"up": true, "down": true, "warning": true, "unknown": true}
 
-// vdPort is one manually-entered switch/host port.
+// --- Category-aware payload ---------------------------------------------------
+// One superset request; createVirtualDevice/updateVirtualDevice persist only the
+// blocks relevant to the device's category into the SAME tables a real collection
+// fills (source=manual), so each category's existing detail page renders it.
+
 type vdPort struct {
-	IfIndex   int    `json:"if_index"`
-	Name      string `json:"name"`
-	Alias     string `json:"alias"`
-	Up        bool   `json:"up"`        // operational status (true=up → IF-MIB oper 1)
-	AdminDown bool   `json:"admin_down"` // operator shut the port (admin 2)
-	SpeedMbps int    `json:"speed_mbps"`
-	VLAN      int    `json:"vlan"`  // access/native VLAN (pvid)
-	Role      string `json:"role"`  // access|trunk|uplink|unknown
-	MAC       string `json:"mac"`
+	IfIndex    int    `json:"if_index"`
+	Name       string `json:"name"`
+	Alias      string `json:"alias"`
+	Up         bool   `json:"up"`         // operational status (true=up → IF-MIB oper 1)
+	AdminDown  bool   `json:"admin_down"` // operator shut the port (admin 2)
+	SpeedMbps  int    `json:"speed_mbps"`
+	VLAN       int    `json:"vlan"`        // access/native VLAN (untagged / PVID)
+	TrunkVLANs []int  `json:"trunk_vlans"` // tagged VLAN members (trunk)
+	Role       string `json:"role"`        // access|trunk|uplink|unknown
+	MAC        string `json:"mac"`
 }
 
 type vdVlan struct {
@@ -62,20 +67,136 @@ type vdMAC struct {
 	IfIndex int    `json:"if_index"`
 }
 
-// virtualDeviceReq is the create/update payload: device identity (reusing the
-// manual-add fields) + status + the full inventory config.
+type vdNIC struct {
+	Name      string `json:"name"`
+	MAC       string `json:"mac"`
+	IP        string `json:"ip"`
+	Gateway   string `json:"gateway"`
+	DNS       string `json:"dns"`
+	Zone      string `json:"zone"` // firewall: WAN/LAN/DMZ zone label
+	SpeedMbps int    `json:"speed_mbps"`
+}
+
+type vdDisk struct {
+	Name       string `json:"name"`
+	Model      string `json:"model"`
+	Filesystem string `json:"filesystem"`
+	TotalBytes int64  `json:"total_bytes"`
+	UsedBytes  int64  `json:"used_bytes"`
+	FreeBytes  int64  `json:"free_bytes"`
+}
+
+type vdSoftware struct {
+	Name      string `json:"name"`
+	Version   string `json:"version"`
+	Publisher string `json:"publisher"`
+}
+
+type vdVpn struct {
+	Name     string `json:"name"`
+	P1Name   string `json:"p1_name"`
+	RemoteGw string `json:"remote_gw"`
+	Status   string `json:"status"`
+}
+
+type vdHA struct {
+	Serial     string `json:"serial"`
+	Hostname   string `json:"hostname"`
+	SyncStatus string `json:"sync_status"`
+}
+
+type vdLicense struct {
+	Contract string `json:"contract"`
+	Expiry   string `json:"expiry"`
+}
+
+type vdFirewall struct {
+	HaMode       string `json:"ha_mode"`
+	HaGroupName  string `json:"ha_group_name"`
+	SessionCount int64  `json:"session_count"`
+}
+
+type vdWlan struct {
+	Vendor         string `json:"vendor"`
+	Version        string `json:"version"`
+	ControllerName string `json:"controller_name"`
+	Model          string `json:"model"`
+	Serial         string `json:"serial"`
+}
+
+type vdAP struct {
+	Name   string `json:"name"`
+	MAC    string `json:"mac"`
+	Model  string `json:"model"`
+	IP     string `json:"ip"`
+	Status string `json:"status"`
+	Serial string `json:"serial"`
+	Band   string `json:"band"`
+	Site   string `json:"site"`
+}
+
+type vdSSID struct {
+	Name     string `json:"name"`
+	Security string `json:"security"`
+	Band     string `json:"band"`
+	Vlan     string `json:"vlan"`
+	Status   string `json:"status"`
+}
+
+type vdClient struct {
+	MAC      string `json:"mac"`
+	IP       string `json:"ip"`
+	Hostname string `json:"hostname"`
+	ApName   string `json:"ap_name"`
+	Ssid     string `json:"ssid"`
+	Band     string `json:"band"`
+}
+
+type vdUPS struct {
+	Manufacturer  string `json:"manufacturer"`
+	Model         string `json:"model"`
+	BatteryStatus string `json:"battery_status"`
+	ChargePct     int    `json:"charge_pct"`
+	RuntimeMin    int    `json:"runtime_min"`
+	LoadPct       int    `json:"load_pct"`
+}
+
+// virtualDeviceReq is the create/update payload — identity + status + per-category
+// blocks. The handler reads only the blocks relevant to the category.
 type virtualDeviceReq struct {
 	manualDeviceReq
-	Status    string       `json:"status"` // operator-set; virtual devices aren't probed
-	Site      string       `json:"site"`
+	Status      string `json:"status"` // operator-set; virtual devices aren't probed
+	Site        string `json:"site"`
+	Notes       string `json:"notes"`
+	Criticality string `json:"criticality"`
+	// Switch / generic L2
 	Ports     []vdPort     `json:"ports"`
 	VLANs     []vdVlan     `json:"vlans"`
 	Neighbors []vdNeighbor `json:"neighbors"`
 	MACs      []vdMAC      `json:"macs"`
+	// Server / workstation
+	NICs     []vdNIC      `json:"nics"`
+	Disks    []vdDisk     `json:"disks"`
+	Roles    []string     `json:"roles"`
+	Software []vdSoftware `json:"software"`
+	// Firewall
+	Firewall   *vdFirewall `json:"firewall"`
+	VpnTunnels []vdVpn     `json:"vpn_tunnels"`
+	HAMembers  []vdHA      `json:"ha_members"`
+	Licenses   []vdLicense `json:"licenses"`
+	// Wireless controller
+	Wlan    *vdWlan    `json:"wlan"`
+	APs     []vdAP     `json:"aps"`
+	SSIDs   []vdSSID   `json:"ssids"`
+	Clients []vdClient `json:"clients"`
+	// UPS
+	UPS *vdUPS `json:"ups"`
+	// Scalar specs / notes that have no dedicated column (CPU, RAM, capacity, …).
+	Facts map[string]string `json:"facts"`
 }
 
 // createVirtualDevice handles POST /devices/virtual — create the device + persist
-// its full manual config in one call.
+// its category-specific manual config in one call.
 func (s *Server) createVirtualDevice(w http.ResponseWriter, r *http.Request) {
 	var req virtualDeviceReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -87,11 +208,8 @@ func (s *Server) createVirtualDevice(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	status := strings.TrimSpace(strings.ToLower(req.Status))
+	status := normVirtualStatus(req.Status, "up")
 	if status == "" {
-		status = "up"
-	}
-	if !validDeviceStatus[status] {
 		http.Error(w, "invalid status; use up, down, warning or unknown", http.StatusBadRequest)
 		return
 	}
@@ -107,18 +225,16 @@ func (s *Server) createVirtualDevice(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	s.writeVirtualConfig(r.Context(), dev.ID, &req)
+	s.setVirtualIdentityExtras(r.Context(), dev, &req) // notes/criticality
+	s.writeVirtualConfig(r.Context(), dev, &req)
 	s.audit(r, "inventory", "device.create_virtual", "device", dev.ID.String(),
-		"Created virtual device "+dev.Name, map[string]any{
-			"category": dev.Category, "ports": len(req.Ports), "vlans": len(req.VLANs),
-			"neighbors": len(req.Neighbors), "macs": len(req.MACs),
-		})
+		"Created virtual "+dev.Category+" "+dev.Name, map[string]any{"category": dev.Category})
 	out, _ := s.queries.GetDevice(r.Context(), dev.ID)
 	writeJSON(w, http.StatusCreated, out)
 }
 
-// updateVirtualDevice handles PUT /devices/virtual/{id} — replace the device's
-// identity + full config. Only virtual devices may be edited this way.
+// updateVirtualDevice handles PUT /devices/virtual/{id} — replace identity + the
+// category-specific config. Only virtual devices may be edited this way.
 func (s *Server) updateVirtualDevice(w http.ResponseWriter, r *http.Request) {
 	ctx, id, ok := pathDevice(w, r)
 	if !ok {
@@ -150,44 +266,108 @@ func (s *Server) updateVirtualDevice(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid category "+strconv.Quote(cat), http.StatusBadRequest)
 		return
 	}
-	status := strings.TrimSpace(strings.ToLower(req.Status))
+	status := normVirtualStatus(req.Status, cur.Status)
 	if status == "" {
-		status = cur.Status
-	}
-	if !validDeviceStatus[status] {
 		http.Error(w, "invalid status", http.StatusBadRequest)
 		return
 	}
-	if _, err := s.queries.UpdateDevice(ctx, db.UpdateDeviceParams{
+	crit := cur.Criticality
+	if strings.TrimSpace(req.Criticality) != "" && validCriticality[strings.TrimSpace(req.Criticality)] {
+		crit = strings.TrimSpace(req.Criticality)
+	}
+	notes := cur.Notes
+	if req.Notes != "" {
+		notes = strings.TrimSpace(req.Notes)
+	}
+	dev, err := s.queries.UpdateDevice(ctx, db.UpdateDeviceParams{
 		ID: id, Name: name, Category: cat,
 		Vendor: strPtr(req.Vendor), Model: strPtr(req.Model), Serial: strPtr(req.Serial),
 		OsVersion: strPtr(req.OSVersion), Hostname: strPtr(req.Hostname),
 		Vlan: strPtr(req.VLAN), DeviceClass: strPtr(req.Class), Location: strPtr(req.Location),
-		LocationID: parseUUIDPtr(req.LocationID), Subtype: cur.Subtype, Notes: cur.Notes,
-		Criticality: cur.Criticality, MonitoringEnabled: cur.MonitoringEnabled,
+		LocationID: parseUUIDPtr(req.LocationID), Subtype: cur.Subtype, Notes: notes,
+		Criticality: crit, MonitoringEnabled: cur.MonitoringEnabled,
 		ClassificationLocked: cur.ClassificationLocked, ManualClassificationReason: cur.ManualClassificationReason,
-	}); err != nil {
+	})
+	if err != nil {
 		writeErr(w, err)
 		return
 	}
 	_ = s.queries.UpdateDeviceMonitoringStatus(ctx, db.UpdateDeviceMonitoringStatusParams{ID: id, Status: status})
-	s.writeVirtualConfig(ctx, id, &req)
-	s.audit(r, "inventory", "device.update_virtual", "device", id.String(), "Updated virtual device "+name, nil)
+	dev.IsVirtual = true
+	s.writeVirtualConfig(ctx, dev, &req)
+	s.audit(r, "inventory", "device.update_virtual", "device", id.String(), "Updated virtual "+cat+" "+name, nil)
 	out, _ := s.queries.GetDevice(ctx, id)
 	writeJSON(w, http.StatusOK, out)
 }
 
-// writeVirtualConfig upserts the device's manual inventory then prunes any manual
-// rows not in this payload (so an update is a full replace of the manual config).
-// Real-collected rows (source != 'manual') are never touched.
-func (s *Server) writeVirtualConfig(ctx context.Context, devID uuid.UUID, req *virtualDeviceReq) {
-	poll := time.Now().UTC()
+// normVirtualStatus lowercases + validates an operator status; returns "" if
+// invalid, or the fallback when the input is blank.
+func normVirtualStatus(in, fallback string) string {
+	s := strings.TrimSpace(strings.ToLower(in))
+	if s == "" {
+		s = strings.TrimSpace(strings.ToLower(fallback))
+	}
+	if !validDeviceStatus[s] {
+		return ""
+	}
+	return s
+}
 
-	for _, p := range req.Ports {
+// setVirtualIdentityExtras applies notes/criticality on create (CreateDevice has
+// no columns for them) via a follow-up UpdateDevice.
+func (s *Server) setVirtualIdentityExtras(ctx context.Context, dev db.Device, req *virtualDeviceReq) {
+	notes := strings.TrimSpace(req.Notes)
+	crit := strings.TrimSpace(req.Criticality)
+	if notes == "" && crit == "" {
+		return
+	}
+	if crit != "" && !validCriticality[crit] {
+		crit = ""
+	}
+	_, _ = s.queries.UpdateDevice(ctx, db.UpdateDeviceParams{
+		ID: dev.ID, Name: dev.Name, Category: dev.Category,
+		Vendor: dev.Vendor, Model: dev.Model, Serial: dev.Serial, OsVersion: dev.OsVersion,
+		Hostname: dev.Hostname, Vlan: dev.Vlan, DeviceClass: dev.DeviceClass, Location: dev.Location,
+		LocationID: dev.LocationID, Subtype: dev.Subtype, Notes: notes, Criticality: crit,
+		MonitoringEnabled: dev.MonitoringEnabled, ClassificationLocked: dev.ClassificationLocked,
+		ManualClassificationReason: dev.ManualClassificationReason,
+	})
+}
+
+// writeVirtualConfig dispatches by category to the per-category persist function.
+// Each writes only its relevant tables (source=manual) and prunes stale manual
+// rows so an edit fully replaces the prior manual config. Real-collected rows are
+// never touched (DeleteStale* is scoped to source=manual).
+func (s *Server) writeVirtualConfig(ctx context.Context, dev db.Device, req *virtualDeviceReq) {
+	poll := time.Now().UTC()
+	s.writeVirtualFacts(ctx, dev.ID, req) // common: scalar specs + site
+	switch dev.Category {
+	case "switch", "router", "isp_router":
+		s.writeVirtualSwitch(ctx, dev.ID, req, poll)
+	case "firewall":
+		s.writeVirtualFirewall(ctx, dev.ID, req, poll)
+	case "server", "virtual_host":
+		s.writeVirtualServer(ctx, dev.ID, req, poll)
+	case "endpoint":
+		s.writeVirtualWorkstation(ctx, dev.ID, req, poll)
+	case "wireless_controller":
+		s.writeVirtualWireless(ctx, dev.ID, req, poll)
+	case "ups":
+		s.writeVirtualUPS(ctx, dev.ID, req)
+		s.writeVirtualNeighbors(ctx, dev.ID, req, poll)
+	default: // access_point, printer, camera, nvr, other, …
+		s.writeVirtualGeneric(ctx, dev.ID, req, poll)
+	}
+}
+
+// writeVirtualPorts upserts the port list as interfaces + their access/trunk VLAN
+// membership, then prunes stale manual rows.
+func (s *Server) writeVirtualPorts(ctx context.Context, devID uuid.UUID, ports []vdPort, poll time.Time) {
+	for _, p := range ports {
 		if p.IfIndex <= 0 {
 			continue
 		}
-		oper := int16(1) // up
+		oper := int16(1)
 		if !p.Up {
 			oper = 2
 		}
@@ -204,18 +384,27 @@ func (s *Server) writeVirtualConfig(ctx context.Context, devID uuid.UUID, req *v
 			Mac: strPtr(p.MAC), SpeedMbps: vdI32(p.SpeedMbps), AdminStatus: &admin, OperStatus: &oper,
 			PortRole: role, CollectionSource: sourceManual, LastSeenAt: poll,
 		})
-		// Access-VLAN membership (untagged) so the port shows its VLAN.
-		if p.VLAN > 0 {
+		if p.VLAN > 0 { // access / native (untagged)
 			_ = s.queries.UpsertPortVlan(ctx, db.UpsertPortVlanParams{
 				DeviceID: devID, IfIndex: int32(p.IfIndex), VlanID: int32(p.VLAN),
 				Tagged: false, CollectionSource: sourceManual, LastSeenAt: poll,
 			})
 		}
+		for _, tv := range p.TrunkVLANs { // tagged (trunk) members
+			if tv > 0 && tv != p.VLAN {
+				_ = s.queries.UpsertPortVlan(ctx, db.UpsertPortVlanParams{
+					DeviceID: devID, IfIndex: int32(p.IfIndex), VlanID: int32(tv),
+					Tagged: true, CollectionSource: sourceManual, LastSeenAt: poll,
+				})
+			}
+		}
 	}
 	_ = s.queries.DeleteStaleInterfaces(ctx, db.DeleteStaleInterfacesParams{DeviceID: devID, LastSeenAt: poll, CollectionSource: sourceManual})
 	_ = s.queries.DeleteStalePortVlans(ctx, db.DeleteStalePortVlansParams{DeviceID: devID, LastSeenAt: poll, CollectionSource: sourceManual})
+}
 
-	for _, v := range req.VLANs {
+func (s *Server) writeVirtualVlans(ctx context.Context, devID uuid.UUID, vlans []vdVlan, poll time.Time) {
+	for _, v := range vlans {
 		if v.ID <= 0 {
 			continue
 		}
@@ -224,13 +413,15 @@ func (s *Server) writeVirtualConfig(ctx context.Context, devID uuid.UUID, req *v
 		})
 	}
 	_ = s.queries.DeleteStaleVlans(ctx, db.DeleteStaleVlansParams{DeviceID: devID, LastSeenAt: poll, CollectionSource: sourceManual})
+}
 
+func (s *Server) writeVirtualNeighbors(ctx context.Context, devID uuid.UUID, req *virtualDeviceReq, poll time.Time) {
 	for _, n := range req.Neighbors {
 		if strings.TrimSpace(n.RemoteName) == "" && strings.TrimSpace(n.RemotePort) == "" {
 			continue
 		}
 		proto := strings.TrimSpace(strings.ToLower(n.Protocol))
-		if proto == "" {
+		if proto != "lldp" && proto != "cdp" {
 			proto = sourceManual
 		}
 		_, _ = s.queries.UpsertNeighbor(ctx, db.UpsertNeighborParams{
@@ -240,8 +431,10 @@ func (s *Server) writeVirtualConfig(ctx context.Context, devID uuid.UUID, req *v
 		})
 	}
 	_ = s.queries.DeleteStaleNeighbors(ctx, db.DeleteStaleNeighborsParams{DeviceID: devID, LastSeenAt: poll, CollectionSource: sourceManual})
+}
 
-	for _, m := range req.MACs {
+func (s *Server) writeVirtualMACs(ctx context.Context, devID uuid.UUID, macs []vdMAC, poll time.Time) {
+	for _, m := range macs {
 		mac := strings.TrimSpace(m.MAC)
 		if mac == "" {
 			continue
@@ -254,7 +447,308 @@ func (s *Server) writeVirtualConfig(ctx context.Context, devID uuid.UUID, req *v
 	_ = s.queries.DeleteStaleMACEntries(ctx, db.DeleteStaleMACEntriesParams{DeviceID: devID, LastSeenAt: poll, CollectionSource: sourceManual})
 }
 
+// writeVirtualFacts stores scalar specs (CPU/RAM/capacity/…) + site as device
+// facts (driver=manual) so they render in every detail page's facts panel.
+func (s *Server) writeVirtualFacts(ctx context.Context, devID uuid.UUID, req *virtualDeviceReq) {
+	put := func(k, v string) {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			return
+		}
+		val := v
+		_ = s.queries.UpsertDeviceFact(ctx, db.UpsertDeviceFactParams{DeviceID: devID, Key: k, Value: &val, Driver: sourceManual, ValueJson: nil})
+	}
+	put("site", req.Site)
+	for k, v := range req.Facts {
+		k = strings.TrimSpace(k)
+		if k != "" {
+			put(k, v)
+		}
+	}
+}
+
+func (s *Server) writeVirtualSwitch(ctx context.Context, devID uuid.UUID, req *virtualDeviceReq, poll time.Time) {
+	s.writeVirtualPorts(ctx, devID, req.Ports, poll)
+	s.writeVirtualVlans(ctx, devID, req.VLANs, poll)
+	s.writeVirtualNeighbors(ctx, devID, req, poll)
+	s.writeVirtualMACs(ctx, devID, req.MACs, poll)
+}
+
+func (s *Server) writeVirtualFirewall(ctx context.Context, devID uuid.UUID, req *virtualDeviceReq, poll time.Time) {
+	// WAN/LAN/DMZ interfaces → interfaces rows (alias=zone); IP/zone also as facts.
+	for i, n := range req.NICs {
+		name := strings.TrimSpace(n.Name)
+		if name == "" {
+			continue
+		}
+		oper := int16(1)
+		_, _ = s.queries.UpsertInterface(ctx, db.UpsertInterfaceParams{
+			DeviceID: devID, IfIndex: int32(i + 1), IfName: &name, IfAlias: strPtr(n.Zone),
+			Mac: strPtr(n.MAC), SpeedMbps: vdI32(n.SpeedMbps), OperStatus: &oper,
+			PortRole: "unknown", CollectionSource: sourceManual, LastSeenAt: poll,
+		})
+		if n.IP != "" {
+			v := n.IP
+			_ = s.queries.UpsertDeviceFact(ctx, db.UpsertDeviceFactParams{DeviceID: devID, Key: "interface." + name + ".ip", Value: &v, Driver: sourceManual})
+		}
+	}
+	_ = s.queries.DeleteStaleInterfaces(ctx, db.DeleteStaleInterfacesParams{DeviceID: devID, LastSeenAt: poll, CollectionSource: sourceManual})
+
+	if f := req.Firewall; f != nil {
+		mode := strings.TrimSpace(f.HaMode)
+		if mode == "" {
+			mode = "standalone"
+		}
+		_ = s.queries.UpsertFirewallStatus(ctx, db.UpsertFirewallStatusParams{
+			DeviceID: devID, HaMode: mode, HaGroupName: strPtr(f.HaGroupName),
+			HaMemberCount: int32(len(req.HAMembers)), SessionCount: vdI64(f.SessionCount),
+			CollectionSource: sourceManual, LastSeenAt: poll,
+		})
+	}
+	for _, t := range req.VpnTunnels {
+		if strings.TrimSpace(t.Name) == "" {
+			continue
+		}
+		st := strings.TrimSpace(t.Status)
+		if st == "" {
+			st = "unknown"
+		}
+		_ = s.queries.UpsertVpnTunnel(ctx, db.UpsertVpnTunnelParams{
+			DeviceID: devID, TunnelName: t.Name, P1Name: strPtr(t.P1Name), RemoteGw: parseIPPtr(t.RemoteGw),
+			Status: st, CollectionSource: sourceManual, LastSeenAt: poll,
+		})
+	}
+	_ = s.queries.DeleteStaleVpnTunnels(ctx, db.DeleteStaleVpnTunnelsParams{DeviceID: devID, LastSeenAt: poll, CollectionSource: sourceManual})
+
+	for _, h := range req.HAMembers {
+		if strings.TrimSpace(h.Serial) == "" {
+			continue
+		}
+		sync := strings.TrimSpace(h.SyncStatus)
+		if sync == "" {
+			sync = "unknown"
+		}
+		_ = s.queries.UpsertHAMember(ctx, db.UpsertHAMemberParams{
+			DeviceID: devID, Serial: h.Serial, Hostname: strPtr(h.Hostname), SyncStatus: sync,
+			CollectionSource: sourceManual, LastSeenAt: poll,
+		})
+	}
+	_ = s.queries.DeleteStaleHAMembers(ctx, db.DeleteStaleHAMembersParams{DeviceID: devID, LastSeenAt: poll, CollectionSource: sourceManual})
+
+	for _, l := range req.Licenses {
+		if strings.TrimSpace(l.Contract) == "" {
+			continue
+		}
+		_ = s.queries.UpsertLicense(ctx, db.UpsertLicenseParams{
+			DeviceID: devID, Contract: l.Contract, Expiry: strPtr(l.Expiry),
+			CollectionSource: sourceManual, LastSeenAt: poll,
+		})
+	}
+	_ = s.queries.DeleteStaleLicenses(ctx, db.DeleteStaleLicensesParams{DeviceID: devID, LastSeenAt: poll, CollectionSource: sourceManual})
+
+	s.writeVirtualNeighbors(ctx, devID, req, poll)
+}
+
+func (s *Server) writeVirtualServer(ctx context.Context, devID uuid.UUID, req *virtualDeviceReq, poll time.Time) {
+	// NICs → interfaces (IP as a fact, since interfaces has no IP column).
+	for i, n := range req.NICs {
+		name := strings.TrimSpace(n.Name)
+		if name == "" {
+			continue
+		}
+		oper := int16(1)
+		_, _ = s.queries.UpsertInterface(ctx, db.UpsertInterfaceParams{
+			DeviceID: devID, IfIndex: int32(i + 1), IfName: &name, Mac: strPtr(n.MAC),
+			SpeedMbps: vdI32(n.SpeedMbps), OperStatus: &oper, PortRole: "unknown",
+			CollectionSource: sourceManual, LastSeenAt: poll,
+		})
+		if n.IP != "" {
+			v := n.IP
+			_ = s.queries.UpsertDeviceFact(ctx, db.UpsertDeviceFactParams{DeviceID: devID, Key: "nic." + name + ".ip", Value: &v, Driver: sourceManual})
+		}
+	}
+	_ = s.queries.DeleteStaleInterfaces(ctx, db.DeleteStaleInterfacesParams{DeviceID: devID, LastSeenAt: poll, CollectionSource: sourceManual})
+
+	for i, d := range req.Disks {
+		if strings.TrimSpace(d.Name) == "" && d.TotalBytes == 0 {
+			continue
+		}
+		_ = s.queries.UpsertServerStorage(ctx, db.UpsertServerStorageParams{
+			DeviceID: devID, HrIndex: int32(i + 1), Descr: strPtr(orName(d.Name, d.Model)),
+			StorageType: "disk", TotalBytes: vdI64(d.TotalBytes), UsedBytes: vdI64(d.UsedBytes),
+			CollectionSource: sourceManual, LastSeenAt: poll,
+		})
+	}
+	_ = s.queries.DeleteStaleServerStorage(ctx, db.DeleteStaleServerStorageParams{DeviceID: devID, LastSeenAt: poll, CollectionSource: sourceManual})
+
+	// Roles → device_roles (replace manual set).
+	_ = s.queries.DeleteManualDeviceRoles(ctx, devID)
+	for _, role := range req.Roles {
+		role = strings.TrimSpace(role)
+		if role == "" {
+			continue
+		}
+		_ = s.queries.AddDeviceRole(ctx, db.AddDeviceRoleParams{DeviceID: devID, Role: role, Source: sourceManual})
+	}
+}
+
+func (s *Server) writeVirtualWorkstation(ctx context.Context, devID uuid.UUID, req *virtualDeviceReq, poll time.Time) {
+	host := strings.TrimSpace(req.Hostname)
+	if host == "" {
+		host = strings.TrimSpace(req.Name)
+	}
+	_, _ = s.queries.UpsertOSInventory(ctx, db.UpsertOSInventoryParams{
+		DeviceID: devID, CollectionMethod: sourceManual, Hostname: strPtr(host),
+		OsCaption: strPtr(req.OSVersion),
+	})
+	for _, n := range req.NICs {
+		name := strings.TrimSpace(n.Name)
+		if name == "" {
+			name = "nic"
+		}
+		_ = s.queries.UpsertOSNic(ctx, db.UpsertOSNicParams{
+			DeviceID: devID, Name: name, Mac: strPtr(n.MAC), IpAddresses: strPtr(n.IP),
+			Gateway: strPtr(n.Gateway), DnsServers: strPtr(n.DNS),
+			CollectionSource: sourceManual, LastSeenAt: poll,
+		})
+	}
+	_ = s.queries.DeleteStaleOSNics(ctx, db.DeleteStaleOSNicsParams{DeviceID: devID, CollectionSource: sourceManual, LastSeenAt: poll})
+
+	for _, d := range req.Disks {
+		name := strings.TrimSpace(d.Name)
+		if name == "" {
+			continue
+		}
+		_ = s.queries.UpsertOSDisk(ctx, db.UpsertOSDiskParams{
+			DeviceID: devID, Name: name, Model: strPtr(d.Model), Filesystem: strPtr(d.Filesystem),
+			TotalBytes: vdI64(d.TotalBytes), FreeBytes: vdI64(d.FreeBytes),
+			CollectionSource: sourceManual, LastSeenAt: poll,
+		})
+	}
+	_ = s.queries.DeleteStaleOSDisks(ctx, db.DeleteStaleOSDisksParams{DeviceID: devID, CollectionSource: sourceManual, LastSeenAt: poll})
+
+	for _, sw := range req.Software {
+		if strings.TrimSpace(sw.Name) == "" {
+			continue
+		}
+		_ = s.queries.UpsertOSSoftware(ctx, db.UpsertOSSoftwareParams{
+			DeviceID: devID, Name: sw.Name, Version: sw.Version, Publisher: strPtr(sw.Publisher),
+			CollectionSource: sourceManual, LastSeenAt: poll,
+		})
+	}
+	_ = s.queries.DeleteStaleOSSoftware(ctx, db.DeleteStaleOSSoftwareParams{DeviceID: devID, CollectionSource: sourceManual, LastSeenAt: poll})
+
+	for _, role := range req.Roles {
+		role = strings.TrimSpace(role)
+		if role == "" {
+			continue
+		}
+		_ = s.queries.UpsertOSRole(ctx, db.UpsertOSRoleParams{DeviceID: devID, Role: role, CollectionSource: sourceManual, LastSeenAt: poll})
+	}
+	_ = s.queries.DeleteStaleOSRoles(ctx, db.DeleteStaleOSRolesParams{DeviceID: devID, CollectionSource: sourceManual, LastSeenAt: poll})
+
+	s.writeVirtualNeighbors(ctx, devID, req, poll) // connected switch/port
+}
+
+func (s *Server) writeVirtualWireless(ctx context.Context, devID uuid.UUID, req *virtualDeviceReq, poll time.Time) {
+	w := req.Wlan
+	if w == nil {
+		w = &vdWlan{}
+	}
+	_, _ = s.queries.UpsertWLANControllerInfo(ctx, db.UpsertWLANControllerInfoParams{
+		DeviceID: devID, Vendor: strPtr(w.Vendor), Version: strPtr(w.Version),
+		ApCount: int32(len(req.APs)), ClientCount: int32(len(req.Clients)), Source: sourceManual,
+		ControllerName: w.ControllerName, Model: w.Model, Serial: w.Serial, SsidCount: int32(len(req.SSIDs)),
+	})
+	for _, ap := range req.APs {
+		if strings.TrimSpace(ap.Name) == "" && strings.TrimSpace(ap.MAC) == "" {
+			continue
+		}
+		st := strings.TrimSpace(ap.Status)
+		if st == "" {
+			st = "unknown"
+		}
+		_, _ = s.queries.UpsertAccessPoint(ctx, db.UpsertAccessPointParams{
+			ControllerDeviceID: devID, Name: orName(ap.Name, ap.MAC), Mac: strPtr(ap.MAC), Model: strPtr(ap.Model),
+			Ip: parseIPPtr(ap.IP), Status: st, Serial: ap.Serial, Band: ap.Band, Site: ap.Site, Source: sourceManual,
+		})
+	}
+	_ = s.queries.DeleteStaleAccessPoints(ctx, db.DeleteStaleAccessPointsParams{ControllerDeviceID: devID, Source: sourceManual, CollectedAt: poll})
+
+	for _, sid := range req.SSIDs {
+		if strings.TrimSpace(sid.Name) == "" {
+			continue
+		}
+		st := strings.TrimSpace(sid.Status)
+		if st == "" {
+			st = "unknown"
+		}
+		_, _ = s.queries.UpsertWirelessSSID(ctx, db.UpsertWirelessSSIDParams{
+			ControllerDeviceID: devID, Name: sid.Name, Status: st, Security: sid.Security,
+			Band: sid.Band, Vlan: sid.Vlan, Source: sourceManual,
+		})
+	}
+	_ = s.queries.DeleteStaleWirelessSSIDs(ctx, db.DeleteStaleWirelessSSIDsParams{ControllerDeviceID: devID, Source: sourceManual, CollectedAt: poll})
+
+	for _, c := range req.Clients {
+		if strings.TrimSpace(c.MAC) == "" {
+			continue
+		}
+		_, _ = s.queries.UpsertWirelessClient(ctx, db.UpsertWirelessClientParams{
+			ControllerDeviceID: devID, Mac: normMAC(c.MAC), Ip: c.IP, Hostname: c.Hostname,
+			ApName: c.ApName, Ssid: c.Ssid, Band: c.Band, Source: sourceManual,
+		})
+	}
+	_ = s.queries.DeleteStaleWirelessClients(ctx, db.DeleteStaleWirelessClientsParams{ControllerDeviceID: devID, Source: sourceManual, CollectedAt: poll})
+}
+
+func (s *Server) writeVirtualUPS(ctx context.Context, devID uuid.UUID, req *virtualDeviceReq) {
+	u := req.UPS
+	if u == nil {
+		return
+	}
+	bs := strings.TrimSpace(u.BatteryStatus)
+	if bs == "" {
+		bs = "unknown"
+	}
+	_ = s.queries.UpsertUPSStatus(ctx, db.UpsertUPSStatusParams{
+		DeviceID: devID, Manufacturer: strPtr(u.Manufacturer), Model: strPtr(u.Model),
+		BatteryStatus: bs, ChargePct: vdI32(u.ChargePct), RuntimeMin: vdI32(u.RuntimeMin), LoadPct: vdI32(u.LoadPct),
+		LastSeenAt: time.Now().UTC(),
+	})
+}
+
+// writeVirtualGeneric handles AP / printer / camera / NVR / other: a connected
+// switch/port neighbor + any L2 detail the operator entered (so "Other" can still
+// model ports/VLANs/MACs if needed).
+func (s *Server) writeVirtualGeneric(ctx context.Context, devID uuid.UUID, req *virtualDeviceReq, poll time.Time) {
+	if len(req.Ports) > 0 {
+		s.writeVirtualPorts(ctx, devID, req.Ports, poll)
+	}
+	if len(req.VLANs) > 0 {
+		s.writeVirtualVlans(ctx, devID, req.VLANs, poll)
+	}
+	if len(req.MACs) > 0 {
+		s.writeVirtualMACs(ctx, devID, req.MACs, poll)
+	}
+	s.writeVirtualNeighbors(ctx, devID, req, poll)
+}
+
 // --- helpers ----------------------------------------------------------------
+
+func vdI64(v int64) *int64 {
+	if v == 0 {
+		return nil
+	}
+	return &v
+}
+
+func orName(a, b string) string {
+	if strings.TrimSpace(a) != "" {
+		return a
+	}
+	return b
+}
 
 func vdI32(v int) *int32 {
 	if v == 0 {
@@ -390,7 +884,8 @@ func (s *Server) importVirtualXLSX(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = s.queries.MarkDeviceVirtual(r.Context(), db.MarkDeviceVirtualParams{ID: device.ID, IsVirtual: true})
-	s.writeVirtualConfig(r.Context(), device.ID, &req)
+	device.IsVirtual = true
+	s.writeVirtualConfig(r.Context(), device, &req)
 	s.audit(r, "inventory", "device.import_virtual", "device", device.ID.String(),
 		"Imported virtual device "+device.Name, map[string]any{"ports": len(req.Ports), "vlans": len(req.VLANs), "neighbors": len(req.Neighbors), "macs": len(req.MACs)})
 

@@ -62,6 +62,18 @@ func (q *Queries) BulkAssignClassification(ctx context.Context, arg BulkAssignCl
 	return result.RowsAffected(), nil
 }
 
+const countDevices = `-- name: CountDevices :one
+SELECT COUNT(*)::bigint FROM devices WHERE deleted_at IS NULL
+`
+
+// Total live devices (for the dashboard total / discovered split).
+func (q *Queries) CountDevices(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countDevices)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const countVirtualDevices = `-- name: CountVirtualDevices :one
 SELECT COUNT(*)::bigint FROM devices WHERE is_virtual AND deleted_at IS NULL
 `
@@ -180,6 +192,16 @@ func (q *Queries) DeleteDevices(ctx context.Context, dollar_1 []uuid.UUID) (int6
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const deleteManualDeviceRoles = `-- name: DeleteManualDeviceRoles :exec
+DELETE FROM device_roles WHERE device_id = $1 AND source = 'manual'
+`
+
+// Clear operator-entered roles before re-writing them (virtual-device edit).
+func (q *Queries) DeleteManualDeviceRoles(ctx context.Context, deviceID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteManualDeviceRoles, deviceID)
+	return err
 }
 
 const getDevice = `-- name: GetDevice :one

@@ -58,6 +58,8 @@ type Querier interface {
 	// Overview KPIs: total versions, distinct devices backed up, and changes today.
 	CountConfigBackupStats(ctx context.Context) (CountConfigBackupStatsRow, error)
 	CountCredentialsNeedingReentry(ctx context.Context) (int64, error)
+	// Total live devices (for the dashboard total / discovered split).
+	CountDevices(ctx context.Context) (int64, error)
 	CountDevicesNeedingAttention(ctx context.Context) (int64, error)
 	// ===== Credential secret accounting / recovery =============================
 	CountEncryptedCredentials(ctx context.Context) (int64, error)
@@ -141,6 +143,8 @@ type Querier interface {
 	DeleteLocation(ctx context.Context, id uuid.UUID) error
 	DeleteLookup(ctx context.Context, id uuid.UUID) error
 	DeleteMaintenanceWindow(ctx context.Context, id uuid.UUID) error
+	// Clear operator-entered roles before re-writing them (virtual-device edit).
+	DeleteManualDeviceRoles(ctx context.Context, deviceID uuid.UUID) error
 	DeleteMibPack(ctx context.Context, id uuid.UUID) error
 	DeleteMibPackTable(ctx context.Context, id uuid.UUID) error
 	DeleteMibWalkRows(ctx context.Context, arg DeleteMibWalkRowsParams) error

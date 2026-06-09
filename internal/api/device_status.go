@@ -43,6 +43,7 @@ const (
 	MgmtNeedsAgent       = "needs_agent"
 	MgmtAgentOffline     = "agent_offline"
 	MgmtCollectionFailed = "collection_failed"
+	MgmtVirtual          = "virtual" // operator-entered placeholder; not probed/monitored
 )
 
 // reachabilityFromStatus maps the honest backend device.status to a reachability
@@ -146,6 +147,14 @@ type deviceStatus struct {
 }
 
 func (m *statusMaps) statusFor(d db.Device) deviceStatus {
+	// Virtual devices are operator-entered placeholders that are never probed, so
+	// they must not appear offline/unmanaged or generate monitoring noise. Their
+	// reachability honestly reflects the operator-set status; management is a
+	// distinct "virtual" state (not a credential/collection gap). This also keeps
+	// them out of every management-gap data-quality bucket below.
+	if d.IsVirtual {
+		return deviceStatus{Reachability: reachabilityFromStatus(d.Status), Management: MgmtVirtual}
+	}
 	reach := reachabilityFromStatus(d.Status)
 	state, managedBy := m.deriveManagement(d)
 	return deviceStatus{
