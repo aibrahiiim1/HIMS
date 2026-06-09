@@ -42,6 +42,8 @@ interface DashboardData {
     devices_needing_attention?: number
     total_expenses?: number
     virtual_devices?: number
+    total_devices?: number
+    discovered_devices?: number
   }
 }
 
@@ -257,7 +259,7 @@ export function Dashboard() {
 
       {/* KPI row */}
       <div className="kpi-grid kpi-6">
-        <Kpi label="Total Devices" value={total} icon={Boxes} tone="info" sub={h.virtual_devices ? `${byType.length} categories · ${h.virtual_devices} virtual` : `${byType.length} categories`} />
+        <Kpi label="Total Devices" value={total} icon={Boxes} tone="info" sub={h.virtual_devices ? `${h.discovered_devices ?? (total - h.virtual_devices)} discovered · ${h.virtual_devices} virtual` : `${byType.length} categories`} />
         <Kpi
           label="Online"
           value={up}

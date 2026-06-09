@@ -36,6 +36,7 @@ import { Mibs } from './pages/Mibs'
 import { Settings } from './pages/Settings'
 import { Inventory } from './pages/Inventory'
 import { VirtualDeviceForm } from './pages/VirtualDeviceForm'
+import { AddVirtualButton } from './components/AddVirtualButton'
 import { MissingClassification } from './pages/MissingClassification'
 import { UnmanagedDevices } from './pages/UnmanagedDevices'
 import { UnmappedDevices } from './pages/UnmappedDevices'
@@ -114,25 +115,26 @@ function Shell({ me, onLogout }: { me?: AuthMe; onLogout: () => void }) {
             <Route path="/discovery/jobs/:jobId/results" element={<ScanJobResults />} />
             <Route path="/discovery/jobs/:jobId/live" element={<LiveDiscovery />} />
             <Route path="/discovery/results" element={<ScanResultsRedirect />} />
-            <Route path="/" element={<DeviceList category="switch" title="Switches" detailBase="/devices" />} />
-            <Route path="/servers" element={<DeviceList category="server" title="Servers" detailBase="/servers" />} />
-            <Route path="/firewalls" element={<DeviceList category="firewall" title="Firewalls" detailBase="/firewalls" />} />
+            <Route path="/" element={<DeviceList category="switch" title="Switches" detailBase="/devices" headerExtra={<AddVirtualButton type="switch" label="Switch" />} />} />
+            <Route path="/servers" element={<DeviceList category="server" title="Servers" detailBase="/servers" headerExtra={<AddVirtualButton type="server" label="Server" />} />} />
+            <Route path="/firewalls" element={<DeviceList category="firewall" title="Firewalls" detailBase="/firewalls" headerExtra={<AddVirtualButton type="firewall" label="Firewall" />} />} />
             <Route path="/devices/virtual/new" element={<VirtualDeviceForm />} />
+            <Route path="/devices/virtual/:id/edit" element={<VirtualDeviceForm />} />
             <Route path="/devices/:id" element={<DeviceDetailDispatch />} />
             <Route path="/servers/:id" element={<ServerDetail />} />
             <Route path="/virtual-hosts" element={<DeviceList category="virtual_host" title="Virtual Hosts" detailBase="/virtual-hosts" />} />
             <Route path="/virtual-hosts/:id" element={<VirtualHostDetail />} />
             <Route path="/firewalls/:id" element={<FirewallDetail />} />
-            <Route path="/cameras" element={<DeviceList category="camera" title="Cameras" detailBase="/cctv" />} />
-            <Route path="/nvrs" element={<DeviceList category="nvr" title="NVR / DVR" detailBase="/cctv" />} />
+            <Route path="/cameras" element={<DeviceList category="camera" title="Cameras" detailBase="/cctv" headerExtra={<AddVirtualButton type="camera" label="Camera" />} />} />
+            <Route path="/nvrs" element={<DeviceList category="nvr" title="NVR / DVR" detailBase="/cctv" headerExtra={<AddVirtualButton type="nvr" label="NVR" />} />} />
             <Route path="/cctv/:id" element={<CctvDetail />} />
             <Route path="/wlan" element={<WirelessControllers />} />
             <Route path="/wlan/:id" element={<WirelessDetail />} />
-            <Route path="/workstations" element={<DeviceList category="endpoint" title="Workstations" detailBase="/workstations" />} />
+            <Route path="/workstations" element={<DeviceList category="endpoint" title="Workstations" detailBase="/workstations" headerExtra={<AddVirtualButton type="endpoint" label="Workstation" />} />} />
             <Route path="/workstations/:id" element={<EndpointDetail />} />
-            <Route path="/printers" element={<DeviceList category="printer" title="Printers" detailBase="/printers" />} />
+            <Route path="/printers" element={<DeviceList category="printer" title="Printers" detailBase="/printers" headerExtra={<AddVirtualButton type="printer" label="Printer" />} />} />
             <Route path="/printers/:id" element={<PrinterDetail />} />
-            <Route path="/ups" element={<DeviceList category="ups" title="UPS Units" detailBase="/ups" />} />
+            <Route path="/ups" element={<DeviceList category="ups" title="UPS Units" detailBase="/ups" headerExtra={<AddVirtualButton type="ups" label="UPS" />} />} />
             <Route path="/ups/:id" element={<UPSDetail />} />
             <Route path="/pbx" element={<DeviceList category="pbx" title="Call Managers / PBX" detailBase="/pbx" />} />
             <Route path="/pbx/:id" element={<PbxDetail />} />

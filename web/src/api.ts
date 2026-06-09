@@ -183,6 +183,7 @@ export interface VirtualPort {
   admin_down?: boolean
   speed_mbps?: number
   vlan?: number
+  trunk_vlans?: number[]
   role?: string // access | trunk | uplink | unknown
   mac?: string
 }
@@ -196,6 +197,19 @@ export interface VirtualNeighbor {
   protocol?: string // lldp | cdp | manual
 }
 export interface VirtualMac { mac: string; vlan?: number; if_index?: number }
+export interface VirtualNic { name?: string; mac?: string; ip?: string; gateway?: string; dns?: string; zone?: string; speed_mbps?: number }
+export interface VirtualDisk { name?: string; model?: string; filesystem?: string; total_bytes?: number; used_bytes?: number; free_bytes?: number }
+export interface VirtualSoftware { name?: string; version?: string; publisher?: string }
+export interface VirtualVpn { name?: string; p1_name?: string; remote_gw?: string; status?: string }
+export interface VirtualHA { serial?: string; hostname?: string; sync_status?: string }
+export interface VirtualLicense { contract?: string; expiry?: string }
+export interface VirtualFirewall { ha_mode?: string; ha_group_name?: string; session_count?: number }
+export interface VirtualWlan { vendor?: string; version?: string; controller_name?: string; model?: string; serial?: string }
+export interface VirtualAP { name?: string; mac?: string; model?: string; ip?: string; status?: string; serial?: string; band?: string; site?: string }
+export interface VirtualSSID { name?: string; security?: string; band?: string; vlan?: string; status?: string }
+export interface VirtualClient { mac?: string; ip?: string; hostname?: string; ap_name?: string; ssid?: string; band?: string }
+export interface VirtualUPS { manufacturer?: string; model?: string; battery_status?: string; charge_pct?: number; runtime_min?: number; load_pct?: number }
+
 export interface VirtualDeviceReq {
   name: string
   category: string
@@ -203,16 +217,50 @@ export interface VirtualDeviceReq {
   model?: string
   serial?: string
   os_version?: string
+  hostname?: string
   primary_ip?: string
   location_id?: string | null
   vlan?: string
   class?: string
   status?: string // up | down | warning | unknown
   site?: string
+  notes?: string
+  criticality?: string
+  // switch / generic L2
   ports?: VirtualPort[]
   vlans?: VirtualVlan[]
   neighbors?: VirtualNeighbor[]
   macs?: VirtualMac[]
+  // server / workstation
+  nics?: VirtualNic[]
+  disks?: VirtualDisk[]
+  roles?: string[]
+  software?: VirtualSoftware[]
+  // firewall
+  firewall?: VirtualFirewall
+  vpn_tunnels?: VirtualVpn[]
+  ha_members?: VirtualHA[]
+  licenses?: VirtualLicense[]
+  // wireless controller
+  wlan?: VirtualWlan
+  aps?: VirtualAP[]
+  ssids?: VirtualSSID[]
+  clients?: VirtualClient[]
+  // ups
+  ups?: VirtualUPS
+  // scalar specs / notes (cpu, ram, capacity, …)
+  facts?: Record<string, string>
+}
+
+// Multi-device Excel import report (per-row errors + counts).
+export interface VirtualImportError { sheet: string; row: number; field?: string; message: string }
+export interface VirtualImportReport {
+  created: number
+  updated: number
+  skipped: number
+  failed: number
+  devices?: string[]
+  errors?: VirtualImportError[]
 }
 
 // Fleet rollup (GET /devices/status-summary) — Online and Managed kept separate.

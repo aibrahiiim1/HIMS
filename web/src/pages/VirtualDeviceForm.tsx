@@ -1,216 +1,307 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useNavigate } from 'react-router-dom'
-import { Ghost, Plus, Trash2, Download, Upload, Save } from 'lucide-react'
-import { api, saveBlob, locationPaths, type Location, type Device, type VirtualDeviceReq, type VirtualPort, type VirtualVlan, type VirtualNeighbor, type VirtualMac } from '../api'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Ghost, Plus, Trash2, Download, Upload, Save, ArrowLeft } from 'lucide-react'
+import { api, saveBlob, locationPaths, type Location, type Device, type VirtualDeviceReq, type VirtualImportReport } from '../api'
 import { PageHeader, Panel } from '../components/ui'
+import { VIRTUAL_TEMPLATES, VIRTUAL_TYPE_ORDER, VIRTUAL_STATUSES, templateFor, type Col, type Section } from './virtual/templates'
 
-// Categories mirror the backend devices.category CHECK + manual-add list.
-const CATEGORIES = [
-  'switch', 'router', 'firewall', 'access_point', 'wireless_controller', 'server',
-  'virtual_host', 'virtual_machine', 'storage', 'nvr', 'camera', 'printer', 'ip_phone',
-  'pbx', 'voice_gateway', 'database', 'directory', 'dns', 'dhcp', 'endpoint', 'ups',
-  'isp_router', 'application', 'unknown',
-]
-const STATUSES = ['up', 'down', 'warning', 'unknown']
-const ROLES = ['access', 'trunk', 'uplink', 'unknown']
-
-const blankPort = (ifIndex: number): VirtualPort => ({ if_index: ifIndex, name: '', up: true, admin_down: false, vlan: 0, role: 'access' })
-
+// VirtualDeviceForm: category-aware create/edit for a virtual (manually-entered)
+// device. Context decides the category — a ?type= (from a category page) skips the
+// picker; All-Inventory shows the type chooser first; an :id edits in place.
 export function VirtualDeviceForm() {
+  const { id } = useParams()
+  const editing = !!id
+  const [params] = useSearchParams()
+  const typeParam = params.get('type') || ''
   const nav = useNavigate()
   const qc = useQueryClient()
   const locs = useQuery({ queryKey: ['locations-all'], queryFn: () => api.get<Location[]>('/locations/all') })
-  const locPath = locationPaths(locs.data ?? [])
+  const locPath = useMemo(() => locationPaths(locs.data ?? []), [locs.data])
 
-  const [d, setD] = useState<VirtualDeviceReq>({ name: '', category: 'switch', status: 'up' })
-  const [ports, setPorts] = useState<VirtualPort[]>([])
-  const [vlans, setVlans] = useState<VirtualVlan[]>([])
-  const [neighbors, setNeighbors] = useState<VirtualNeighbor[]>([])
-  const [macs, setMacs] = useState<VirtualMac[]>([])
-  const [msg, setMsg] = useState<string | null>(null)
+  const [req, setReq] = useState<VirtualDeviceReq>(() => seed(typeParam, params))
+  const [factRows, setFactRows] = useState<{ k: string; v: string }[]>([])
+  const [picked, setPicked] = useState<boolean>(editing || (!!typeParam && !!VIRTUAL_TEMPLATES[typeParam]))
   const [err, setErr] = useState<string | null>(null)
+  const [report, setReport] = useState<VirtualImportReport | null>(null)
 
-  const set = (k: keyof VirtualDeviceReq, v: string) => setD((p) => ({ ...p, [k]: v }))
+  // Edit: load the last-saved payload (lossless round-trip).
+  useEffect(() => {
+    if (!editing) return
+    api.get<VirtualDeviceReq>(`/devices/virtual/${id}/config`).then((c) => {
+      if (c && (c as VirtualDeviceReq).name) {
+        setReq(c)
+        setFactRows(Object.entries(c.facts ?? {}).map(([k, v]) => ({ k, v: String(v) })))
+      } else {
+        // Pre-blob device: fall back to its identity so at least that is editable.
+        api.get<Device[]>(`/devices?category=all`).then((all) => {
+          const d = all.find((x) => x.id === id)
+          if (d) setReq((p) => ({ ...p, name: d.name, category: d.category, vendor: d.vendor ?? '', model: d.model ?? '', serial: d.serial ?? '', os_version: d.os_version ?? '', primary_ip: d.primary_ip ?? '', vlan: d.vlan ?? '', class: d.device_class ?? '', status: d.status }))
+        })
+      }
+    }).catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id])
+
+  const tmpl = templateFor(req.category || 'other')
+  const set = (k: keyof VirtualDeviceReq, v: unknown) => setReq((p) => ({ ...p, [k]: v }))
+  const setBlock = (block: string, rows: unknown[]) => setReq((p) => ({ ...p, [block]: rows }))
+  const setSingleton = (block: string, obj: Record<string, unknown>) => setReq((p) => ({ ...p, [block]: obj }))
 
   const save = useMutation({
-    mutationFn: () => api.post<Device>('/devices/virtual', {
-      ...d,
-      location_id: d.location_id || undefined,
-      ports, vlans, neighbors, macs,
-    }),
+    mutationFn: () => {
+      const body: VirtualDeviceReq = { ...req, location_id: req.location_id || undefined, facts: factsObj(factRows) }
+      return editing ? api.put<Device>(`/devices/virtual/${id}`, body) : api.post<Device>('/devices/virtual', body)
+    },
     onSuccess: (dev) => {
       qc.invalidateQueries({ queryKey: ['devices'] })
-      nav(`/devices/${dev.id}`)
+      const devId = editing ? id : (dev as Device | undefined)?.id
+      nav(devId ? `/devices/${devId}` : '/inventory')
     },
     onError: (e) => setErr((e as Error).message),
   })
 
   const importXlsx = useMutation({
-    mutationFn: async (file: File) => {
-      const fd = new FormData()
-      fd.append('file', file)
-      return api.postForm<{ device: Device; counts: Record<string, number> }>('/devices/virtual/import', fd)
-    },
-    onSuccess: (res) => { qc.invalidateQueries({ queryKey: ['devices'] }); nav(`/devices/${res.device.id}`) },
+    mutationFn: async (file: File) => { const fd = new FormData(); fd.append('file', file); return api.postForm<VirtualImportReport>('/devices/virtual/import', fd) },
+    onSuccess: (r) => { setReport(r); qc.invalidateQueries({ queryKey: ['devices'] }) },
     onError: (e) => setErr((e as Error).message),
   })
 
   const downloadTemplate = async () => {
     try {
-      const blob = await api.getBlob('/devices/virtual/template.xlsx')
-      saveBlob(blob, 'virtual-device-template.xlsx')
+      const t = req.category && VIRTUAL_TEMPLATES[req.category] ? `?type=${req.category}` : ''
+      const blob = await api.getBlob(`/devices/virtual/template.xlsx${t}`)
+      saveBlob(blob, t ? `virtual-${req.category}-template.xlsx` : 'virtual-devices-template.xlsx')
     } catch (e) { setErr((e as Error).message) }
   }
 
-  const addPorts = (n: number) => {
-    const start = ports.reduce((m, p) => Math.max(m, p.if_index), 0) + 1
-    setPorts((p) => [...p, ...Array.from({ length: n }, (_, i) => blankPort(start + i))])
-  }
   const submit = () => {
-    setErr(null); setMsg(null)
-    if (!d.name.trim()) { setErr('Name is required'); return }
+    setErr(null)
+    if (!req.name.trim()) { setErr('Name is required'); return }
     save.mutate()
+  }
+
+  // ---- Type picker (All-Inventory entry) ----
+  if (!picked) {
+    return (
+      <div>
+        <PageHeader title="Add Virtual Device" icon={Ghost} subtitle="Choose the device type — each has its own template." />
+        <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(auto-fill,minmax(190px,1fr))' }}>
+          {VIRTUAL_TYPE_ORDER.map((cat) => {
+            const t = VIRTUAL_TEMPLATES[cat]; const Icon = t.icon
+            return (
+              <button key={cat} className="card" style={{ textAlign: 'left', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 6, padding: 16 }}
+                onClick={() => { setReq((p) => ({ ...p, category: cat })); setPicked(true) }}>
+                <span style={{ color: 'var(--brand)' }}><Icon size={22} /></span>
+                <strong>{t.label}</strong>
+                <small className="muted">{t.blurb}</small>
+              </button>
+            )
+          })}
+        </div>
+        <div style={{ marginTop: 16 }}><button className="btn btn-ghost" onClick={() => nav('/inventory')}><ArrowLeft size={14} /> Cancel</button></div>
+      </div>
+    )
   }
 
   return (
     <div>
-      <PageHeader title="Add Virtual Device" icon={Ghost}
-        subtitle="A manually-entered placeholder for gear HIMS can't integrate with — it counts in inventory and renders everywhere, marked Virtual."
+      <PageHeader title={editing ? `Edit Virtual ${tmpl.label}` : `Add Virtual ${tmpl.label}`} icon={tmpl.icon}
+        subtitle={tmpl.blurb}
         actions={
           <>
             <button className="btn btn-ghost btn-sm" onClick={downloadTemplate}><Download size={14} /> Excel template</button>
             <label className="btn btn-ghost btn-sm" style={{ cursor: 'pointer' }}>
               <Upload size={14} /> Import Excel
-              <input type="file" accept=".xlsx" style={{ display: 'none' }}
-                onChange={(e) => { const f = e.target.files?.[0]; if (f) importXlsx.mutate(f) }} />
+              <input type="file" accept=".xlsx" style={{ display: 'none' }} onChange={(e) => { const f = e.target.files?.[0]; if (f) importXlsx.mutate(f) }} />
             </label>
           </>
-        }
-      />
+        } />
 
       {err && <div className="enc-banner crit" style={{ marginBottom: 12 }}>{err}</div>}
-      {msg && <div className="enc-banner" style={{ marginBottom: 12 }}>{msg}</div>}
       {importXlsx.isPending && <div className="loading">Importing…</div>}
+      {report && <ImportReport report={report} onClose={() => setReport(null)} onGo={() => nav('/inventory')} />}
 
-      <Panel title="Identity" subtitle="What this device is">
-        <div className="form-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))', gap: 12 }}>
-          <Field label="Name *"><input className="field" value={d.name} onChange={(e) => set('name', e.target.value)} placeholder="Core-SW-04" /></Field>
-          <Field label="Category">
-            <select className="field" value={d.category} onChange={(e) => set('category', e.target.value)}>
-              {CATEGORIES.map((c) => <option key={c} value={c}>{c.replace(/_/g, ' ')}</option>)}
+      <Panel title="Identity">
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))', gap: 12 }}>
+          <Field label="Name *"><input className="field" value={req.name} onChange={(e) => set('name', e.target.value)} placeholder={`Virtual-${tmpl.label}`} /></Field>
+          <Field label="Type">
+            <select className="field" value={req.category} onChange={(e) => set('category', e.target.value)}>
+              {VIRTUAL_TYPE_ORDER.map((c) => <option key={c} value={c}>{VIRTUAL_TEMPLATES[c].label}</option>)}
             </select>
           </Field>
           <Field label="Status">
-            <select className="field" value={d.status} onChange={(e) => set('status', e.target.value)}>
-              {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+            <select className="field" value={req.status ?? 'up'} onChange={(e) => set('status', e.target.value)}>{VIRTUAL_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}</select>
+          </Field>
+          <Field label="Management IP"><input className="field" value={req.primary_ip ?? ''} onChange={(e) => set('primary_ip', e.target.value)} placeholder="optional" /></Field>
+          <Field label="Vendor"><input className="field" value={req.vendor ?? ''} onChange={(e) => set('vendor', e.target.value)} /></Field>
+          <Field label="Model"><input className="field" value={req.model ?? ''} onChange={(e) => set('model', e.target.value)} /></Field>
+          <Field label="Serial"><input className="field" value={req.serial ?? ''} onChange={(e) => set('serial', e.target.value)} /></Field>
+          <Field label="OS / Firmware"><input className="field" value={req.os_version ?? ''} onChange={(e) => set('os_version', e.target.value)} /></Field>
+          <Field label="VLAN (mgmt)"><input className="field" value={req.vlan ?? ''} onChange={(e) => set('vlan', e.target.value)} /></Field>
+          <Field label="Class"><input className="field" value={req.class ?? ''} onChange={(e) => set('class', e.target.value)} placeholder="core_switch / access_switch / …" /></Field>
+          <Field label="Criticality">
+            <select className="field" value={req.criticality ?? ''} onChange={(e) => set('criticality', e.target.value)}>
+              <option value="">—</option>{['low', 'normal', 'high', 'critical'].map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
           </Field>
-          <Field label="Management IP"><input className="field" value={d.primary_ip ?? ''} onChange={(e) => set('primary_ip', e.target.value)} placeholder="172.21.96.9 (optional)" /></Field>
-          <Field label="Vendor"><input className="field" value={d.vendor ?? ''} onChange={(e) => set('vendor', e.target.value)} /></Field>
-          <Field label="Model"><input className="field" value={d.model ?? ''} onChange={(e) => set('model', e.target.value)} /></Field>
-          <Field label="Serial"><input className="field" value={d.serial ?? ''} onChange={(e) => set('serial', e.target.value)} /></Field>
-          <Field label="OS / Firmware"><input className="field" value={d.os_version ?? ''} onChange={(e) => set('os_version', e.target.value)} /></Field>
-          <Field label="VLAN (mgmt)"><input className="field" value={d.vlan ?? ''} onChange={(e) => set('vlan', e.target.value)} /></Field>
-          <Field label="Class"><input className="field" value={d.class ?? ''} onChange={(e) => set('class', e.target.value)} placeholder="core_switch / access_switch / …" /></Field>
           <Field label="Location">
-            <select className="field" value={d.location_id ?? ''} onChange={(e) => set('location_id', e.target.value)}>
+            <select className="field" value={req.location_id ?? ''} onChange={(e) => set('location_id', e.target.value)}>
               <option value="">— none —</option>
               {(locs.data ?? []).map((l) => <option key={l.id} value={l.id}>{locPath[l.id] ?? l.name}</option>)}
             </select>
           </Field>
+          <Field label="Site"><input className="field" value={req.site ?? ''} onChange={(e) => set('site', e.target.value)} /></Field>
+          <Field label="Notes" wide><input className="field" value={req.notes ?? ''} onChange={(e) => set('notes', e.target.value)} /></Field>
         </div>
       </Panel>
 
-      <EditorPanel title="Ports / Interfaces" count={ports.length}
-        head={<button className="btn btn-ghost btn-xs" onClick={() => setPorts((p) => [...p, blankPort((p.reduce((m, x) => Math.max(m, x.if_index), 0)) + 1)])}><Plus size={12} /> Add port</button>}
-        extra={<><button className="btn btn-ghost btn-xs" onClick={() => addPorts(24)}>+24</button><button className="btn btn-ghost btn-xs" onClick={() => addPorts(48)}>+48</button></>}>
-        {ports.length > 0 && (
-          <table className="data-table"><thead><tr><th>#</th><th>Name</th><th>Alias</th><th>State</th><th>Admin</th><th>Speed</th><th>VLAN</th><th>Role</th><th>MAC</th><th /></tr></thead>
-            <tbody>{ports.map((p, i) => (
-              <tr key={i}>
-                <td style={{ width: 56 }}><input className="field" type="number" value={p.if_index} onChange={(e) => upd(setPorts, i, { if_index: +e.target.value })} /></td>
-                <td><input className="field" value={p.name ?? ''} onChange={(e) => upd(setPorts, i, { name: e.target.value })} placeholder="Gi1/0/1" /></td>
-                <td><input className="field" value={p.alias ?? ''} onChange={(e) => upd(setPorts, i, { alias: e.target.value })} /></td>
-                <td><select className="field" value={p.up ? 'up' : 'down'} onChange={(e) => upd(setPorts, i, { up: e.target.value === 'up' })}><option value="up">up</option><option value="down">down</option></select></td>
-                <td><label style={{ fontSize: 12 }}><input type="checkbox" checked={!!p.admin_down} onChange={(e) => upd(setPorts, i, { admin_down: e.target.checked })} /> shut</label></td>
-                <td style={{ width: 80 }}><input className="field" type="number" value={p.speed_mbps ?? 0} onChange={(e) => upd(setPorts, i, { speed_mbps: +e.target.value })} /></td>
-                <td style={{ width: 70 }}><input className="field" type="number" value={p.vlan ?? 0} onChange={(e) => upd(setPorts, i, { vlan: +e.target.value })} /></td>
-                <td><select className="field" value={p.role ?? 'access'} onChange={(e) => upd(setPorts, i, { role: e.target.value })}>{ROLES.map((r) => <option key={r} value={r}>{r}</option>)}</select></td>
-                <td><input className="field mono" value={p.mac ?? ''} onChange={(e) => upd(setPorts, i, { mac: e.target.value })} /></td>
-                <td><button className="btn btn-ghost btn-xs" onClick={() => rm(setPorts, i)}><Trash2 size={12} /></button></td>
-              </tr>))}</tbody>
-          </table>
-        )}
-      </EditorPanel>
-
-      <EditorPanel title="VLANs" count={vlans.length} head={<button className="btn btn-ghost btn-xs" onClick={() => setVlans((v) => [...v, { id: 0, name: '' }])}><Plus size={12} /> Add VLAN</button>}>
-        {vlans.length > 0 && (
-          <table className="data-table"><thead><tr><th>VLAN ID</th><th>Name</th><th /></tr></thead>
-            <tbody>{vlans.map((v, i) => (
-              <tr key={i}>
-                <td style={{ width: 100 }}><input className="field" type="number" value={v.id} onChange={(e) => upd(setVlans, i, { id: +e.target.value })} /></td>
-                <td><input className="field" value={v.name ?? ''} onChange={(e) => upd(setVlans, i, { name: e.target.value })} /></td>
-                <td><button className="btn btn-ghost btn-xs" onClick={() => rm(setVlans, i)}><Trash2 size={12} /></button></td>
-              </tr>))}</tbody>
-          </table>
-        )}
-      </EditorPanel>
-
-      <EditorPanel title="Neighbors (LLDP/CDP)" count={neighbors.length} head={<button className="btn btn-ghost btn-xs" onClick={() => setNeighbors((n) => [...n, { protocol: 'manual' }])}><Plus size={12} /> Add neighbor</button>}>
-        {neighbors.length > 0 && (
-          <table className="data-table"><thead><tr><th>Local port</th><th>Remote device</th><th>Remote port</th><th>Remote mgmt IP</th><th>Protocol</th><th /></tr></thead>
-            <tbody>{neighbors.map((n, i) => (
-              <tr key={i}>
-                <td><input className="field" value={n.local_port ?? ''} onChange={(e) => upd(setNeighbors, i, { local_port: e.target.value })} /></td>
-                <td><input className="field" value={n.remote_name ?? ''} onChange={(e) => upd(setNeighbors, i, { remote_name: e.target.value })} /></td>
-                <td><input className="field" value={n.remote_port ?? ''} onChange={(e) => upd(setNeighbors, i, { remote_port: e.target.value })} /></td>
-                <td><input className="field mono" value={n.remote_mgmt_ip ?? ''} onChange={(e) => upd(setNeighbors, i, { remote_mgmt_ip: e.target.value })} /></td>
-                <td><select className="field" value={n.protocol ?? 'manual'} onChange={(e) => upd(setNeighbors, i, { protocol: e.target.value })}><option>manual</option><option>lldp</option><option>cdp</option></select></td>
-                <td><button className="btn btn-ghost btn-xs" onClick={() => rm(setNeighbors, i)}><Trash2 size={12} /></button></td>
-              </tr>))}</tbody>
-          </table>
-        )}
-      </EditorPanel>
-
-      <EditorPanel title="Learned MACs (FDB)" count={macs.length} head={<button className="btn btn-ghost btn-xs" onClick={() => setMacs((m) => [...m, { mac: '', vlan: 0, if_index: 0 }])}><Plus size={12} /> Add MAC</button>}>
-        {macs.length > 0 && (
-          <table className="data-table"><thead><tr><th>MAC</th><th>VLAN</th><th>Port (ifIndex)</th><th /></tr></thead>
-            <tbody>{macs.map((m, i) => (
-              <tr key={i}>
-                <td><input className="field mono" value={m.mac} onChange={(e) => upd(setMacs, i, { mac: e.target.value })} placeholder="aa:bb:cc:dd:ee:ff" /></td>
-                <td style={{ width: 80 }}><input className="field" type="number" value={m.vlan ?? 0} onChange={(e) => upd(setMacs, i, { vlan: +e.target.value })} /></td>
-                <td style={{ width: 110 }}><input className="field" type="number" value={m.if_index ?? 0} onChange={(e) => upd(setMacs, i, { if_index: +e.target.value })} /></td>
-                <td><button className="btn btn-ghost btn-xs" onClick={() => rm(setMacs, i)}><Trash2 size={12} /></button></td>
-              </tr>))}</tbody>
-          </table>
-        )}
-      </EditorPanel>
+      {tmpl.sections.map((sec, i) => (
+        <SectionEditor key={i} section={sec} req={req} factRows={factRows}
+          onRows={setBlock} onSingleton={setSingleton} onRoles={(r) => set('roles', r)} onFacts={setFactRows} />
+      ))}
 
       <div className="row" style={{ gap: 10, marginTop: 16, justifyContent: 'flex-end' }}>
-        <button className="btn btn-ghost" onClick={() => nav('/inventory')}>Cancel</button>
-        <button className="btn btn-primary" disabled={save.isPending} onClick={submit}><Save size={15} /> {save.isPending ? 'Creating…' : 'Create virtual device'}</button>
+        <button className="btn btn-ghost" onClick={() => nav(editing ? `/devices/${id}` : '/inventory')}>Cancel</button>
+        <button className="btn btn-primary" disabled={save.isPending} onClick={submit}><Save size={15} /> {save.isPending ? 'Saving…' : editing ? 'Save changes' : `Create virtual ${tmpl.label.toLowerCase()}`}</button>
       </div>
     </div>
   )
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}><span className="muted">{label}</span>{children}</label>
-}
+// ---- section dispatch -------------------------------------------------------
 
-function EditorPanel({ title, count, head, extra, children }: { title: string; count: number; head: React.ReactNode; extra?: React.ReactNode; children: React.ReactNode }) {
+function SectionEditor({ section, req, factRows, onRows, onSingleton, onRoles, onFacts }: {
+  section: Section; req: VirtualDeviceReq; factRows: { k: string; v: string }[]
+  onRows: (block: string, rows: unknown[]) => void
+  onSingleton: (block: string, obj: Record<string, unknown>) => void
+  onRoles: (roles: string[]) => void
+  onFacts: (rows: { k: string; v: string }[]) => void
+}) {
+  if (section.kind === 'singleton') {
+    const obj = ((req as unknown as Record<string, Record<string, unknown>>)[section.block]) ?? {}
+    return (
+      <Panel title={section.title}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 12 }}>
+          {section.cols.map((c) => (
+            <Field key={c.key} label={c.label}>{cellInput(c, obj[c.key], (v) => onSingleton(section.block, { ...obj, [c.key]: v }))}</Field>
+          ))}
+        </div>
+      </Panel>
+    )
+  }
+  if (section.kind === 'roles') {
+    const roles = req.roles ?? []
+    return (
+      <Panel title={section.title} subtitle={roles.length ? `${roles.length}` : section.hint}
+        actions={<button className="btn btn-ghost btn-xs" onClick={() => onRoles([...roles, ''])}><Plus size={12} /> Add</button>} pad={roles.length === 0}>
+        {roles.length === 0 ? <div className="muted" style={{ fontSize: 13 }}>None.</div> : (
+          <div className="stack" style={{ gap: 6 }}>{roles.map((r, i) => (
+            <div key={i} className="row" style={{ gap: 6 }}>
+              <input className="field" value={r} onChange={(e) => onRoles(roles.map((x, j) => j === i ? e.target.value : x))} style={{ flex: 1 }} />
+              <button className="btn btn-ghost btn-xs" onClick={() => onRoles(roles.filter((_, j) => j !== i))}><Trash2 size={12} /></button>
+            </div>))}</div>
+        )}
+      </Panel>
+    )
+  }
+  if (section.kind === 'facts') {
+    return (
+      <Panel title={section.title} subtitle={factRows.length ? `${factRows.length}` : section.hint}
+        actions={<button className="btn btn-ghost btn-xs" onClick={() => onFacts([...factRows, { k: '', v: '' }])}><Plus size={12} /> Add</button>} pad={factRows.length === 0}>
+        {factRows.length === 0 ? <div className="muted" style={{ fontSize: 13 }}>{section.hint ?? 'None.'}</div> : (
+          <table className="data-table"><thead><tr><th>Field</th><th>Value</th><th /></tr></thead>
+            <tbody>{factRows.map((f, i) => (
+              <tr key={i}>
+                <td style={{ width: 200 }}><input className="field" value={f.k} onChange={(e) => onFacts(factRows.map((x, j) => j === i ? { ...x, k: e.target.value } : x))} placeholder="cpu" /></td>
+                <td><input className="field" value={f.v} onChange={(e) => onFacts(factRows.map((x, j) => j === i ? { ...x, v: e.target.value } : x))} /></td>
+                <td><button className="btn btn-ghost btn-xs" onClick={() => onFacts(factRows.filter((_, j) => j !== i))}><Trash2 size={12} /></button></td>
+              </tr>))}</tbody>
+          </table>
+        )}
+      </Panel>
+    )
+  }
+  // rows
+  const rows = (((req as unknown as Record<string, unknown[]>)[section.block]) ?? []) as Record<string, unknown>[]
+  const blank = () => {
+    const r: Record<string, unknown> = {}
+    section.cols.forEach((c) => { r[c.key] = c.type === 'bool' ? (c.key === 'up') : c.type === 'int' || c.type === 'int64' ? 0 : c.type === 'intlist' ? [] : '' })
+    if (section.cols.some((c) => c.key === 'if_index')) r.if_index = rows.reduce((m, x) => Math.max(m, Number(x.if_index) || 0), 0) + 1
+    return r
+  }
+  const addN = (n: number) => onRows(section.block, [...rows, ...Array.from({ length: n }, blank)])
   return (
-    <Panel title={title} subtitle={count ? `${count}` : undefined} actions={<div className="row" style={{ gap: 6 }}>{extra}{head}</div>} pad={count === 0}>
-      {count === 0 ? <div className="muted" style={{ fontSize: 13 }}>None added yet.</div> : children}
+    <Panel title={section.title} subtitle={rows.length ? `${rows.length}` : section.hint}
+      actions={<div className="row" style={{ gap: 6 }}>
+        {section.bulk?.map((n) => <button key={n} className="btn btn-ghost btn-xs" onClick={() => addN(n)}>+{n}</button>)}
+        <button className="btn btn-ghost btn-xs" onClick={() => onRows(section.block, [...rows, blank()])}><Plus size={12} /> Add</button>
+      </div>} pad={rows.length === 0}>
+      {rows.length === 0 ? <div className="muted" style={{ fontSize: 13 }}>{section.hint ?? 'None added yet.'}</div> : (
+        <table className="data-table"><thead><tr>{section.cols.map((c) => <th key={c.key}>{c.label}</th>)}<th /></tr></thead>
+          <tbody>{rows.map((row, i) => (
+            <tr key={i}>
+              {section.cols.map((c) => <td key={c.key} style={c.w ? { width: c.w } : undefined}>{cellInput(c, row[c.key], (v) => onRows(section.block, rows.map((x, j) => j === i ? { ...x, [c.key]: v } : x)))}</td>)}
+              <td><button className="btn btn-ghost btn-xs" onClick={() => onRows(section.block, rows.filter((_, j) => j !== i))}><Trash2 size={12} /></button></td>
+            </tr>))}</tbody>
+        </table>
+      )}
     </Panel>
   )
 }
 
-// upd/rm: immutable row helpers for the editors.
-function upd<T>(setter: React.Dispatch<React.SetStateAction<T[]>>, i: number, patch: Partial<T>) {
-  setter((arr) => arr.map((x, j) => (j === i ? { ...x, ...patch } : x)))
+// cellInput renders the right control for a column type.
+function cellInput(c: Col, value: unknown, onChange: (v: unknown) => void) {
+  switch (c.type) {
+    case 'bool':
+      return <input type="checkbox" checked={!!value} onChange={(e) => onChange(e.target.checked)} />
+    case 'int':
+    case 'int64':
+      return <input className="field" type="number" value={Number(value) || 0} onChange={(e) => onChange(Number(e.target.value))} />
+    case 'select':
+      return <select className="field" value={String(value ?? '')} onChange={(e) => onChange(e.target.value)}>{(c.opts ?? []).map((o) => <option key={o} value={o}>{o}</option>)}</select>
+    case 'intlist':
+      return <input className="field" value={Array.isArray(value) ? (value as number[]).join(',') : ''} onChange={(e) => onChange(e.target.value.split(/[,;\s]+/).map((x) => parseInt(x, 10)).filter((n) => n > 0))} placeholder="20,30" />
+    default:
+      return <input className={c.type === 'mac' || c.type === 'ip' ? 'field mono' : 'field'} value={String(value ?? '')} onChange={(e) => onChange(e.target.value)} />
+  }
 }
-function rm<T>(setter: React.Dispatch<React.SetStateAction<T[]>>, i: number) {
-  setter((arr) => arr.filter((_, j) => j !== i))
+
+function ImportReport({ report, onClose, onGo }: { report: VirtualImportReport; onClose: () => void; onGo: () => void }) {
+  const tone = report.failed > 0 ? 'warn' : ''
+  return (
+    <Panel title="Import result"
+      actions={<><button className="btn btn-ghost btn-xs" onClick={onClose}>Dismiss</button><button className="btn btn-primary btn-xs" onClick={onGo}>View inventory</button></>}>
+      <div className={`enc-banner ${tone}`} style={{ marginBottom: report.errors?.length ? 10 : 0 }}>
+        Created <strong>{report.created}</strong> · Updated <strong>{report.updated}</strong> · Failed <strong>{report.failed}</strong>
+        {report.devices?.length ? ` — ${report.devices.join(', ')}` : ''}
+      </div>
+      {report.errors?.length ? (
+        <table className="data-table"><thead><tr><th>Sheet</th><th>Row</th><th>Field</th><th>Problem</th></tr></thead>
+          <tbody>{report.errors.map((e, i) => <tr key={i}><td>{e.sheet}</td><td>{e.row}</td><td>{e.field ?? '—'}</td><td>{e.message}</td></tr>)}</tbody>
+        </table>
+      ) : null}
+    </Panel>
+  )
+}
+
+function Field({ label, children, wide }: { label: string; children: React.ReactNode; wide?: boolean }) {
+  return <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13, gridColumn: wide ? '1 / -1' : undefined }}><span className="muted">{label}</span>{children}</label>
+}
+
+// seed builds the initial request, applying ?type and any prefill (connSwitch/port/vlan).
+function seed(type: string, params: URLSearchParams): VirtualDeviceReq {
+  const r: VirtualDeviceReq = { name: '', category: VIRTUAL_TEMPLATES[type] ? type : '', status: 'up' }
+  const connSwitch = params.get('connSwitch') || ''
+  const connPort = params.get('connPort') || ''
+  if (connSwitch || connPort) r.neighbors = [{ remote_name: connSwitch, remote_port: connPort, protocol: 'manual' }]
+  const vlan = params.get('vlan') || ''
+  if (vlan) r.vlan = vlan
+  return r
+}
+
+function factsObj(rows: { k: string; v: string }[]): Record<string, string> {
+  const o: Record<string, string> = {}
+  rows.forEach(({ k, v }) => { if (k.trim()) o[k.trim()] = v })
+  return o
 }

@@ -27,6 +27,11 @@ import (
 
 const sourceManual = "manual"
 
+// virtualConfigFactKey stores the last-submitted virtual-device payload as a
+// device fact so the edit form reloads it losslessly. It is hidden from the facts
+// panel (see deviceFacts).
+const virtualConfigFactKey = "virtual.config"
+
 var validDeviceStatus = map[string]bool{"up": true, "down": true, "warning": true, "unknown": true}
 
 // --- Category-aware payload ---------------------------------------------------
@@ -296,6 +301,39 @@ func (s *Server) setVirtualIdentityExtras(ctx context.Context, dev db.Device, re
 		MonitoringEnabled: dev.MonitoringEnabled, ClassificationLocked: dev.ClassificationLocked,
 		ManualClassificationReason: dev.ManualClassificationReason,
 	})
+}
+
+// saveVirtualConfigBlob persists the submitted payload as a hidden fact for a
+// lossless edit reload (GET /devices/virtual/{id}/config).
+func (s *Server) saveVirtualConfigBlob(ctx context.Context, devID uuid.UUID, req *virtualDeviceReq) {
+	b, err := json.Marshal(req)
+	if err != nil {
+		return
+	}
+	v := string(b)
+	_ = s.queries.UpsertDeviceFact(ctx, db.UpsertDeviceFactParams{DeviceID: devID, Key: virtualConfigFactKey, Value: &v, Driver: "virtual"})
+}
+
+// getVirtualConfig handles GET /devices/virtual/{id}/config — returns the stored
+// payload for the edit form (or an empty object if none).
+func (s *Server) getVirtualConfig(w http.ResponseWriter, r *http.Request) {
+	ctx, id, ok := pathDevice(w, r)
+	if !ok {
+		return
+	}
+	facts, err := s.queries.ListDeviceFacts(ctx, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	for _, f := range facts {
+		if f.Key == virtualConfigFactKey && f.Value != nil {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(*f.Value))
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{})
 }
 
 // writeVirtualConfig dispatches by category to the per-category persist function.
@@ -1145,6 +1183,7 @@ func (s *Server) persistVirtual(ctx context.Context, req *virtualDeviceReq, cur 
 		_ = s.queries.UpdateDeviceMonitoringStatus(ctx, db.UpdateDeviceMonitoringStatusParams{ID: dev.ID, Status: status})
 		dev.IsVirtual = true
 		s.writeVirtualConfig(ctx, dev, req)
+		s.saveVirtualConfigBlob(ctx, dev.ID, req)
 		return dev, "updated", nil
 	}
 	// create
@@ -1162,6 +1201,7 @@ func (s *Server) persistVirtual(ctx context.Context, req *virtualDeviceReq, cur 
 	dev.IsVirtual = true
 	s.setVirtualIdentityExtras(ctx, dev, req)
 	s.writeVirtualConfig(ctx, dev, req)
+	s.saveVirtualConfigBlob(ctx, dev.ID, req)
 	return dev, "created", nil
 }
 

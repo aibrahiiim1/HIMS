@@ -199,6 +199,7 @@ func (s *Server) routes() {
 		r.Post("/devices/virtual", s.createVirtualDevice)
 		r.Get("/devices/virtual/template.xlsx", s.virtualTemplateXLSX)
 		r.Post("/devices/virtual/import", s.importVirtualXLSX)
+		r.Get("/devices/virtual/{id}/config", s.getVirtualConfig) // edit reload
 		r.Put("/devices/virtual/{id}", s.updateVirtualDevice)
 		r.Post("/devices/bulk-delete", s.bulkDeleteDevices)
 		r.Post("/devices/bulk-assign", s.bulkAssignDevices)
@@ -705,7 +706,15 @@ func (s *Server) deviceFacts(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, rows)
+	// Hide the internal virtual-device edit blob from the facts panel.
+	out := rows[:0]
+	for _, f := range rows {
+		if f.Key == virtualConfigFactKey {
+			continue
+		}
+		out = append(out, f)
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) deviceVMs(w http.ResponseWriter, r *http.Request) {

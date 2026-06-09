@@ -1,7 +1,7 @@
 import { useMemo, useState, type ComponentType } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
-import { HardDrive, Radar, ShieldCheck, MapPin, Wifi, Wrench, Pencil, Lock, Ghost } from 'lucide-react'
+import { Link, useNavigate } from 'react-router-dom'
+import { HardDrive, Radar, ShieldCheck, MapPin, Wifi, Wrench, Pencil, Lock, Ghost, Trash2 } from 'lucide-react'
 import { api, type Device, type Location, type MonitoringCheck, locationPaths } from '../api'
 import { HealthRing, colorFor, timeAgo } from './ui'
 import { ReachabilityBadge, ManagementBadge } from './StatusBadges'
@@ -60,10 +60,22 @@ export function DeviceHeader({ deviceId, icon: Icon = HardDrive, showCredential 
   showCredential?: boolean
 }) {
   const qc = useQueryClient()
+  const nav = useNavigate()
   const devices = useQuery({ queryKey: ['devices', 'all'], queryFn: () => api.get<Device[]>('/devices?category=all') })
   const checksQ = useQuery({ queryKey: ['dev-checks', deviceId], queryFn: () => api.get<MonitoringCheck[]>(`/devices/${deviceId}/monitoring/checks`) })
   const locs = useQuery({ queryKey: ['locations-all'], queryFn: () => api.get<Location[]>('/locations/all') })
   const locPath = useMemo(() => locationPaths(locs.data ?? []), [locs.data])
+
+  const deleteVirtual = async () => {
+    if (!window.confirm('Delete this virtual device?\n\nThis permanently removes the device and all its manually-entered ports, VLANs, neighbors, learned MACs and category-specific data. This cannot be undone.')) return
+    try {
+      await api.del(`/devices/${deviceId}`)
+      qc.invalidateQueries({ queryKey: ['devices'] })
+      nav('/inventory')
+    } catch (e) {
+      alert((e as Error).message)
+    }
+  }
 
   const [repairing, setRepairing] = useState(false)
   const [repairMsg, setRepairMsg] = useState<string | null>(null)
@@ -176,10 +188,19 @@ export function DeviceHeader({ deviceId, icon: Icon = HardDrive, showCredential 
           </div>
         </div>
         <div className="device-hero-actions">
-          <RescanSplit targets={d.primary_ip ?? ''} label="Re-scan this device" size="sm" onMsg={onScanMsg} />
-          <button className="btn btn-ghost btn-sm" onClick={repairReachability} disabled={repairing} title="Recompute the reachability monitoring target from discovered open ports">
-            <Wrench size={13} /> {repairing ? 'Repairing…' : 'Repair check'}
-          </button>
+          {d.is_virtual ? (
+            <>
+              <Link className="btn btn-primary btn-sm" to={`/devices/virtual/${deviceId}/edit`} title="Edit this virtual device's identity + configuration"><Pencil size={13} /> Edit virtual device</Link>
+              <button className="btn btn-danger btn-sm" onClick={deleteVirtual} title="Delete this virtual device and its manual ports/VLANs/neighbors/MACs"><Trash2 size={13} /> Delete</button>
+            </>
+          ) : (
+            <>
+              <RescanSplit targets={d.primary_ip ?? ''} label="Re-scan this device" size="sm" onMsg={onScanMsg} />
+              <button className="btn btn-ghost btn-sm" onClick={repairReachability} disabled={repairing} title="Recompute the reachability monitoring target from discovered open ports">
+                <Wrench size={13} /> {repairing ? 'Repairing…' : 'Repair check'}
+              </button>
+            </>
+          )}
         </div>
         {(scanMsg || repairMsg) && (
           <div className="device-hero-msgs">
@@ -187,7 +208,7 @@ export function DeviceHeader({ deviceId, icon: Icon = HardDrive, showCredential 
             {repairMsg && <span className="muted">{repairMsg}</span>}
           </div>
         )}
-        {showCredential && <div className="device-hero-cred"><CredentialBindSelect deviceId={deviceId} align="end" /></div>}
+        {showCredential && !d.is_virtual && <div className="device-hero-cred"><CredentialBindSelect deviceId={deviceId} align="end" /></div>}
       </div>
       {editing && <EditDevice device={d} onClose={() => setEditing(false)} onSaved={() => qc.invalidateQueries({ queryKey: ['devices', 'all'] })} />}
     </div>
