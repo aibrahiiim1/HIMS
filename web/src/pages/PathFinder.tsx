@@ -3,10 +3,12 @@ import { useSearchParams } from 'react-router-dom'
 import { useMutation } from '@tanstack/react-query'
 import {
   Route as RouteIcon, Search, MonitorSmartphone, Network, Flame, Router, Server,
-  ArrowDown, CircleHelp, ShieldCheck, Clock,
+  ArrowDown, CircleHelp, ShieldCheck, Clock, Share2, List, Wifi,
 } from 'lucide-react'
 import { api, type SearchResult } from '../api'
 import { PageHeader, Panel, EmptyState, timeAgo } from '../components/ui'
+import { PathGraph } from '../components/PathGraph'
+import { ROLE_COLOR, roleLabel } from '../components/topologyColors'
 
 // Device Path Finder — search by IP / MAC / hostname / device name and trace the
 // Layer-2 path: endpoint → MAC → switch → port → VLAN → uplink → core →
@@ -45,6 +47,7 @@ function SourceChip({ source }: { source?: string | null }) {
 export function PathFinder() {
   const [params, setParams] = useSearchParams()
   const [q, setQ] = useState(params.get('q') ?? '')
+  const [view, setView] = useState<'visual' | 'details'>('visual')
   const search = useMutation({
     mutationFn: async (query: string) => {
       const r = await api.get<SearchResult | SearchResult[]>(`/search?q=${encodeURIComponent(query)}`)
@@ -88,8 +91,75 @@ export function PathFinder() {
         <Panel><EmptyState icon={CircleHelp} title="No match" message="Nothing resolved for that query. Try an IP, MAC, hostname or device name." /></Panel>
       )}
 
-      {results.map((res, i) => <ResultCard key={i} res={res} />)}
+      {results.length > 0 && (
+        <div className="row" style={{ justifyContent: 'flex-end', marginBottom: 8 }}>
+          <div className="seg" role="tablist" aria-label="View mode">
+            <button className={view === 'visual' ? 'active' : ''} onClick={() => setView('visual')}>
+              <Share2 size={13} style={{ verticalAlign: '-2px', marginRight: 4 }} /> Visual
+            </button>
+            <button className={view === 'details' ? 'active' : ''} onClick={() => setView('details')}>
+              <List size={13} style={{ verticalAlign: '-2px', marginRight: 4 }} /> Details
+            </button>
+          </div>
+        </div>
+      )}
+
+      {results.map((res, i) =>
+        view === 'visual' ? <PathGraphCard key={i} res={res} /> : <ResultCard key={i} res={res} />
+      )}
     </div>
+  )
+}
+
+// Visual mode: the traced path drawn as a graph (client/AP/controller → switch →
+// uplinks → core), plus a wireless summary when the endpoint is a Wi-Fi client and
+// a role legend of the hops actually shown.
+function PathGraphCard({ res }: { res: SearchResult }) {
+  const conf = CONF[res.confidence] ?? CONF.none
+  const w = res.wireless
+  const rolesShown = Array.from(new Set(res.path.map((p) => p.role)))
+  return (
+    <Panel
+      title={res.device_name || res.mac || res.query}
+      subtitle={res.query_type.toUpperCase()}
+      actions={<span className={`badge ${conf.cls}`}><ShieldCheck size={13} /> {conf.label}</span>}
+    >
+      {w && (
+        <div className="enc-banner info" style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <Wifi size={15} />
+          <span>
+            Wi-Fi client on <strong>{w.ap_name || 'AP'}</strong>
+            {w.ssid && <> · SSID <strong>{w.ssid}</strong></>}
+            {w.band && <> · {w.band}</>}
+            {w.controller_name && <> · controller {w.controller_name}</>}
+            {' '}— the path starts at the access point.
+          </span>
+        </div>
+      )}
+      {res.path.length === 0 ? (
+        <EmptyState icon={CircleHelp} title="No path to draw" message="The endpoint was not found in any MAC/FDB table, so there is no Layer-2 path to visualize." />
+      ) : (
+        <>
+          <PathGraph res={res} />
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, fontSize: 11, marginTop: 10 }}>
+            {rolesShown.map((r) => (
+              <span key={r} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <i style={{ width: 9, height: 9, borderRadius: 9, background: ROLE_COLOR[r] ?? '#64748b', display: 'inline-block' }} /> {roleLabel(r)}
+              </span>
+            ))}
+            <span className="muted">· click a node to open its device · drag to pan · scroll to zoom</span>
+          </div>
+        </>
+      )}
+      {res.confidence_reasons?.length > 0 && (
+        <div className="card" style={{ margin: '12px 0 0' }}>
+          <h3 style={{ fontSize: 13, marginBottom: 10 }}>Why this confidence</h3>
+          <ul style={{ margin: 0, paddingLeft: 18 }}>
+            {res.confidence_reasons.map((r, i) => <li key={i} className="muted" style={{ fontSize: 12, marginBottom: 4 }}>{r}</li>)}
+          </ul>
+        </div>
+      )}
+    </Panel>
   )
 }
 

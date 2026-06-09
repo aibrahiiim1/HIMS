@@ -439,8 +439,14 @@ export interface SearchResult {
   arp_last_seen?: string | null
   confidence: string
   confidence_reasons: string[]
+  // Set only when the searched endpoint is a Wi-Fi client: the path then starts at
+  // the AP the client is associated to (client → AP → controller → wired uplink).
+  wireless?: WirelessTrace | null
 }
 
+// PathStep.role values:
+//   wireless_client | ap | wireless_controller | endpoint | access | uplink |
+//   distribution | core | gateway | firewall
 export interface PathStep {
   hop: number
   role: string
@@ -452,6 +458,21 @@ export interface PathStep {
   vlan_id?: number | null
   port_role?: string | null
   source?: string | null
+}
+
+// A searched endpoint's wireless association (client → AP → controller).
+export interface WirelessTrace {
+  client_mac?: string
+  client_ip?: string | null
+  hostname?: string | null
+  ssid?: string | null
+  band?: string | null
+  rssi?: number | null
+  ap_name?: string
+  ap_mac?: string | null
+  ap_ip?: string | null
+  controller_device_id?: string | null
+  controller_name?: string | null
 }
 
 // Unified global-search hit — a MAC/IP/name observed anywhere (access point,

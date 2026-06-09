@@ -183,13 +183,14 @@ export function SearchPage() {
 
           {wcs.length > 0 && (
             <Panel title="Wireless Clients" icon={Smartphone} subtitle={`${wcs.length}`} pad={false}>
-              <table className="data-table"><thead><tr><th>Client</th><th>IP</th><th>MAC</th><th>Association</th><th>Controller</th></tr></thead>
-                <tbody>{wcs.map((h, i) => { const lk = entLink(h); return (
+              <table className="data-table"><thead><tr><th>Client</th><th>IP</th><th>MAC</th><th>Association</th><th>Controller</th><th>Trace</th></tr></thead>
+                <tbody>{wcs.map((h, i) => { const lk = entLink(h); const trace = h.mac || h.ip; return (
                   <tr key={`wc-${i}`}>
                     <td className="cell-name">{h.title}</td>
                     <td className="mono">{h.ip || '—'}</td><td className="mono">{h.mac || '—'}</td>
                     <td className="muted">{h.subtitle || '—'}</td>
                     <td>{lk ? <Link className="cell-name" to={lk}>{h.device_name || '—'}</Link> : (h.device_name || '—')}</td>
+                    <td>{trace ? <Link className="btn btn-ghost btn-xs" to={`/path-finder?q=${encodeURIComponent(trace)}`}><RouteIcon size={13} /> Path</Link> : '—'}</td>
                   </tr>)})}</tbody>
               </table>
             </Panel>

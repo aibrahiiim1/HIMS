@@ -3,6 +3,8 @@ package topology
 import (
 	"context"
 	"net/netip"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,6 +30,9 @@ type fakeQuerier struct {
 	fabricMACs []db.ListFabricInterfaceMACsRow
 	portCounts map[uuid.UUID][]db.MACCountByPortRow
 	upserted   []db.UpsertTopologyLinkParams
+	// Wireless association.
+	wirelessRows []db.FindWirelessClientRow
+	aps          map[string]db.GetAccessPointByNameRow // keyed by AP name
 }
 
 func (f *fakeQuerier) GetDevice(_ context.Context, id uuid.UUID) (db.Device, error) {
@@ -88,6 +93,15 @@ func (f *fakeQuerier) ListFabricInterfaceMACs(_ context.Context) ([]db.ListFabri
 }
 func (f *fakeQuerier) MACCountByPort(_ context.Context, id uuid.UUID) ([]db.MACCountByPortRow, error) {
 	return f.portCounts[id], nil
+}
+func (f *fakeQuerier) FindWirelessClient(_ context.Context, _ string) ([]db.FindWirelessClientRow, error) {
+	return f.wirelessRows, nil
+}
+func (f *fakeQuerier) GetAccessPointByName(_ context.Context, arg db.GetAccessPointByNameParams) (db.GetAccessPointByNameRow, error) {
+	if ap, ok := f.aps[arg.Name]; ok {
+		return ap, nil
+	}
+	return db.GetAccessPointByNameRow{}, nil
 }
 
 func TestSearchMAC_NoResults(t *testing.T) {
@@ -382,5 +396,105 @@ func TestInferLinksFromFDB_SkipsLLDPProvenPair(t *testing.T) {
 	}
 	if n, err := New(q).InferLinksFromFDB(context.Background()); err != nil || n != 0 {
 		t.Fatalf("expected 0 links when pair already LLDP-proven, got n=%d err=%v", n, err)
+	}
+}
+
+// TestSearchMAC_WirelessStartsAtAP: a searched Wi-Fi client's MAC must trace
+// client → AP → controller → (the AP's wired uplink switch, found via the AP's MAC
+// in the FDB) → upstream walk to the edge.
+func TestSearchMAC_WirelessStartsAtAP(t *testing.T) {
+	clientMAC := "11:22:33:44:55:66"
+	apMAC := "aa:bb:cc:dd:ee:ff"
+	ctrlID, accID, fwID := uuid.New(), uuid.New(), uuid.New()
+	ifIdx := int32(8)
+	ifName := "Gi1/0/8"
+	uplink := "Gi1/0/24"
+	role := "access"
+	swIP := netip.MustParseAddr("10.0.0.2")
+	ctrlName := "WLC-1"
+	now := time.Now().UTC()
+	q := &fakeQuerier{
+		// macToPort(apMAC) → the AP is learned on accID's access port.
+		macRows: []db.SearchByMACRow{
+			{Mac: apMAC, VlanID: 20, IfIndex: &ifIdx, DeviceID: accID, SwitchName: "SW-ACC01", SwitchIp: &swIP, IfName: &ifName, PortRole: &role},
+		},
+		macTables: map[uuid.UUID][]db.ListMACForDeviceRow{
+			accID: {{Mac: apMAC, VlanID: 20, CollectionSource: "snmp", LastSeenAt: now}},
+		},
+		devices: map[uuid.UUID]db.Device{fwID: {ID: fwID, Name: "FW-EDGE", Category: "firewall"}},
+		links: map[uuid.UUID][]db.TopologyLink{
+			accID: {{LocalDeviceID: accID, RemoteDeviceID: &fwID, LocalIfName: &uplink, LinkSource: "lldp"}},
+		},
+		wirelessRows: []db.FindWirelessClientRow{
+			{ControllerDeviceID: ctrlID, ControllerName: &ctrlName, Mac: clientMAC, Ip: "10.0.0.50", Hostname: "laptop1", ApName: "AP-Lobby", Ssid: "Corp", Band: "5GHz"},
+		},
+		aps: map[string]db.GetAccessPointByNameRow{
+			"AP-Lobby": {ID: uuid.New(), Name: "AP-Lobby", Mac: &apMAC, Ip: "10.0.0.10", Status: "online"},
+		},
+	}
+	res, err := New(q).SearchMAC(context.Background(), clientMAC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Wireless == nil || res.Wireless.APName != "AP-Lobby" {
+		t.Fatalf("expected wireless association to AP-Lobby, got %+v", res.Wireless)
+	}
+	roles := []string{}
+	for _, p := range res.Path {
+		roles = append(roles, p.Role)
+	}
+	want := []string{"wireless_client", "ap", "wireless_controller", "access", "firewall"}
+	if !reflect.DeepEqual(roles, want) {
+		t.Fatalf("path roles = %v, want %v", roles, want)
+	}
+	if res.Path[2].DeviceID == nil || *res.Path[2].DeviceID != ctrlID {
+		t.Errorf("controller hop device id mismatch")
+	}
+	if res.Path[1].DeviceName == nil || *res.Path[1].DeviceName != "AP-Lobby" {
+		t.Errorf("ap hop name = %v, want AP-Lobby", res.Path[1].DeviceName)
+	}
+}
+
+// TestSearchMAC_WirelessNoFDB: when neither the AP's MAC nor the client's MAC is in
+// any switch FDB, the path stops at the controller and an honest reason is recorded
+// (we never guess a wired uplink we can't substantiate). A located client+AP is not
+// reported as "none".
+func TestSearchMAC_WirelessNoFDB(t *testing.T) {
+	clientMAC := "11:22:33:44:55:66"
+	apMAC := "aa:bb:cc:dd:ee:ff"
+	ctrlID := uuid.New()
+	ctrlName := "WLC-1"
+	q := &fakeQuerier{
+		// No macRows → neither AP MAC nor client MAC is learned anywhere.
+		wirelessRows: []db.FindWirelessClientRow{
+			{ControllerDeviceID: ctrlID, ControllerName: &ctrlName, Mac: clientMAC, ApName: "AP-Roof"},
+		},
+		aps: map[string]db.GetAccessPointByNameRow{
+			"AP-Roof": {Name: "AP-Roof", Mac: &apMAC},
+		},
+	}
+	res, err := New(q).SearchMAC(context.Background(), clientMAC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roles := []string{}
+	for _, p := range res.Path {
+		roles = append(roles, p.Role)
+	}
+	want := []string{"wireless_client", "ap", "wireless_controller"}
+	if !reflect.DeepEqual(roles, want) {
+		t.Fatalf("path roles = %v, want %v (no FDB → stops at controller)", roles, want)
+	}
+	if res.Confidence == "none" {
+		t.Errorf("a located client+AP should not be confidence=none")
+	}
+	found := false
+	for _, r := range res.ConfidenceReasons {
+		if strings.Contains(r, "wired uplink not found") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected an honest 'wired uplink not found' reason, got %v", res.ConfidenceReasons)
 	}
 }

@@ -153,6 +153,104 @@ func (q *Queries) FailStaleScanJobs(ctx context.Context, arg FailStaleScanJobsPa
 	return result.RowsAffected(), nil
 }
 
+const findWirelessClient = `-- name: FindWirelessClient :many
+SELECT wc.controller_device_id, d.name AS controller_name,
+       wc.mac, wc.ip, wc.hostname, wc.ap_name, wc.ssid, wc.band, wc.rssi
+FROM wireless_clients wc
+LEFT JOIN devices d ON d.id = wc.controller_device_id AND d.deleted_at IS NULL
+WHERE wc.ap_name <> ''
+  AND ( lower(wc.mac) = lower($1)
+     OR wc.ip = $1
+     OR (wc.hostname <> '' AND lower(wc.hostname) = lower($1)) )
+ORDER BY wc.collected_at DESC
+LIMIT 5
+`
+
+type FindWirelessClientRow struct {
+	ControllerDeviceID uuid.UUID `json:"controller_device_id"`
+	ControllerName     *string   `json:"controller_name"`
+	Mac                string    `json:"mac"`
+	Ip                 string    `json:"ip"`
+	Hostname           string    `json:"hostname"`
+	ApName             string    `json:"ap_name"`
+	Ssid               string    `json:"ssid"`
+	Band               string    `json:"band"`
+	Rssi               *int32    `json:"rssi"`
+}
+
+// Path Finder: exact-match a search term (MAC / IP / hostname) to an associated
+// wireless client that has a known AP, so the traced path can START at the access
+// point the client is connected to. Exact (not substring) match avoids tracing an
+// unrelated client. Only rows with a known ap_name qualify (we need an AP to start
+// at; without one the normal FDB path still applies).
+func (q *Queries) FindWirelessClient(ctx context.Context, lower string) ([]FindWirelessClientRow, error) {
+	rows, err := q.db.Query(ctx, findWirelessClient, lower)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []FindWirelessClientRow{}
+	for rows.Next() {
+		var i FindWirelessClientRow
+		if err := rows.Scan(
+			&i.ControllerDeviceID,
+			&i.ControllerName,
+			&i.Mac,
+			&i.Ip,
+			&i.Hostname,
+			&i.ApName,
+			&i.Ssid,
+			&i.Band,
+			&i.Rssi,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getAccessPointByName = `-- name: GetAccessPointByName :one
+SELECT ap.id, ap.name, ap.mac, COALESCE(host(ap.ip), '')::text AS ip, ap.model, ap.status
+FROM access_points ap
+WHERE ap.controller_device_id = $1 AND ap.name = $2
+LIMIT 1
+`
+
+type GetAccessPointByNameParams struct {
+	ControllerDeviceID uuid.UUID `json:"controller_device_id"`
+	Name               string    `json:"name"`
+}
+
+type GetAccessPointByNameRow struct {
+	ID     uuid.UUID `json:"id"`
+	Name   string    `json:"name"`
+	Mac    *string   `json:"mac"`
+	Ip     string    `json:"ip"`
+	Model  *string   `json:"model"`
+	Status string    `json:"status"`
+}
+
+// Path Finder: the AP a wireless client is associated to (scoped to its
+// controller), to read the AP's MAC/IP and resolve its wired uplink switch via the
+// FDB.
+func (q *Queries) GetAccessPointByName(ctx context.Context, arg GetAccessPointByNameParams) (GetAccessPointByNameRow, error) {
+	row := q.db.QueryRow(ctx, getAccessPointByName, arg.ControllerDeviceID, arg.Name)
+	var i GetAccessPointByNameRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Mac,
+		&i.Ip,
+		&i.Model,
+		&i.Status,
+	)
+	return i, err
+}
+
 const getDiscoveryJob = `-- name: GetDiscoveryJob :one
 SELECT id, location_id, subnet_id, scope_cidr, status, started_at, finished_at, host_count, found_count, error, metadata, created_at, scanned_count FROM discovery_jobs WHERE id = $1
 `

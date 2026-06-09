@@ -46,6 +46,9 @@ type Querier interface {
 	ListAllDevices(ctx context.Context) ([]db.Device, error)
 	ListFabricInterfaceMACs(ctx context.Context) ([]db.ListFabricInterfaceMACsRow, error)
 	MACCountByPort(ctx context.Context, deviceID uuid.UUID) ([]db.MACCountByPortRow, error)
+	// Wireless association (Path Finder: start the path at the AP a client is on).
+	FindWirelessClient(ctx context.Context, term string) ([]db.FindWirelessClientRow, error)
+	GetAccessPointByName(ctx context.Context, arg db.GetAccessPointByNameParams) (db.GetAccessPointByNameRow, error)
 }
 
 // Link is a directed network link for API/UI consumption.
@@ -66,7 +69,7 @@ type Link struct {
 // can render the chain (endpoint → access → uplink → core → firewall/gateway).
 type PathStep struct {
 	Hop        int        `json:"hop"`
-	Role       string     `json:"role"` // endpoint|access|uplink|distribution|core|gateway|firewall
+	Role       string     `json:"role"` // wireless_client|ap|wireless_controller|endpoint|access|uplink|distribution|core|gateway|firewall
 	DeviceID   *uuid.UUID `json:"device_id,omitempty"`
 	DeviceName *string    `json:"device_name,omitempty"`
 	IP         *string    `json:"ip,omitempty"`
@@ -97,6 +100,27 @@ type SearchResult struct {
 	// Confidence in the resolved path.
 	Confidence        string   `json:"confidence"` // high|medium|low|none
 	ConfidenceReasons []string `json:"confidence_reasons"`
+	// Wireless association (set only when the searched endpoint is a Wi-Fi client):
+	// the path then starts at the AP the client is on, then AP → controller → wired
+	// uplink switch → core.
+	Wireless *WirelessTrace `json:"wireless,omitempty"`
+}
+
+// WirelessTrace describes a searched endpoint's wireless association — the client,
+// the AP it is associated to, and the controller — so the path can start at the AP
+// (where the client gets the network) rather than at a wired switch port.
+type WirelessTrace struct {
+	ClientMAC          string     `json:"client_mac,omitempty"`
+	ClientIP           *string    `json:"client_ip,omitempty"`
+	Hostname           *string    `json:"hostname,omitempty"`
+	SSID               *string    `json:"ssid,omitempty"`
+	Band               *string    `json:"band,omitempty"`
+	RSSI               *int32     `json:"rssi,omitempty"`
+	APName             string     `json:"ap_name,omitempty"`
+	APMAC              *string    `json:"ap_mac,omitempty"`
+	APIP               *string    `json:"ap_ip,omitempty"`
+	ControllerDeviceID *uuid.UUID `json:"controller_device_id,omitempty"`
+	ControllerName     *string    `json:"controller_name,omitempty"`
 }
 
 // SwitchPortEntry is one FDB match: a switch + port + VLAN that carries the MAC,
@@ -375,8 +399,15 @@ func (e *Engine) SearchIP(ctx context.Context, ip netip.Addr) (SearchResult, err
 	if res.MAC != nil {
 		res.SwitchPort = e.macToPort(ctx, *res.MAC)
 	}
-	res.Path = e.buildPath(ctx, &res)
+	// If this endpoint is a Wi-Fi client, start the path at the AP it's on.
+	res.Wireless = e.wirelessAssociation(ctx, ip.String())
+	if res.Wireless != nil {
+		res.Path = e.buildWirelessPath(ctx, &res)
+	} else {
+		res.Path = e.buildPath(ctx, &res)
+	}
 	res.Confidence, res.ConfidenceReasons = assessConfidence(&res)
+	applyWirelessConfidence(&res)
 	if resolvedVia != "" {
 		via := map[string]string{
 			"wireless_client": "the wireless-client roster",
@@ -397,8 +428,15 @@ func (e *Engine) SearchIP(ctx context.Context, ip netip.Addr) (SearchResult, err
 func (e *Engine) SearchMAC(ctx context.Context, mac string) (SearchResult, error) {
 	res := SearchResult{Query: mac, QueryType: "mac", MAC: &mac}
 	res.SwitchPort = e.macToPort(ctx, mac)
-	res.Path = e.buildPath(ctx, &res)
+	// If this MAC belongs to a Wi-Fi client, start the path at its AP.
+	res.Wireless = e.wirelessAssociation(ctx, mac)
+	if res.Wireless != nil {
+		res.Path = e.buildWirelessPath(ctx, &res)
+	} else {
+		res.Path = e.buildPath(ctx, &res)
+	}
 	res.Confidence, res.ConfidenceReasons = assessConfidence(&res)
+	applyWirelessConfidence(&res)
 	res.normalizeSlices()
 	return res, nil
 }
@@ -441,6 +479,22 @@ func (e *Engine) SearchHostname(ctx context.Context, name string) ([]SearchResul
 		}
 		sr.normalizeSlices()
 		out = append(out, sr)
+	}
+	// A searched name might be a wireless client's hostname rather than a managed
+	// device — trace it from its AP.
+	if len(out) == 0 {
+		if w := e.wirelessAssociation(ctx, name); w != nil {
+			sr := SearchResult{Query: name, QueryType: "hostname", Wireless: w}
+			if w.ClientMAC != "" {
+				m := w.ClientMAC
+				sr.MAC = &m
+			}
+			sr.Path = e.buildWirelessPath(ctx, &sr)
+			sr.Confidence, sr.ConfidenceReasons = assessConfidence(&sr)
+			applyWirelessConfidence(&sr)
+			sr.normalizeSlices()
+			out = append(out, sr)
+		}
 	}
 	return out, nil
 }
@@ -666,6 +720,152 @@ func roleForCategory(cat string) (string, int) {
 	default:
 		return "uplink", 3
 	}
+}
+
+// wirelessAssociation resolves a search term (IP / MAC / hostname) to an associated
+// Wi-Fi client and the AP + controller it is on. Returns nil when the term is not a
+// wireless client with a known AP — in which case the normal wired path applies.
+func (e *Engine) wirelessAssociation(ctx context.Context, term string) *WirelessTrace {
+	if strings.TrimSpace(term) == "" {
+		return nil
+	}
+	rows, err := e.q.FindWirelessClient(ctx, term)
+	if err != nil || len(rows) == 0 {
+		return nil
+	}
+	c := rows[0]
+	wt := &WirelessTrace{ClientMAC: c.Mac, APName: c.ApName, RSSI: c.Rssi}
+	if c.Ip != "" {
+		ip := c.Ip
+		wt.ClientIP = &ip
+	}
+	if c.Hostname != "" {
+		h := c.Hostname
+		wt.Hostname = &h
+	}
+	if c.Ssid != "" {
+		s := c.Ssid
+		wt.SSID = &s
+	}
+	if c.Band != "" {
+		b := c.Band
+		wt.Band = &b
+	}
+	cid := c.ControllerDeviceID
+	wt.ControllerDeviceID = &cid
+	wt.ControllerName = c.ControllerName
+	// Resolve the AP row for its MAC/IP, used to find its wired uplink via the FDB.
+	if ap, aerr := e.q.GetAccessPointByName(ctx, db.GetAccessPointByNameParams{
+		ControllerDeviceID: c.ControllerDeviceID, Name: c.ApName,
+	}); aerr == nil {
+		wt.APMAC = ap.Mac
+		if ap.Ip != "" {
+			apip := ap.Ip
+			wt.APIP = &apip
+		}
+	}
+	return wt
+}
+
+// buildWirelessPath assembles a Wi-Fi endpoint's path: client → AP → controller →
+// (the AP's wired uplink switch, resolved from the AP's MAC via the FDB) → upstream
+// walk to the edge. The AP→switch hop is FDB-derived (the only signal available); if
+// the AP's MAC is not learned on any switch, it falls back to the client's own FDB
+// match, and if neither resolves the path stops at the controller (flagged in the
+// confidence reasons).
+func (e *Engine) buildWirelessPath(ctx context.Context, res *SearchResult) []PathStep {
+	w := res.Wireless
+	if w == nil {
+		return e.buildPath(ctx, res)
+	}
+	steps := []PathStep{}
+	hop := 0
+	wsrc := "wireless"
+
+	// Endpoint: the wireless client.
+	client := PathStep{Hop: hop, Role: "wireless_client", IP: w.ClientIP, Source: &wsrc}
+	if w.Hostname != nil {
+		client.DeviceName = w.Hostname
+	}
+	steps = append(steps, client)
+	hop++
+
+	// AP hop (where the client gets the network).
+	apName := w.APName
+	ap := PathStep{Hop: hop, Role: "ap", DeviceName: &apName, IP: w.APIP, Source: &wsrc}
+	steps = append(steps, ap)
+	hop++
+
+	// Controller hop (the managed wireless controller device).
+	if w.ControllerDeviceID != nil {
+		ctrl := PathStep{Hop: hop, Role: "wireless_controller", DeviceID: w.ControllerDeviceID, DeviceName: w.ControllerName, Source: &wsrc}
+		steps = append(steps, ctrl)
+		hop++
+	}
+
+	// Wired uplink: the switch port that learned the AP's MAC (FDB). Fall back to the
+	// client's own FDB match (already resolved by the caller) when the AP MAC isn't
+	// in any switch table.
+	var ports []SwitchPortEntry
+	if w.APMAC != nil && *w.APMAC != "" {
+		ports = e.macToPort(ctx, strings.ToLower(*w.APMAC))
+	}
+	if len(ports) == 0 {
+		ports = res.SwitchPort
+	}
+	if len(ports) > 0 {
+		res.SwitchPort = ports
+		acc := ports[0]
+		v := acc.VLANID
+		msrc := "mac"
+		if acc.Source != nil {
+			msrc = *acc.Source
+		}
+		steps = append(steps, PathStep{
+			Hop: hop, Role: "access",
+			DeviceID: &acc.SwitchID, DeviceName: &acc.SwitchName, IP: acc.SwitchIP,
+			IfIndex: acc.IfIndex, IfName: acc.IfName, VLANID: &v, PortRole: acc.PortRole, Source: &msrc,
+		})
+		hop++
+
+		// Walk upstream from the access switch toward the edge.
+		visited := map[uuid.UUID]bool{acc.SwitchID: true}
+		cur := acc.SwitchID
+		for i := 0; i < 6; i++ {
+			next, role, ok := e.nextUpstream(ctx, cur, visited)
+			if !ok {
+				break
+			}
+			visited[next.DeviceID] = true
+			steps = append(steps, PathStep{
+				Hop: hop, Role: role,
+				DeviceID: &next.DeviceID, DeviceName: &next.DeviceName, IP: next.IP,
+				IfName: next.LocalIfName, Source: &next.Source,
+			})
+			hop++
+			cur = next.DeviceID
+			if role == "firewall" || role == "gateway" {
+				break
+			}
+		}
+	}
+	return steps
+}
+
+// applyWirelessConfidence augments the confidence reasons for a wireless trace and
+// ensures a located client+AP is never reported as "none".
+func applyWirelessConfidence(res *SearchResult) {
+	if res.Wireless == nil {
+		return
+	}
+	reasons := []string{"Endpoint is a Wi-Fi client associated to AP " + res.Wireless.APName + " — the path starts at the access point."}
+	if len(res.SwitchPort) == 0 {
+		reasons = append(reasons, "AP wired uplink not found in any switch MAC table — showing client → AP → controller only.")
+		if res.Confidence == "" || res.Confidence == "none" {
+			res.Confidence = "low"
+		}
+	}
+	res.ConfidenceReasons = append(reasons, res.ConfidenceReasons...)
 }
 
 // assessConfidence rates how trustworthy the resolved path is, with reasons.

@@ -78,6 +78,32 @@ WHERE host(a.ip_address) ILIKE '%'||$1||'%' OR a.mac ILIKE '%'||$1||'%'
 ORDER BY a.last_seen_at DESC
 LIMIT 40;
 
+-- name: FindWirelessClient :many
+-- Path Finder: exact-match a search term (MAC / IP / hostname) to an associated
+-- wireless client that has a known AP, so the traced path can START at the access
+-- point the client is connected to. Exact (not substring) match avoids tracing an
+-- unrelated client. Only rows with a known ap_name qualify (we need an AP to start
+-- at; without one the normal FDB path still applies).
+SELECT wc.controller_device_id, d.name AS controller_name,
+       wc.mac, wc.ip, wc.hostname, wc.ap_name, wc.ssid, wc.band, wc.rssi
+FROM wireless_clients wc
+LEFT JOIN devices d ON d.id = wc.controller_device_id AND d.deleted_at IS NULL
+WHERE wc.ap_name <> ''
+  AND ( lower(wc.mac) = lower($1)
+     OR wc.ip = $1
+     OR (wc.hostname <> '' AND lower(wc.hostname) = lower($1)) )
+ORDER BY wc.collected_at DESC
+LIMIT 5;
+
+-- name: GetAccessPointByName :one
+-- Path Finder: the AP a wireless client is associated to (scoped to its
+-- controller), to read the AP's MAC/IP and resolve its wired uplink switch via the
+-- FDB.
+SELECT ap.id, ap.name, ap.mac, COALESCE(host(ap.ip), '')::text AS ip, ap.model, ap.status
+FROM access_points ap
+WHERE ap.controller_device_id = $1 AND ap.name = $2
+LIMIT 1;
+
 -- name: ResolveIPToMAC :many
 -- Path Finder fallback for when the ARP table is empty/sparse: resolve an IP to a
 -- MAC (and an identity) from the wireless-client roster and the AP inventory, so a

@@ -218,6 +218,12 @@ type Querier interface {
 	FindMACByIP(ctx context.Context, ipAddress netip.Addr) ([]FindMACByIPRow, error)
 	// Topology search: which switch + port + VLAN carries a MAC?
 	FindMACOnSwitches(ctx context.Context, mac string) ([]FindMACOnSwitchesRow, error)
+	// Path Finder: exact-match a search term (MAC / IP / hostname) to an associated
+	// wireless client that has a known AP, so the traced path can START at the access
+	// point the client is connected to. Exact (not substring) match avoids tracing an
+	// unrelated client. Only rows with a known ap_name qualify (we need an AP to start
+	// at; without one the normal FDB path still applies).
+	FindWirelessClient(ctx context.Context, lower string) ([]FindWirelessClientRow, error)
 	// Analytics aggregations powering the enterprise dashboards (Dashboard, NOC
 	// Wallboard, Health Overview). All grounded in real collected data:
 	// monitoring_samples (reachability time-series) and alerts. Bucket granularity
@@ -235,6 +241,10 @@ type Querier interface {
 	// devices, and latency stats. Used for the headline availability KPI / SLA figure.
 	FleetAvailabilitySummary(ctx context.Context, dollar_1 string) (FleetAvailabilitySummaryRow, error)
 	FlowOverview(ctx context.Context, at time.Time) (FlowOverviewRow, error)
+	// Path Finder: the AP a wireless client is associated to (scoped to its
+	// controller), to read the AP's MAC/IP and resolve its wired uplink switch via the
+	// FDB.
+	GetAccessPointByName(ctx context.Context, arg GetAccessPointByNameParams) (GetAccessPointByNameRow, error)
 	GetAgentJob(ctx context.Context, id uuid.UUID) (AgentJob, error)
 	GetAlert(ctx context.Context, id uuid.UUID) (Alert, error)
 	GetBMCInfo(ctx context.Context, deviceID uuid.UUID) (BmcInfo, error)
