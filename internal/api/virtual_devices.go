@@ -203,30 +203,19 @@ func (s *Server) createVirtualDevice(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	params, err := manualDeviceParams(req.manualDeviceReq)
-	if err != nil {
+	if _, err := manualDeviceParams(req.manualDeviceReq); err != nil { // clean 400 on bad name/category/ip
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	status := normVirtualStatus(req.Status, "up")
-	if status == "" {
+	if normVirtualStatus(req.Status, "up") == "" {
 		http.Error(w, "invalid status; use up, down, warning or unknown", http.StatusBadRequest)
 		return
 	}
-	params.Status = status
-	params.Metadata = []byte(`{"source":"virtual"}`)
-
-	dev, err := s.queries.CreateDevice(r.Context(), params)
+	dev, _, err := s.persistVirtual(r.Context(), &req, nil)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	if err := s.queries.MarkDeviceVirtual(r.Context(), db.MarkDeviceVirtualParams{ID: dev.ID, IsVirtual: true}); err != nil {
-		writeErr(w, err)
-		return
-	}
-	s.setVirtualIdentityExtras(r.Context(), dev, &req) // notes/criticality
-	s.writeVirtualConfig(r.Context(), dev, &req)
 	s.audit(r, "inventory", "device.create_virtual", "device", dev.ID.String(),
 		"Created virtual "+dev.Category+" "+dev.Name, map[string]any{"category": dev.Category})
 	out, _ := s.queries.GetDevice(r.Context(), dev.ID)
@@ -254,48 +243,23 @@ func (s *Server) updateVirtualDevice(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	name := strings.TrimSpace(req.Name)
-	if name == "" {
-		name = cur.Name
+	if strings.TrimSpace(req.Name) == "" {
+		req.Name = cur.Name
 	}
-	cat := strings.TrimSpace(req.Category)
-	if cat == "" {
-		cat = cur.Category
-	}
-	if !validCategory(cat) {
-		http.Error(w, "invalid category "+strconv.Quote(cat), http.StatusBadRequest)
+	if c := strings.TrimSpace(req.Category); c != "" && !validCategory(c) {
+		http.Error(w, "invalid category "+strconv.Quote(c), http.StatusBadRequest)
 		return
 	}
-	status := normVirtualStatus(req.Status, cur.Status)
-	if status == "" {
+	if normVirtualStatus(req.Status, cur.Status) == "" {
 		http.Error(w, "invalid status", http.StatusBadRequest)
 		return
 	}
-	crit := cur.Criticality
-	if strings.TrimSpace(req.Criticality) != "" && validCriticality[strings.TrimSpace(req.Criticality)] {
-		crit = strings.TrimSpace(req.Criticality)
-	}
-	notes := cur.Notes
-	if req.Notes != "" {
-		notes = strings.TrimSpace(req.Notes)
-	}
-	dev, err := s.queries.UpdateDevice(ctx, db.UpdateDeviceParams{
-		ID: id, Name: name, Category: cat,
-		Vendor: strPtr(req.Vendor), Model: strPtr(req.Model), Serial: strPtr(req.Serial),
-		OsVersion: strPtr(req.OSVersion), Hostname: strPtr(req.Hostname),
-		Vlan: strPtr(req.VLAN), DeviceClass: strPtr(req.Class), Location: strPtr(req.Location),
-		LocationID: parseUUIDPtr(req.LocationID), Subtype: cur.Subtype, Notes: notes,
-		Criticality: crit, MonitoringEnabled: cur.MonitoringEnabled,
-		ClassificationLocked: cur.ClassificationLocked, ManualClassificationReason: cur.ManualClassificationReason,
-	})
+	dev, _, err := s.persistVirtual(ctx, &req, &cur)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	_ = s.queries.UpdateDeviceMonitoringStatus(ctx, db.UpdateDeviceMonitoringStatusParams{ID: id, Status: status})
-	dev.IsVirtual = true
-	s.writeVirtualConfig(ctx, dev, &req)
-	s.audit(r, "inventory", "device.update_virtual", "device", id.String(), "Updated virtual "+cat+" "+name, nil)
+	s.audit(r, "inventory", "device.update_virtual", "device", id.String(), "Updated virtual "+dev.Category+" "+dev.Name, nil)
 	out, _ := s.queries.GetDevice(ctx, id)
 	writeJSON(w, http.StatusOK, out)
 }
@@ -770,54 +734,139 @@ func parseIPPtr(s string) *netip.Addr {
 	return &ip
 }
 
-// --- Excel template + import ------------------------------------------------
+// --- Category-aware Excel template + multi-device import ---------------------
+// Every sheet is keyed by device_key (first column) so a single workbook can hold
+// many devices; child rows attach to a device row in the Devices sheet by key. A
+// type-scoped template includes only that category's relevant sheets; a no-type
+// template includes the full set.
 
-var (
-	vdHdrDevice    = []any{"name", "category", "vendor", "model", "serial", "os_version", "primary_ip", "site", "status", "notes"}
-	vdHdrPorts     = []any{"if_index", "name", "alias", "up (yes/no)", "admin_down (yes/no)", "speed_mbps", "vlan", "role", "mac"}
-	vdHdrVLANs     = []any{"vlan_id", "name"}
-	vdHdrNeighbors = []any{"local_port", "local_if_index", "remote_name", "remote_port", "remote_mgmt_ip", "protocol"}
-	vdHdrMACs      = []any{"mac", "vlan", "if_index"}
-)
+var vdSheetHdr = map[string][]any{
+	"Devices":     {"device_key", "name", "category", "vendor", "model", "serial", "os_version", "primary_ip", "site", "status", "vlan", "class", "criticality", "notes"},
+	"Ports":       {"device_key", "if_index", "name", "alias", "up (yes/no)", "admin_down (yes/no)", "speed_mbps", "vlan", "trunk_vlans", "role", "mac"},
+	"VLANs":       {"device_key", "vlan_id", "name"},
+	"Neighbors":   {"device_key", "local_port", "local_if_index", "remote_name", "remote_port", "remote_mgmt_ip", "protocol"},
+	"LearnedMACs": {"device_key", "mac", "vlan", "if_index"},
+	"Interfaces":  {"device_key", "name", "zone", "ip", "mac", "speed_mbps"},
+	"Disks":       {"device_key", "name", "model", "filesystem", "total_bytes", "used_bytes", "free_bytes"},
+	"Roles":       {"device_key", "role"},
+	"Software":    {"device_key", "name", "version", "publisher"},
+	"VpnTunnels":  {"device_key", "name", "p1_name", "remote_gw", "status"},
+	"HAMembers":   {"device_key", "serial", "hostname", "sync_status"},
+	"Licenses":    {"device_key", "contract", "expiry"},
+	"APs":         {"device_key", "name", "mac", "model", "ip", "status", "serial", "band", "site"},
+	"SSIDs":       {"device_key", "name", "security", "band", "vlan", "status"},
+	"Clients":     {"device_key", "mac", "ip", "hostname", "ap_name", "ssid", "band"},
+	"UPS":         {"device_key", "manufacturer", "model", "battery_status", "charge_pct", "runtime_min", "load_pct"},
+	"Facts":       {"device_key", "key", "value"},
+}
 
-// virtualTemplateXLSX handles GET /devices/virtual/template.xlsx — a fillable
-// workbook (one device per file) with a sheet per inventory section + examples.
+var vdSheetExample = map[string][]any{
+	"Ports":       {"sw1", 1, "Gi1/0/1", "uplink-to-core", "yes", "no", 1000, 10, "20,30", "uplink", ""},
+	"VLANs":       {"sw1", 10, "Mgmt"},
+	"Neighbors":   {"sw1", "Gi1/0/1", 1, "CHV-CORE", "1/1/24", "172.21.96.2", "lldp"},
+	"LearnedMACs": {"sw1", "aa:bb:cc:dd:ee:ff", 20, 2},
+	"Interfaces":  {"fw1", "port1", "WAN", "203.0.113.2", "", 1000},
+	"Disks":       {"srv1", "C:", "Samsung", "NTFS", 512000000000, 200000000000, 312000000000},
+	"Roles":       {"srv1", "Application Server"},
+	"Software":    {"ws1", "Microsoft Office", "2021", "Microsoft"},
+	"VpnTunnels":  {"fw1", "Site-to-HQ", "ph1-hq", "198.51.100.1", "up"},
+	"HAMembers":   {"fw1", "FGT123", "fw-a", "synchronized"},
+	"Licenses":    {"fw1", "FortiCare", "2027-01-01"},
+	"APs":         {"wlc1", "AP-Lobby", "f0:b0:52:00:00:01", "AP305", "10.98.0.10", "up", "SN123", "5GHz", "Main Hotel"},
+	"SSIDs":       {"wlc1", "Guest-WiFi", "WPA2", "dual", "90", "up"},
+	"Clients":     {"wlc1", "0a:11:22:33:44:55", "172.21.4.20", "iphone", "AP-Lobby", "Guest-WiFi", "5GHz"},
+	"UPS":         {"ups1", "APC", "SMT1500", "normal", 100, 35, 28},
+	"Facts":       {"srv1", "cpu", "2 x Xeon Gold 6230"},
+}
+
+// vdCategorySheets maps a category to the child sheets relevant to it.
+var vdCategorySheets = map[string][]string{
+	"switch":              {"Ports", "VLANs", "Neighbors", "LearnedMACs", "Facts"},
+	"router":              {"Ports", "VLANs", "Neighbors", "LearnedMACs", "Facts"},
+	"isp_router":          {"Ports", "VLANs", "Neighbors", "LearnedMACs", "Facts"},
+	"firewall":            {"Interfaces", "VpnTunnels", "HAMembers", "Licenses", "Neighbors", "Facts"},
+	"server":              {"Interfaces", "Disks", "Roles", "Neighbors", "Facts"},
+	"virtual_host":        {"Interfaces", "Disks", "Roles", "Neighbors", "Facts"},
+	"endpoint":            {"Interfaces", "Disks", "Software", "Roles", "Neighbors", "Facts"},
+	"wireless_controller": {"APs", "SSIDs", "Clients", "Facts"},
+	"ups":                 {"UPS", "Facts"},
+	"access_point":        {"Neighbors", "Facts"},
+	"printer":             {"Neighbors", "Facts"},
+	"camera":              {"Neighbors", "Facts"},
+	"nvr":                 {"Neighbors", "Facts"},
+}
+
+// vdAllChildSheets is the full set used for an All-Inventory (no type) template.
+var vdAllChildSheets = []string{"Ports", "VLANs", "Neighbors", "LearnedMACs", "Interfaces", "Disks", "Roles", "Software", "VpnTunnels", "HAMembers", "Licenses", "APs", "SSIDs", "Clients", "UPS", "Facts"}
+
+// virtualTemplateXLSX handles GET /devices/virtual/template.xlsx?type=<category>.
+// Multi-device, category-aware: only the relevant sheets for the type (or the full
+// set when no/unknown type), each keyed by device_key.
 func (s *Server) virtualTemplateXLSX(w http.ResponseWriter, r *http.Request) {
+	typ := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("type")))
+	child, scoped := vdCategorySheets[typ]
+	if !scoped {
+		child = vdAllChildSheets
+	}
 	xl := excelize.NewFile()
 	defer xl.Close()
-
-	put := func(sheet string, header []any, examples [][]any) {
-		idx, _ := xl.NewSheet(sheet)
-		_ = idx
-		_ = xl.SetSheetRow(sheet, "A1", &header)
+	put := func(sheet string, examples [][]any) {
+		_, _ = xl.NewSheet(sheet)
+		if hdr := vdSheetHdr[sheet]; hdr != nil {
+			_ = xl.SetSheetRow(sheet, "A1", &hdr)
+		}
 		for i, ex := range examples {
 			_ = xl.SetSheetRow(sheet, "A"+strconv.Itoa(i+2), &ex)
 		}
 	}
-	put("Device", vdHdrDevice, [][]any{{"Core-SW-EXAMPLE", "switch", "Cisco", "C9300", "FOC123", "IOS-XE 17", "172.21.96.9", "Main Hotel", "up", "manually entered"}})
-	put("Ports", vdHdrPorts, [][]any{
-		{1, "GigabitEthernet1/0/1", "uplink-to-core", "yes", "no", 1000, 10, "uplink", ""},
-		{2, "GigabitEthernet1/0/2", "AP-Lobby", "yes", "no", 1000, 20, "access", ""},
-		{3, "GigabitEthernet1/0/3", "spare", "no", "yes", 1000, 1, "access", ""},
-	})
-	put("VLANs", vdHdrVLANs, [][]any{{10, "Mgmt"}, {20, "Staff"}, {90, "Guest"}})
-	put("Neighbors", vdHdrNeighbors, [][]any{{"GigabitEthernet1/0/1", 1, "CHV-CORE", "1/1/24", "172.21.96.2", "lldp"}})
-	put("MACs", vdHdrMACs, [][]any{{"aa:bb:cc:dd:ee:ff", 20, 2}})
-
+	exCat := typ
+	if exCat == "" {
+		exCat = "switch"
+	}
+	put("Devices", [][]any{{"device1", "EXAMPLE-" + strings.ToUpper(exCat), exCat, "Vendor", "Model", "SN123", "", "172.21.96.9", "Main Hotel", "up", "10", "", "normal", "manually entered"}})
+	for _, sh := range child {
+		var ex [][]any
+		if e := vdSheetExample[sh]; e != nil {
+			ex = [][]any{e}
+		}
+		put(sh, ex)
+	}
 	xl.DeleteSheet("Sheet1")
 	xl.SetActiveSheet(0)
 
+	fname := "virtual-devices-template.xlsx"
+	if scoped {
+		fname = "virtual-" + typ + "-template.xlsx"
+	}
 	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-	w.Header().Set("Content-Disposition", `attachment; filename="virtual-device-template.xlsx"`)
+	w.Header().Set("Content-Disposition", `attachment; filename="`+fname+`"`)
 	if err := xl.Write(w); err != nil {
 		writeErr(w, err)
 	}
 }
 
-// importVirtualXLSX handles POST /devices/virtual/import (multipart "file") — one
-// virtual device per workbook, read from the Device/Ports/VLANs/Neighbors/MACs
-// sheets, then created the same way as the JSON create path.
+// vdImportError is one cell/row problem, located precisely for the operator.
+type vdImportError struct {
+	Sheet   string `json:"sheet"`
+	Row     int    `json:"row"`
+	Field   string `json:"field,omitempty"`
+	Message string `json:"message"`
+}
+
+type vdImportReport struct {
+	Created int             `json:"created"`
+	Updated int             `json:"updated"`
+	Skipped int             `json:"skipped"`
+	Failed  int             `json:"failed"`
+	Devices []string        `json:"devices,omitempty"`
+	Errors  []vdImportError `json:"errors,omitempty"`
+}
+
+// importVirtualXLSX handles POST /devices/virtual/import (multipart "file") — a
+// multi-device, category-aware workbook. Child sheet rows link to a Devices row by
+// device_key. Returns a structured per-row report (created/updated/skipped/failed).
 func (s *Server) importVirtualXLSX(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	f, _, err := r.FormFile("file")
 	if err != nil {
 		http.Error(w, "no file uploaded (field 'file'): "+err.Error(), http.StatusBadRequest)
@@ -836,65 +885,287 @@ func (s *Server) importVirtualXLSX(w http.ResponseWriter, r *http.Request) {
 	}
 	defer xl.Close()
 
-	dev := sheetRows(xl, "Device")
-	if len(dev) < 2 {
-		http.Error(w, "the 'Device' sheet needs a header row + one device row", http.StatusBadRequest)
+	reqs, rows, parseErrs, fatal := parseVirtualWorkbook(xl)
+	if fatal != "" {
+		http.Error(w, fatal, http.StatusBadRequest)
 		return
 	}
-	dcol := headerIndex(dev[0])
-	row := dev[1]
-	cell := func(key string) string {
-		if i, ok := dcol[key]; ok && i < len(row) {
-			return strings.TrimSpace(row[i])
+	// Existing virtual devices by lowercased name → create-or-update.
+	existing := map[string]db.Device{}
+	if all, lerr := s.queries.ListAllDevices(ctx); lerr == nil {
+		for _, d := range all {
+			if d.IsVirtual {
+				existing[strings.ToLower(d.Name)] = d
+			}
 		}
-		return ""
 	}
-	req := virtualDeviceReq{
-		manualDeviceReq: manualDeviceReq{
-			Name: cell("name"), Category: cell("category"), Vendor: cell("vendor"), Model: cell("model"),
-			Serial: cell("serial"), OSVersion: cell("os_version"), PrimaryIP: cell("primary_ip"),
-		},
-		Status: cell("status"), Site: cell("site"),
+	rep := vdImportReport{Errors: parseErrs, Failed: len(parseErrs)}
+	for i := range reqs {
+		req := reqs[i]
+		cur, isUpdate := existing[strings.ToLower(req.Name)]
+		var curPtr *db.Device
+		if isUpdate {
+			curPtr = &cur
+		}
+		dev, action, perr := s.persistVirtual(ctx, &req, curPtr)
+		if perr != nil {
+			rep.Failed++
+			rep.Errors = append(rep.Errors, vdImportError{Sheet: "Devices", Row: rows[i], Message: perr.Error()})
+			continue
+		}
+		if action == "updated" {
+			rep.Updated++
+		} else {
+			rep.Created++
+		}
+		rep.Devices = append(rep.Devices, dev.Name)
 	}
-	if req.Name == "" {
-		http.Error(w, "Device sheet: 'name' is required", http.StatusBadRequest)
-		return
+	s.audit(r, "inventory", "device.import_virtual", "device", "",
+		"Imported virtual devices from workbook", map[string]any{"created": rep.Created, "updated": rep.Updated, "failed": rep.Failed})
+	writeJSON(w, http.StatusOK, rep)
+}
+
+// parseVirtualWorkbook reads a multi-device workbook into per-device requests
+// (child sheet rows attached by device_key), plus per-row parse errors. A non-empty
+// fatal means the workbook is unusable (no Devices sheet).
+func parseVirtualWorkbook(xl *excelize.File) (reqs []virtualDeviceReq, rows []int, errs []vdImportError, fatal string) {
+	devRows := sheetRows(xl, "Devices")
+	if len(devRows) < 2 {
+		return nil, nil, nil, "the 'Devices' sheet needs a header row + at least one device row"
 	}
 
-	req.Ports = parsePorts(sheetRows(xl, "Ports"))
-	req.VLANs = parseVLANs(sheetRows(xl, "VLANs"))
-	req.Neighbors = parseNeighbors(sheetRows(xl, "Neighbors"))
-	req.MACs = parseMACs(sheetRows(xl, "MACs"))
-
-	params, perr := manualDeviceParams(req.manualDeviceReq)
-	if perr != nil {
-		http.Error(w, perr.Error(), http.StatusBadRequest)
-		return
+	// Single-device fallback key: child rows may omit device_key when there's one device.
+	singleKey := ""
+	if n := countDataRows(devRows); n == 1 {
+		singleKey = firstDeviceKey(devRows)
 	}
-	status := strings.ToLower(strings.TrimSpace(req.Status))
-	if !validDeviceStatus[status] {
+	keyOf := func(get func(string) string) string {
+		k := strings.ToLower(strings.TrimSpace(get("device_key")))
+		if k == "" {
+			return singleKey
+		}
+		return k
+	}
+
+	// Group every child sheet by device_key.
+	ports := map[string][]vdPort{}
+	forEachRow(sheetRows(xl, "Ports"), func(_ int, g func(string) string) {
+		if vdAtoi(g("if_index")) <= 0 {
+			return
+		}
+		ports[keyOf(g)] = append(ports[keyOf(g)], vdPort{
+			IfIndex: vdAtoi(g("if_index")), Name: g("name"), Alias: g("alias"),
+			Up: yesish(g("up")), AdminDown: yesish(g("admin_down")), SpeedMbps: vdAtoi(g("speed_mbps")),
+			VLAN: vdAtoi(g("vlan")), TrunkVLANs: vdAtoiList(g("trunk_vlans")), Role: g("role"), MAC: g("mac"),
+		})
+	})
+	vlans := map[string][]vdVlan{}
+	forEachRow(sheetRows(xl, "VLANs"), func(_ int, g func(string) string) {
+		if vdAtoi(g("vlan_id")) <= 0 {
+			return
+		}
+		vlans[keyOf(g)] = append(vlans[keyOf(g)], vdVlan{ID: vdAtoi(g("vlan_id")), Name: g("name")})
+	})
+	neighbors := map[string][]vdNeighbor{}
+	forEachRow(sheetRows(xl, "Neighbors"), func(_ int, g func(string) string) {
+		if g("remote_name") == "" && g("remote_port") == "" {
+			return
+		}
+		neighbors[keyOf(g)] = append(neighbors[keyOf(g)], vdNeighbor{
+			LocalPort: g("local_port"), LocalIfIndex: vdAtoi(g("local_if_index")), RemoteName: g("remote_name"),
+			RemotePort: g("remote_port"), RemoteMgmtIP: g("remote_mgmt_ip"), Protocol: g("protocol"),
+		})
+	})
+	macs := map[string][]vdMAC{}
+	forEachRow(sheetRows(xl, "LearnedMACs"), func(_ int, g func(string) string) {
+		if g("mac") == "" {
+			return
+		}
+		macs[keyOf(g)] = append(macs[keyOf(g)], vdMAC{MAC: g("mac"), VLAN: vdAtoi(g("vlan")), IfIndex: vdAtoi(g("if_index"))})
+	})
+	nics := map[string][]vdNIC{}
+	forEachRow(sheetRows(xl, "Interfaces"), func(_ int, g func(string) string) {
+		if g("name") == "" {
+			return
+		}
+		nics[keyOf(g)] = append(nics[keyOf(g)], vdNIC{Name: g("name"), Zone: g("zone"), IP: g("ip"), MAC: g("mac"), SpeedMbps: vdAtoi(g("speed_mbps"))})
+	})
+	disks := map[string][]vdDisk{}
+	forEachRow(sheetRows(xl, "Disks"), func(_ int, g func(string) string) {
+		if g("name") == "" {
+			return
+		}
+		disks[keyOf(g)] = append(disks[keyOf(g)], vdDisk{Name: g("name"), Model: g("model"), Filesystem: g("filesystem"), TotalBytes: vdAtoi64(g("total_bytes")), UsedBytes: vdAtoi64(g("used_bytes")), FreeBytes: vdAtoi64(g("free_bytes"))})
+	})
+	roles := map[string][]string{}
+	forEachRow(sheetRows(xl, "Roles"), func(_ int, g func(string) string) {
+		if g("role") == "" {
+			return
+		}
+		roles[keyOf(g)] = append(roles[keyOf(g)], g("role"))
+	})
+	software := map[string][]vdSoftware{}
+	forEachRow(sheetRows(xl, "Software"), func(_ int, g func(string) string) {
+		if g("name") == "" {
+			return
+		}
+		software[keyOf(g)] = append(software[keyOf(g)], vdSoftware{Name: g("name"), Version: g("version"), Publisher: g("publisher")})
+	})
+	vpns := map[string][]vdVpn{}
+	forEachRow(sheetRows(xl, "VpnTunnels"), func(_ int, g func(string) string) {
+		if g("name") == "" {
+			return
+		}
+		vpns[keyOf(g)] = append(vpns[keyOf(g)], vdVpn{Name: g("name"), P1Name: g("p1_name"), RemoteGw: g("remote_gw"), Status: g("status")})
+	})
+	has := map[string][]vdHA{}
+	forEachRow(sheetRows(xl, "HAMembers"), func(_ int, g func(string) string) {
+		if g("serial") == "" {
+			return
+		}
+		has[keyOf(g)] = append(has[keyOf(g)], vdHA{Serial: g("serial"), Hostname: g("hostname"), SyncStatus: g("sync_status")})
+	})
+	lics := map[string][]vdLicense{}
+	forEachRow(sheetRows(xl, "Licenses"), func(_ int, g func(string) string) {
+		if g("contract") == "" {
+			return
+		}
+		lics[keyOf(g)] = append(lics[keyOf(g)], vdLicense{Contract: g("contract"), Expiry: g("expiry")})
+	})
+	aps := map[string][]vdAP{}
+	forEachRow(sheetRows(xl, "APs"), func(_ int, g func(string) string) {
+		if g("name") == "" && g("mac") == "" {
+			return
+		}
+		aps[keyOf(g)] = append(aps[keyOf(g)], vdAP{Name: g("name"), MAC: g("mac"), Model: g("model"), IP: g("ip"), Status: g("status"), Serial: g("serial"), Band: g("band"), Site: g("site")})
+	})
+	ssids := map[string][]vdSSID{}
+	forEachRow(sheetRows(xl, "SSIDs"), func(_ int, g func(string) string) {
+		if g("name") == "" {
+			return
+		}
+		ssids[keyOf(g)] = append(ssids[keyOf(g)], vdSSID{Name: g("name"), Security: g("security"), Band: g("band"), Vlan: g("vlan"), Status: g("status")})
+	})
+	clients := map[string][]vdClient{}
+	forEachRow(sheetRows(xl, "Clients"), func(_ int, g func(string) string) {
+		if g("mac") == "" {
+			return
+		}
+		clients[keyOf(g)] = append(clients[keyOf(g)], vdClient{MAC: g("mac"), IP: g("ip"), Hostname: g("hostname"), ApName: g("ap_name"), Ssid: g("ssid"), Band: g("band")})
+	})
+	upsByKey := map[string]*vdUPS{}
+	forEachRow(sheetRows(xl, "UPS"), func(_ int, g func(string) string) {
+		upsByKey[keyOf(g)] = &vdUPS{Manufacturer: g("manufacturer"), Model: g("model"), BatteryStatus: g("battery_status"), ChargePct: vdAtoi(g("charge_pct")), RuntimeMin: vdAtoi(g("runtime_min")), LoadPct: vdAtoi(g("load_pct"))}
+	})
+	facts := map[string]map[string]string{}
+	forEachRow(sheetRows(xl, "Facts"), func(_ int, g func(string) string) {
+		if g("key") == "" {
+			return
+		}
+		k := keyOf(g)
+		if facts[k] == nil {
+			facts[k] = map[string]string{}
+		}
+		facts[k][g("key")] = g("value")
+	})
+
+	forEachRow(devRows, func(rowNum int, g func(string) string) {
+		name := strings.TrimSpace(g("name"))
+		if name == "" {
+			errs = append(errs, vdImportError{Sheet: "Devices", Row: rowNum, Field: "name", Message: "name is required"})
+			return
+		}
+		key := strings.ToLower(strings.TrimSpace(g("device_key")))
+		if key == "" {
+			key = strings.ToLower(name)
+		}
+		req := virtualDeviceReq{
+			manualDeviceReq: manualDeviceReq{
+				Name: name, Category: g("category"), Vendor: g("vendor"), Model: g("model"), Serial: g("serial"),
+				OSVersion: g("os_version"), PrimaryIP: g("primary_ip"), VLAN: g("vlan"), Class: g("class"),
+			},
+			Status: g("status"), Site: g("site"), Notes: g("notes"), Criticality: g("criticality"),
+			Ports: ports[key], VLANs: vlans[key], Neighbors: neighbors[key], MACs: macs[key],
+			NICs: nics[key], Disks: disks[key], Roles: roles[key], Software: software[key],
+			VpnTunnels: vpns[key], HAMembers: has[key], Licenses: lics[key],
+			APs: aps[key], SSIDs: ssids[key], Clients: clients[key], UPS: upsByKey[key], Facts: facts[key],
+		}
+		if req.Category == "" {
+			req.Category = "unknown"
+		}
+		if !validCategory(req.Category) {
+			errs = append(errs, vdImportError{Sheet: "Devices", Row: rowNum, Field: "category", Message: "invalid category " + strconv.Quote(req.Category)})
+			return
+		}
+		reqs = append(reqs, req)
+		rows = append(rows, rowNum)
+	})
+	return reqs, rows, errs, ""
+}
+
+// persistVirtual creates (cur==nil) or updates a virtual device's identity +
+// status, then writes its category config. Shared by the JSON create/update
+// handlers' logic intent and the Excel import. Returns the device + "created"/"updated".
+func (s *Server) persistVirtual(ctx context.Context, req *virtualDeviceReq, cur *db.Device) (db.Device, string, error) {
+	fallback := "up"
+	if cur != nil {
+		fallback = cur.Status
+	}
+	status := normVirtualStatus(req.Status, fallback)
+	if status == "" {
 		status = "up"
+	}
+	crit := strings.TrimSpace(req.Criticality)
+	if crit != "" && !validCriticality[crit] {
+		crit = ""
+	}
+	if cur != nil { // update
+		cat := strings.TrimSpace(req.Category)
+		if cat == "" || !validCategory(cat) {
+			cat = cur.Category
+		}
+		notes := cur.Notes
+		if strings.TrimSpace(req.Notes) != "" {
+			notes = strings.TrimSpace(req.Notes)
+		}
+		if crit == "" {
+			crit = cur.Criticality
+		}
+		dev, err := s.queries.UpdateDevice(ctx, db.UpdateDeviceParams{
+			ID: cur.ID, Name: strings.TrimSpace(req.Name), Category: cat,
+			Vendor: strPtr(req.Vendor), Model: strPtr(req.Model), Serial: strPtr(req.Serial),
+			OsVersion: strPtr(req.OSVersion), Hostname: strPtr(req.Hostname), Vlan: strPtr(req.VLAN),
+			DeviceClass: strPtr(req.Class), Location: strPtr(req.Location), LocationID: parseUUIDPtr(req.LocationID),
+			Subtype: cur.Subtype, Notes: notes, Criticality: crit, MonitoringEnabled: cur.MonitoringEnabled,
+			ClassificationLocked: cur.ClassificationLocked, ManualClassificationReason: cur.ManualClassificationReason,
+		})
+		if err != nil {
+			return db.Device{}, "", err
+		}
+		_ = s.queries.UpdateDeviceMonitoringStatus(ctx, db.UpdateDeviceMonitoringStatusParams{ID: dev.ID, Status: status})
+		dev.IsVirtual = true
+		s.writeVirtualConfig(ctx, dev, req)
+		return dev, "updated", nil
+	}
+	// create
+	params, err := manualDeviceParams(req.manualDeviceReq)
+	if err != nil {
+		return db.Device{}, "", err
 	}
 	params.Status = status
 	params.Metadata = []byte(`{"source":"virtual"}`)
-
-	device, err := s.queries.CreateDevice(r.Context(), params)
+	dev, err := s.queries.CreateDevice(ctx, params)
 	if err != nil {
-		writeErr(w, err)
-		return
+		return db.Device{}, "", err
 	}
-	_ = s.queries.MarkDeviceVirtual(r.Context(), db.MarkDeviceVirtualParams{ID: device.ID, IsVirtual: true})
-	device.IsVirtual = true
-	s.writeVirtualConfig(r.Context(), device, &req)
-	s.audit(r, "inventory", "device.import_virtual", "device", device.ID.String(),
-		"Imported virtual device "+device.Name, map[string]any{"ports": len(req.Ports), "vlans": len(req.VLANs), "neighbors": len(req.Neighbors), "macs": len(req.MACs)})
-
-	out, _ := s.queries.GetDevice(r.Context(), device.ID)
-	writeJSON(w, http.StatusCreated, map[string]any{
-		"device": out,
-		"counts": map[string]int{"ports": len(req.Ports), "vlans": len(req.VLANs), "neighbors": len(req.Neighbors), "macs": len(req.MACs)},
-	})
+	_ = s.queries.MarkDeviceVirtual(ctx, db.MarkDeviceVirtualParams{ID: dev.ID, IsVirtual: true})
+	dev.IsVirtual = true
+	s.setVirtualIdentityExtras(ctx, dev, req)
+	s.writeVirtualConfig(ctx, dev, req)
+	return dev, "created", nil
 }
+
+// --- workbook helpers --------------------------------------------------------
 
 func sheetRows(xl *excelize.File, sheet string) [][]string {
 	if i, _ := xl.GetSheetIndex(sheet); i < 0 {
@@ -908,8 +1179,7 @@ func headerIndex(header []string) map[string]int {
 	m := map[string]int{}
 	for i, h := range header {
 		key := strings.ToLower(strings.TrimSpace(h))
-		// normalize "up (yes/no)" → "up", "admin_down (yes/no)" → "admin_down"
-		if sp := strings.IndexByte(key, ' '); sp >= 0 {
+		if sp := strings.IndexByte(key, ' '); sp >= 0 { // "up (yes/no)" → "up"
 			key = key[:sp]
 		}
 		m[key] = i
@@ -922,6 +1192,43 @@ func cellAt(row []string, col map[string]int, key string) string {
 		return strings.TrimSpace(row[i])
 	}
 	return ""
+}
+
+// forEachRow iterates non-blank data rows, calling fn with the 1-based sheet row
+// number and a column getter.
+func forEachRow(rows [][]string, fn func(rowNum int, get func(string) string)) {
+	if len(rows) < 2 {
+		return
+	}
+	col := headerIndex(rows[0])
+	for i, row := range rows[1:] {
+		if strings.TrimSpace(strings.Join(row, "")) == "" {
+			continue
+		}
+		r := row
+		fn(i+2, func(k string) string { return cellAt(r, col, k) })
+	}
+}
+
+func countDataRows(rows [][]string) int {
+	n := 0
+	forEachRow(rows, func(int, func(string) string) { n++ })
+	return n
+}
+
+func firstDeviceKey(rows [][]string) string {
+	out := ""
+	forEachRow(rows, func(_ int, g func(string) string) {
+		if out != "" {
+			return
+		}
+		if k := strings.ToLower(strings.TrimSpace(g("device_key"))); k != "" {
+			out = k
+		} else {
+			out = strings.ToLower(strings.TrimSpace(g("name")))
+		}
+	})
+	return out
 }
 
 func yesish(s string) bool {
@@ -937,79 +1244,18 @@ func vdAtoi(s string) int {
 	return n
 }
 
-func parsePorts(rows [][]string) []vdPort {
-	if len(rows) < 2 {
-		return nil
-	}
-	col := headerIndex(rows[0])
-	out := []vdPort{}
-	for _, row := range rows[1:] {
-		if strings.TrimSpace(strings.Join(row, "")) == "" {
-			continue
-		}
-		idx := vdAtoi(cellAt(row, col, "if_index"))
-		if idx <= 0 {
-			continue
-		}
-		out = append(out, vdPort{
-			IfIndex: idx, Name: cellAt(row, col, "name"), Alias: cellAt(row, col, "alias"),
-			Up: yesish(cellAt(row, col, "up")), AdminDown: yesish(cellAt(row, col, "admin_down")),
-			SpeedMbps: vdAtoi(cellAt(row, col, "speed_mbps")), VLAN: vdAtoi(cellAt(row, col, "vlan")),
-			Role: cellAt(row, col, "role"), MAC: cellAt(row, col, "mac"),
-		})
-	}
-	return out
+func vdAtoi64(s string) int64 {
+	n, _ := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
+	return n
 }
 
-func parseVLANs(rows [][]string) []vdVlan {
-	if len(rows) < 2 {
-		return nil
-	}
-	col := headerIndex(rows[0])
-	out := []vdVlan{}
-	for _, row := range rows[1:] {
-		id := vdAtoi(cellAt(row, col, "vlan_id"))
-		if id <= 0 {
-			continue
+// vdAtoiList parses "20,30,40" (or space/semicolon separated) into ints.
+func vdAtoiList(s string) []int {
+	out := []int{}
+	for _, p := range strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == ';' || r == ' ' }) {
+		if n := vdAtoi(p); n > 0 {
+			out = append(out, n)
 		}
-		out = append(out, vdVlan{ID: id, Name: cellAt(row, col, "name")})
-	}
-	return out
-}
-
-func parseNeighbors(rows [][]string) []vdNeighbor {
-	if len(rows) < 2 {
-		return nil
-	}
-	col := headerIndex(rows[0])
-	out := []vdNeighbor{}
-	for _, row := range rows[1:] {
-		name := cellAt(row, col, "remote_name")
-		port := cellAt(row, col, "remote_port")
-		if name == "" && port == "" {
-			continue
-		}
-		out = append(out, vdNeighbor{
-			LocalPort: cellAt(row, col, "local_port"), LocalIfIndex: vdAtoi(cellAt(row, col, "local_if_index")),
-			RemoteName: name, RemotePort: port, RemoteMgmtIP: cellAt(row, col, "remote_mgmt_ip"),
-			Protocol: cellAt(row, col, "protocol"),
-		})
-	}
-	return out
-}
-
-func parseMACs(rows [][]string) []vdMAC {
-	if len(rows) < 2 {
-		return nil
-	}
-	col := headerIndex(rows[0])
-	out := []vdMAC{}
-	for _, row := range rows[1:] {
-		mac := cellAt(row, col, "mac")
-		if mac == "" {
-			continue
-		}
-		out = append(out, vdMAC{MAC: mac, VLAN: vdAtoi(cellAt(row, col, "vlan")), IfIndex: vdAtoi(cellAt(row, col, "if_index"))})
 	}
 	return out
 }
