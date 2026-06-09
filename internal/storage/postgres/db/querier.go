@@ -67,8 +67,14 @@ type Querier interface {
 	CountExpiringSystems(ctx context.Context) (int64, error)
 	// Failed jobs for one agent (for the agent detail page + Data Quality count).
 	CountFailedAgentJobs(ctx context.Context, agentID uuid.UUID) (int64, error)
+	// Channels whose camera IP matched an already-discovered standalone camera device.
+	CountLinkedNVRChannels(ctx context.Context) (int64, error)
 	CountMibPacksBySource(ctx context.Context) ([]CountMibPacksBySourceRow, error)
 	CountMibWalkRows(ctx context.Context, deviceID uuid.UUID) (int64, error)
+	// Total camera channels collected across all recorders (CCTV summary). Channels
+	// are NOT inventory devices, so this is reported separately and never folded into
+	// the device count.
+	CountNVRChannels(ctx context.Context) (int64, error)
 	CountOpenAlerts(ctx context.Context) (int64, error)
 	CountOpenWorkOrders(ctx context.Context) (int64, error)
 	CountSSHCliBySource(ctx context.Context, deviceID uuid.UUID) ([]CountSSHCliBySourceRow, error)
@@ -585,6 +591,11 @@ type Querier interface {
 	// a MAC was seen on, anywhere in the fabric.
 	SearchFdbMacs(ctx context.Context, dollar_1 *string) ([]SearchFdbMacsRow, error)
 	SearchMibObjects(ctx context.Context, name string) ([]MibObject, error)
+	// Global-search: NVR/DVR camera channels by channel name / camera IP / channel
+	// number / recorder (NVR) name. Returns the owning recorder so a channel found
+	// anywhere links back to the NVR detail page, plus any linked standalone camera
+	// device. Channels are recorder-owned rows, not separate inventory devices.
+	SearchNVRChannels(ctx context.Context, dollar_1 *string) ([]SearchNVRChannelsRow, error)
 	// Global-search: associated wireless clients by MAC / IP / hostname / SSID / AP.
 	SearchWirelessClients(ctx context.Context, dollar_1 *string) ([]SearchWirelessClientsRow, error)
 	SetAlertRuleEnabled(ctx context.Context, arg SetAlertRuleEnabledParams) (AlertRule, error)

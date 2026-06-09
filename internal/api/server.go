@@ -44,6 +44,8 @@ type Server struct {
 
 	scanHub     *scanEventHub // live scan event fan-out (SSE); lazily created
 	scanHubOnce sync.Once
+
+	cctvFleet atomic.Pointer[cctvFleetRun] // last/current fleet-wide CCTV collection summary (in-memory, ephemeral)
 }
 
 // cipher returns the active credential cipher, or nil when no key is loaded.
@@ -211,6 +213,9 @@ func (s *Server) routes() {
 		r.Post("/devices/{id}/collect-os", s.collectOSInventory)
 		r.Post("/devices/{id}/collect-vsphere", s.collectVSphere)
 		r.Post("/devices/{id}/collect-cctv", s.collectCCTV)
+		r.Post("/cctv/collect-fleet", s.collectCCTVFleet)
+		r.Get("/cctv/collect-fleet", s.getCCTVFleet)
+		r.Get("/cctv/summary", s.cctvSummary)
 		r.Post("/devices/{id}/classification-lock", s.setClassificationLock)
 		r.Get("/devices/{id}/interfaces", s.deviceInterfaces)
 		r.Get("/devices/{id}/vlans", s.deviceVLANs)
@@ -484,6 +489,26 @@ func (s *Server) listDevices(w http.ResponseWriter, r *http.Request) {
 	var err error
 	if cat == "all" || topoFilter != "" || cat == "" && (reachFilter != "" || mgmtFilter != "") {
 		rows, err = s.queries.ListAllDevices(ctx)
+	} else if strings.Contains(cat, ",") {
+		// Comma-separated union (e.g. "nvr,dvr" for the recorder list page).
+		seen := map[uuid.UUID]bool{}
+		for _, c := range strings.Split(cat, ",") {
+			c = strings.TrimSpace(c)
+			if c == "" {
+				continue
+			}
+			part, perr := s.queries.ListDevicesByCategory(ctx, c)
+			if perr != nil {
+				err = perr
+				break
+			}
+			for _, d := range part {
+				if !seen[d.ID] {
+					seen[d.ID] = true
+					rows = append(rows, d)
+				}
+			}
+		}
 	} else {
 		if cat == "" {
 			cat = "switch"

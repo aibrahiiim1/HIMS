@@ -116,6 +116,7 @@ func categorizeCollectErr(method, errStr string) (reason, detail string) {
 	switch {
 	case strings.Contains(e, "unable to authenticate") || strings.Contains(e, "permission denied") ||
 		strings.Contains(e, "unauthorized") || strings.Contains(e, "access is denied") ||
+		strings.Contains(e, "authentication") || // ISAPI surfaces "authentication rejected"
 		strings.Contains(e, "401") || strings.Contains(e, "403") || strings.Contains(e, "logon"):
 		return "auth_failed", "authentication rejected — check the bound credential"
 	case strings.Contains(e, "refused") || strings.Contains(e, "actively refused") || strings.Contains(e, "reset"):

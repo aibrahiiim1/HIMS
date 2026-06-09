@@ -487,7 +487,7 @@ export interface WirelessTrace {
 // Unified global-search hit — a MAC/IP/name observed anywhere (access point,
 // wireless client, bridge FDB, ARP table) linked back to the device that owns it.
 export interface EntityHit {
-  kind: 'access_point' | 'wireless_client' | 'fdb' | 'arp'
+  kind: 'access_point' | 'wireless_client' | 'nvr_channel' | 'fdb' | 'arp'
   title: string
   subtitle: string
   ip?: string
@@ -502,8 +502,50 @@ export interface SearchEntities {
   total: number
   access_points: EntityHit[]
   wireless_clients: EntityHit[]
+  nvr_channels: EntityHit[]
   fdb: EntityHit[]
   arp: EntityHit[]
+}
+
+// CCTV inventory breakdown (GET /cctv/summary): NVRs vs DVRs vs standalone
+// cameras (devices), with camera channels reported separately (not devices).
+export interface CCTVSummary {
+  nvrs: number
+  dvrs: number
+  cameras: number
+  recorders: number
+  devices_total: number
+  channels: number
+  channels_linked: number
+}
+
+// One device's outcome in a fleet-wide CCTV collection.
+export interface CCTVFleetItem {
+  device_id: string
+  name: string
+  ip: string
+  was_category: string
+  now_category: string
+  status: 'collected' | 'failed'
+  outcome: 'collected' | 'auth' | 'lockout' | 'unsupported' | 'unreachable' | 'no_credential' | 'error' | string
+  detail: string
+  channels: number
+  storage: number
+}
+
+export interface CCTVFleetRun {
+  running: boolean
+  started_at: string
+  finished_at?: string
+  total: number
+  done: number
+  collected: number
+  failed: number
+  nvrs: number
+  dvrs: number
+  cameras: number
+  channels: number
+  items: CCTVFleetItem[]
 }
 
 export interface ServerStorage {

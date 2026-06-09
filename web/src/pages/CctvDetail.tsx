@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { useParams } from 'react-router-dom'
+import { useParams, Link } from 'react-router-dom'
 import { Camera, Video, Film, HardDrive, Disc, Network, Activity, Wrench, RefreshCw, Cpu } from 'lucide-react'
 import { api, type CameraInfo, type NVRChannel, type NVRDetail, type Device } from '../api'
 import { DeviceHeader } from '../components/DeviceHeader'
@@ -45,7 +45,7 @@ export function CctvDetail() {
   const storage = nvr.data?.storage ?? []
   const isNVR = useMemo(() => {
     const dt = (info?.device_type ?? '').toLowerCase()
-    return dev?.category === 'nvr' || dt.includes('nvr') || dt.includes('dvr') || channels.length > 0 || storage.length > 0
+    return dev?.category === 'nvr' || dev?.category === 'dvr' || dt.includes('nvr') || dt.includes('dvr') || channels.length > 0 || storage.length > 0
   }, [dev?.category, info?.device_type, channels.length, storage.length])
 
   const chOnline = channels.filter((x) => x.status === 'online').length
@@ -132,27 +132,7 @@ export function CctvDetail() {
         </Panel>
       )}
 
-      {tab === 'channels' && (
-        <Panel title="Channels / Cameras" icon={Video} subtitle={channels.length ? `${chOnline}/${channels.length} online` : undefined} pad={false}>
-          {channels.length === 0 ? (
-            <EmptyState icon={Video} title="No channels collected" message="Run Collect — channels populate from ISAPI /ContentMgmt/InputProxy/channels. If the recorder exposes none, it will report empty." />
-          ) : (
-            <table className="data-table">
-              <thead><tr><th>Ch</th><th>Camera name</th><th>Camera IP</th><th>Status</th></tr></thead>
-              <tbody>
-                {channels.map((x: NVRChannel) => (
-                  <tr key={x.id}>
-                    <td className="cell-name">{x.channel_no}</td>
-                    <td>{x.camera_name || '—'}</td>
-                    <td className="mono">{x.camera_ip || '—'}</td>
-                    <td><StatusPill status={chStatus(x.status)} label={x.status} /></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </Panel>
-      )}
+      {tab === 'channels' && <ChannelsTab channels={channels} chOnline={chOnline} />}
 
       {tab === 'storage' && (
         <Panel title="Storage / HDD" icon={HardDrive} pad={false}>
@@ -246,6 +226,66 @@ export function CctvDetail() {
         </Panel>
       )}
     </div>
+  )
+}
+
+// ChannelsTab renders the recorder's camera channels with a live filter (by name /
+// IP / channel number / status) and pagination, so a recorder with many channels
+// stays usable. A channel whose camera IP matched an already-discovered camera
+// device links to that device.
+function ChannelsTab({ channels, chOnline }: { channels: NVRChannel[]; chOnline: number }) {
+  const [q, setQ] = useState('')
+  const [page, setPage] = useState(0)
+  const PAGE = 25
+  const filtered = useMemo(() => {
+    const t = q.trim().toLowerCase()
+    if (!t) return channels
+    return channels.filter((x) =>
+      (x.camera_name || '').toLowerCase().includes(t) ||
+      (x.camera_ip || '').toLowerCase().includes(t) ||
+      String(x.channel_no).includes(t) ||
+      (x.status || '').toLowerCase().includes(t))
+  }, [channels, q])
+  const pages = Math.max(1, Math.ceil(filtered.length / PAGE))
+  const cur = Math.min(page, pages - 1)
+  const rows = filtered.slice(cur * PAGE, cur * PAGE + PAGE)
+
+  return (
+    <Panel title="Channels / Cameras" icon={Video} subtitle={channels.length ? `${chOnline}/${channels.length} online` : undefined} pad={false}>
+      {channels.length === 0 ? (
+        <EmptyState icon={Video} title="No channels collected" message="Run Collect — channels populate from ISAPI /ContentMgmt/InputProxy/channels. If the recorder exposes none, it will report empty." />
+      ) : (
+        <>
+          <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', gap: 10, flexWrap: 'wrap' }}>
+            <input placeholder="Search name / IP / channel / status…" value={q}
+              onChange={(e) => { setQ(e.target.value); setPage(0) }}
+              style={{ padding: '6px 10px', border: '1px solid #2a3a47', borderRadius: 6, fontSize: 13, width: 320, maxWidth: '100%' }} />
+            <span className="muted" style={{ fontSize: 13 }}>{filtered.length} of {channels.length}</span>
+          </div>
+          <table className="data-table">
+            <thead><tr><th>Ch</th><th>Camera name</th><th>Camera IP</th><th>Linked device</th><th>Status</th></tr></thead>
+            <tbody>
+              {rows.map((x: NVRChannel) => (
+                <tr key={x.id}>
+                  <td className="cell-name">{x.channel_no}</td>
+                  <td>{x.camera_name || '—'}</td>
+                  <td className="mono">{x.camera_ip || '—'}</td>
+                  <td>{x.camera_device_id ? <Link className="cell-name" to={`/cctv/${x.camera_device_id}`}>camera device</Link> : <span className="muted">—</span>}</td>
+                  <td><StatusPill status={chStatus(x.status)} label={x.status} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {pages > 1 && (
+            <div className="row" style={{ justifyContent: 'center', gap: 8, padding: 10 }}>
+              <button className="btn btn-sm" disabled={cur === 0} onClick={() => setPage(cur - 1)}>Prev</button>
+              <span className="muted" style={{ fontSize: 13 }}>Page {cur + 1} / {pages}</span>
+              <button className="btn btn-sm" disabled={cur >= pages - 1} onClick={() => setPage(cur + 1)}>Next</button>
+            </div>
+          )}
+        </>
+      )}
+    </Panel>
   )
 }
 

@@ -30,10 +30,19 @@ func TestISAPI_NVRvsCamera(t *testing.T) {
 	if cam.Category != string(domain.CatCamera) {
 		t.Errorf("deviceType=IPCamera → %q, want camera", cam.Category)
 	}
-	// A DVR is also a recorder, not a camera.
+	// A DVR is a recorder too, but CCTV Phase 2 classifies it DISTINCTLY from an
+	// NVR (separate fleet-summary count), so deviceType=DVR → dvr.
 	dvr := FromEvidence(ISAPIDeviceInfo("DVR", ""))
-	if dvr.Category != string(domain.CatNVR) {
-		t.Errorf("deviceType=DVR → %q, want nvr", dvr.Category)
+	if dvr.Category != string(domain.CatDVR) {
+		t.Errorf("deviceType=DVR → %q, want dvr", dvr.Category)
+	}
+	if dvr.Subtype != "dvr" {
+		t.Errorf("DVR subtype = %q, want dvr", dvr.Subtype)
+	}
+	// A DVR model code (…HGHI…) corroborates dvr even without deviceType.
+	dvrModel := FromEvidence(ISAPIDeviceInfo("", "DS-7216HGHI-K1"))
+	if dvrModel.Category != string(domain.CatDVR) {
+		t.Errorf("model=DS-7216HGHI-K1 → %q, want dvr", dvrModel.Category)
 	}
 }
 

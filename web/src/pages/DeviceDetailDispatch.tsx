@@ -40,6 +40,7 @@ export function DeviceDetailDispatch() {
       return <VirtualHostDetail />
     case 'camera':
     case 'nvr':
+    case 'dvr':
       return <CctvDetail />
     case 'printer':
       return <PrinterDetail />

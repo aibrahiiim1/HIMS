@@ -12,6 +12,32 @@ import (
 	"github.com/google/uuid"
 )
 
+const countLinkedNVRChannels = `-- name: CountLinkedNVRChannels :one
+SELECT count(*) FROM nvr_channels WHERE camera_device_id IS NOT NULL
+`
+
+// Channels whose camera IP matched an already-discovered standalone camera device.
+func (q *Queries) CountLinkedNVRChannels(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countLinkedNVRChannels)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countNVRChannels = `-- name: CountNVRChannels :one
+SELECT count(*) FROM nvr_channels
+`
+
+// Total camera channels collected across all recorders (CCTV summary). Channels
+// are NOT inventory devices, so this is reported separately and never folded into
+// the device count.
+func (q *Queries) CountNVRChannels(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countNVRChannels)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const getCameraInfo = `-- name: GetCameraInfo :one
 SELECT device_id, manufacturer, model, resolution, rtsp_url, onvif_url, last_seen_at FROM camera_info WHERE device_id = $1
 `
@@ -113,6 +139,64 @@ func (q *Queries) ListNVRStorage(ctx context.Context, nvrDeviceID uuid.UUID) ([]
 			&i.Property,
 			&i.Source,
 			&i.LastSeenAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const searchNVRChannels = `-- name: SearchNVRChannels :many
+SELECT ch.nvr_device_id, d.name AS nvr_name, d.category AS nvr_category,
+       ch.channel_no, ch.camera_name, COALESCE(host(ch.camera_ip), '')::text AS camera_ip,
+       ch.status, ch.camera_device_id
+FROM nvr_channels ch
+JOIN devices d ON d.id = ch.nvr_device_id AND d.deleted_at IS NULL
+WHERE COALESCE(ch.camera_name,'') ILIKE '%'||$1||'%'
+   OR COALESCE(host(ch.camera_ip),'') ILIKE '%'||$1||'%'
+   OR CAST(ch.channel_no AS TEXT) ILIKE '%'||$1||'%'
+   OR d.name ILIKE '%'||$1||'%'
+ORDER BY d.name, ch.channel_no
+LIMIT 50
+`
+
+type SearchNVRChannelsRow struct {
+	NvrDeviceID    uuid.UUID  `json:"nvr_device_id"`
+	NvrName        string     `json:"nvr_name"`
+	NvrCategory    string     `json:"nvr_category"`
+	ChannelNo      int32      `json:"channel_no"`
+	CameraName     *string    `json:"camera_name"`
+	CameraIp       string     `json:"camera_ip"`
+	Status         string     `json:"status"`
+	CameraDeviceID *uuid.UUID `json:"camera_device_id"`
+}
+
+// Global-search: NVR/DVR camera channels by channel name / camera IP / channel
+// number / recorder (NVR) name. Returns the owning recorder so a channel found
+// anywhere links back to the NVR detail page, plus any linked standalone camera
+// device. Channels are recorder-owned rows, not separate inventory devices.
+func (q *Queries) SearchNVRChannels(ctx context.Context, dollar_1 *string) ([]SearchNVRChannelsRow, error) {
+	rows, err := q.db.Query(ctx, searchNVRChannels, dollar_1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SearchNVRChannelsRow{}
+	for rows.Next() {
+		var i SearchNVRChannelsRow
+		if err := rows.Scan(
+			&i.NvrDeviceID,
+			&i.NvrName,
+			&i.NvrCategory,
+			&i.ChannelNo,
+			&i.CameraName,
+			&i.CameraIp,
+			&i.Status,
+			&i.CameraDeviceID,
 		); err != nil {
 			return nil, err
 		}

@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
-import { Search as SearchIcon, Boxes, Building2, ClipboardList, Wrench, Network, Route as RouteIcon, Clock, X, Wifi, Smartphone, Cpu, Globe } from 'lucide-react'
+import { Search as SearchIcon, Boxes, Building2, ClipboardList, Wrench, Network, Route as RouteIcon, Clock, X, Wifi, Smartphone, Cpu, Globe, Video } from 'lucide-react'
 import { api, type Device, type WorkOrder, type SystemLicense, type Location, type SearchResult, type SearchEntities, type EntityHit, locationPaths } from '../api'
 import { PageHeader, Panel, StatusPill, EmptyState, colorFor } from '../components/ui'
 
@@ -10,7 +10,7 @@ function loadRecent(): string[] {
   try { return JSON.parse(localStorage.getItem(RECENT_KEY) || '[]') } catch { return [] }
 }
 
-const detailBase: Record<string, string> = { switch: '/devices', server: '/servers', firewall: '/firewalls', camera: '/cctv', nvr: '/cctv', wireless_controller: '/wlan', printer: '/printers', ups: '/ups', pbx: '/pbx', virtual_host: '/virtual-hosts' }
+const detailBase: Record<string, string> = { switch: '/devices', server: '/servers', firewall: '/firewalls', camera: '/cctv', nvr: '/cctv', dvr: '/cctv', wireless_controller: '/wlan', printer: '/printers', ups: '/ups', pbx: '/pbx', virtual_host: '/virtual-hosts' }
 const looksNetworky = (s: string) => /^[0-9a-f]{2}([:-][0-9a-f]{2}){5}$/i.test(s) || /^\d{1,3}(\.\d{1,3}){3}$/.test(s)
 
 export function SearchPage() {
@@ -55,9 +55,10 @@ export function SearchPage() {
   const netList: SearchResult[] = net.data == null ? [] : Array.isArray(net.data) ? net.data : [net.data]
   const aps = ent.data?.access_points ?? []
   const wcs = ent.data?.wireless_clients ?? []
+  const nch = ent.data?.nvr_channels ?? []
   const fdb = ent.data?.fdb ?? []
   const arp = ent.data?.arp ?? []
-  const entTotal = aps.length + wcs.length + fdb.length + arp.length
+  const entTotal = aps.length + wcs.length + nch.length + fdb.length + arp.length
   const totalHits = devHits.length + locHits.length + woHits.length + sysHits.length + entTotal
 
   // Deep-link an entity hit to the device that owns the observation (controller
@@ -81,7 +82,7 @@ export function SearchPage() {
 
   return (
     <div>
-      <PageHeader title="Global Search" icon={SearchIcon} subtitle="Any MAC, IP or name across the whole system — devices, access points, wireless clients, learned MACs, ARP, locations, work orders and systems" />
+      <PageHeader title="Global Search" icon={SearchIcon} subtitle="Any MAC, IP or name across the whole system — devices, access points, wireless clients, NVR camera channels, learned MACs, ARP, locations, work orders and systems" />
       <div className="card">
         <div className="search-box" style={{ marginBottom: 0 }}>
           <input autoFocus value={term} onChange={(e) => setTerm(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && run()}
@@ -197,6 +198,20 @@ export function SearchPage() {
                     <td className="muted">{h.subtitle || '—'}</td>
                     <td>{lk ? <Link className="cell-name" to={lk}>{h.device_name || '—'}</Link> : (h.device_name || '—')}</td>
                     <td>{trace ? <Link className="btn btn-ghost btn-xs" to={`/path-finder?q=${encodeURIComponent(trace)}`}><RouteIcon size={13} /> Path</Link> : '—'}</td>
+                  </tr>)})}</tbody>
+              </table>
+            </Panel>
+          )}
+
+          {nch.length > 0 && (
+            <Panel title="NVR Channels / Cameras" icon={Video} subtitle={`${nch.length}`} pad={false}>
+              <table className="data-table"><thead><tr><th>Channel / Camera</th><th>Camera IP</th><th>Details</th><th>Recorder</th></tr></thead>
+                <tbody>{nch.map((h, i) => { const lk = entLink(h); return (
+                  <tr key={`nch-${i}`}>
+                    <td className="cell-name">{h.title}</td>
+                    <td className="mono">{h.ip || '—'}</td>
+                    <td className="muted">{h.subtitle || '—'}</td>
+                    <td>{lk ? <Link className="cell-name" to={lk}>{h.device_name || '—'}</Link> : (h.device_name || '—')}</td>
                   </tr>)})}</tbody>
               </table>
             </Panel>

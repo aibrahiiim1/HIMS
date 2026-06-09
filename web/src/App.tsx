@@ -37,6 +37,7 @@ import { Settings } from './pages/Settings'
 import { Inventory } from './pages/Inventory'
 import { VirtualDeviceForm } from './pages/VirtualDeviceForm'
 import { AddVirtualButton } from './components/AddVirtualButton'
+import { CctvOps } from './components/CctvOps'
 import { MissingClassification } from './pages/MissingClassification'
 import { UnmanagedDevices } from './pages/UnmanagedDevices'
 import { UnmappedDevices } from './pages/UnmappedDevices'
@@ -126,7 +127,7 @@ function Shell({ me, onLogout }: { me?: AuthMe; onLogout: () => void }) {
             <Route path="/virtual-hosts/:id" element={<VirtualHostDetail />} />
             <Route path="/firewalls/:id" element={<FirewallDetail />} />
             <Route path="/cameras" element={<DeviceList category="camera" title="Cameras" detailBase="/cctv" headerExtra={<AddVirtualButton type="camera" label="Camera" />} />} />
-            <Route path="/nvrs" element={<DeviceList category="nvr" title="NVR / DVR" detailBase="/cctv" headerExtra={<AddVirtualButton type="nvr" label="NVR" />} />} />
+            <Route path="/nvrs" element={<DeviceList category="nvr,dvr" title="NVR / DVR" detailBase="/cctv" headerExtra={<AddVirtualButton type="nvr" label="NVR" />} preContent={<CctvOps />} />} />
             <Route path="/cctv/:id" element={<CctvDetail />} />
             <Route path="/wlan" element={<WirelessControllers />} />
             <Route path="/wlan/:id" element={<WirelessDetail />} />

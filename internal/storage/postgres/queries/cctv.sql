@@ -51,6 +51,33 @@ RETURNING *;
 -- name: ListNVRStorage :many
 SELECT * FROM nvr_storage WHERE nvr_device_id = $1 ORDER BY hdd_id;
 
+-- name: CountNVRChannels :one
+-- Total camera channels collected across all recorders (CCTV summary). Channels
+-- are NOT inventory devices, so this is reported separately and never folded into
+-- the device count.
+SELECT count(*) FROM nvr_channels;
+
+-- name: CountLinkedNVRChannels :one
+-- Channels whose camera IP matched an already-discovered standalone camera device.
+SELECT count(*) FROM nvr_channels WHERE camera_device_id IS NOT NULL;
+
+-- name: SearchNVRChannels :many
+-- Global-search: NVR/DVR camera channels by channel name / camera IP / channel
+-- number / recorder (NVR) name. Returns the owning recorder so a channel found
+-- anywhere links back to the NVR detail page, plus any linked standalone camera
+-- device. Channels are recorder-owned rows, not separate inventory devices.
+SELECT ch.nvr_device_id, d.name AS nvr_name, d.category AS nvr_category,
+       ch.channel_no, ch.camera_name, COALESCE(host(ch.camera_ip), '')::text AS camera_ip,
+       ch.status, ch.camera_device_id
+FROM nvr_channels ch
+JOIN devices d ON d.id = ch.nvr_device_id AND d.deleted_at IS NULL
+WHERE COALESCE(ch.camera_name,'') ILIKE '%'||$1||'%'
+   OR COALESCE(host(ch.camera_ip),'') ILIKE '%'||$1||'%'
+   OR CAST(ch.channel_no AS TEXT) ILIKE '%'||$1||'%'
+   OR d.name ILIKE '%'||$1||'%'
+ORDER BY d.name, ch.channel_no
+LIMIT 50;
+
 -- name: UpsertNVRStorage :one
 INSERT INTO nvr_storage (nvr_device_id, hdd_id, name, status, capacity_mb, free_mb, property, source)
 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)

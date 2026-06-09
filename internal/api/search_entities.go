@@ -28,6 +28,7 @@ type searchEntitiesResponse struct {
 	Total          int         `json:"total"`
 	AccessPoints   []entityHit `json:"access_points"`
 	WirelessClient []entityHit `json:"wireless_clients"`
+	NvrChannels    []entityHit `json:"nvr_channels"`
 	Fdb            []entityHit `json:"fdb"`
 	Arp            []entityHit `json:"arp"`
 }
@@ -60,6 +61,7 @@ func (s *Server) searchEntities(w http.ResponseWriter, r *http.Request) {
 		Query:          q,
 		AccessPoints:   []entityHit{},
 		WirelessClient: []entityHit{},
+		NvrChannels:    []entityHit{},
 		Fdb:            []entityHit{},
 		Arp:            []entityHit{},
 	}
@@ -107,6 +109,28 @@ func (s *Server) searchEntities(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// --- NVR/DVR camera channels (channel name / camera IP / number / NVR name)
+	if chs, err := s.queries.SearchNVRChannels(ctx, &term); err != nil {
+		writeErr(w, err)
+		return
+	} else {
+		for _, c := range chs {
+			title := derefStr(c.CameraName)
+			if strings.TrimSpace(title) == "" {
+				title = fmt.Sprintf("Channel %d", c.ChannelNo)
+			}
+			resp.NvrChannels = append(resp.NvrChannels, entityHit{
+				Kind:           "nvr_channel",
+				Title:          title,
+				Subtitle:       nvrChannelSubtitle(c.NvrName, int(c.ChannelNo), c.Status, c.CameraDeviceID != nil),
+				IP:             c.CameraIp,
+				DeviceID:       c.NvrDeviceID.String(), // link to the recorder's detail page
+				DeviceName:     c.NvrName,
+				DeviceCategory: c.NvrCategory,
+			})
+		}
+	}
+
 	// --- Learned MACs / bridge FDB (which switch + port saw a MAC) ------------
 	if macs, err := s.queries.SearchFdbMacs(ctx, &term); err != nil {
 		writeErr(w, err)
@@ -148,8 +172,23 @@ func (s *Server) searchEntities(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	resp.Total = len(resp.AccessPoints) + len(resp.WirelessClient) + len(resp.Fdb) + len(resp.Arp)
+	resp.Total = len(resp.AccessPoints) + len(resp.WirelessClient) + len(resp.NvrChannels) + len(resp.Fdb) + len(resp.Arp)
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func nvrChannelSubtitle(nvrName string, ch int, status string, linked bool) string {
+	parts := []string{}
+	if nvrName != "" {
+		parts = append(parts, "NVR "+nvrName)
+	}
+	parts = append(parts, fmt.Sprintf("ch %d", ch))
+	if status != "" && status != "unknown" {
+		parts = append(parts, status)
+	}
+	if linked {
+		parts = append(parts, "linked device")
+	}
+	return strings.Join(parts, " · ")
 }
 
 func apSubtitle(model, site, status string) string {
