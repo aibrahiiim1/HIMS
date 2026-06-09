@@ -90,6 +90,25 @@ func (s *Server) registerMonitoringCheck(w http.ResponseWriter, r *http.Request)
 		writeErr(w, err)
 		return
 	}
+	// A check an operator adds beyond the device's reachability check is
+	// "supplemental": polled and shown, but it must NOT flip the device's
+	// online/offline status or the inventory counts. So whenever the device
+	// already has another reachability check, demote this one to supplemental.
+	if existing, lerr := s.queries.ListMonitoringChecksByDevice(r.Context(), *id); lerr == nil {
+		otherReach := 0
+		for _, c := range existing {
+			// "supplemental" is the explicit opt-in; anything else (the
+			// "reachability" default + legacy empty role) is a reachability check.
+			if c.ID != chk.ID && c.Role != "supplemental" {
+				otherReach++
+			}
+		}
+		if otherReach > 0 && chk.Role != "supplemental" {
+			if rerr := s.queries.SetMonitoringCheckRole(r.Context(), db.SetMonitoringCheckRoleParams{ID: chk.ID, Role: "supplemental"}); rerr == nil {
+				chk.Role = "supplemental"
+			}
+		}
+	}
 	writeJSON(w, http.StatusCreated, chk)
 }
 

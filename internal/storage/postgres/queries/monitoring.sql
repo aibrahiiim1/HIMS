@@ -15,7 +15,22 @@ RETURNING *;
 SELECT * FROM monitoring_checks WHERE id = $1;
 
 -- name: ListMonitoringChecks :many
-SELECT * FROM monitoring_checks ORDER BY created_at DESC LIMIT 500;
+-- Global checks list (Health Overview). Joined to the device so the UI can
+-- identify each check by device name / IP (not just a bare port), and ordered
+-- by device then reachability-first so a device's checks group together.
+SELECT c.*,
+       d.name AS device_name,
+       d.primary_ip AS device_ip,
+       d.category AS device_category
+FROM monitoring_checks c
+JOIN devices d ON d.id = c.device_id AND d.deleted_at IS NULL
+ORDER BY d.name, (c.role <> 'reachability'), c.kind, c.target_port
+LIMIT 500;
+
+-- name: SetMonitoringCheckRole :exec
+-- Mark a check as reachability (drives device status) or supplemental (extra,
+-- informational only). Used when an operator adds a check beyond the default.
+UPDATE monitoring_checks SET role = $2, updated_at = now() WHERE id = $1;
 
 -- name: ListMonitoringChecksByDevice :many
 SELECT * FROM monitoring_checks WHERE device_id = $1 ORDER BY kind, target_port;
@@ -65,11 +80,27 @@ ORDER BY time DESC
 LIMIT $2;
 
 -- name: MonitoringStatusOverview :many
--- Live fleet rollup: how many checks sit in each status bucket.
-SELECT last_status AS status, COUNT(*) AS count
-FROM monitoring_checks
-WHERE enabled
-GROUP BY last_status;
+-- Fleet health rollup, DEVICE-based: how many MONITORED devices sit in each
+-- reachability bucket. We count devices (not checks) and map the device's
+-- rolled-up status onto the up/down/warning/unknown vocabulary, so the KPI
+-- counts match the inventory reachability filter exactly (a click lands on the
+-- same devices). A failing SUPPLEMENTAL check surfaces here as "warning" (the
+-- rollup degrades the device to warning, never down) — it lowers the health
+-- score and is clickable, but never inflates the "down"/offline bucket. A device
+-- is "monitored" when it has at least one enabled check.
+SELECT
+    (CASE d.status
+        WHEN 'up' THEN 'up'
+        WHEN 'down' THEN 'down'
+        WHEN 'warning' THEN 'warning'
+        WHEN 'needs_attention' THEN 'warning'
+        ELSE 'unknown'
+     END)::text AS status,
+    COUNT(*)::bigint AS count
+FROM devices d
+WHERE d.deleted_at IS NULL
+  AND EXISTS (SELECT 1 FROM monitoring_checks c WHERE c.device_id = d.id AND c.enabled)
+GROUP BY 1;
 
 -- name: ListDevicesNeedingDefaultCheck :many
 -- Devices with a reachable IP but no monitoring check yet — the seeder turns

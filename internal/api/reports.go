@@ -84,7 +84,7 @@ func (s *Server) availabilitySheets(ctx context.Context) ([]reports.Sheet, error
 		out[i] = []string{r.Status, fmt.Sprintf("%d", r.Count)}
 	}
 	return []reports.Sheet{
-		{Name: "Availability", Headers: []string{"Check Status", "Count"}, Rows: out},
+		{Name: "Availability", Headers: []string{"Device Reachability", "Devices"}, Rows: out},
 	}, nil
 }
 

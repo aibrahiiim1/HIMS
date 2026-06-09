@@ -225,11 +225,23 @@ func (e *Engine) rollupDevice(ctx context.Context, deviceID uuid.UUID) {
 		e.log.Warn("monitoring: rollup list failed", "device", deviceID, "error", err)
 		return
 	}
-	statuses := make([]Status, 0, len(checks))
+	// Split checks by role. REACHABILITY checks decide up/down/offline (and the
+	// inventory counts); SUPPLEMENTAL checks (extra ports/metrics an operator
+	// added) can only DEGRADE a reachable device to "warning" (needs attention),
+	// never flip it offline. So a failing firewall/extra check is surfaced and
+	// lowers the health score without inflating the offline count.
+	reach := make([]Status, 0, len(checks))
+	supp := make([]Status, 0, len(checks))
 	for _, c := range checks {
-		statuses = append(statuses, Status(c.LastStatus))
+		// "supplemental" is the explicit opt-in; anything else (including the
+		// "reachability" default and legacy empty role) drives reachability.
+		if c.Role == "supplemental" {
+			supp = append(supp, Status(c.LastStatus))
+		} else {
+			reach = append(reach, Status(c.LastStatus))
+		}
 	}
-	dev := RollupDevice(statuses)
+	dev := RollupDeviceWithSupplemental(reach, supp)
 	if err := e.repo.UpdateDeviceMonitoringStatus(ctx, db.UpdateDeviceMonitoringStatusParams{
 		ID:     deviceID,
 		Status: string(dev),

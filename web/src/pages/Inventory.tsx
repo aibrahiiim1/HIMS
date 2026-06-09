@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
-import { Boxes, Trash2, Search, Wifi, WifiOff, Server, TriangleAlert, Package } from 'lucide-react'
+import { Boxes, Trash2, Search, Wifi, WifiOff, Server, TriangleAlert, Package, Plus, Ghost } from 'lucide-react'
 import { api, type Device, type Lookup, type Location, locationPaths } from '../api'
 import { PageHeader, Panel, Kpi, BarList, EmptyState, colorFor, usePaged, Pager } from '../components/ui'
 import { ReachabilityBadge, ManagementBadge } from '../components/StatusBadges'
@@ -98,6 +98,7 @@ export function Inventory() {
   const all = data ?? []
   const online = all.filter((d) => (d.status || '').toLowerCase() === 'up').length
   const offline = all.filter((d) => isOffline(d.status)).length
+  const virtualCount = all.filter((d) => d.is_virtual).length
   const vendorRows = useMemo(() => Object.entries(all.reduce<Record<string, number>>((m, d) => { const v = d.vendor || 'Unknown'; m[v] = (m[v] ?? 0) + 1; return m }, {}))
     .sort((a, b) => b[1] - a[1]).slice(0, 6).map(([label, value]) => ({ label, value, color: colorFor(label) })), [data])
   const statusRows = useMemo(() => {
@@ -186,6 +187,7 @@ export function Inventory() {
         icon={Boxes}
         actions={
           <>
+            <Link className="btn btn-primary btn-sm" to="/devices/virtual/new"><Plus size={14} /> Virtual Device</Link>
             <RescanSplit
               targets={(selRows.map((d) => d.primary_ip).filter(Boolean) as string[]).join(',')}
               label={`Re-scan${sel.size > 0 ? ` (${sel.size})` : ''}`} size="sm" onMsg={setMsg} />
@@ -201,7 +203,7 @@ export function Inventory() {
 
       {/* Summary KPIs */}
       <div className="kpi-grid">
-        <Kpi label="Total Devices" value={all.length} icon={Boxes} tone="info" sub={`${cats.length} categories`} />
+        <Kpi label="Total Devices" value={all.length} icon={Boxes} tone="info" sub={`${cats.length} categories${virtualCount ? ` · ${virtualCount} virtual` : ''}`} />
         <Kpi label="Online" value={online} icon={Wifi} tone="ok" sub={all.length ? `${Math.round((online / all.length) * 100)}%` : '—'} />
         <Kpi label="Offline / Attention" value={offline} icon={WifiOff} tone={offline > 0 ? 'crit' : 'default'} sub={offline > 0 ? 'needs review' : 'all clear'} />
         <Kpi label="Vendors" value={new Set(all.map((d) => d.vendor || 'Unknown')).size} icon={Server} tone="default" sub="distinct" />
@@ -357,7 +359,10 @@ export function Inventory() {
                       <div className="dev-cell">
                         <span className="dev-avatar" style={{ background: colorFor(d.category) }}>{d.category.charAt(0).toUpperCase()}</span>
                         <div className="dev-meta">
-                          {base ? <Link className="cell-name" to={`${base}/${d.id}`}>{d.name}</Link> : <span className="cell-name">{d.name}</span>}
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                            {base ? <Link className="cell-name" to={`${base}/${d.id}`}>{d.name}</Link> : <span className="cell-name">{d.name}</span>}
+                            {d.is_virtual && <span className="badge" title="Virtual device — manually entered, not probed" style={{ background: 'rgba(139,92,246,.15)', color: '#8b5cf6', fontSize: 10, display: 'inline-flex', alignItems: 'center', gap: 3 }}><Ghost size={11} /> Virtual</span>}
+                          </span>
                           {d.model && <small>{d.model}</small>}
                         </div>
                       </div>

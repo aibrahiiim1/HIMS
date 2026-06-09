@@ -1,7 +1,7 @@
 import { useMemo, useState, type ComponentType } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
-import { HardDrive, Radar, ShieldCheck, MapPin, Wifi, Wrench, Pencil, Lock } from 'lucide-react'
+import { Link, useNavigate } from 'react-router-dom'
+import { HardDrive, Radar, ShieldCheck, MapPin, Wifi, Wrench, Pencil, Lock, Ghost, Trash2 } from 'lucide-react'
 import { api, type Device, type Location, type MonitoringCheck, locationPaths } from '../api'
 import { HealthRing, colorFor, timeAgo } from './ui'
 import { ReachabilityBadge, ManagementBadge } from './StatusBadges'
@@ -60,10 +60,25 @@ export function DeviceHeader({ deviceId, icon: Icon = HardDrive, showCredential 
   showCredential?: boolean
 }) {
   const qc = useQueryClient()
+  const nav = useNavigate()
   const devices = useQuery({ queryKey: ['devices', 'all'], queryFn: () => api.get<Device[]>('/devices?category=all') })
   const checksQ = useQuery({ queryKey: ['dev-checks', deviceId], queryFn: () => api.get<MonitoringCheck[]>(`/devices/${deviceId}/monitoring/checks`) })
   const locs = useQuery({ queryKey: ['locations-all'], queryFn: () => api.get<Location[]>('/locations/all') })
   const locPath = useMemo(() => locationPaths(locs.data ?? []), [locs.data])
+
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const [deleteErr, setDeleteErr] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const doDelete = async () => {
+    setDeleting(true); setDeleteErr(null)
+    try {
+      await api.del(`/devices/${deviceId}`)
+      qc.invalidateQueries({ queryKey: ['devices'] })
+      nav('/inventory')
+    } catch (e) {
+      setDeleteErr((e as Error).message); setDeleting(false)
+    }
+  }
 
   const [repairing, setRepairing] = useState(false)
   const [repairMsg, setRepairMsg] = useState<string | null>(null)
@@ -135,6 +150,9 @@ export function DeviceHeader({ deviceId, icon: Icon = HardDrive, showCredential 
               {d.classification_locked && (
                 <span className="badge badge-warning" title={d.manual_classification_reason || 'Classification locked — scans will not overwrite identity'}><Lock size={11} style={{ verticalAlign: -1 }} /> manual</span>
               )}
+              {d.is_virtual && (
+                <span className="badge" title="Virtual device — manually entered, not probed" style={{ background: 'rgba(139,92,246,.15)', color: '#8b5cf6' }}><Ghost size={11} style={{ verticalAlign: -1 }} /> Virtual</span>
+              )}
               <button className="btn btn-ghost btn-xs" onClick={() => setEditing(true)} title="Edit device identity, location, criticality, classification lock"><Pencil size={12} /> Edit</button>
             </span>
           </div>
@@ -153,36 +171,68 @@ export function DeviceHeader({ deviceId, icon: Icon = HardDrive, showCredential 
       </div>
 
       <div className="device-hero-metrics">
-        {checks.length > 0 && <HealthRing score={score} size={84} label="Health" />}
-        <div className="device-hero-stats">
-          <div className="hero-stat"><span className="hero-stat-ico tone-info"><Wifi size={15} /></span>
-            <div>
-              <b>{tcpCheck?.target_port ? `:${tcpCheck.target_port}` : '—'}{tcpCheck ? ` · ${tcpCheck.last_status || 'unknown'}` : ''}</b>
-              <small>reachability target {tcpCheck?.last_run_at ? `· ${timeAgo(tcpCheck.last_run_at)}` : ''}</small>
-            </div></div>
-          <div className="hero-stat"><span className="hero-stat-ico"><ShieldCheck size={15} /></span>
-            <div>
-              <b style={{ whiteSpace: 'normal', wordBreak: 'break-word' }} title={managedViaLabels(d.managed_by, d.driver ?? 'none')}>{managedViaLabels(d.managed_by, d.driver ?? 'none')}</b>
-              <small>managed via</small>
-            </div></div>
-          <div className="hero-stat"><span className="hero-stat-ico"><Radar size={15} /></span>
-            <div><b>{timeAgo(d.last_discovery_at)}</b><small>last discovery</small></div></div>
-          <div className="hero-stat"><span className="hero-stat-ico"><MapPin size={15} /></span>
-            <div><b>{d.location_id ? (locPath[d.location_id] ?? '—') : '—'}</b><small>location</small></div></div>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end', minWidth: 230 }}>
-          <div className="row" style={{ gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-            <RescanSplit targets={d.primary_ip ?? ''} label="Re-scan this device" size="sm" onMsg={onScanMsg} />
-            <button className="btn btn-ghost btn-sm" onClick={repairReachability} disabled={repairing} title="Recompute the reachability monitoring target from discovered open ports">
-              <Wrench size={13} /> {repairing ? 'Repairing…' : 'Repair check'}
-            </button>
+        <div className="device-hero-telemetry">
+          {checks.length > 0 && <HealthRing score={score} size={76} label="Health" />}
+          <div className="device-hero-stats">
+            <div className="hero-stat"><span className="hero-stat-ico tone-info"><Wifi size={15} /></span>
+              <div>
+                <b>{tcpCheck?.target_port ? `:${tcpCheck.target_port}` : '—'}{tcpCheck ? ` · ${tcpCheck.last_status || 'unknown'}` : ''}</b>
+                <small>reachability target {tcpCheck?.last_run_at ? `· ${timeAgo(tcpCheck.last_run_at)}` : ''}</small>
+              </div></div>
+            <div className="hero-stat"><span className="hero-stat-ico"><ShieldCheck size={15} /></span>
+              <div>
+                <b style={{ whiteSpace: 'normal', wordBreak: 'break-word' }} title={managedViaLabels(d.managed_by, d.driver ?? 'none')}>{managedViaLabels(d.managed_by, d.driver ?? 'none')}</b>
+                <small>managed via</small>
+              </div></div>
+            <div className="hero-stat"><span className="hero-stat-ico"><Radar size={15} /></span>
+              <div><b>{timeAgo(d.last_discovery_at)}</b><small>last discovery</small></div></div>
+            <div className="hero-stat"><span className="hero-stat-ico"><MapPin size={15} /></span>
+              <div><b>{d.location_id ? (locPath[d.location_id] ?? '—') : '—'}</b><small>location</small></div></div>
           </div>
-          {scanMsg && <span className="muted" style={{ fontSize: 11, maxWidth: 280, textAlign: 'right' }}>{scanMsg} <Link to="/discovery">View scan jobs</Link></span>}
-          {repairMsg && <span className="muted" style={{ fontSize: 11, maxWidth: 280, textAlign: 'right' }}>{repairMsg}</span>}
-          {showCredential && <CredentialBindSelect deviceId={deviceId} align="end" />}
         </div>
+        <div className="device-hero-actions">
+          {d.is_virtual ? (
+            <>
+              <Link className="btn btn-primary btn-sm" to={`/devices/virtual/${deviceId}/edit`} title="Edit this virtual device's identity + configuration"><Pencil size={13} /> Edit virtual device</Link>
+              <button className="btn btn-danger btn-sm" onClick={() => { setDeleteErr(null); setConfirmingDelete(true) }} title="Delete this virtual device and its manual ports/VLANs/neighbors/MACs"><Trash2 size={13} /> Delete</button>
+            </>
+          ) : (
+            <>
+              <RescanSplit targets={d.primary_ip ?? ''} label="Re-scan this device" size="sm" onMsg={onScanMsg} />
+              <button className="btn btn-ghost btn-sm" onClick={repairReachability} disabled={repairing} title="Recompute the reachability monitoring target from discovered open ports">
+                <Wrench size={13} /> {repairing ? 'Repairing…' : 'Repair check'}
+              </button>
+            </>
+          )}
+        </div>
+        {(scanMsg || repairMsg) && (
+          <div className="device-hero-msgs">
+            {scanMsg && <span className="muted">{scanMsg} <Link to="/discovery">View scan jobs</Link></span>}
+            {repairMsg && <span className="muted">{repairMsg}</span>}
+          </div>
+        )}
+        {showCredential && !d.is_virtual && <div className="device-hero-cred"><CredentialBindSelect deviceId={deviceId} align="end" /></div>}
       </div>
       {editing && <EditDevice device={d} onClose={() => setEditing(false)} onSaved={() => qc.invalidateQueries({ queryKey: ['devices', 'all'] })} />}
+      {confirmingDelete && (
+        <div role="dialog" aria-modal="true" onClick={() => !deleting && setConfirmingDelete(false)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+          <div className="card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 480, width: '90%', padding: 20 }}>
+            <h2 style={{ margin: '0 0 8px', display: 'inline-flex', gap: 8, alignItems: 'center' }}><Trash2 size={18} /> Delete virtual device?</h2>
+            <p style={{ margin: '0 0 6px' }}>Delete <strong>{d.name}</strong>?</p>
+            <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
+              This permanently removes the device and all its manually-entered ports, VLANs, neighbors,
+              learned MACs and category-specific data (interfaces, firewall/UPS/wireless records, OS inventory).
+              This cannot be undone.
+            </p>
+            {deleteErr && <div className="enc-banner crit" style={{ margin: '8px 0' }}>{deleteErr}</div>}
+            <div className="row" style={{ gap: 10, justifyContent: 'flex-end', marginTop: 14 }}>
+              <button className="btn btn-ghost" disabled={deleting} onClick={() => setConfirmingDelete(false)}>Cancel</button>
+              <button className="btn btn-danger" disabled={deleting} onClick={doDelete}><Trash2 size={13} /> {deleting ? 'Deleting…' : 'Delete device'}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

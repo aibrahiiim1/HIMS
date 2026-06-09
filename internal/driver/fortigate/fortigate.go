@@ -131,6 +131,9 @@ func (d *Driver) Collect(sess driver.Session, _ driver.Probe) (driver.Facts, err
 
 	// Interfaces via the shared collector (FortiGate exposes IF-MIB).
 	f.Interfaces = swsnmp.CollectInterfaces(ctx, c)
+	// ARP (ipNetToMedia): the firewall is the default gateway, so its ARP cache is
+	// the richest IP↔MAC source in the fabric — the Path Finder's best resolver.
+	f.ARP = swsnmp.CollectARP(ctx, c)
 	return f, nil
 }
 

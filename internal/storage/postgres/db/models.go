@@ -273,6 +273,8 @@ type Device struct {
 	Criticality                string      `json:"criticality"`
 	MonitoringEnabled          bool        `json:"monitoring_enabled"`
 	ManualClassificationReason string      `json:"manual_classification_reason"`
+	// Operator-entered placeholder device (not auto-discovered/probed); its inventory data is manual.
+	IsVirtual bool `json:"is_virtual"`
 }
 
 type DeviceFact struct {
@@ -583,6 +585,7 @@ type MonitoringCheck struct {
 	ConsecutiveFailures int32      `json:"consecutive_failures"`
 	CreatedAt           time.Time  `json:"created_at"`
 	UpdatedAt           time.Time  `json:"updated_at"`
+	Role                string     `json:"role"`
 }
 
 type MonitoringSample struct {

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -140,6 +141,11 @@ func (s *Server) routes() {
 		r.Get("/dashboard/access-coverage", s.accessCoverage)
 		r.Get("/dashboard/badge-counts", s.badgeCounts)
 
+		// --- Analytics (historical trend/time-series) ----------------
+		r.Get("/analytics/availability", s.analyticsAvailability)
+		r.Get("/analytics/device-uptime", s.analyticsDeviceUptime)
+		r.Get("/analytics/alerts", s.analyticsAlerts)
+
 		// --- System: runtime identity of THIS API process ------------
 		r.Get("/system/runtime", s.systemRuntime)
 		r.Get("/data-quality", s.dataQuality)
@@ -189,6 +195,12 @@ func (s *Server) routes() {
 		r.Post("/devices", s.createManualDevice)
 		r.Post("/devices/import-csv", s.importDevicesCSV)
 		r.Post("/devices/import-file", s.importDevicesFile)
+		// Virtual devices: operator-entered placeholders for non-integratable gear.
+		r.Post("/devices/virtual", s.createVirtualDevice)
+		r.Get("/devices/virtual/template.xlsx", s.virtualTemplateXLSX)
+		r.Post("/devices/virtual/import", s.importVirtualXLSX)
+		r.Get("/devices/virtual/{id}/config", s.getVirtualConfig) // edit reload
+		r.Put("/devices/virtual/{id}", s.updateVirtualDevice)
 		r.Post("/devices/bulk-delete", s.bulkDeleteDevices)
 		r.Post("/devices/bulk-assign", s.bulkAssignDevices)
 		r.Patch("/devices/{id}", s.updateDevice)
@@ -270,7 +282,8 @@ func (s *Server) routes() {
 
 		// --- Topology & search ----------------------------------------
 		// IP/MAC/name → switch+port+path (the headline Phase 1 feature).
-		r.Get("/search", s.search) // ?q=<IP|MAC|name>
+		r.Get("/search", s.search)                  // ?q=<IP|MAC|name> → topology path trace
+		r.Get("/search/entities", s.searchEntities) // ?q= → unified hits across APs/clients/FDB/ARP
 		r.Get("/topology/links", s.allLinks)
 		r.Get("/topology/graph", s.topologyGraph)
 		r.Post("/topology/rebuild", s.rebuildTopology)
@@ -464,10 +477,11 @@ func (s *Server) listDevices(w http.ResponseWriter, r *http.Request) {
 	cat := q.Get("category")
 	access, proto, issue := q.Get("access"), q.Get("accessProtocol"), q.Get("accessIssue")
 	reachFilter, mgmtFilter := q.Get("reachability"), q.Get("management")
+	topoFilter := q.Get("topology") // "unmapped" → fabric devices absent from topology
 
 	var rows []db.Device
 	var err error
-	if cat == "all" || cat == "" && (reachFilter != "" || mgmtFilter != "") {
+	if cat == "all" || topoFilter != "" || cat == "" && (reachFilter != "" || mgmtFilter != "") {
 		rows, err = s.queries.ListAllDevices(ctx)
 	} else {
 		if cat == "" {
@@ -480,6 +494,20 @@ func (s *Server) listDevices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows = s.scopeDevices(ctx, rows)
+
+	// Topology drill-down (Inventory → Unmapped Devices). Restrict to the
+	// topology-capable fabric (switches/routers) that appear in no topology link,
+	// using the same predicate as topology coverage and the sidebar badge.
+	if topoFilter == "unmapped" {
+		mapped := s.mappedDeviceIDs(ctx)
+		kept := rows[:0]
+		for _, d := range rows {
+			if isUnmappedFabric(d, mapped) {
+				kept = append(kept, d)
+			}
+		}
+		rows = kept
+	}
 
 	// Management-access drill-down filters (dashboard card → Inventory). Computed
 	// from real bindings + collection evidence only.
@@ -584,17 +612,75 @@ func (s *Server) deviceNeighbors(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, rows)
 }
 
+// deviceLinkDTO is one topology link as seen from a single device: the OTHER
+// end is always the "remote", regardless of which side the row was stored on.
+// inbound=true means the link was derived from the neighbour's side (e.g. a
+// MAC/FDB-inferred cross-vendor uplink), so this device's own local port is not
+// known — remote_port carries the neighbour's port instead.
+type deviceLinkDTO struct {
+	RemoteDeviceID   *uuid.UUID `json:"remote_device_id"`
+	RemoteDeviceName *string    `json:"remote_device_name"`
+	RemoteSysName    *string    `json:"remote_sys_name"`
+	RemoteIP         *string    `json:"remote_ip"`
+	RemoteVendor     *string    `json:"remote_vendor"`
+	RemoteCategory   *string    `json:"remote_category"`
+	LocalIfName      *string    `json:"local_if_name"`
+	LocalIfIndex     *int32     `json:"local_if_index"`
+	RemotePort       *string    `json:"remote_port"`
+	LinkSource       string     `json:"link_source"`
+	Inbound          bool       `json:"inbound"`
+	LastSeenAt       string     `json:"last_seen_at"`
+}
+
 func (s *Server) deviceTopology(w http.ResponseWriter, r *http.Request) {
 	ctx, id, ok := pathDevice(w, r)
 	if !ok {
 		return
 	}
-	links, err := s.queries.ListTopologyLinks(ctx, id)
+	rows, err := s.queries.ListDeviceLinksBidirectional(ctx, id)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, links)
+	ipStr := func(a *netip.Addr) *string {
+		if a != nil && a.IsValid() {
+			s := a.String()
+			return &s
+		}
+		return nil
+	}
+	out := make([]deviceLinkDTO, 0, len(rows))
+	for _, l := range rows {
+		d := deviceLinkDTO{LinkSource: l.LinkSource, Inbound: l.Inbound, LastSeenAt: l.LastSeenAt.UTC().Format(time.RFC3339)}
+		if l.Inbound {
+			// This device is the link's remote side → the neighbour is the LOCAL row.
+			lid := l.LocalDeviceID
+			ln := l.LocalName
+			d.RemoteDeviceID = &lid
+			d.RemoteDeviceName = &ln
+			d.RemoteSysName = &ln
+			d.RemoteIP = ipStr(l.LocalDevIp)
+			d.RemoteVendor = l.LocalVendor
+			lc := l.LocalCategory
+			d.RemoteCategory = &lc
+			d.RemotePort = l.LocalIfName // the neighbour's port toward us
+		} else {
+			d.RemoteDeviceID = l.RemoteDeviceID
+			d.RemoteDeviceName = l.RemoteName
+			d.RemoteSysName = l.RemoteSysName
+			if ip := ipStr(l.RemoteDevIp); ip != nil {
+				d.RemoteIP = ip
+			} else {
+				d.RemoteIP = ipStr(l.RemoteIp)
+			}
+			d.RemoteVendor = l.RemoteVendor
+			d.RemoteCategory = l.RemoteCategory
+			d.LocalIfName = l.LocalIfName
+			d.LocalIfIndex = l.LocalIfIndex
+		}
+		out = append(out, d)
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) deviceStorage(w http.ResponseWriter, r *http.Request) {
@@ -620,7 +706,15 @@ func (s *Server) deviceFacts(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, rows)
+	// Hide the internal virtual-device edit blob from the facts panel.
+	out := rows[:0]
+	for _, f := range rows {
+		if f.Key == virtualConfigFactKey {
+			continue
+		}
+		out = append(out, f)
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) deviceVMs(w http.ResponseWriter, r *http.Request) {
@@ -917,6 +1011,15 @@ func (s *Server) rebuildTopologyOnce(ctx context.Context) (devices, links int, s
 		ids = append(ids, d.ID)
 	}
 	nd, nl := s.topo.RebuildAll(ctx, ids)
+	// Vendor-neutral fill: derive switch-to-switch links from the bridge MAC
+	// forwarding tables (FDB) for gaps LLDP/CDP can't cover — notably cross-vendor
+	// uplinks (e.g. a Cisco access switch on an Aruba/HPE port). Runs after the
+	// authoritative LLDP/CDP pass and never overrides it.
+	if mc, ferr := s.topo.InferLinksFromFDB(ctx); ferr != nil {
+		slog.Warn("topology FDB inference failed", "error", ferr)
+	} else {
+		nl += mc
+	}
 	stale, _ := s.topo.CleanupStaleLinks(ctx, 7*24*time.Hour)
 	return nd, nl, stale, nil
 }
@@ -1047,7 +1150,33 @@ func isMACLike(s string) bool {
 	return len(s) >= 12 && (len(s) == 17 || len(s) == 12 || len(s) == 14)
 }
 
+// normMAC canonicalizes a MAC to lowercase colon-separated form
+// (aa:bb:cc:dd:ee:ff) so it matches the stored FDB/ARP format no matter how the
+// operator typed it — uppercase, dashes, Cisco dotted (aabb.ccdd.eeff), or no
+// separators at all. If the input doesn't contain exactly 12 hex digits it is
+// returned lowercased/trimmed unchanged (so hostname-ish queries pass through).
 func normMAC(s string) string {
-	// Normalize aa:bb:cc:dd:ee:ff or aabbccddeff → lowercase colon-sep.
-	return s // simplified; Phase 2 adds proper normalization
+	var hex strings.Builder
+	hex.Grow(12)
+	for _, r := range s {
+		switch {
+		case r >= '0' && r <= '9', r >= 'a' && r <= 'f':
+			hex.WriteRune(r)
+		case r >= 'A' && r <= 'F':
+			hex.WriteRune(r + 32) // fold to lowercase
+		}
+	}
+	h := hex.String()
+	if len(h) != 12 {
+		return strings.ToLower(strings.TrimSpace(s))
+	}
+	var b strings.Builder
+	b.Grow(17)
+	for i := 0; i < 12; i += 2 {
+		if i > 0 {
+			b.WriteByte(':')
+		}
+		b.WriteString(h[i : i+2])
+	}
+	return b.String()
 }

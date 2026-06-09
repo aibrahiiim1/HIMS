@@ -1304,13 +1304,71 @@ func (s *Server) scanDecrypt(ctx context.Context, id uuid.UUID) (discovery.Decry
 	return dc, nil
 }
 
+// scanJobDTO is a discovery job with its scan scope decoded from metadata. The
+// raw metadata JSONB marshals as base64, and scope_cidr is empty for target-mode
+// scans, so the list view couldn't say WHAT was scanned — this exposes the
+// targets/mode + a human "scope" label the UI shows in place of the blank cell.
+type scanJobDTO struct {
+	ID           uuid.UUID  `json:"id"`
+	LocationID   *uuid.UUID `json:"location_id"`
+	ScopeCidr    *string    `json:"scope_cidr"`
+	Status       string     `json:"status"`
+	StartedAt    *time.Time `json:"started_at"`
+	FinishedAt   *time.Time `json:"finished_at"`
+	CreatedAt    time.Time  `json:"created_at"`
+	HostCount    int32      `json:"host_count"`
+	FoundCount   int32      `json:"found_count"`
+	ScannedCount int32      `json:"scanned_count"`
+	Error        *string    `json:"error"`
+	Mode         string     `json:"mode"`
+	Targets      string     `json:"targets"`
+	Scope        string     `json:"scope"`
+}
+
+// scanScopeLabel renders a human-readable "what was scanned" string from the
+// job's saved scan spec + scope, used in the Scan Jobs list.
+func scanScopeLabel(j db.DiscoveryJob, spec rerunSpec) string {
+	switch {
+	case spec.Targets != "":
+		return spec.Targets
+	case j.ScopeCidr != nil:
+		return j.ScopeCidr.String()
+	case spec.CIDR != "":
+		return spec.CIDR
+	case spec.Mode == "site_subnets":
+		return "site subnets"
+	default:
+		return "import / manual"
+	}
+}
+
 func (s *Server) listDiscoveryJobs(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.queries.ListDiscoveryJobs(r.Context())
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, rows)
+	out := make([]scanJobDTO, 0, len(rows))
+	for _, j := range rows {
+		d := scanJobDTO{
+			ID: j.ID, LocationID: j.LocationID, Status: j.Status,
+			StartedAt: j.StartedAt, FinishedAt: j.FinishedAt, CreatedAt: j.CreatedAt,
+			HostCount: j.HostCount, FoundCount: j.FoundCount, ScannedCount: j.ScannedCount, Error: j.Error,
+		}
+		if j.ScopeCidr != nil {
+			sc := j.ScopeCidr.String()
+			d.ScopeCidr = &sc
+		}
+		var spec rerunSpec
+		if len(j.Metadata) > 0 {
+			_ = json.Unmarshal(j.Metadata, &spec)
+		}
+		d.Mode = spec.Mode
+		d.Targets = spec.Targets
+		d.Scope = scanScopeLabel(j, spec)
+		out = append(out, d)
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // deleteDiscoveryJob removes a job + its results.

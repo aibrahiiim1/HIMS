@@ -55,20 +55,41 @@ export function DeviceOps({ deviceId }: { deviceId: string }) {
         </button>
         {bind.isSuccess && <span className="muted">bound ✓</span>}
       </div>
-      {checks.data && checks.data.length > 0 && (
-        <table style={{ marginTop: 10 }}>
-          <thead><tr><th>Kind</th><th>Port</th><th>Status</th><th>Interval</th></tr></thead>
-          <tbody>
-            {checks.data.map((c) => (
-              <tr key={c.id}>
-                <td>{c.kind}</td><td>{c.target_port ?? '—'}</td>
-                <td><span className={`badge badge-${c.last_status === 'up' ? 'up' : c.last_status === 'down' ? 'down' : c.last_status === 'warning' ? 'warning' : 'unknown'}`}>{c.last_status}</span></td>
-                <td>{c.interval_seconds}s</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+      {checks.data && checks.data.length > 0 && (() => {
+        const all = checks.data!
+        const extras = all.filter((c) => c.role === 'supplemental')
+        const extrasNotOk = extras.filter((c) => c.last_status === 'down' || c.last_status === 'warning')
+        return (
+          <>
+            {extras.length > 0 && (
+              <div className="muted" style={{ marginTop: 10, fontSize: 12 }}>
+                This device has <strong>{all.length} checks</strong> ({all.length - extras.length} reachability + {extras.length} extra).
+                {extrasNotOk.length > 0 && (
+                  <span style={{ color: 'var(--warn)' }}> ⚠ {extrasNotOk.length} extra check{extrasNotOk.length > 1 ? 's are' : ' is'} not OK — this marks the device <strong>Degraded</strong> (needs attention) and lowers its health, but does <strong>not</strong> mark it offline or change the offline count.</span>
+                )}
+              </div>
+            )}
+            <table style={{ marginTop: 10 }}>
+              <thead><tr><th>Check</th><th>Port</th><th>Role</th><th>Status</th><th>Interval</th></tr></thead>
+              <tbody>
+                {all.map((c) => (
+                  <tr key={c.id}>
+                    <td style={{ textTransform: 'uppercase' }}>{c.kind}</td>
+                    <td>{c.target_port ?? '—'}</td>
+                    <td>
+                      {c.role === 'supplemental'
+                        ? <span className="badge badge-unknown" title="Extra check — a failure marks the device Degraded (needs attention) and lowers its health, but never marks it offline or changes the offline count">Extra</span>
+                        : <span className="badge badge-up" title="Reachability check — drives the device's online/offline status">Reachability</span>}
+                    </td>
+                    <td><span className={`badge badge-${c.last_status === 'up' ? 'up' : c.last_status === 'down' ? 'down' : c.last_status === 'warning' ? 'warning' : 'unknown'}`}>{c.last_status}</span></td>
+                    <td>{c.interval_seconds}s</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        )
+      })()}
     </div>
   )
 }

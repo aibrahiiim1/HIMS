@@ -28,7 +28,25 @@ export function ScanJobs() {
   const rerun = useMutation({ mutationFn: (id: string) => api.post(`/discovery/jobs/${id}/rerun`, {}), onSuccess: () => { setMsg('Re-run launched.'); qc.invalidateQueries({ queryKey: ['discovery-jobs'] }) }, onError: (e) => setMsg((e as Error).message) })
   const del = useMutation({ mutationFn: (id: string) => api.del(`/discovery/jobs/${id}`), onSuccess: () => { setMsg('Job deleted.'); qc.invalidateQueries({ queryKey: ['discovery-jobs'] }) }, onError: (e) => setMsg((e as Error).message) })
 
+  // Multi-select for bulk delete (selection is by job id, cleared after delete).
+  const [sel, setSel] = useState<Set<string>>(new Set())
+  const toggle = (id: string) => setSel((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n })
+  // Bulk delete loops the per-job DELETE; settled (not all) so one failure
+  // doesn't abandon the rest. Selection clears + the list refetches after.
+  const bulkDel = useMutation({
+    mutationFn: async (ids: string[]) => {
+      const res = await Promise.allSettled(ids.map((id) => api.del(`/discovery/jobs/${id}`)))
+      const failed = res.filter((r) => r.status === 'rejected').length
+      return { ok: ids.length - failed, failed }
+    },
+    onSuccess: ({ ok, failed }) => { setMsg(`Deleted ${ok} job(s)${failed ? ` · ${failed} failed` : ''}.`); setSel(new Set()); qc.invalidateQueries({ queryKey: ['discovery-jobs'] }) },
+    onError: (e) => setMsg((e as Error).message),
+  })
+
   const list = [...(jobs.data ?? [])].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+  const allSelected = list.length > 0 && list.every((j) => sel.has(j.id))
+  const toggleAll = () => setSel(allSelected ? new Set<string>() : new Set(list.map((j) => j.id)))
+  const doDeleteSelected = () => { if (sel.size === 0) return; if (confirm(`Delete ${sel.size} job(s) and their results? This cannot be undone.`)) bulkDel.mutate([...sel]) }
   const running = list.filter((j) => j.status === 'running').length
   const failed = list.filter((j) => j.status === 'failed').length
   const found = list.reduce((a, j) => a + j.found_count, 0)
@@ -49,14 +67,26 @@ export function ScanJobs() {
         {jobs.isLoading && <div className="loading">Loading…</div>}
         {jobs.data && list.length === 0 && <EmptyState icon={Radar} title="No scan jobs yet" message="Start a scan from Discovery Center." action={<Link className="btn btn-primary btn-sm" to="/discovery">Start Discovery</Link>} />}
         {list.length > 0 && (
+          <>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 10px', borderBottom: '1px solid var(--border)' }}>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+              <input type="checkbox" checked={allSelected} onChange={toggleAll} /> Select all ({list.length})
+            </label>
+            <button className="btn btn-danger btn-sm" disabled={sel.size === 0 || bulkDel.isPending} onClick={doDeleteSelected}>
+              <Trash2 size={14} /> {bulkDel.isPending ? 'Deleting…' : `Delete selected${sel.size > 0 ? ` (${sel.size})` : ''}`}
+            </button>
+            {sel.size > 0 && <button className="btn btn-ghost btn-sm" onClick={() => setSel(new Set())}>Clear</button>}
+          </div>
           <table className="data-table">
             <thead><tr>
+              <th style={{ width: 28 }}><input type="checkbox" checked={allSelected} onChange={toggleAll} aria-label="Select all jobs" /></th>
               <th>Scope / range</th><th>Status</th><th>Site</th><th>Started</th><th>Finished</th><th>Duration</th><th>Probed</th><th>Found</th><th></th>
             </tr></thead>
             <tbody>
               {list.map((j) => (
-                <tr key={j.id}>
-                  <td className="mono" style={{ fontSize: 12 }}><Link className="cell-name" to={`/discovery/jobs/${j.id}/results`}>{j.scope_cidr ?? 'import'}</Link></td>
+                <tr key={j.id} className={sel.has(j.id) ? 'row-selected' : undefined}>
+                  <td><input type="checkbox" checked={sel.has(j.id)} onChange={() => toggle(j.id)} aria-label={`Select job ${j.id}`} /></td>
+                  <td className="mono" style={{ fontSize: 12, maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={j.scope ?? j.targets ?? j.scope_cidr ?? ''}><Link className="cell-name" to={`/discovery/jobs/${j.id}/results`}>{j.scope ?? j.scope_cidr ?? 'import / manual'}</Link></td>
                   <td><span className={`badge badge-${jobBadge(j.status)}`}>{j.status}</span></td>
                   <td>{j.location_id ? (locPath[j.location_id] ?? '—') : '—'}</td>
                   <td>{j.started_at ? new Date(j.started_at).toLocaleString() : '—'}</td>
@@ -67,13 +97,14 @@ export function ScanJobs() {
                   <td style={{ whiteSpace: 'nowrap' }}>
                     <Link className="btn btn-ghost btn-xs" to={`/discovery/jobs/${j.id}/results`}>Open Results</Link>{' '}
                     <Link className="btn btn-ghost btn-xs" to={`/discovery/jobs/${j.id}/live`} title="Live visual board">Live</Link>{' '}
-                    {j.scope_cidr && <button className="btn btn-ghost btn-xs" disabled={rerun.isPending} onClick={() => rerun.mutate(j.id)} title="Re-run this scan"><RefreshCw size={12} /></button>}{' '}
+                    {(j.scope_cidr || j.targets || j.mode === 'site_subnets') && j.status !== 'running' && <button className="btn btn-ghost btn-xs" disabled={rerun.isPending} onClick={() => rerun.mutate(j.id)} title="Re-run this scan"><RefreshCw size={12} /></button>}{' '}
                     <button className="btn btn-ghost btn-xs" style={{ color: 'var(--crit)' }} onClick={() => { if (confirm('Delete this job and its results?')) del.mutate(j.id) }} title="Delete job"><Trash2 size={12} /></button>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
+          </>
         )}
       </Panel>
       <p className="muted" style={{ fontSize: 12, marginTop: 8 }}><Clock size={12} style={{ verticalAlign: -1 }} /> Auto-refreshes every 5s. Managed / Unmanaged / Missing-classification breakdowns are on each job's Results page.</p>

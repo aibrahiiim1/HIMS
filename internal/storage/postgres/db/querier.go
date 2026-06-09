@@ -27,6 +27,12 @@ type Querier interface {
 	// Absolute set of on-hand quantity (a stock count / receiving correction).
 	// The CHECK (quantity >= 0) constraint rejects negative results.
 	AdjustSparePartStock(ctx context.Context, arg AdjustSparePartStockParams) (SparePart, error)
+	// Alert volume + responsiveness over the window. MTTA/MTTR are NULL until alerts
+	// with acknowledged/resolved timestamps exist (honest empty state). $1 = window.
+	AlertAnalyticsSummary(ctx context.Context, dollar_1 string) (AlertAnalyticsSummaryRow, error)
+	// Alerts opened per time bucket, split by severity, for the alert-rate trend.
+	// $1 = granularity, $2 = window.
+	AlertOpenedSeries(ctx context.Context, arg AlertOpenedSeriesParams) ([]AlertOpenedSeriesRow, error)
 	// Distinct filter values (+counts) for the audit filter UI, in one round-trip.
 	AuditFacets(ctx context.Context) ([]AuditFacetsRow, error)
 	BindCredentialGroup(ctx context.Context, arg BindCredentialGroupParams) (CredentialBinding, error)
@@ -52,6 +58,8 @@ type Querier interface {
 	// Overview KPIs: total versions, distinct devices backed up, and changes today.
 	CountConfigBackupStats(ctx context.Context) (CountConfigBackupStatsRow, error)
 	CountCredentialsNeedingReentry(ctx context.Context) (int64, error)
+	// Total live devices (for the dashboard total / discovered split).
+	CountDevices(ctx context.Context) (int64, error)
 	CountDevicesNeedingAttention(ctx context.Context) (int64, error)
 	// ===== Credential secret accounting / recovery =============================
 	CountEncryptedCredentials(ctx context.Context) (int64, error)
@@ -70,6 +78,8 @@ type Querier interface {
 	// How many profiles still reference a credential (for orphan-credential cleanup on
 	// profile delete).
 	CountVendorProfilesUsingCredential(ctx context.Context, credentialID *uuid.UUID) (int64, error)
+	// Headline count for the "N devices, M virtual" indicator.
+	CountVirtualDevices(ctx context.Context) (int64, error)
 	CreateAgentJob(ctx context.Context, arg CreateAgentJobParams) (AgentJob, error)
 	// ---- Alert rules ----------------------------------------------------------
 	CreateAlertRule(ctx context.Context, arg CreateAlertRuleParams) (AlertRule, error)
@@ -133,6 +143,8 @@ type Querier interface {
 	DeleteLocation(ctx context.Context, id uuid.UUID) error
 	DeleteLookup(ctx context.Context, id uuid.UUID) error
 	DeleteMaintenanceWindow(ctx context.Context, id uuid.UUID) error
+	// Clear operator-entered roles before re-writing them (virtual-device edit).
+	DeleteManualDeviceRoles(ctx context.Context, deviceID uuid.UUID) error
 	DeleteMibPack(ctx context.Context, id uuid.UUID) error
 	DeleteMibPackTable(ctx context.Context, id uuid.UUID) error
 	DeleteMibWalkRows(ctx context.Context, arg DeleteMibWalkRowsParams) error
@@ -183,6 +195,10 @@ type Querier interface {
 	DeleteWirelessEventsForSource(ctx context.Context, arg DeleteWirelessEventsForSourceParams) error
 	DeviceCountByCategory(ctx context.Context) ([]DeviceCountByCategoryRow, error)
 	DeviceCountByStatus(ctx context.Context) ([]DeviceCountByStatusRow, error)
+	// Per-device availability over the window: sample/up counts (for uptime %),
+	// latency, and flap count (status transitions). Ordered worst-first so the UI can
+	// show "worst performers" and a flapping list. $1 = window (e.g. '24 hours').
+	DeviceUptimeRanking(ctx context.Context, dollar_1 string) ([]DeviceUptimeRankingRow, error)
 	// Mark open, unacknowledged, not-yet-escalated alerts as escalated once they
 	// have aged past their rule's escalate_after_minutes (0 = never).
 	EscalateStaleAlerts(ctx context.Context) ([]EscalateStaleAlertsRow, error)
@@ -193,11 +209,42 @@ type Querier interface {
 	// same repair/license).
 	ExpensesByCategory(ctx context.Context) ([]ExpensesByCategoryRow, error)
 	ExpensesByLocation(ctx context.Context) ([]ExpensesByLocationRow, error)
+	// Reconcile orphaned scans: a scan runs as an in-process goroutine, so any job
+	// still 'running'/'pending' after a restart (or that hangs past a max duration)
+	// has no live worker and must be failed. $1 = cutoff (started/created before
+	// this), $2 = error message. Returns the number of jobs reconciled.
+	FailStaleScanJobs(ctx context.Context, arg FailStaleScanJobsParams) (int64, error)
 	// First step of the IP→MAC→port→path search.
 	FindMACByIP(ctx context.Context, ipAddress netip.Addr) ([]FindMACByIPRow, error)
 	// Topology search: which switch + port + VLAN carries a MAC?
 	FindMACOnSwitches(ctx context.Context, mac string) ([]FindMACOnSwitchesRow, error)
+	// Path Finder: exact-match a search term (MAC / IP / hostname) to an associated
+	// wireless client that has a known AP, so the traced path can START at the access
+	// point the client is connected to. Exact (not substring) match avoids tracing an
+	// unrelated client. Only rows with a known ap_name qualify (we need an AP to start
+	// at; without one the normal FDB path still applies).
+	FindWirelessClient(ctx context.Context, lower string) ([]FindWirelessClientRow, error)
+	// Analytics aggregations powering the enterprise dashboards (Dashboard, NOC
+	// Wallboard, Health Overview). All grounded in real collected data:
+	// monitoring_samples (reachability time-series) and alerts. Bucket granularity
+	// and window are passed as text params so one query serves 24h/7d/30d.
+	//
+	// Percentages are intentionally NOT computed in SQL (kept as raw up/total int
+	// counts) so the result types stay clean float8/bigint; the handler derives %.
+	// Latency / MTTA / MTTR are nullable: avg() over no rows is NULL, which must
+	// read as "no data" (not a fake 0) — hence bare aggregates, no ::float8 cast.
+	// Fleet-wide reachability over time: one row per time bucket with up/down/warning
+	// sample counts and latency stats. $1 = date_trunc granularity ('hour'|'day'),
+	// $2 = window (e.g. '24 hours', '7 days'). Powers the availability trend chart.
+	FleetAvailabilitySeries(ctx context.Context, arg FleetAvailabilitySeriesParams) ([]FleetAvailabilitySeriesRow, error)
+	// Single-row rollup over the same window: sample counts (for uptime %), distinct
+	// devices, and latency stats. Used for the headline availability KPI / SLA figure.
+	FleetAvailabilitySummary(ctx context.Context, dollar_1 string) (FleetAvailabilitySummaryRow, error)
 	FlowOverview(ctx context.Context, at time.Time) (FlowOverviewRow, error)
+	// Path Finder: the AP a wireless client is associated to (scoped to its
+	// controller), to read the AP's MAC/IP and resolve its wired uplink switch via the
+	// FDB.
+	GetAccessPointByName(ctx context.Context, arg GetAccessPointByNameParams) (GetAccessPointByNameRow, error)
 	GetAgentJob(ctx context.Context, id uuid.UUID) (AgentJob, error)
 	GetAlert(ctx context.Context, id uuid.UUID) (Alert, error)
 	GetBMCInfo(ctx context.Context, deviceID uuid.UUID) (BmcInfo, error)
@@ -326,6 +373,12 @@ type Querier interface {
 	// Full recent test history for one device (Device Detail → Credential Health).
 	ListDeviceCredentialTests(ctx context.Context, arg ListDeviceCredentialTestsParams) ([]CredentialTestResult, error)
 	ListDeviceFacts(ctx context.Context, deviceID uuid.UUID) ([]DeviceFact, error)
+	// All topology links touching a device from EITHER endpoint, with both ends
+	// enriched (name/ip/vendor/category) and an `inbound` flag set when the device
+	// is the link's remote side. The handler normalizes this so the per-device
+	// Topology tab always shows the OTHER device — including links that point AT it
+	// (e.g. a MAC/FDB-derived cross-vendor uplink stored from the neighbour's side).
+	ListDeviceLinksBidirectional(ctx context.Context, localDeviceID uuid.UUID) ([]ListDeviceLinksBidirectionalRow, error)
 	ListDeviceRoles(ctx context.Context, deviceID uuid.UUID) ([]DeviceRole, error)
 	// ===== Device templates ====================================================
 	ListDeviceTemplates(ctx context.Context) ([]DeviceTemplate, error)
@@ -347,6 +400,10 @@ type Querier interface {
 	// The evaluator's input: every enabled check joined to its device so rules
 	// can filter by category and alerts can carry a readable device name.
 	ListEnabledChecksWithDevice(ctx context.Context) ([]ListEnabledChecksWithDeviceRow, error)
+	// Every interface MAC belonging to a topology-capable fabric device (switch /
+	// router / ISP router). Used to map an observed FDB MAC back to the device that
+	// owns it, for vendor-neutral L2 link inference (FDB-based topology).
+	ListFabricInterfaceMACs(ctx context.Context) ([]ListFabricInterfaceMACsRow, error)
 	ListHAMembers(ctx context.Context, deviceID uuid.UUID) ([]FirewallHaMember, error)
 	ListInterfaces(ctx context.Context, deviceID uuid.UUID) ([]Interface, error)
 	// Per-device scan dispositions across recent jobs (newest first). Powers the
@@ -371,7 +428,10 @@ type Querier interface {
 	ListMibPackTables(ctx context.Context, packID uuid.UUID) ([]MibPackTable, error)
 	ListMibPacks(ctx context.Context) ([]MibPack, error)
 	ListMibWalkRows(ctx context.Context, arg ListMibWalkRowsParams) ([]MibWalkRow, error)
-	ListMonitoringChecks(ctx context.Context) ([]MonitoringCheck, error)
+	// Global checks list (Health Overview). Joined to the device so the UI can
+	// identify each check by device name / IP (not just a bare port), and ordered
+	// by device then reachability-first so a device's checks group together.
+	ListMonitoringChecks(ctx context.Context) ([]ListMonitoringChecksRow, error)
 	ListMonitoringChecksByDevice(ctx context.Context, deviceID uuid.UUID) ([]MonitoringCheck, error)
 	ListMonitoringSamplesByCheck(ctx context.Context, arg ListMonitoringSamplesByCheckParams) ([]MonitoringSample, error)
 	ListMonitoringSamplesByDevice(ctx context.Context, arg ListMonitoringSamplesByDeviceParams) ([]MonitoringSample, error)
@@ -454,9 +514,18 @@ type Querier interface {
 	LiveDeviceByIPAndLocation(ctx context.Context, arg LiveDeviceByIPAndLocationParams) (Device, error)
 	MACCountByPort(ctx context.Context, deviceID uuid.UUID) ([]MACCountByPortRow, error)
 	MarkAgentJobDispatched(ctx context.Context, id uuid.UUID) error
+	// Flag (or unflag) a device as a manually-entered virtual placeholder.
+	MarkDeviceVirtual(ctx context.Context, arg MarkDeviceVirtualParams) error
 	// Freshness of the most recent LLDP/CDP neighbor observation (topology age).
 	MaxNeighborSeenAt(ctx context.Context) (time.Time, error)
-	// Live fleet rollup: how many checks sit in each status bucket.
+	// Fleet health rollup, DEVICE-based: how many MONITORED devices sit in each
+	// reachability bucket. We count devices (not checks) and map the device's
+	// rolled-up status onto the up/down/warning/unknown vocabulary, so the KPI
+	// counts match the inventory reachability filter exactly (a click lands on the
+	// same devices). A failing SUPPLEMENTAL check surfaces here as "warning" (the
+	// rollup degrades the device to warning, never down) — it lowers the health
+	// score and is clickable, but never inflates the "down"/offline bucket. A device
+	// is "monitored" when it has at least one enabled check.
 	MonitoringStatusOverview(ctx context.Context) ([]MonitoringStatusOverviewRow, error)
 	// ---- Alerts ---------------------------------------------------------------
 	// Atomic open: ON CONFLICT against idx_alerts_one_open means a second open
@@ -482,6 +551,11 @@ type Querier interface {
 	// pure resolver (internal/credresolver) can order them.
 	//   specificity 2 = subnet binding, 1 = location binding.
 	ResolveCandidatesForIP(ctx context.Context, arg ResolveCandidatesForIPParams) ([]ResolveCandidatesForIPRow, error)
+	// Path Finder fallback for when the ARP table is empty/sparse: resolve an IP to a
+	// MAC (and an identity) from the wireless-client roster and the AP inventory, so a
+	// wireless endpoint's IP still traces to its switch port via the FDB. Clients are
+	// preferred over APs ($1 = IP as text).
+	ResolveIPToMAC(ctx context.Context, ip string) ([]ResolveIPToMACRow, error)
 	// Auto-resolve: any un-resolved alert whose check has recovered to 'up'.
 	ResolveRecoveredAlerts(ctx context.Context) ([]ResolveRecoveredAlertsRow, error)
 	// The newest enabled, recently-online agent assigned to a location — used to
@@ -494,13 +568,23 @@ type Querier interface {
 	// Fleet-wide role rollup: how many devices hold each role (the CMDB role cut).
 	RoleSummary(ctx context.Context) ([]RoleSummaryRow, error)
 	RolesForUser(ctx context.Context, userID uuid.UUID) ([]Role, error)
+	// Global-search: access points by name / MAC / IP / serial / model. Returns the
+	// owning controller so an AP MAC or IP found anywhere resolves to a device.
+	SearchAccessPoints(ctx context.Context, dollar_1 *string) ([]SearchAccessPointsRow, error)
+	// Global-search: ARP table (IP↔MAC) by IP or MAC — which L3 device resolved an IP.
+	SearchArpEntries(ctx context.Context, dollar_1 *string) ([]SearchArpEntriesRow, error)
 	SearchByHostname(ctx context.Context, hostname *string) ([]SearchByHostnameRow, error)
 	// Primary search entry point for the IP → MAC → port path resolution.
 	SearchByIP(ctx context.Context, primaryIp *netip.Addr) (SearchByIPRow, error)
 	// Finds the switch(es) that have this MAC in their FDB, then joins the
 	// interface for port + VLAN detail.
 	SearchByMAC(ctx context.Context, mac string) ([]SearchByMACRow, error)
+	// Global-search: learned MAC addresses (bridge FDB) by MAC — which switch + port
+	// a MAC was seen on, anywhere in the fabric.
+	SearchFdbMacs(ctx context.Context, dollar_1 *string) ([]SearchFdbMacsRow, error)
 	SearchMibObjects(ctx context.Context, name string) ([]MibObject, error)
+	// Global-search: associated wireless clients by MAC / IP / hostname / SSID / AP.
+	SearchWirelessClients(ctx context.Context, dollar_1 *string) ([]SearchWirelessClientsRow, error)
 	SetAlertRuleEnabled(ctx context.Context, arg SetAlertRuleEnabledParams) (AlertRule, error)
 	SetAlertWorkOrder(ctx context.Context, arg SetAlertWorkOrderParams) error
 	// Operator manual override: lock (true) freezes auto-classification for this
@@ -515,6 +599,9 @@ type Querier interface {
 	SetMibPackParseMeta(ctx context.Context, arg SetMibPackParseMetaParams) error
 	SetMibPackTested(ctx context.Context, arg SetMibPackTestedParams) error
 	SetMonitoringCheckEnabled(ctx context.Context, arg SetMonitoringCheckEnabledParams) (MonitoringCheck, error)
+	// Mark a check as reachability (drives device status) or supplemental (extra,
+	// informational only). Used when an operator adds a check beyond the default.
+	SetMonitoringCheckRole(ctx context.Context, arg SetMonitoringCheckRoleParams) error
 	SetNotificationChannelEnabled(ctx context.Context, arg SetNotificationChannelEnabledParams) (NotificationChannel, error)
 	SetRelayAgentEnabled(ctx context.Context, arg SetRelayAgentEnabledParams) error
 	SetRelayAgentLocation(ctx context.Context, arg SetRelayAgentLocationParams) error

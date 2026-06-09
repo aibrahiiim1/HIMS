@@ -15,6 +15,7 @@ package topology
 import (
 	"context"
 	"net/netip"
+	"sort"
 	"strings"
 	"time"
 
@@ -39,6 +40,22 @@ type Querier interface {
 	GetDevice(ctx context.Context, id uuid.UUID) (db.Device, error)
 	ListMACForDevice(ctx context.Context, deviceID uuid.UUID) ([]db.ListMACForDeviceRow, error)
 	ListARPForDevice(ctx context.Context, deviceID uuid.UUID) ([]db.ListARPForDeviceRow, error)
+	// IP→MAC fallback via the wireless-client roster + AP inventory (used when the
+	// ARP table has no entry for the searched IP).
+	ResolveIPToMAC(ctx context.Context, ip string) ([]db.ResolveIPToMACRow, error)
+	// FDB-based (vendor-neutral) link inference.
+	ListAllDevices(ctx context.Context) ([]db.Device, error)
+	ListFabricInterfaceMACs(ctx context.Context) ([]db.ListFabricInterfaceMACsRow, error)
+	MACCountByPort(ctx context.Context, deviceID uuid.UUID) ([]db.MACCountByPortRow, error)
+	// Wireless association (Path Finder: start the path at the AP a client is on).
+	FindWirelessClient(ctx context.Context, term string) ([]db.FindWirelessClientRow, error)
+	GetAccessPointByName(ctx context.Context, arg db.GetAccessPointByNameParams) (db.GetAccessPointByNameRow, error)
+	// Configured VLANs per switch (to validate an FDB VLAN is a real 802.1Q VLAN
+	// and not a bridge/FdbId artifact).
+	ListVlans(ctx context.Context, deviceID uuid.UUID) ([]db.Vlan, error)
+	// Per-port VLAN membership (untagged/native + tagged) — the authoritative VLAN
+	// config for a switch port, preferred over the FDB-derived VLAN.
+	ListPortVlans(ctx context.Context, deviceID uuid.UUID) ([]db.PortVlan, error)
 }
 
 // Link is a directed network link for API/UI consumption.
@@ -59,7 +76,7 @@ type Link struct {
 // can render the chain (endpoint → access → uplink → core → firewall/gateway).
 type PathStep struct {
 	Hop        int        `json:"hop"`
-	Role       string     `json:"role"` // endpoint|access|uplink|distribution|core|gateway|firewall
+	Role       string     `json:"role"` // wireless_client|ap|wireless_controller|endpoint|access|uplink|distribution|core|gateway|firewall
 	DeviceID   *uuid.UUID `json:"device_id,omitempty"`
 	DeviceName *string    `json:"device_name,omitempty"`
 	IP         *string    `json:"ip,omitempty"`
@@ -90,6 +107,27 @@ type SearchResult struct {
 	// Confidence in the resolved path.
 	Confidence        string   `json:"confidence"` // high|medium|low|none
 	ConfidenceReasons []string `json:"confidence_reasons"`
+	// Wireless association (set only when the searched endpoint is a Wi-Fi client):
+	// the path then starts at the AP the client is on, then AP → controller → wired
+	// uplink switch → core.
+	Wireless *WirelessTrace `json:"wireless,omitempty"`
+}
+
+// WirelessTrace describes a searched endpoint's wireless association — the client,
+// the AP it is associated to, and the controller — so the path can start at the AP
+// (where the client gets the network) rather than at a wired switch port.
+type WirelessTrace struct {
+	ClientMAC          string     `json:"client_mac,omitempty"`
+	ClientIP           *string    `json:"client_ip,omitempty"`
+	Hostname           *string    `json:"hostname,omitempty"`
+	SSID               *string    `json:"ssid,omitempty"`
+	Band               *string    `json:"band,omitempty"`
+	RSSI               *int32     `json:"rssi,omitempty"`
+	APName             string     `json:"ap_name,omitempty"`
+	APMAC              *string    `json:"ap_mac,omitempty"`
+	APIP               *string    `json:"ap_ip,omitempty"`
+	ControllerDeviceID *uuid.UUID `json:"controller_device_id,omitempty"`
+	ControllerName     *string    `json:"controller_name,omitempty"`
 }
 
 // SwitchPortEntry is one FDB match: a switch + port + VLAN that carries the MAC,
@@ -100,10 +138,30 @@ type SwitchPortEntry struct {
 	SwitchIP   *string   `json:"switch_ip,omitempty"`
 	IfIndex    *int32    `json:"if_index,omitempty"`
 	IfName     *string   `json:"if_name,omitempty"`
+	IfAlias    *string   `json:"if_alias,omitempty"` // port description (e.g. "ROOM_4105_AP")
 	VLANID     int32     `json:"vlan_id"`
-	PortRole   *string   `json:"port_role,omitempty"`
-	Source     *string   `json:"source,omitempty"`       // mac-table collection_source: snmp|cli|api
-	LastSeenAt *string   `json:"last_seen_at,omitempty"` // mac-table last_seen_at (RFC3339)
+	// Authoritative per-port VLAN membership from the switch's port-VLAN table
+	// (preferred over the FDB-derived VLANID): the untagged/native VLAN and the
+	// tagged/trunked VLANs. UntaggedVLANName is the configured name when known.
+	UntaggedVLAN     *int32  `json:"untagged_vlan,omitempty"`
+	UntaggedVLANName *string `json:"untagged_vlan_name,omitempty"`
+	TaggedVLANs      []int32 `json:"tagged_vlans,omitempty"`
+	// VLANConfigured is true when VLANID is a real 802.1Q VLAN configured on the
+	// switch; VLANName is its configured name when known. VLANSuspect is true when
+	// the switch HAS VLANs collected but VLANID is not among them — i.e. the FDB
+	// reported a bridge/FdbId index, not a real VLAN — so the VLAN is not asserted in
+	// the path. (When no VLANs are collected we can't validate, so neither is set and
+	// the VLAN is still shown.)
+	VLANConfigured bool    `json:"vlan_configured"`
+	VLANSuspect    bool    `json:"vlan_suspect,omitempty"`
+	VLANName       *string `json:"vlan_name,omitempty"`
+	PortRole       *string `json:"port_role,omitempty"`
+	Source         *string `json:"source,omitempty"`       // mac-table collection_source: snmp|cli|api
+	LastSeenAt     *string `json:"last_seen_at,omitempty"` // mac-table last_seen_at (RFC3339)
+	// MACCount is how many MACs are learned on this switch port. The true point of
+	// attachment is the port with the FEWEST (an edge port carrying just this
+	// device); a transit uplink/trunk that also learned the MAC carries hundreds.
+	MACCount *int64 `json:"mac_count,omitempty"`
 }
 
 // Engine wraps the Querier and provides topology operations.
@@ -345,12 +403,50 @@ func (e *Engine) SearchIP(ctx context.Context, ip netip.Addr) (SearchResult, err
 		e.attributeARP(ctx, &res, ip, mac, arpRows[0].DeviceID)
 	}
 
+	// Step 2b: ARP fallback — if no ARP entry mapped this IP to a MAC (e.g. ARP
+	// collection is sparse or absent), resolve it from the wireless-client roster
+	// or the AP inventory. The resolved MAC then flows through the same FDB lookup
+	// below, so a wireless endpoint or AP still traces to its switch port.
+	var resolvedVia string
+	if res.MAC == nil {
+		if rows, rerr := e.q.ResolveIPToMAC(ctx, ip.String()); rerr == nil && len(rows) > 0 {
+			// FDB stores MACs lowercase-colon; AP/client rosters may store them
+			// uppercase. Fold to lowercase so the exact-match FDB lookup below hits.
+			mac := strings.ToLower(rows[0].Mac)
+			res.MAC = &mac
+			resolvedVia = rows[0].Source
+			if res.DeviceName == nil && rows[0].DeviceName != "" {
+				dn := rows[0].DeviceName
+				res.DeviceName = &dn
+			}
+		}
+	}
+
 	// Step 3: MAC → switch + port + VLAN, then the upstream path.
 	if res.MAC != nil {
 		res.SwitchPort = e.macToPort(ctx, *res.MAC)
 	}
-	res.Path = e.buildPath(ctx, &res)
+	// If this endpoint is a Wi-Fi client, start the path at the AP it's on.
+	res.Wireless = e.wirelessAssociation(ctx, ip.String())
+	if res.Wireless != nil {
+		res.Path = e.buildWirelessPath(ctx, &res)
+	} else {
+		res.Path = e.buildPath(ctx, &res)
+	}
 	res.Confidence, res.ConfidenceReasons = assessConfidence(&res)
+	applyWirelessConfidence(&res)
+	if resolvedVia != "" {
+		via := map[string]string{
+			"wireless_client": "the wireless-client roster",
+			"access_point":    "the access-point inventory",
+		}[resolvedVia]
+		if via == "" {
+			via = resolvedVia
+		}
+		res.ConfidenceReasons = append([]string{
+			"IP resolved to its MAC via " + via + " (no ARP entry for this IP)",
+		}, res.ConfidenceReasons...)
+	}
 	res.normalizeSlices()
 	return res, nil
 }
@@ -359,8 +455,15 @@ func (e *Engine) SearchIP(ctx context.Context, ip netip.Addr) (SearchResult, err
 func (e *Engine) SearchMAC(ctx context.Context, mac string) (SearchResult, error) {
 	res := SearchResult{Query: mac, QueryType: "mac", MAC: &mac}
 	res.SwitchPort = e.macToPort(ctx, mac)
-	res.Path = e.buildPath(ctx, &res)
+	// If this MAC belongs to a Wi-Fi client, start the path at its AP.
+	res.Wireless = e.wirelessAssociation(ctx, mac)
+	if res.Wireless != nil {
+		res.Path = e.buildWirelessPath(ctx, &res)
+	} else {
+		res.Path = e.buildPath(ctx, &res)
+	}
 	res.Confidence, res.ConfidenceReasons = assessConfidence(&res)
+	applyWirelessConfidence(&res)
 	res.normalizeSlices()
 	return res, nil
 }
@@ -404,6 +507,22 @@ func (e *Engine) SearchHostname(ctx context.Context, name string) ([]SearchResul
 		sr.normalizeSlices()
 		out = append(out, sr)
 	}
+	// A searched name might be a wireless client's hostname rather than a managed
+	// device — trace it from its AP.
+	if len(out) == 0 {
+		if w := e.wirelessAssociation(ctx, name); w != nil {
+			sr := SearchResult{Query: name, QueryType: "hostname", Wireless: w}
+			if w.ClientMAC != "" {
+				m := w.ClientMAC
+				sr.MAC = &m
+			}
+			sr.Path = e.buildWirelessPath(ctx, &sr)
+			sr.Confidence, sr.ConfidenceReasons = assessConfidence(&sr)
+			applyWirelessConfidence(&sr)
+			sr.normalizeSlices()
+			out = append(out, sr)
+		}
+	}
 	return out, nil
 }
 
@@ -420,6 +539,55 @@ func (e *Engine) macToPort(ctx context.Context, mac string) []SwitchPortEntry {
 	// Cache per-device MAC tables so we attribute source/last-seen without
 	// re-querying for MACs that appear on the same switch multiple times.
 	macCache := map[uuid.UUID][]db.ListMACForDeviceRow{}
+	// Cache per-device, per-port MAC fan-out (count of MACs on each port) so we can
+	// pick the true point of attachment (lowest fan-out) over transit uplinks.
+	fanCache := map[uuid.UUID]map[int32]int64{}
+	// Cache per-device configured VLANs (id → name) to validate that an FDB VLAN is
+	// a real 802.1Q VLAN and not a bridge/FdbId artifact.
+	vlanCache := map[uuid.UUID]map[int32]*string{}
+	type portVLANs struct {
+		untagged *int32
+		tagged   []int32
+	}
+	pvCache := map[uuid.UUID]map[int32]*portVLANs{}
+	// vlanNamesFor returns (and caches) the device's configured VLAN id→name map.
+	vlanNamesFor := func(id uuid.UUID) map[int32]*string {
+		if vc, ok := vlanCache[id]; ok {
+			return vc
+		}
+		vc := map[int32]*string{}
+		if vlans, verr := e.q.ListVlans(ctx, id); verr == nil {
+			for _, v := range vlans {
+				vc[v.VlanID] = v.Name
+			}
+		}
+		vlanCache[id] = vc
+		return vc
+	}
+	// portVlansFor returns (and caches) the device's per-port VLAN membership.
+	portVlansFor := func(id uuid.UUID) map[int32]*portVLANs {
+		if pm, ok := pvCache[id]; ok {
+			return pm
+		}
+		pm := map[int32]*portVLANs{}
+		if pvs, perr := e.q.ListPortVlans(ctx, id); perr == nil {
+			for _, pv := range pvs {
+				g := pm[pv.IfIndex]
+				if g == nil {
+					g = &portVLANs{}
+					pm[pv.IfIndex] = g
+				}
+				if pv.Tagged {
+					g.tagged = append(g.tagged, pv.VlanID)
+				} else {
+					u := pv.VlanID
+					g.untagged = &u
+				}
+			}
+		}
+		pvCache[id] = pm
+		return pm
+	}
 	out := make([]SwitchPortEntry, 0, len(rows))
 	for _, r := range rows {
 		entry := SwitchPortEntry{
@@ -433,6 +601,7 @@ func (e *Engine) macToPort(ctx context.Context, mac string) []SwitchPortEntry {
 		}
 		entry.IfIndex = r.IfIndex
 		entry.IfName = r.IfName
+		entry.IfAlias = r.IfAlias
 		entry.PortRole = r.PortRole
 
 		mt, ok := macCache[r.DeviceID]
@@ -449,16 +618,79 @@ func (e *Engine) macToPort(ctx context.Context, mac string) []SwitchPortEntry {
 				break
 			}
 		}
+		// Per-port MAC fan-out — the lowest is the edge port the device is actually
+		// cabled to; high counts are transit uplinks/trunks that merely carry it.
+		if r.IfIndex != nil {
+			fc, ok := fanCache[r.DeviceID]
+			if !ok {
+				fc = map[int32]int64{}
+				if counts, cerr := e.q.MACCountByPort(ctx, r.DeviceID); cerr == nil {
+					for _, c := range counts {
+						if c.IfIndex != nil {
+							fc[*c.IfIndex] = c.MacCount
+						}
+					}
+				}
+				fanCache[r.DeviceID] = fc
+			}
+			if n, ok := fc[*r.IfIndex]; ok {
+				nn := n
+				entry.MACCount = &nn
+			}
+		}
+		// Validate the FDB VLAN against the switch's configured VLANs. FDB tables can
+		// report a bridge/FdbId index that is not a real 802.1Q VLAN (e.g. "2" on a
+		// switch with no VLAN 2); only assert the VLAN when it is actually configured.
+		if entry.VLANID > 0 {
+			vc := vlanNamesFor(r.DeviceID)
+			// Only judge the FDB VLAN if the switch has any VLANs collected at all;
+			// without that list we can't validate, so leave it unmarked (still shown).
+			if len(vc) > 0 {
+				if name, ok := vc[entry.VLANID]; ok {
+					entry.VLANConfigured = true
+					entry.VLANName = name
+				} else {
+					entry.VLANSuspect = true // present FDB VLAN is not a configured VLAN
+				}
+			}
+		}
+		// Authoritative per-port VLAN membership (untagged/native + tagged) from the
+		// switch's port-VLAN table — the real config of the attachment port, preferred
+		// over the FDB-derived VLAN for display.
+		if r.IfIndex != nil {
+			if g := portVlansFor(r.DeviceID)[*r.IfIndex]; g != nil {
+				entry.UntaggedVLAN = g.untagged
+				entry.TaggedVLANs = g.tagged
+				if g.untagged != nil {
+					if name, ok := vlanNamesFor(r.DeviceID)[*g.untagged]; ok {
+						entry.UntaggedVLANName = name
+					}
+				}
+			}
+		}
 		out = append(out, entry)
 	}
-	// Access/edge ports first, then most-recently-seen.
-	sortAccessFirst(out)
+	// Lowest fan-out (true attachment) first, then access/edge role, then freshest.
+	sortByAttachment(out)
 	return out
 }
 
-// sortAccessFirst orders FDB matches so access/edge ports lead, then freshest.
-func sortAccessFirst(p []SwitchPortEntry) {
-	rank := func(e SwitchPortEntry) int {
+// sortByAttachment orders FDB matches so the true point of attachment leads. The
+// primary signal is MAC fan-out: the port carrying the FEWEST MACs is the edge port
+// the device is cabled to, while a transit uplink/trunk that merely forwarded the
+// MAC carries hundreds. (port_role is an unreliable secondary signal — real edge
+// ports are sometimes labelled "uplink".) Ties break by access/edge role then
+// freshness. When fan-out is unknown for every match (counts not collected, e.g. in
+// tests), it falls back to the previous role-then-freshness ordering.
+func sortByAttachment(p []SwitchPortEntry) {
+	const unknownFan = int64(1) << 62 // sorts after any real count
+	fan := func(e SwitchPortEntry) int64 {
+		if e.MACCount != nil {
+			return *e.MACCount
+		}
+		return unknownFan
+	}
+	roleRank := func(e SwitchPortEntry) int {
 		if e.PortRole == nil {
 			return 2
 		}
@@ -471,19 +703,18 @@ func sortAccessFirst(p []SwitchPortEntry) {
 			return 1
 		}
 	}
-	for i := 1; i < len(p); i++ {
-		for j := i; j > 0; j-- {
-			a, b := p[j-1], p[j]
-			swap := rank(b) < rank(a)
-			if rank(a) == rank(b) && b.LastSeenAt != nil && a.LastSeenAt != nil {
-				swap = *b.LastSeenAt > *a.LastSeenAt
-			}
-			if !swap {
-				break
-			}
-			p[j-1], p[j] = p[j], p[j-1]
+	sort.SliceStable(p, func(i, j int) bool {
+		if fi, fj := fan(p[i]), fan(p[j]); fi != fj {
+			return fi < fj
 		}
-	}
+		if ri, rj := roleRank(p[i]), roleRank(p[j]); ri != rj {
+			return ri < rj
+		}
+		if p[i].LastSeenAt != nil && p[j].LastSeenAt != nil {
+			return *p[i].LastSeenAt > *p[j].LastSeenAt
+		}
+		return false
+	})
 }
 
 // attributeARP records which device's ARP table resolved the IP→MAC mapping and
@@ -533,7 +764,6 @@ func (e *Engine) buildPath(ctx context.Context, res *SearchResult) []PathStep {
 
 	// Access switch hop (first, access-sorted entry).
 	acc := res.SwitchPort[0]
-	v := acc.VLANID
 	src := "mac"
 	if acc.Source != nil {
 		src = *acc.Source
@@ -541,7 +771,13 @@ func (e *Engine) buildPath(ctx context.Context, res *SearchResult) []PathStep {
 	accStep := PathStep{
 		Hop: hop, Role: "access",
 		DeviceID: &acc.SwitchID, DeviceName: &acc.SwitchName, IP: acc.SwitchIP,
-		IfIndex: acc.IfIndex, IfName: acc.IfName, VLANID: &v, PortRole: acc.PortRole, Source: &src,
+		IfIndex: acc.IfIndex, IfName: acc.IfName, PortRole: acc.PortRole, Source: &src,
+	}
+	if acc.UntaggedVLAN != nil { // authoritative native/access VLAN from the port config
+		accStep.VLANID = acc.UntaggedVLAN
+	} else if acc.VLANID > 0 && !acc.VLANSuspect { // else FDB VLAN, only if it's a real VLAN
+		v := acc.VLANID
+		accStep.VLANID = &v
 	}
 	steps = append(steps, accStep)
 	hop++
@@ -628,6 +864,158 @@ func roleForCategory(cat string) (string, int) {
 	default:
 		return "uplink", 3
 	}
+}
+
+// wirelessAssociation resolves a search term (IP / MAC / hostname) to an associated
+// Wi-Fi client and the AP + controller it is on. Returns nil when the term is not a
+// wireless client with a known AP — in which case the normal wired path applies.
+func (e *Engine) wirelessAssociation(ctx context.Context, term string) *WirelessTrace {
+	if strings.TrimSpace(term) == "" {
+		return nil
+	}
+	rows, err := e.q.FindWirelessClient(ctx, term)
+	if err != nil || len(rows) == 0 {
+		return nil
+	}
+	c := rows[0]
+	wt := &WirelessTrace{ClientMAC: c.Mac, APName: c.ApName, RSSI: c.Rssi}
+	if c.Ip != "" {
+		ip := c.Ip
+		wt.ClientIP = &ip
+	}
+	if c.Hostname != "" {
+		h := c.Hostname
+		wt.Hostname = &h
+	}
+	if c.Ssid != "" {
+		s := c.Ssid
+		wt.SSID = &s
+	}
+	if c.Band != "" {
+		b := c.Band
+		wt.Band = &b
+	}
+	cid := c.ControllerDeviceID
+	wt.ControllerDeviceID = &cid
+	wt.ControllerName = c.ControllerName
+	// Resolve the AP row for its MAC/IP, used to find its wired uplink via the FDB.
+	if ap, aerr := e.q.GetAccessPointByName(ctx, db.GetAccessPointByNameParams{
+		ControllerDeviceID: c.ControllerDeviceID, Name: c.ApName,
+	}); aerr == nil {
+		wt.APMAC = ap.Mac
+		if ap.Ip != "" {
+			apip := ap.Ip
+			wt.APIP = &apip
+		}
+	}
+	return wt
+}
+
+// buildWirelessPath assembles a Wi-Fi endpoint's path: client → AP → controller →
+// (the AP's wired uplink switch, resolved from the AP's MAC via the FDB) → upstream
+// walk to the edge. The AP→switch hop is FDB-derived (the only signal available); if
+// the AP's MAC is not learned on any switch, it falls back to the client's own FDB
+// match, and if neither resolves the path stops at the controller (flagged in the
+// confidence reasons).
+func (e *Engine) buildWirelessPath(ctx context.Context, res *SearchResult) []PathStep {
+	w := res.Wireless
+	if w == nil {
+		return e.buildPath(ctx, res)
+	}
+	steps := []PathStep{}
+	hop := 0
+	wsrc := "wireless"
+
+	// Endpoint: the wireless client.
+	client := PathStep{Hop: hop, Role: "wireless_client", IP: w.ClientIP, Source: &wsrc}
+	if w.Hostname != nil {
+		client.DeviceName = w.Hostname
+	}
+	steps = append(steps, client)
+	hop++
+
+	// AP hop (where the client gets the network).
+	apName := w.APName
+	ap := PathStep{Hop: hop, Role: "ap", DeviceName: &apName, IP: w.APIP, Source: &wsrc}
+	steps = append(steps, ap)
+	hop++
+
+	// Controller hop (the managed wireless controller device).
+	if w.ControllerDeviceID != nil {
+		ctrl := PathStep{Hop: hop, Role: "wireless_controller", DeviceID: w.ControllerDeviceID, DeviceName: w.ControllerName, Source: &wsrc}
+		steps = append(steps, ctrl)
+		hop++
+	}
+
+	// Wired uplink: the switch port that learned the AP's MAC (FDB). Fall back to the
+	// client's own FDB match (already resolved by the caller) when the AP MAC isn't
+	// in any switch table.
+	var ports []SwitchPortEntry
+	if w.APMAC != nil && *w.APMAC != "" {
+		ports = e.macToPort(ctx, strings.ToLower(*w.APMAC))
+	}
+	if len(ports) == 0 {
+		ports = res.SwitchPort
+	}
+	if len(ports) > 0 {
+		res.SwitchPort = ports
+		acc := ports[0]
+		msrc := "mac"
+		if acc.Source != nil {
+			msrc = *acc.Source
+		}
+		accStep := PathStep{
+			Hop: hop, Role: "access",
+			DeviceID: &acc.SwitchID, DeviceName: &acc.SwitchName, IP: acc.SwitchIP,
+			IfIndex: acc.IfIndex, IfName: acc.IfName, PortRole: acc.PortRole, Source: &msrc,
+		}
+		if acc.UntaggedVLAN != nil { // authoritative native/access VLAN from the port config
+			accStep.VLANID = acc.UntaggedVLAN
+		} else if acc.VLANID > 0 && !acc.VLANSuspect { // else FDB VLAN, only if it's a real VLAN
+			v := acc.VLANID
+			accStep.VLANID = &v
+		}
+		steps = append(steps, accStep)
+		hop++
+
+		// Walk upstream from the access switch toward the edge.
+		visited := map[uuid.UUID]bool{acc.SwitchID: true}
+		cur := acc.SwitchID
+		for i := 0; i < 6; i++ {
+			next, role, ok := e.nextUpstream(ctx, cur, visited)
+			if !ok {
+				break
+			}
+			visited[next.DeviceID] = true
+			steps = append(steps, PathStep{
+				Hop: hop, Role: role,
+				DeviceID: &next.DeviceID, DeviceName: &next.DeviceName, IP: next.IP,
+				IfName: next.LocalIfName, Source: &next.Source,
+			})
+			hop++
+			cur = next.DeviceID
+			if role == "firewall" || role == "gateway" {
+				break
+			}
+		}
+	}
+	return steps
+}
+
+// applyWirelessConfidence augments the confidence reasons for a wireless trace and
+// ensures a located client+AP is never reported as "none".
+func applyWirelessConfidence(res *SearchResult) {
+	if res.Wireless == nil {
+		return
+	}
+	reasons := []string{"Endpoint is a Wi-Fi client associated to AP " + res.Wireless.APName + " — the path starts at the access point."}
+	if len(res.SwitchPort) == 0 {
+		reasons = append(reasons, "AP wired uplink not found in any switch MAC table — showing client → AP → controller only.")
+		if res.Confidence == "" || res.Confidence == "none" {
+			res.Confidence = "low"
+		}
+	}
+	res.ConfidenceReasons = append(reasons, res.ConfidenceReasons...)
 }
 
 // assessConfidence rates how trustworthy the resolved path is, with reasons.
@@ -767,4 +1155,189 @@ func (e *Engine) RebuildAll(ctx context.Context, deviceIDs []uuid.UUID) (devices
 		linksBuilt += n
 	}
 	return devicesProcessed, linksBuilt
+}
+
+// fdbFabricCats are the device classes that form the switched fabric. FDB-based
+// link inference only connects these to each other — endpoints, servers, APs
+// etc. that merely appear in a forwarding table must not become topology nodes.
+var fdbFabricCats = map[string]bool{"switch": true, "router": true, "isp_router": true}
+
+// fdbEdgePortMaxMACs caps how many MAC addresses a port may carry to be treated
+// as a DIRECT edge / point-to-point attachment in FDB inference. Above this the
+// port is an aggregation trunk where the device is merely *downstream*, not
+// directly attached — those are skipped so the map isn't polluted with guessed
+// transit links. (Real edge/access ports carry a handful to a few dozen MACs;
+// uplinks/trunks carry hundreds.)
+const fdbEdgePortMaxMACs = 64
+
+// normMAC lowercases a MAC and strips any separators so values from different
+// sources/vendors (aa:bb:.., AA-BB-.., aabb..) compare equal.
+func normMAC(s string) string {
+	var b strings.Builder
+	b.Grow(12)
+	for _, r := range s {
+		switch {
+		case r >= '0' && r <= '9', r >= 'a' && r <= 'f':
+			b.WriteRune(r)
+		case r >= 'A' && r <= 'F':
+			b.WriteRune(r + 32)
+		}
+	}
+	return b.String()
+}
+
+// fdbPairKey returns an order-independent key for an unordered device pair.
+func fdbPairKey(a, b uuid.UUID) [2]uuid.UUID {
+	if a.String() > b.String() {
+		a, b = b, a
+	}
+	return [2]uuid.UUID{a, b}
+}
+
+// fdbCand is one observation "switch S learned device D's MAC on port P, and P
+// carries macCount MACs in total".
+type fdbCand struct {
+	switchID uuid.UUID
+	ifIndex  *int32
+	ifName   *string
+	macCount int64
+}
+
+// InferLinksFromFDB derives vendor-neutral switch-to-switch topology links from
+// the bridge MAC forwarding tables (FDB/CAM), filling the gaps LLDP/CDP can't —
+// notably cross-vendor uplinks (e.g. a Cisco access switch on an Aruba/HPE port)
+// where the two ends speak different neighbor-discovery protocols and never see
+// each other.
+//
+// For every fabric device D, each switch S whose FDB learned one of D's
+// interface MACs is a candidate; D is taken to attach directly to the S whose
+// port-toward-D carries the FEWEST MACs (the closest, edge-like port). Trunk
+// ports (high fan-out — D is merely downstream) and pairs already connected by
+// authoritative LLDP/CDP are skipped, so this only adds genuine, edge-like links
+// and never overrides protocol evidence. Stored with link_source='mac'; the
+// graph rates these medium-confidence. Returns the number of links upserted.
+func (e *Engine) InferLinksFromFDB(ctx context.Context) (int, error) {
+	devs, err := e.q.ListAllDevices(ctx)
+	if err != nil {
+		return 0, err
+	}
+	nameByID := make(map[uuid.UUID]string, len(devs))
+	isFabric := make(map[uuid.UUID]bool, len(devs))
+	for _, d := range devs {
+		nameByID[d.ID] = d.Name
+		if fdbFabricCats[d.Category] {
+			isFabric[d.ID] = true
+		}
+	}
+
+	// MAC → owning fabric device (only fabric MACs, so endpoints never link).
+	ownerRows, err := e.q.ListFabricInterfaceMACs(ctx)
+	if err != nil {
+		return 0, err
+	}
+	macOwner := make(map[string]uuid.UUID, len(ownerRows))
+	for _, r := range ownerRows {
+		if r.Mac == nil {
+			continue
+		}
+		if nm := normMAC(*r.Mac); len(nm) == 12 {
+			macOwner[nm] = r.DeviceID
+		}
+	}
+
+	// Pairs already connected by authoritative LLDP/CDP — never override these.
+	authPair := map[[2]uuid.UUID]bool{}
+	allLinks, err := e.q.ListAllTopologyLinks(ctx)
+	if err != nil {
+		return 0, err
+	}
+	for _, l := range allLinks {
+		if l.RemoteDeviceID != nil && (l.LinkSource == "lldp" || l.LinkSource == "cdp") {
+			authPair[fdbPairKey(l.LocalDeviceID, *l.RemoteDeviceID)] = true
+		}
+	}
+
+	// For each fabric switch S, find — per target device — the smallest-fan-out
+	// port of S that learned that target's MAC.
+	candidates := map[uuid.UUID][]fdbCand{} // target device → candidate attach points
+	for _, d := range devs {
+		if !isFabric[d.ID] {
+			continue
+		}
+		counts, cerr := e.q.MACCountByPort(ctx, d.ID)
+		if cerr != nil {
+			continue
+		}
+		portCount := map[int32]int64{}
+		for _, c := range counts {
+			if c.IfIndex != nil {
+				portCount[*c.IfIndex] = c.MacCount
+			}
+		}
+		fdb, ferr := e.q.ListMACForDevice(ctx, d.ID)
+		if ferr != nil {
+			continue
+		}
+		best := map[uuid.UUID]fdbCand{} // target → smallest port on THIS switch
+		for _, m := range fdb {
+			if m.IfIndex == nil {
+				continue
+			}
+			owner, ok := macOwner[normMAC(m.Mac)]
+			if !ok || owner == d.ID || !isFabric[owner] {
+				continue
+			}
+			cnt := portCount[*m.IfIndex]
+			if cur, seen := best[owner]; !seen || cnt < cur.macCount {
+				best[owner] = fdbCand{switchID: d.ID, ifIndex: m.IfIndex, ifName: m.IfName, macCount: cnt}
+			}
+		}
+		for owner, c := range best {
+			candidates[owner] = append(candidates[owner], c)
+		}
+	}
+
+	// Pick, per target, the closest switch (fewest MACs on the port toward it),
+	// then dedupe reciprocal observations of the same physical link — keeping the
+	// end whose port has the smaller fan-out, which best attributes the port.
+	chosen := map[[2]uuid.UUID]db.UpsertTopologyLinkParams{}
+	chosenCnt := map[[2]uuid.UUID]int64{}
+	for target, cands := range candidates {
+		best := cands[0]
+		for _, c := range cands[1:] {
+			if c.macCount < best.macCount {
+				best = c
+			}
+		}
+		if best.macCount > fdbEdgePortMaxMACs {
+			continue // only edge-like (point-to-point/access) attachments
+		}
+		pk := fdbPairKey(best.switchID, target)
+		if authPair[pk] {
+			continue // already proven by LLDP/CDP
+		}
+		if prev, ok := chosenCnt[pk]; ok && prev <= best.macCount {
+			continue // a stronger (lower fan-out) observation already won this pair
+		}
+		name := nameByID[target]
+		tgt := target
+		chosen[pk] = db.UpsertTopologyLinkParams{
+			LocalDeviceID:  best.switchID,
+			LocalIfIndex:   best.ifIndex,
+			LocalIfName:    best.ifName,
+			RemoteDeviceID: &tgt,
+			RemoteSysName:  &name,
+			LinkSource:     "mac",
+			LastSeenAt:     time.Now().UTC(),
+		}
+		chosenCnt[pk] = best.macCount
+	}
+
+	built := 0
+	for _, arg := range chosen {
+		if err := e.q.UpsertTopologyLink(ctx, arg); err == nil {
+			built++
+		}
+	}
+	return built, nil
 }

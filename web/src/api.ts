@@ -169,6 +169,98 @@ export interface Device {
   classification_locked?: boolean // manual identity lock — scans won't overwrite
   manual_classification_reason?: string
   confidence_score?: number | null
+  is_virtual?: boolean // operator-entered placeholder (not auto-discovered/probed)
+}
+
+// Virtual device create/import payloads — operator-entered placeholders for gear
+// HIMS can't integrate with. The full config is stored in the same tables a real
+// collection fills, so the device renders everywhere with a "virtual" badge.
+export interface VirtualPort {
+  if_index: number
+  name?: string
+  alias?: string
+  up?: boolean
+  admin_down?: boolean
+  speed_mbps?: number
+  vlan?: number
+  trunk_vlans?: number[]
+  role?: string // access | trunk | uplink | unknown
+  mac?: string
+}
+export interface VirtualVlan { id: number; name?: string }
+export interface VirtualNeighbor {
+  local_port?: string
+  local_if_index?: number
+  remote_name?: string
+  remote_port?: string
+  remote_mgmt_ip?: string
+  protocol?: string // lldp | cdp | manual
+}
+export interface VirtualMac { mac: string; vlan?: number; if_index?: number }
+export interface VirtualNic { name?: string; mac?: string; ip?: string; gateway?: string; dns?: string; zone?: string; speed_mbps?: number }
+export interface VirtualDisk { name?: string; model?: string; filesystem?: string; total_bytes?: number; used_bytes?: number; free_bytes?: number }
+export interface VirtualSoftware { name?: string; version?: string; publisher?: string }
+export interface VirtualVpn { name?: string; p1_name?: string; remote_gw?: string; status?: string }
+export interface VirtualHA { serial?: string; hostname?: string; sync_status?: string }
+export interface VirtualLicense { contract?: string; expiry?: string }
+export interface VirtualFirewall { ha_mode?: string; ha_group_name?: string; session_count?: number }
+export interface VirtualWlan { vendor?: string; version?: string; controller_name?: string; model?: string; serial?: string }
+export interface VirtualAP { name?: string; mac?: string; model?: string; ip?: string; status?: string; serial?: string; band?: string; site?: string }
+export interface VirtualSSID { name?: string; security?: string; band?: string; vlan?: string; status?: string }
+export interface VirtualClient { mac?: string; ip?: string; hostname?: string; ap_name?: string; ssid?: string; band?: string }
+export interface VirtualUPS { manufacturer?: string; model?: string; battery_status?: string; charge_pct?: number; runtime_min?: number; load_pct?: number }
+
+export interface VirtualDeviceReq {
+  name: string
+  category: string
+  vendor?: string
+  model?: string
+  serial?: string
+  os_version?: string
+  hostname?: string
+  primary_ip?: string
+  location_id?: string | null
+  vlan?: string
+  class?: string
+  status?: string // up | down | warning | unknown
+  site?: string
+  notes?: string
+  criticality?: string
+  // switch / generic L2
+  ports?: VirtualPort[]
+  vlans?: VirtualVlan[]
+  neighbors?: VirtualNeighbor[]
+  macs?: VirtualMac[]
+  // server / workstation
+  nics?: VirtualNic[]
+  disks?: VirtualDisk[]
+  roles?: string[]
+  software?: VirtualSoftware[]
+  // firewall
+  firewall?: VirtualFirewall
+  vpn_tunnels?: VirtualVpn[]
+  ha_members?: VirtualHA[]
+  licenses?: VirtualLicense[]
+  // wireless controller
+  wlan?: VirtualWlan
+  aps?: VirtualAP[]
+  ssids?: VirtualSSID[]
+  clients?: VirtualClient[]
+  // ups
+  ups?: VirtualUPS
+  // scalar specs / notes (cpu, ram, capacity, …)
+  facts?: Record<string, string>
+}
+
+// Multi-device Excel import report (per-row errors + counts).
+export interface VirtualImportError { sheet: string; row: number; field?: string; message: string }
+export interface VirtualImportReport {
+  created: number
+  updated: number
+  skipped: number
+  failed: number
+  devices?: string[]
+  errors?: VirtualImportError[]
 }
 
 // Fleet rollup (GET /devices/status-summary) — Online and Managed kept separate.
@@ -191,6 +283,7 @@ export const REACH_BADGE: Record<string, { label: string; cls: string }> = {
 export const MGMT_BADGE: Record<string, { label: string; cls: string }> = {
   managed: { label: 'Managed', cls: 'badge-up' },
   partially_managed: { label: 'Partially managed', cls: 'badge-warning' },
+  virtual: { label: 'Manual', cls: 'badge-virtual' },
   unmanaged: { label: 'Unmanaged', cls: 'badge-unknown' },
   needs_credential: { label: 'Needs credential', cls: 'badge-warning' },
   credential_failed: { label: 'Credential failed', cls: 'badge-down' },
@@ -280,8 +373,8 @@ export interface Neighbor {
 }
 
 export interface TopologyLink {
-  local_device_id: string
-  local_device_name: string
+  local_device_id?: string
+  local_device_name?: string
   local_ip?: string | null
   local_if_index?: number | null
   local_if_name?: string | null
@@ -289,7 +382,14 @@ export interface TopologyLink {
   remote_device_name?: string | null
   remote_ip?: string | null
   remote_sys_name?: string | null
+  remote_vendor?: string | null
+  remote_category?: string | null
+  remote_port?: string | null
+  // inbound=true: link was derived from the neighbour's side (e.g. a MAC/FDB
+  // cross-vendor uplink); this device's own local port is unknown.
+  inbound?: boolean
   link_source: string
+  last_seen_at?: string
 }
 
 export interface TopologyGraphNode {
@@ -319,10 +419,19 @@ export interface SwitchPortEntry {
   switch_ip?: string | null
   if_index?: number | null
   if_name?: string | null
+  if_alias?: string | null // port description (e.g. "ROOM_4105_AP")
   vlan_id: number
+  // Authoritative per-port VLAN membership (from the switch's port-VLAN table).
+  untagged_vlan?: number | null // native/access VLAN
+  untagged_vlan_name?: string | null
+  tagged_vlans?: number[] | null // trunked VLANs
+  vlan_configured?: boolean // FDB VLAN is a real 802.1Q VLAN configured on the switch
+  vlan_suspect?: boolean // switch HAS VLANs but this FDB VLAN isn't one (FdbId artifact)
+  vlan_name?: string | null // configured VLAN name when known
   port_role?: string | null
   source?: string | null
   last_seen_at?: string | null
+  mac_count?: number | null // MACs learned on this port (low = true edge attachment)
 }
 
 export interface SearchResult {
@@ -339,8 +448,14 @@ export interface SearchResult {
   arp_last_seen?: string | null
   confidence: string
   confidence_reasons: string[]
+  // Set only when the searched endpoint is a Wi-Fi client: the path then starts at
+  // the AP the client is associated to (client → AP → controller → wired uplink).
+  wireless?: WirelessTrace | null
 }
 
+// PathStep.role values:
+//   wireless_client | ap | wireless_controller | endpoint | access | uplink |
+//   distribution | core | gateway | firewall
 export interface PathStep {
   hop: number
   role: string
@@ -352,6 +467,43 @@ export interface PathStep {
   vlan_id?: number | null
   port_role?: string | null
   source?: string | null
+}
+
+// A searched endpoint's wireless association (client → AP → controller).
+export interface WirelessTrace {
+  client_mac?: string
+  client_ip?: string | null
+  hostname?: string | null
+  ssid?: string | null
+  band?: string | null
+  rssi?: number | null
+  ap_name?: string
+  ap_mac?: string | null
+  ap_ip?: string | null
+  controller_device_id?: string | null
+  controller_name?: string | null
+}
+
+// Unified global-search hit — a MAC/IP/name observed anywhere (access point,
+// wireless client, bridge FDB, ARP table) linked back to the device that owns it.
+export interface EntityHit {
+  kind: 'access_point' | 'wireless_client' | 'fdb' | 'arp'
+  title: string
+  subtitle: string
+  ip?: string
+  mac?: string
+  device_id?: string
+  device_name?: string
+  device_category?: string
+}
+
+export interface SearchEntities {
+  query: string
+  total: number
+  access_points: EntityHit[]
+  wireless_clients: EntityHit[]
+  fdb: EntityHit[]
+  arp: EntityHit[]
 }
 
 export interface ServerStorage {
@@ -575,6 +727,10 @@ export interface DiscoveryJob {
   scanned_count?: number // hosts processed so far (drives the 0→100% scan progress bar)
   error?: string | null
   created_at: string
+  // What was scanned, decoded from the job's saved scan spec (metadata):
+  mode?: string // 'targets' | 'site_subnets' | ''
+  targets?: string // raw target list (IP / range / CIDR / mixed) for target-mode scans
+  scope?: string // human-readable scope label (targets || scope_cidr || 'site subnets' || 'import / manual')
 }
 
 export interface ScanCredAttempt { kind: string; protocol: string; category: string; detail: string; success: boolean; relevant?: boolean }
@@ -1102,6 +1258,15 @@ export interface MonitoringCheck {
   last_status: string
   last_latency_ms?: number | null
   consecutive_failures: number
+  // 'reachability' = drives the device's online/offline status + inventory
+  // counts; 'supplemental' = an extra port/metric check (polled + shown, but
+  // never flips the device offline).
+  role?: string
+  // Present on the global checks list (GET /monitoring/checks), which joins the
+  // device so each check is identified by name/IP, not just a bare port.
+  device_name?: string
+  device_ip?: string | null
+  device_category?: string
 }
 
 export interface MonitoringSample {
@@ -1743,4 +1908,68 @@ export interface AgentJob {
   category?: string
   error?: string
   created_at: string
+}
+
+// ---- Analytics (historical trend/time-series) ----------------------------
+export interface AvailabilityPoint {
+  ts: string
+  total: number
+  up: number
+  down: number
+  warning: number
+  uptime_pct: number
+  avg_latency_ms: number | null
+  p95_latency_ms: number | null
+}
+export interface AvailabilitySummary {
+  samples: number
+  up: number
+  down: number
+  warning: number
+  devices: number
+  uptime_pct: number
+  avg_latency_ms: number | null
+  p95_latency_ms: number | null
+}
+export interface AvailabilityAnalytics {
+  window: string
+  bucket: string
+  summary: AvailabilitySummary
+  series: AvailabilityPoint[]
+}
+export interface DeviceUptime {
+  device_id: string
+  name: string
+  primary_ip: string | null
+  category: string
+  samples: number
+  up: number
+  uptime_pct: number
+  avg_latency_ms: number | null
+  max_latency_ms: number | null
+  flaps: number
+}
+export interface AlertAnalytics {
+  window: string
+  bucket: string
+  opened: number
+  resolved: number
+  open_now: number
+  open_critical: number
+  mtta_seconds: number | null
+  mttr_seconds: number | null
+  series: { ts: string; opened: number; critical: number; warning: number }[]
+}
+// Per-site rollup from GET /sites/overview.
+export interface SiteRollup {
+  site_id: string
+  site_name: string
+  kind: string
+  devices: number
+  up: number
+  down: number
+  warning: number
+  unknown: number
+  open_alerts: number
+  by_category: Record<string, number>
 }

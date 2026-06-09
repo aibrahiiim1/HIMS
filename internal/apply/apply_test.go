@@ -26,6 +26,8 @@ type fakeWriter struct {
 	facts      []db.UpsertDeviceFactParams
 	ifaces     []db.UpsertInterfaceParams
 	vlans      []db.UpsertVlanParams
+	portVlans  []db.UpsertPortVlanParams
+	arp        []db.UpsertARPParams
 	neighbors  []db.UpsertNeighborParams
 	bmcInfo    []db.UpsertBMCInfoParams
 	bmcSensors []db.UpsertBMCSensorParams
@@ -81,10 +83,22 @@ func (f *fakeWriter) DeleteStaleVlans(_ context.Context, _ db.DeleteStaleVlansPa
 	f.staleCalls++
 	return nil
 }
+func (f *fakeWriter) UpsertPortVlan(_ context.Context, arg db.UpsertPortVlanParams) error {
+	f.portVlans = append(f.portVlans, arg)
+	return nil
+}
+func (f *fakeWriter) DeleteStalePortVlans(_ context.Context, _ db.DeleteStalePortVlansParams) error {
+	return nil
+}
 func (f *fakeWriter) UpsertMAC(_ context.Context, _ db.UpsertMACParams) error { return nil }
 func (f *fakeWriter) DeleteStaleMACEntries(_ context.Context, _ db.DeleteStaleMACEntriesParams) error {
 	return nil
 }
+func (f *fakeWriter) UpsertARP(_ context.Context, arg db.UpsertARPParams) error {
+	f.arp = append(f.arp, arg)
+	return nil
+}
+func (f *fakeWriter) DeleteStaleARP(_ context.Context, _ db.DeleteStaleARPParams) error { return nil }
 func (f *fakeWriter) UpsertNeighbor(_ context.Context, arg db.UpsertNeighborParams) (db.Neighbor, error) {
 	f.neighbors = append(f.neighbors, arg)
 	return db.Neighbor{}, nil
@@ -196,6 +210,7 @@ func switchResult() discovery.HostResult {
 			Interfaces: []driver.InterfaceSnap{{IfIndex: 1, IfName: "1/1/1", PortRole: "access"}, {IfIndex: 2, IfName: "1/1/2"}},
 			VLANs:      []driver.VLANSnap{{VLANID: 10, Name: "guests"}},
 			Neighbors:  []driver.NeighborSnap{{LocalIfIndex: 1, RemSysName: "core", Protocol: "lldp"}},
+			ARP:        []driver.ARPSnap{{IP: "10.0.0.50", MAC: "aa:bb:cc:dd:ee:ff", IfIndex: 1}, {IP: "bad-ip", MAC: "00:00:00:00:00:01"}},
 		},
 	}
 }
@@ -221,6 +236,10 @@ func TestApply_CreatePathPersistsEverything(t *testing.T) {
 	}
 	if len(f.ifaces) != 2 || len(f.vlans) != 1 || len(f.neighbors) != 1 {
 		t.Fatalf("inventory not persisted: ifaces=%d vlans=%d neighbors=%d", len(f.ifaces), len(f.vlans), len(f.neighbors))
+	}
+	// ARP: the valid binding persists; the malformed IP is skipped (not 2).
+	if len(f.arp) != 1 || f.arp[0].Mac != "aa:bb:cc:dd:ee:ff" || f.arp[0].IpAddress.String() != "10.0.0.50" {
+		t.Fatalf("ARP not persisted/parsed correctly: %+v", f.arp)
 	}
 	if len(f.facts) != 1 {
 		t.Fatalf("KV facts not persisted: %+v", f.facts)

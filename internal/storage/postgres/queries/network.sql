@@ -215,3 +215,32 @@ GROUP BY if_index;
 -- name: MaxNeighborSeenAt :one
 -- Freshness of the most recent LLDP/CDP neighbor observation (topology age).
 SELECT MAX(last_seen_at)::timestamptz AS max_seen FROM neighbors;
+
+-- name: ListFabricInterfaceMACs :many
+-- Every interface MAC belonging to a topology-capable fabric device (switch /
+-- router / ISP router). Used to map an observed FDB MAC back to the device that
+-- owns it, for vendor-neutral L2 link inference (FDB-based topology).
+SELECT i.device_id, i.mac
+FROM interfaces i
+JOIN devices d ON d.id = i.device_id AND d.deleted_at IS NULL
+WHERE i.mac IS NOT NULL AND i.mac <> ''
+  AND d.category IN ('switch', 'router', 'isp_router');
+
+-- name: ListDeviceLinksBidirectional :many
+-- All topology links touching a device from EITHER endpoint, with both ends
+-- enriched (name/ip/vendor/category) and an `inbound` flag set when the device
+-- is the link's remote side. The handler normalizes this so the per-device
+-- Topology tab always shows the OTHER device — including links that point AT it
+-- (e.g. a MAC/FDB-derived cross-vendor uplink stored from the neighbour's side).
+SELECT tl.id,
+       tl.local_device_id, tl.local_if_index, tl.local_if_name,
+       tl.remote_device_id, tl.remote_sys_name, tl.remote_ip,
+       tl.link_source, tl.last_seen_at,
+       (tl.local_device_id <> $1) AS inbound,
+       ld.name AS local_name, ld.primary_ip AS local_dev_ip, ld.vendor AS local_vendor, ld.category AS local_category,
+       rd.name AS remote_name, rd.primary_ip AS remote_dev_ip, rd.vendor AS remote_vendor, rd.category AS remote_category
+FROM topology_links tl
+JOIN devices ld ON ld.id = tl.local_device_id AND ld.deleted_at IS NULL
+LEFT JOIN devices rd ON rd.id = tl.remote_device_id AND rd.deleted_at IS NULL
+WHERE tl.local_device_id = $1 OR tl.remote_device_id = $1
+ORDER BY tl.local_if_index NULLS LAST;

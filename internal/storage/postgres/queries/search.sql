@@ -27,6 +27,109 @@ LEFT JOIN arp_entries a ON a.mac = m.mac
 WHERE m.mac = $1
 ORDER BY m.last_seen_at DESC;
 
+-- name: SearchAccessPoints :many
+-- Global-search: access points by name / MAC / IP / serial / model. Returns the
+-- owning controller so an AP MAC or IP found anywhere resolves to a device.
+SELECT ap.controller_device_id, d.name AS controller_name, d.category AS controller_category,
+       ap.name, ap.mac, ap.model, host(ap.ip)::text AS ip, ap.site, ap.status
+FROM access_points ap
+LEFT JOIN devices d ON d.id = ap.controller_device_id AND d.deleted_at IS NULL
+WHERE ap.name ILIKE '%'||$1||'%'
+   OR COALESCE(ap.mac,'') ILIKE '%'||$1||'%'
+   OR COALESCE(ap.serial,'') ILIKE '%'||$1||'%'
+   OR COALESCE(ap.model,'') ILIKE '%'||$1||'%'
+   OR COALESCE(host(ap.ip),'') ILIKE '%'||$1||'%'
+ORDER BY ap.name
+LIMIT 30;
+
+-- name: SearchWirelessClients :many
+-- Global-search: associated wireless clients by MAC / IP / hostname / SSID / AP.
+SELECT wc.controller_device_id, d.name AS controller_name, d.category AS controller_category,
+       wc.mac, wc.ip, wc.hostname, wc.ap_name, wc.ssid, wc.band
+FROM wireless_clients wc
+LEFT JOIN devices d ON d.id = wc.controller_device_id AND d.deleted_at IS NULL
+WHERE wc.mac ILIKE '%'||$1||'%'
+   OR wc.ip ILIKE '%'||$1||'%'
+   OR wc.hostname ILIKE '%'||$1||'%'
+   OR wc.ssid ILIKE '%'||$1||'%'
+   OR wc.ap_name ILIKE '%'||$1||'%'
+ORDER BY wc.hostname, wc.mac
+LIMIT 30;
+
+-- name: SearchFdbMacs :many
+-- Global-search: learned MAC addresses (bridge FDB) by MAC — which switch + port
+-- a MAC was seen on, anywhere in the fabric.
+SELECT m.device_id, d.name AS device_name, d.category AS device_category,
+       m.mac, m.vlan_id, m.if_index, i.if_name, i.if_alias, m.last_seen_at
+FROM mac_addresses m
+JOIN devices d ON d.id = m.device_id AND d.deleted_at IS NULL
+LEFT JOIN interfaces i ON i.device_id = m.device_id AND i.if_index = m.if_index
+WHERE m.mac ILIKE '%'||$1||'%'
+ORDER BY m.last_seen_at DESC
+LIMIT 40;
+
+-- name: SearchArpEntries :many
+-- Global-search: ARP table (IP↔MAC) by IP or MAC — which L3 device resolved an IP.
+SELECT a.device_id, d.name AS device_name, d.category AS device_category,
+       host(a.ip_address)::text AS ip, a.mac, a.if_index, a.last_seen_at
+FROM arp_entries a
+JOIN devices d ON d.id = a.device_id AND d.deleted_at IS NULL
+WHERE host(a.ip_address) ILIKE '%'||$1||'%' OR a.mac ILIKE '%'||$1||'%'
+ORDER BY a.last_seen_at DESC
+LIMIT 40;
+
+-- name: FindWirelessClient :many
+-- Path Finder: exact-match a search term (MAC / IP / hostname) to an associated
+-- wireless client that has a known AP, so the traced path can START at the access
+-- point the client is connected to. Exact (not substring) match avoids tracing an
+-- unrelated client. Only rows with a known ap_name qualify (we need an AP to start
+-- at; without one the normal FDB path still applies).
+SELECT wc.controller_device_id, d.name AS controller_name,
+       wc.mac, wc.ip, wc.hostname, wc.ap_name, wc.ssid, wc.band, wc.rssi
+FROM wireless_clients wc
+LEFT JOIN devices d ON d.id = wc.controller_device_id AND d.deleted_at IS NULL
+WHERE wc.ap_name <> ''
+  AND ( lower(wc.mac) = lower($1)
+     OR wc.ip = $1
+     OR (wc.hostname <> '' AND lower(wc.hostname) = lower($1)) )
+ORDER BY wc.collected_at DESC
+LIMIT 5;
+
+-- name: GetAccessPointByName :one
+-- Path Finder: the AP a wireless client is associated to (scoped to its
+-- controller), to read the AP's MAC/IP and resolve its wired uplink switch via the
+-- FDB.
+SELECT ap.id, ap.name, ap.mac, COALESCE(host(ap.ip), '')::text AS ip, ap.model, ap.status
+FROM access_points ap
+WHERE ap.controller_device_id = $1 AND ap.name = $2
+LIMIT 1;
+
+-- name: ResolveIPToMAC :many
+-- Path Finder fallback for when the ARP table is empty/sparse: resolve an IP to a
+-- MAC (and an identity) from the wireless-client roster and the AP inventory, so a
+-- wireless endpoint's IP still traces to its switch port via the FDB. Clients are
+-- preferred over APs ($1 = IP as text).
+SELECT mac, source, device_id, device_name
+FROM (
+    SELECT wc.mac AS mac,
+           'wireless_client'::text AS source,
+           wc.controller_device_id AS device_id,
+           COALESCE(NULLIF(wc.hostname, ''), wc.mac) AS device_name,
+           1 AS pri
+    FROM wireless_clients wc
+    WHERE wc.ip = $1 AND wc.mac <> ''
+    UNION ALL
+    SELECT ap.mac AS mac,
+           'access_point'::text AS source,
+           ap.controller_device_id AS device_id,
+           ap.name AS device_name,
+           2 AS pri
+    FROM access_points ap
+    WHERE host(ap.ip) = $1 AND ap.mac IS NOT NULL
+) x
+ORDER BY pri
+LIMIT 5;
+
 -- name: CreateDiscoveryJob :one
 INSERT INTO discovery_jobs (location_id, subnet_id, scope_cidr, status)
 VALUES ($1, $2, $3, 'pending')
@@ -104,3 +207,15 @@ RETURNING seq;
 -- name: ListDiscoveryJobEvents :many
 SELECT seq, job_id, ip, device_id, stage, protocol, status, message, created_at
 FROM discovery_job_events WHERE job_id = $1 ORDER BY seq ASC LIMIT 5000;
+
+-- name: FailStaleScanJobs :execrows
+-- Reconcile orphaned scans: a scan runs as an in-process goroutine, so any job
+-- still 'running'/'pending' after a restart (or that hangs past a max duration)
+-- has no live worker and must be failed. $1 = cutoff (started/created before
+-- this), $2 = error message. Returns the number of jobs reconciled.
+UPDATE discovery_jobs
+SET status = 'failed',
+    finished_at = now(),
+    error = $2
+WHERE status IN ('running', 'pending')
+  AND COALESCE(started_at, created_at) < $1;
