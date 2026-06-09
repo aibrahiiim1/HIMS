@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Radar, Boxes, CircleX, Clock, KeyRound } from 'lucide-react'
@@ -214,6 +214,18 @@ function NetworkScan({ locations, locPath, creds, onLaunch, setMsg }: { location
   })
   const toggleCred = (id: string) => setCredIDs((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]))
 
+  // Lockout hint: the scan tries each selected ONVIF/HTTP-Basic credential on every
+  // camera/NVR in scope, so picking many of the same kind risks a Hikvision IP
+  // lockout on hosts where none match. Non-blocking — just informs.
+  const webOverLimit = useMemo(() => {
+    const byKind: Record<string, number> = {}
+    for (const id of credIDs) {
+      const c = creds.find((x) => x.id === id)
+      if (c && (c.kind === 'http_basic' || c.kind === 'onvif')) byKind[c.kind] = (byKind[c.kind] || 0) + 1
+    }
+    return Object.entries(byKind).filter(([, n]) => n > 3).map(([k, n]) => `${n} ${k}`)
+  }, [credIDs, creds])
+
   // Preflight: what protocols we're equipped to authenticate with for this scope.
   const preflight = useQuery({
     queryKey: ['scan-preflight', location, credIDs.join(',')],
@@ -246,6 +258,11 @@ function NetworkScan({ locations, locPath, creds, onLaunch, setMsg }: { location
       <div style={{ marginTop: 12 }}>
         <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Credentials to try</div>
         <CredentialPicker creds={creds} selected={credIDs} onChange={setCredIDs} toggle={toggleCred} />
+        {webOverLimit.length > 0 && (
+          <div style={{ fontSize: 12, marginTop: 6, color: 'var(--warn, #d97706)' }}>
+            ⚠ {webOverLimit.join(', ')} credentials selected — the scan tries each on every camera/NVR until one works, which can trip a Hikvision IP lockout on hosts where none match.
+          </div>
+        )}
       </div>
 
       {preflight.data && <ScanPreflightPanel pf={preflight.data} siteSelected={!!location} />}

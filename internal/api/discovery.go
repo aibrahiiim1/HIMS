@@ -426,6 +426,22 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 	}
 	applier := apply.New(s.queries)
 
+	// Web credentials selected for this scan (ONVIF / HTTP-Basic). CCTV collection
+	// tries EACH of these in turn on a camera/NVR/DVR — first success binds — so
+	// selecting several http_basic credentials actually tries all of them, not just
+	// one. (Mirrors how SNMP tries every selected community.) Empty ⇒ CCTV falls
+	// back to the device's bound/CCTV credential.
+	var scanWebCreds []uuid.UUID
+	seenWebCred := map[uuid.UUID]bool{}
+	for _, g := range extraGroups {
+		for _, m := range g.Members {
+			if (m.Kind == domain.CredONVIF || m.Kind == domain.CredHTTPBasic) && !seenWebCred[m.ID] {
+				seenWebCred[m.ID] = true
+				scanWebCreds = append(scanWebCreds, m.ID)
+			}
+		}
+	}
+
 	// --- Known-Device Retry: load the devices already in inventory for the IPs in
 	// this scan's scope. A known device that the main sweep misses (transient
 	// timeout under load) is retried separately and, if still gone, recorded as
@@ -681,14 +697,15 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 					} else {
 						profRes = &scanProfileResult{Resolved: false}
 						cctx, ccancel := context.WithTimeout(ctx, 90*time.Second)
-						cv := s.runCCTVCollection(cctx, dev, nil) // scan = bound-credential-only
+						// Try each operator-selected web credential (first success binds).
+						cv := s.runCCTVCollection(cctx, dev, scanWebCreds)
 						ccancel()
 						if cv.ok() {
-							enrichment = "ONVIF facts collected (" + cv.Category + ")"
+							enrichment = "CCTV collected (" + cv.Category + ") via " + cv.CredentialUsed
 						} else if cv.Reason == "no_credential" {
-							enrichment = "CCTV candidate — no profile configured; add a CCTV / ONVIF Vendor Connection Profile"
+							enrichment = "CCTV candidate — select an ONVIF/HTTP-Basic credential in the scan (or add a CCTV Vendor Connection Profile)"
 						} else {
-							enrichment = "ONVIF collection incomplete: " + cv.Reason
+							enrichment = "CCTV collection incomplete: " + cv.Reason
 						}
 					}
 				}
