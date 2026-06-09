@@ -358,6 +358,7 @@ tr:hover td { background: var(--surface-2); }
 .badge-down { background: var(--crit-bg); color: var(--crit); }
 .badge-warning { background: var(--warn-bg); color: var(--warn); }
 .badge-unknown { background: var(--neutral-bg); color: var(--neutral); }
+.badge-virtual { background: rgba(139, 92, 246, .15); color: #8b5cf6; }
 .badge-lldp { background: var(--info-bg); color: var(--info); }
 .badge-cdp { background: #fce4ec; color: #880e4f; }
 .badge-edge { background: #f3e5f5; color: #6a1b9a; }

@@ -66,14 +66,17 @@ export function DeviceHeader({ deviceId, icon: Icon = HardDrive, showCredential 
   const locs = useQuery({ queryKey: ['locations-all'], queryFn: () => api.get<Location[]>('/locations/all') })
   const locPath = useMemo(() => locationPaths(locs.data ?? []), [locs.data])
 
-  const deleteVirtual = async () => {
-    if (!window.confirm('Delete this virtual device?\n\nThis permanently removes the device and all its manually-entered ports, VLANs, neighbors, learned MACs and category-specific data. This cannot be undone.')) return
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const [deleteErr, setDeleteErr] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const doDelete = async () => {
+    setDeleting(true); setDeleteErr(null)
     try {
       await api.del(`/devices/${deviceId}`)
       qc.invalidateQueries({ queryKey: ['devices'] })
       nav('/inventory')
     } catch (e) {
-      alert((e as Error).message)
+      setDeleteErr((e as Error).message); setDeleting(false)
     }
   }
 
@@ -191,7 +194,7 @@ export function DeviceHeader({ deviceId, icon: Icon = HardDrive, showCredential 
           {d.is_virtual ? (
             <>
               <Link className="btn btn-primary btn-sm" to={`/devices/virtual/${deviceId}/edit`} title="Edit this virtual device's identity + configuration"><Pencil size={13} /> Edit virtual device</Link>
-              <button className="btn btn-danger btn-sm" onClick={deleteVirtual} title="Delete this virtual device and its manual ports/VLANs/neighbors/MACs"><Trash2 size={13} /> Delete</button>
+              <button className="btn btn-danger btn-sm" onClick={() => { setDeleteErr(null); setConfirmingDelete(true) }} title="Delete this virtual device and its manual ports/VLANs/neighbors/MACs"><Trash2 size={13} /> Delete</button>
             </>
           ) : (
             <>
@@ -211,6 +214,25 @@ export function DeviceHeader({ deviceId, icon: Icon = HardDrive, showCredential 
         {showCredential && !d.is_virtual && <div className="device-hero-cred"><CredentialBindSelect deviceId={deviceId} align="end" /></div>}
       </div>
       {editing && <EditDevice device={d} onClose={() => setEditing(false)} onSaved={() => qc.invalidateQueries({ queryKey: ['devices', 'all'] })} />}
+      {confirmingDelete && (
+        <div role="dialog" aria-modal="true" onClick={() => !deleting && setConfirmingDelete(false)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+          <div className="card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 480, width: '90%', padding: 20 }}>
+            <h2 style={{ margin: '0 0 8px', display: 'inline-flex', gap: 8, alignItems: 'center' }}><Trash2 size={18} /> Delete virtual device?</h2>
+            <p style={{ margin: '0 0 6px' }}>Delete <strong>{d.name}</strong>?</p>
+            <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
+              This permanently removes the device and all its manually-entered ports, VLANs, neighbors,
+              learned MACs and category-specific data (interfaces, firewall/UPS/wireless records, OS inventory).
+              This cannot be undone.
+            </p>
+            {deleteErr && <div className="enc-banner crit" style={{ margin: '8px 0' }}>{deleteErr}</div>}
+            <div className="row" style={{ gap: 10, justifyContent: 'flex-end', marginTop: 14 }}>
+              <button className="btn btn-ghost" disabled={deleting} onClick={() => setConfirmingDelete(false)}>Cancel</button>
+              <button className="btn btn-danger" disabled={deleting} onClick={doDelete}><Trash2 size={13} /> {deleting ? 'Deleting…' : 'Delete device'}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

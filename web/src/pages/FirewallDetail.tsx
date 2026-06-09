@@ -11,6 +11,7 @@ import { DeviceHeader } from '../components/DeviceHeader'
 import { DeviceCredentialHealth } from '../components/DeviceCredentialHealth'
 import { CredentialBindSelect } from '../components/CredentialBindSelect'
 import { Panel, Kpi, DefList, EmptyState, StatusPill, Meter, TabBar } from '../components/ui'
+import { useIsVirtual } from '../components/useIsVirtual'
 
 type Tab = 'overview' | 'vpn' | 'ha' | 'licenses' | 'interfaces' | 'operations'
 
@@ -52,6 +53,7 @@ function expiryState(expiry?: string | null): { tone: 'up' | 'warning' | 'down' 
 export function FirewallDetail() {
   const { id } = useParams<{ id: string }>()
   const [tab, setTab] = useState<Tab>('overview')
+  const isVirtual = useIsVirtual(id)
 
   const status = useQuery({ queryKey: ['fwstatus', id], queryFn: () => api.get<FirewallStatus>(`/devices/${id}/firewall-status`), retry: false })
   const facts = useQuery({ queryKey: ['facts', id], queryFn: () => api.get<DeviceFact[]>(`/devices/${id}/facts`) })
@@ -107,7 +109,12 @@ export function FirewallDetail() {
       {/* ── OVERVIEW ──────────────────────────────────────────────────────── */}
       {tab === 'overview' && (
         <>
-          {!s && !status.isLoading && (
+          {isVirtual && (
+            <div className="enc-banner info" style={{ marginBottom: 12 }}>
+              <Flame size={14} style={{ verticalAlign: -2 }} /> This is a manually modeled virtual firewall. Its data is maintained manually — use <strong>Edit virtual device</strong> in the header to update interfaces, HA, VPN tunnels and licenses.
+            </div>
+          )}
+          {!s && !status.isLoading && !isVirtual && (
             <div className="enc-banner warn" style={{ marginBottom: 12 }}>
               <AlertTriangle size={14} style={{ verticalAlign: -2 }} /> No firewall status collected yet. Bind a working SNMP credential and re-scan this device to populate HA, sessions, VPN and resource data.
               <button className="btn btn-ghost btn-xs" style={{ marginLeft: 8 }} onClick={() => setTab('operations')}>Open Operations</button>
@@ -133,7 +140,7 @@ export function FirewallDetail() {
 
           <div className="grid-2" style={{ alignItems: 'start' }}>
             <Panel title="Firewall Status" icon={Shield}>
-              {!s && <EmptyState icon={Shield} title="Not collected" message="Bind a working SNMP credential and re-scan to populate firewall status." />}
+              {!s && <EmptyState icon={Shield} title="Not collected" message={isVirtual ? 'Manually modeled — HA / status is maintained manually via Edit virtual device.' : 'Bind a working SNMP credential and re-scan to populate firewall status.'} />}
               {s && (
                 <DefList items={[
                   { label: 'HA mode', value: <span className="badge badge-access">{HA_LABEL[s.ha_mode] ?? s.ha_mode}</span> },
@@ -286,7 +293,7 @@ export function FirewallDetail() {
       {/* ── INTERFACES ────────────────────────────────────────────────────── */}
       {tab === 'interfaces' && (
         <Panel title="Interfaces" icon={Cable} subtitle={ifList.length ? `${ifList.length} · ${ifUp} up` : undefined} pad={false}>
-          {ifaces.data && ifList.length === 0 && <EmptyState icon={Cable} title="No interfaces collected" message="Bind a working SNMP credential and collect this firewall." />}
+          {ifaces.data && ifList.length === 0 && <EmptyState icon={Cable} title={isVirtual ? 'No interfaces entered' : 'No interfaces collected'} message={isVirtual ? 'Add interfaces via Edit virtual device.' : 'Bind a working SNMP credential and collect this firewall.'} />}
           {ifList.length > 0 && (
             <table className="data-table">
               <thead><tr><th>Interface</th><th>Alias</th><th>Oper</th><th>Speed</th><th>MAC</th></tr></thead>

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/netip"
 	"strconv"
@@ -599,10 +600,15 @@ func (s *Server) writeVirtualWorkstation(ctx context.Context, devID uuid.UUID, r
 	if host == "" {
 		host = strings.TrimSpace(req.Name)
 	}
-	_, _ = s.queries.UpsertOSInventory(ctx, db.UpsertOSInventoryParams{
+	// Don't swallow this: a CHECK/constraint failure here means the workstation's
+	// OS-inventory row never lands and the detail page shows "No OS inventory yet"
+	// despite the operator entering data (the 000064 root-cause). Surface it.
+	if _, err := s.queries.UpsertOSInventory(ctx, db.UpsertOSInventoryParams{
 		DeviceID: devID, CollectionMethod: sourceManual, Hostname: strPtr(host),
 		OsCaption: strPtr(req.OSVersion),
-	})
+	}); err != nil {
+		slog.Warn("virtual workstation: os_inventory upsert failed", "device", devID, "error", err)
+	}
 	for _, n := range req.NICs {
 		name := strings.TrimSpace(n.Name)
 		if name == "" {

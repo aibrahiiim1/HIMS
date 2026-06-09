@@ -50,7 +50,8 @@ export function VirtualDeviceForm() {
 
   const save = useMutation({
     mutationFn: () => {
-      const body: VirtualDeviceReq = { ...req, location_id: req.location_id || undefined, facts: factsObj(factRows) }
+      const norm = withSelectDefaults(req, tmpl.sections)
+      const body: VirtualDeviceReq = { ...norm, location_id: norm.location_id || undefined, facts: factsObj(factRows) }
       return editing ? api.put<Device>(`/devices/virtual/${id}`, body) : api.post<Device>('/devices/virtual', body)
     },
     onSuccess: (dev) => {
@@ -226,7 +227,7 @@ function SectionEditor({ section, req, factRows, onRows, onSingleton, onRoles, o
   const rows = (((req as unknown as Record<string, unknown[]>)[section.block]) ?? []) as Record<string, unknown>[]
   const blank = () => {
     const r: Record<string, unknown> = {}
-    section.cols.forEach((c) => { r[c.key] = c.type === 'bool' ? (c.key === 'up') : c.type === 'int' || c.type === 'int64' ? 0 : c.type === 'intlist' ? [] : '' })
+    section.cols.forEach((c) => { r[c.key] = c.type === 'bool' ? (c.key === 'up') : c.type === 'int' || c.type === 'int64' ? 0 : c.type === 'intlist' ? [] : c.type === 'select' ? (c.opts?.[0] ?? '') : '' })
     if (section.cols.some((c) => c.key === 'if_index')) r.if_index = rows.reduce((m, x) => Math.max(m, Number(x.if_index) || 0), 0) + 1
     return r
   }
@@ -304,4 +305,29 @@ function factsObj(rows: { k: string; v: string }[]): Record<string, string> {
   const o: Record<string, string> = {}
   rows.forEach(({ k, v }) => { if (k.trim()) o[k.trim()] = v })
   return o
+}
+
+// withSelectDefaults guarantees a select's *visible* default (its first option) is
+// actually submitted even when the operator never opens the dropdown. Without it an
+// untouched <select> renders option[0] but submits empty — silently dropping status
+// fields (VPN-tunnel status, UPS battery status, …). Covers repeatable-row and
+// singleton sections; row creation also seeds defaults (see blank()), this is the
+// belt-and-braces guarantee at submit time.
+function withSelectDefaults(req: VirtualDeviceReq, sections: Section[]): VirtualDeviceReq {
+  const out = { ...req } as Record<string, unknown>
+  const fill = (obj: Record<string, unknown>, cols: Col[]) => {
+    const o = { ...obj }
+    for (const c of cols) if (c.type === 'select' && c.opts?.length && !o[c.key]) o[c.key] = c.opts[0]
+    return o
+  }
+  for (const sec of sections) {
+    if (sec.kind === 'rows') {
+      const rows = (out[sec.block] as Record<string, unknown>[]) ?? []
+      out[sec.block] = rows.map((r) => fill(r, sec.cols))
+    } else if (sec.kind === 'singleton') {
+      const filled = fill((out[sec.block] as Record<string, unknown>) ?? {}, sec.cols)
+      if (Object.keys(filled).length) out[sec.block] = filled
+    }
+  }
+  return out as unknown as VirtualDeviceReq
 }

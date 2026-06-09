@@ -283,6 +283,7 @@ export const REACH_BADGE: Record<string, { label: string; cls: string }> = {
 export const MGMT_BADGE: Record<string, { label: string; cls: string }> = {
   managed: { label: 'Managed', cls: 'badge-up' },
   partially_managed: { label: 'Partially managed', cls: 'badge-warning' },
+  virtual: { label: 'Manual', cls: 'badge-virtual' },
   unmanaged: { label: 'Unmanaged', cls: 'badge-unknown' },
   needs_credential: { label: 'Needs credential', cls: 'badge-warning' },
   credential_failed: { label: 'Credential failed', cls: 'badge-down' },

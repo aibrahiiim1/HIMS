@@ -10,6 +10,7 @@ import { DeviceOps } from '../components/DeviceOps'
 import { DeviceCredentialHealth } from '../components/DeviceCredentialHealth'
 import { CredentialBindSelect } from '../components/CredentialBindSelect'
 import { Panel, Kpi, EmptyState, TabBar } from '../components/ui'
+import { useIsVirtual } from '../components/useIsVirtual'
 
 type Tab = 'overview' | 'operations'
 
@@ -37,6 +38,7 @@ export function EndpointDetail() {
   const { id } = useParams<{ id: string }>()
   const deviceId = id ?? ''
   const [tab, setTab] = useState<Tab>('overview')
+  const isVirtual = useIsVirtual(deviceId)
 
   // Shares the query key with DeepOSInventory → react-query fetches once.
   const osq = useQuery({ queryKey: ['os-inventory', deviceId], queryFn: () => api.get<OSInventoryBundle>(`/devices/${deviceId}/os-inventory`) })
@@ -71,7 +73,7 @@ export function EndpointDetail() {
             <ClassificationCard deviceId={deviceId} />
             <Panel title="At a glance" icon={Clock}>
               {!inv
-                ? <EmptyState icon={MonitorSmartphone} title="No OS inventory yet" message="Bind a working credential (WinRM for Windows, SSH for Linux) and collect below to populate OS, hardware, disks, services and software." />
+                ? <EmptyState icon={MonitorSmartphone} title={isVirtual ? 'Manually modeled workstation' : 'No OS inventory yet'} message={isVirtual ? 'OS, NICs, disks and software are maintained manually — use Edit virtual device to update them.' : 'Bind a working credential (WinRM for Windows, SSH for Linux) and collect below to populate OS, hardware, disks, services and software.'} />
                 : (
                   <div className="stack" style={{ gap: 8, fontSize: 13 }}>
                     <Row label="Hostname" value={inv.hostname || '—'} />
@@ -85,7 +87,7 @@ export function EndpointDetail() {
             </Panel>
           </div>
 
-          <DeepOSInventory deviceId={deviceId} alwaysShow />
+          <DeepOSInventory deviceId={deviceId} alwaysShow isVirtual={isVirtual} />
         </>
       )}
 

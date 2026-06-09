@@ -8,6 +8,7 @@ import { RescanSplit } from '../components/RescanSplit'
 import { CredentialBindSelect } from '../components/CredentialBindSelect'
 import { Panel, Kpi, DefList, EmptyState, StatusPill, TabBar } from '../components/ui'
 import { DataTable, type DataCol, type DataFilter } from '../components/DataTable'
+import { useIsVirtual } from '../components/useIsVirtual'
 
 // Wireless Controller — operator dashboard, organised into tabs:
 //   Overview  → identity card + summary KPIs + honesty warnings
@@ -20,6 +21,7 @@ type Tab = 'overview' | 'aps' | 'clients' | 'ssids' | 'manage'
 
 export function WirelessDetail() {
   const { id } = useParams<{ id: string }>()
+  const isVirtual = useIsVirtual(id)
   const qc = useQueryClient()
   const q = useQuery({ queryKey: ['wireless', id], queryFn: () => api.get<WirelessDetailResp>(`/devices/${id}/wireless`) })
   const d = q.data
@@ -138,7 +140,9 @@ export function WirelessDetail() {
               { label: 'Primary source', value: srcLabel(d.collection.source) },
               { label: 'Last collection', value: d.summary.collected_at ? `${new Date(d.summary.collected_at).toLocaleString()} (${dataAge(d.summary.collected_at)} ago)` : (d.collection.collected_at ? new Date(d.collection.collected_at).toLocaleString() : '—') },
             ]} />
-            {d.collection.next_action && <div className="enc-banner info" style={{ marginTop: 12 }}>{d.collection.next_action} <button className="btn btn-ghost btn-xs" style={{ marginLeft: 8 }} onClick={() => setTab('manage')}>Open Manage</button></div>}
+            {isVirtual
+              ? <div className="enc-banner info" style={{ marginTop: 12 }}>This is a manually modeled virtual controller. AP / SSID / client data is maintained manually — use <strong>Edit virtual device</strong> in the header.</div>
+              : d.collection.next_action && <div className="enc-banner info" style={{ marginTop: 12 }}>{d.collection.next_action} <button className="btn btn-ghost btn-xs" style={{ marginLeft: 8 }} onClick={() => setTab('manage')}>Open Manage</button></div>}
           </Panel>
 
           {/* Summary KPIs — robust whether or not a controller summary exists. */}
@@ -377,7 +381,7 @@ export function WirelessDetail() {
 // badges and filters work for every source: REST/XML stores real labels
 // (Ruckus "Connected"/"Disconnected", Extreme "In Service"/"Critical"/"Out of
 // Service"), SNMP/SSH store "online"/"offline".
-export function apState(status?: string): 'up' | 'down' | 'warn' | 'unknown' {
+function apState(status?: string): 'up' | 'down' | 'warn' | 'unknown' {
   const s = (status || '').trim().toLowerCase()
   if (!s) return 'unknown'
   if (['online', 'up', 'active', 'connected', 'in service', 'inservice', 'operational', 'registered', 'running'].includes(s)) return 'up'
