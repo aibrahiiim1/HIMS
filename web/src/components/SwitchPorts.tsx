@@ -18,7 +18,7 @@ const SPP_CSS = `
 .spp-stat b { font-size:15px; color:var(--text); }
 .spp-racktitle { display:flex; align-items:center; gap:8px; font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; color:var(--text-muted); margin:14px 0 6px; }
 .spp-rack { display:grid; grid-auto-flow:column; grid-template-rows:repeat(2,minmax(0,1fr)); gap:5px; overflow-x:auto; padding:10px; background:var(--surface-2); border:1px solid var(--border); border-radius:10px; }
-.spp-rack.logical { grid-template-rows:repeat(1,minmax(0,1fr)); }
+.spp-rack.logical { grid-template-rows:repeat(2,minmax(0,1fr)); }
 .spp-rack .port-tile { position:relative; }
 .spp-rack .port-tile .neigh { position:absolute; bottom:2px; left:50%; transform:translateX(-50%); width:5px; height:5px; border-radius:50%; background:var(--brand); }
 .spp-field { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:6px 9px; font-size:13px; color:var(--text); }
