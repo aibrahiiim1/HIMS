@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/netip"
@@ -36,7 +37,12 @@ type cctvResult struct {
 
 func (r cctvResult) ok() bool { return r.Status == "collected" }
 
-func (s *Server) runCCTVCollection(ctx context.Context, d db.Device) cctvResult {
+// runCCTVCollection collects a camera/NVR/DVR. selectedCreds is an optional,
+// operator-chosen set of credentials to TRY (each in turn) from the per-device
+// Collect UI; when empty the collection falls back to the single credential bound
+// to the device (the bound-credential-only default that cannot spray). The fleet
+// collector always passes nil to keep bulk runs lockout-safe.
+func (s *Server) runCCTVCollection(ctx context.Context, d db.Device, selectedCreds []uuid.UUID) cctvResult {
 	res := cctvResult{Status: "failed"}
 	if d.PrimaryIp == nil || !d.PrimaryIp.IsValid() {
 		res.Reason, res.Detail = "no_ip", "device has no IP to collect from"
@@ -69,20 +75,29 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device) cctvResult 
 		u, p := credtest.SplitUserPass(string(plain))
 		cands = append(cands, cc{id: c.ID, name: c.Name, kind: c.Kind, user: u, pass: p})
 	}
-	// STRICT bound-credential-only (CCTV Phase 2). Cameras/NVRs — Hikvision in
-	// particular — lock out a source IP after a few failed logins, so a fleet-wide
-	// collect must NEVER spray stored credentials. We try ONLY the credential the
-	// operator bound to this device. If none is bound (or the bound one isn't a web
-	// credential), we stop with a clear "bind a web credential" message instead of
-	// guessing — guessing is exactly what triggers the lockout.
-	if d.CredentialID != nil {
+	// Build the candidate list. Two modes:
+	//   1. Operator selected credentials to TRY (per-device Collect UI) — try each,
+	//      in the given order, and bind the first that authenticates. This is a
+	//      deliberate, operator-driven choice (not automatic spraying); the UI warns
+	//      when more than 3 of the same kind are selected, since each failed attempt
+	//      counts toward a Hikvision IP lockout.
+	//   2. No selection — bound-credential-only: try ONLY the credential bound to the
+	//      device. This is the safe default and the only mode the fleet collector
+	//      ever uses, so a bulk run can never spray.
+	if len(selectedCreds) > 0 {
+		for _, cid := range selectedCreds {
+			if c, err := s.queries.GetCredential(ctx, cid); err == nil {
+				add(c)
+			}
+		}
+	} else if d.CredentialID != nil {
 		if c, err := s.queries.GetCredential(ctx, *d.CredentialID); err == nil {
 			add(c)
 		}
 	}
 	if len(cands) == 0 {
 		res.Reason, res.Detail = "no_credential",
-			"no ONVIF/HTTP web credential bound to this device — bind the camera/NVR web login (Digest/Basic), then collect. Collection never sprays other credentials, to avoid a Hikvision IP lockout."
+			"no usable ONVIF/HTTP web credential — select the device's web-login credential(s) to try (or bind one), then collect. Only ONVIF/HTTP-Basic credentials can authenticate a camera/NVR."
 		return res
 	}
 
@@ -388,8 +403,10 @@ func nvrDetail(cat domain.DeviceCategory, vendor string, info isapi.DeviceInfo, 
 	return d
 }
 
-// collectCCTV handles POST /devices/{id}/collect-cctv — operator-triggered ONVIF
-// onboarding for a camera/NVR/DVR.
+// collectCCTV handles POST /devices/{id}/collect-cctv — operator-triggered
+// ONVIF/ISAPI collection for a camera/NVR/DVR. An optional body
+// {"credential_ids":[...]} selects which credentials to try (each in turn); an
+// empty/absent list falls back to the credential bound to the device.
 func (s *Server) collectCCTV(w http.ResponseWriter, r *http.Request) {
 	ctx, id, ok := pathDevice(w, r)
 	if !ok {
@@ -400,10 +417,20 @@ func (s *Server) collectCCTV(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	res := s.runCCTVCollection(ctx, d)
+	var body struct {
+		CredentialIDs []string `json:"credential_ids"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body) // absent/empty body ⇒ bound-credential-only
+	var creds []uuid.UUID
+	for _, cs := range body.CredentialIDs {
+		if cid, perr := uuid.Parse(strings.TrimSpace(cs)); perr == nil {
+			creds = append(creds, cid)
+		}
+	}
+	res := s.runCCTVCollection(ctx, d, creds)
 	if res.ok() {
 		s.audit(r, "inventory", "device.collect_cctv", "device", id.String(),
-			"Collected ONVIF facts for "+d.Name, map[string]any{"category": res.Category})
+			"Collected ONVIF facts for "+d.Name, map[string]any{"category": res.Category, "credentials_tried": len(creds)})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"collected": res.ok(), "reason": res.Reason, "detail": res.Detail,

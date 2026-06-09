@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { useParams, Link } from 'react-router-dom'
-import { Camera, Video, Film, HardDrive, Disc, Network, Activity, Wrench, RefreshCw, Cpu } from 'lucide-react'
+import { Camera, Video, Film, HardDrive, Disc, Network, Activity, Wrench, Cpu } from 'lucide-react'
 import { api, type CameraInfo, type NVRChannel, type NVRDetail, type Device } from '../api'
 import { DeviceHeader } from '../components/DeviceHeader'
+import { CctvCollect } from '../components/CctvCollect'
 import { Panel, Kpi, DefList, EmptyState, StatusPill } from '../components/ui'
 
 const chStatus = (s: string) => (s === 'online' ? 'up' : s === 'offline' ? 'down' : 'unknown')
@@ -22,22 +23,12 @@ type Tab = 'overview' | 'channels' | 'storage' | 'recording' | 'network' | 'heal
 // keeps the compact single-view layout.
 export function CctvDetail() {
   const { id } = useParams<{ id: string }>()
-  const qc = useQueryClient()
   const [tab, setTab] = useState<Tab>('overview')
 
   const devices = useQuery({ queryKey: ['devices', 'all'], queryFn: () => api.get<Device[]>('/devices?category=all') })
   const dev = (devices.data ?? []).find((d) => d.id === id)
   const cam = useQuery({ queryKey: ['camera', id], queryFn: () => api.get<CameraInfo>(`/devices/${id}/camera`) })
   const nvr = useQuery({ queryKey: ['nvr', id], queryFn: () => api.get<NVRDetail>(`/devices/${id}/nvr`) })
-
-  const collect = useMutation({
-    mutationFn: () => api.post<{ collected: boolean; reason?: string; detail?: string; category?: string; credential_used?: string }>(`/devices/${id}/collect-cctv`, {}),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['nvr', id] })
-      qc.invalidateQueries({ queryKey: ['camera', id] })
-      qc.invalidateQueries({ queryKey: ['devices', 'all'] })
-    },
-  })
 
   const c = cam.data
   const info = nvr.data?.info ?? null
@@ -57,7 +48,9 @@ export function CctvDetail() {
     return (
       <div>
         <DeviceHeader deviceId={id!} icon={Camera} />
-        <CollectBar collect={collect} />
+        <Panel>
+          <CctvCollect deviceId={id!} boundCredId={dev?.credential_id} compact label="Collect" />
+        </Panel>
         <div className="kpi-grid">
           <Kpi label="Manufacturer" value={c?.manufacturer || '—'} icon={Camera} tone="info" />
           <Kpi label="Model" value={c?.model || '—'} icon={Video} />
@@ -206,9 +199,8 @@ export function CctvDetail() {
             { label: 'Storage', value: storage.length ? <StatusPill status="up" label={`${storage.length} collected`} /> : <StatusPill status="unknown" label="none / not exposed" /> },
             { label: 'Last collected', value: info?.collected_at ? new Date(info.collected_at).toLocaleString() : '—' },
           ]} />
-          {collect.data && <CollectResult data={collect.data} />}
           <p className="muted" style={{ marginTop: 10, fontSize: 13 }}>
-            ISAPI is tried over HTTPS/HTTP with the device's bound credential only (no credential spraying — that would trigger a Hikvision IP lockout). Unsupported endpoints are reported as “not exposed by device”, not as a generic failure.
+            ISAPI is tried over HTTPS/HTTP with the credential(s) you select on the Operations tab. Unsupported endpoints are reported as “not exposed by device”, not as a generic failure.
           </p>
         </Panel>
       )}
@@ -216,13 +208,9 @@ export function CctvDetail() {
       {tab === 'ops' && (
         <Panel title="Operations" icon={Wrench}>
           <p className="muted" style={{ fontSize: 13, marginBottom: 12 }}>
-            Collect uses the credential <strong>bound to this device</strong> only. Bind the NVR's <strong>web admin</strong> login (an ONVIF/http_basic credential) — the ONVIF integration user is separate and is rejected by ISAPI. Repeated wrong logins can trigger a Hikvision IP lockout.
+            Pick the NVR's <strong>web admin</strong> login credential(s) to try — the ONVIF integration user is separate and is rejected by ISAPI. HIMS tries each selected credential and binds the first that authenticates. Selecting more than 3 of the same type warns first, since repeated wrong logins can trigger a Hikvision IP lockout.
           </p>
-          <button className="btn btn-primary" disabled={collect.isPending} onClick={() => collect.mutate()}>
-            <RefreshCw size={15} className={collect.isPending ? 'spin' : ''} /> {collect.isPending ? 'Collecting…' : 'Collect NVR data'}
-          </button>
-          {collect.isError && <div className="enc-banner crit" style={{ marginTop: 12 }}>{(collect.error as Error).message}</div>}
-          {collect.data && <CollectResult data={collect.data} />}
+          <CctvCollect deviceId={id!} boundCredId={dev?.credential_id} label="Collect NVR data" />
         </Panel>
       )}
     </div>
@@ -286,33 +274,5 @@ function ChannelsTab({ channels, chOnline }: { channels: NVRChannel[]; chOnline:
         </>
       )}
     </Panel>
-  )
-}
-
-function CollectBar({ collect }: { collect: { mutate: () => void; isPending: boolean; data?: CollectResp; isError?: boolean; error?: unknown } }) {
-  return (
-    <Panel>
-      <div className="row" style={{ justifyContent: 'space-between' }}>
-        <span className="muted" style={{ fontSize: 13 }}>Identity is collected over ONVIF/ISAPI using the bound credential.</span>
-        <button className="btn btn-primary btn-sm" disabled={collect.isPending} onClick={() => collect.mutate()}>
-          <RefreshCw size={14} className={collect.isPending ? 'spin' : ''} /> {collect.isPending ? 'Collecting…' : 'Collect'}
-        </button>
-      </div>
-      {collect.data && <CollectResult data={collect.data} />}
-    </Panel>
-  )
-}
-
-type CollectResp = { collected: boolean; reason?: string; detail?: string; category?: string; credential_used?: string }
-
-function CollectResult({ data }: { data: CollectResp }) {
-  const lockout = (data.detail || '').toLowerCase().includes('lockout') || (data.reason === 'auth_failed')
-  const cls = data.collected ? 'ok' : lockout ? 'warn' : 'crit'
-  return (
-    <div className={`enc-banner ${cls}`} style={{ marginTop: 12 }}>
-      {data.collected
-        ? `Collected${data.category ? ` (${data.category})` : ''}${data.credential_used ? ` via ${data.credential_used}` : ''}: ${data.detail || ''}`
-        : `${data.reason || 'failed'} — ${data.detail || ''}`}
-    </div>
   )
 }

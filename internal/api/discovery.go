@@ -681,7 +681,7 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 					} else {
 						profRes = &scanProfileResult{Resolved: false}
 						cctx, ccancel := context.WithTimeout(ctx, 90*time.Second)
-						cv := s.runCCTVCollection(cctx, dev)
+						cv := s.runCCTVCollection(cctx, dev, nil) // scan = bound-credential-only
 						ccancel()
 						if cv.ok() {
 							enrichment = "ONVIF facts collected (" + cv.Category + ")"
