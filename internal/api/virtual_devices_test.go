@@ -2,11 +2,44 @@ package api
 
 import (
 	"bytes"
+	"net/http/httptest"
 	"reflect"
 	"testing"
 
 	"github.com/xuri/excelize/v2"
 )
+
+// The generated template must use ONE consistent example device_key across the
+// Devices row and every child sheet, so the unmodified template imports as a
+// single complete device (the bug that left Ports orphaned was Devices="device1"
+// vs Ports="sw1").
+func TestVirtualTemplateConsistentKey(t *testing.T) {
+	s := &Server{}
+	rec := httptest.NewRecorder()
+	s.virtualTemplateXLSX(rec, httptest.NewRequest("GET", "/devices/virtual/template.xlsx?type=switch", nil))
+	if rec.Code != 200 {
+		t.Fatalf("status %d", rec.Code)
+	}
+	xl, err := excelize.OpenReader(bytes.NewReader(rec.Body.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer xl.Close()
+	dev, _ := xl.GetRows("Devices")
+	if len(dev) < 2 {
+		t.Fatal("Devices sheet missing example row")
+	}
+	devKey := dev[1][0]
+	for _, sh := range []string{"Ports", "VLANs", "Neighbors", "LearnedMACs"} {
+		rows, _ := xl.GetRows(sh)
+		if len(rows) < 2 {
+			continue
+		}
+		if rows[1][0] != devKey {
+			t.Fatalf("%s example device_key=%q but Devices device_key=%q — child rows would orphan", sh, rows[1][0], devKey)
+		}
+	}
+}
 
 // vdAtoiList parses the trunk_vlans cell ("20,30,40" in any common separator).
 func TestVdAtoiList(t *testing.T) {
@@ -148,6 +181,57 @@ func TestParseVirtualWorkbookMultiDevice(t *testing.T) {
 	}
 	if len(srv.Ports) != 0 {
 		t.Fatalf("server should have no ports, got %d", len(srv.Ports))
+	}
+}
+
+// A child row whose device_key matches no Devices row must be reported (not
+// silently dropped) when the workbook has multiple devices.
+func TestParseVirtualWorkbookOrphanChildRow(t *testing.T) {
+	xl := excelize.NewFile()
+	defer xl.Close()
+	set := func(sheet string, rows [][]any) {
+		if sheet != "Sheet1" {
+			_, _ = xl.NewSheet(sheet)
+		}
+		for i, r := range rows {
+			_ = xl.SetSheetRow(sheet, "A"+itoaTest(i+1), &r)
+		}
+	}
+	set("Sheet1", [][]any{{"device_key", "name", "category", "status"}, {"sw1", "SW-A", "switch", "up"}, {"sw2", "SW-B", "switch", "up"}})
+	_ = xl.SetSheetName("Sheet1", "Devices")
+	// "typo" matches neither sw1 nor sw2.
+	set("Ports", [][]any{{"device_key", "if_index", "name"}, {"typo", 1, "Gi1/0/1"}})
+
+	var buf bytes.Buffer
+	if err := xl.Write(&buf); err != nil {
+		t.Fatal(err)
+	}
+	rd, err := excelize.OpenReader(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rd.Close()
+
+	reqs, _, errs, fatal := parseVirtualWorkbook(rd)
+	if fatal != "" {
+		t.Fatalf("fatal: %s", fatal)
+	}
+	if len(reqs) != 2 {
+		t.Fatalf("want 2 devices, got %d", len(reqs))
+	}
+	for _, r := range reqs {
+		if len(r.Ports) != 0 {
+			t.Fatalf("%s should have no ports (orphaned row), got %d", r.Name, len(r.Ports))
+		}
+	}
+	found := false
+	for _, e := range errs {
+		if e.Sheet == "Ports" && e.Field == "device_key" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected a Ports/device_key orphan error, got %+v", errs)
 	}
 }
 

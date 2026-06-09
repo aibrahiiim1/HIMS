@@ -179,6 +179,7 @@ function SectionEditor({ section, req, factRows, onRows, onSingleton, onRoles, o
   onRoles: (roles: string[]) => void
   onFacts: (rows: { k: string; v: string }[]) => void
 }) {
+  const [bulkN, setBulkN] = useState('') // custom "add N rows" count (e.g. an 8-port switch)
   if (section.kind === 'singleton') {
     const obj = ((req as unknown as Record<string, Record<string, unknown>>)[section.block]) ?? {}
     return (
@@ -234,8 +235,17 @@ function SectionEditor({ section, req, factRows, onRows, onSingleton, onRoles, o
   const addN = (n: number) => onRows(section.block, [...rows, ...Array.from({ length: n }, blank)])
   return (
     <Panel title={section.title} subtitle={rows.length ? `${rows.length}` : section.hint}
-      actions={<div className="row" style={{ gap: 6 }}>
+      actions={<div className="row" style={{ gap: 6, alignItems: 'center' }}>
         {section.bulk?.map((n) => <button key={n} className="btn btn-ghost btn-xs" onClick={() => addN(n)}>+{n}</button>)}
+        {section.bulk && (
+          <span className="row" style={{ gap: 4, alignItems: 'center' }}>
+            <input className="field" type="number" min={1} max={500} value={bulkN} onChange={(e) => setBulkN(e.target.value)}
+              placeholder="N" title="Add a custom number of rows (e.g. an 8-port switch)" style={{ width: 56, padding: '2px 6px' }}
+              onKeyDown={(e) => { if (e.key === 'Enter') { const n = parseInt(bulkN, 10); if (n > 0) { addN(Math.min(n, 500)); setBulkN('') } } }} />
+            <button className="btn btn-ghost btn-xs" disabled={!(parseInt(bulkN, 10) > 0)}
+              onClick={() => { const n = parseInt(bulkN, 10); if (n > 0) { addN(Math.min(n, 500)); setBulkN('') } }}>+ Add N</button>
+          </span>
+        )}
         <button className="btn btn-ghost btn-xs" onClick={() => onRows(section.block, [...rows, blank()])}><Plus size={12} /> Add</button>
       </div>} pad={rows.length === 0}>
       {rows.length === 0 ? <div className="muted" style={{ fontSize: 13 }}>{section.hint ?? 'None added yet.'}</div> : (

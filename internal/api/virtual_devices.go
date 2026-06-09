@@ -867,11 +867,17 @@ func (s *Server) virtualTemplateXLSX(w http.ResponseWriter, r *http.Request) {
 	if exCat == "" {
 		exCat = "switch"
 	}
-	put("Devices", [][]any{{"device1", "EXAMPLE-" + strings.ToUpper(exCat), exCat, "Vendor", "Model", "SN123", "", "172.21.96.9", "Main Hotel", "up", "10", "", "normal", "manually entered"}})
+	// One coherent example device_key used on the Devices row AND every child row,
+	// so the unmodified template imports as a single complete device. (Previously
+	// the Devices example used "device1" while child examples used "sw1"/"srv1"/… —
+	// mismatched keys meant the example child rows linked to no device.)
+	const exKey = "dev1"
+	put("Devices", [][]any{{exKey, "EXAMPLE-" + strings.ToUpper(exCat), exCat, "Vendor", "Model", "SN123", "", "172.21.96.9", "Main Hotel", "up", "10", "", "normal", "manually entered"}})
 	for _, sh := range child {
 		var ex [][]any
 		if e := vdSheetExample[sh]; e != nil {
-			ex = [][]any{e}
+			row := append([]any{exKey}, e[1:]...) // force device_key to match the Devices row
+			ex = [][]any{row}
 		}
 		put(sh, ex)
 	}
@@ -990,6 +996,20 @@ func parseVirtualWorkbook(xl *excelize.File) (reqs []virtualDeviceReq, rows []in
 		}
 		return k
 	}
+
+	// The set of device_keys that actually have a Devices row — used to warn on
+	// child rows that reference a non-existent device (instead of dropping silently).
+	deviceKeys := map[string]bool{}
+	forEachRow(devRows, func(_ int, g func(string) string) {
+		if strings.TrimSpace(g("name")) == "" {
+			return
+		}
+		k := strings.ToLower(strings.TrimSpace(g("device_key")))
+		if k == "" {
+			k = strings.ToLower(strings.TrimSpace(g("name")))
+		}
+		deviceKeys[k] = true
+	})
 
 	// Group every child sheet by device_key.
 	ports := map[string][]vdPort{}
@@ -1112,6 +1132,25 @@ func parseVirtualWorkbook(xl *excelize.File) (reqs []virtualDeviceReq, rows []in
 		}
 		facts[k][g("key")] = g("value")
 	})
+
+	// Surface child rows that reference a device_key with no matching Devices row
+	// (the most common import mistake), instead of dropping them silently. Skipped
+	// for a single-device workbook, where every child row attaches to the one device.
+	if singleKey == "" {
+		for _, sh := range vdAllChildSheets {
+			forEachRow(sheetRows(xl, sh), func(rn int, g func(string) string) {
+				raw := strings.TrimSpace(g("device_key"))
+				k := strings.ToLower(raw)
+				if k == "" {
+					errs = append(errs, vdImportError{Sheet: sh, Row: rn, Field: "device_key",
+						Message: "device_key is required (the Devices sheet has more than one device) — row skipped"})
+				} else if !deviceKeys[k] {
+					errs = append(errs, vdImportError{Sheet: sh, Row: rn, Field: "device_key",
+						Message: "no device with device_key " + strconv.Quote(raw) + " in the Devices sheet — row skipped"})
+				}
+			})
+		}
+	}
 
 	forEachRow(devRows, func(rowNum int, g func(string) string) {
 		name := strings.TrimSpace(g("name"))
