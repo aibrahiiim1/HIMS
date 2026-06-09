@@ -50,9 +50,10 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device) cctvResult 
 	type cc struct {
 		id         uuid.UUID
 		name       string
+		kind       string
 		user, pass string
 	}
-	const maxCands = 6
+	const maxCands = 12 // sites can have many onvif/http_basic creds; try enough to find the camera/NVR's web login
 	var cands []cc
 	seen := map[uuid.UUID]bool{}
 	add := func(c db.Credential) {
@@ -65,7 +66,7 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device) cctvResult 
 			return
 		}
 		u, p := credtest.SplitUserPass(string(plain))
-		cands = append(cands, cc{c.ID, c.Name, u, p})
+		cands = append(cands, cc{id: c.ID, name: c.Name, kind: c.Kind, user: u, pass: p})
 	}
 	if d.CredentialID != nil {
 		if c, err := s.queries.GetCredential(ctx, *d.CredentialID); err == nil {
@@ -152,8 +153,12 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device) cctvResult 
 		if err != nil {
 			category, detail = categorizeCollectErr("isapi", err.Error())
 		}
+		akind := domain.CredHTTPBasic
+		if cd.kind == string(domain.CredONVIF) {
+			akind = domain.CredONVIF
+		}
 		attempts = append(attempts, discovery.CredAttempt{
-			CredentialID: cd.id, Kind: domain.CredHTTPBasic, Protocol: "isapi",
+			CredentialID: cd.id, Kind: akind, Protocol: "isapi",
 			Success: err == nil, Category: category, Detail: detail,
 		})
 		if err != nil {
