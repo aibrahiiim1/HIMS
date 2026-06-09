@@ -33,6 +33,7 @@ type fakeQuerier struct {
 	// Wireless association.
 	wirelessRows []db.FindWirelessClientRow
 	aps          map[string]db.GetAccessPointByNameRow // keyed by AP name
+	vlans        map[uuid.UUID][]db.Vlan                // configured VLANs per device
 }
 
 func (f *fakeQuerier) GetDevice(_ context.Context, id uuid.UUID) (db.Device, error) {
@@ -102,6 +103,9 @@ func (f *fakeQuerier) GetAccessPointByName(_ context.Context, arg db.GetAccessPo
 		return ap, nil
 	}
 	return db.GetAccessPointByNameRow{}, nil
+}
+func (f *fakeQuerier) ListVlans(_ context.Context, id uuid.UUID) ([]db.Vlan, error) {
+	return f.vlans[id], nil
 }
 
 func TestSearchMAC_NoResults(t *testing.T) {
@@ -435,6 +439,76 @@ func TestSearchMAC_PrefersLowestFanoutPort(t *testing.T) {
 	}
 	if top.MACCount == nil || *top.MACCount != 7 {
 		t.Errorf("MACCount = %v, want 7", top.MACCount)
+	}
+}
+
+// TestSearchMAC_SuppressesUnconfiguredFDBVlan: when the FDB reports a VLAN that is
+// not a configured 802.1Q VLAN on the switch (a bridge/FdbId artifact, e.g. "2" on a
+// switch that has no VLAN 2), it must be flagged suspect and NOT asserted in the
+// path. This is the "there is no VLAN 2 on the switch" report.
+func TestSearchMAC_SuppressesUnconfiguredFDBVlan(t *testing.T) {
+	mac := "f0:b0:52:08:0c:70"
+	sw := uuid.New()
+	idx := int32(22)
+	ifName := "22"
+	role := "uplink"
+	mgt := "MGT"
+	q := &fakeQuerier{
+		macRows: []db.SearchByMACRow{
+			{Mac: mac, VlanID: 2, IfIndex: &idx, DeviceID: sw, SwitchName: "CHV-B04-1", IfName: &ifName, PortRole: &role},
+		},
+		portCounts: map[uuid.UUID][]db.MACCountByPortRow{sw: {{IfIndex: &idx, MacCount: 7}}},
+		vlans:      map[uuid.UUID][]db.Vlan{sw: {{VlanID: 1}, {VlanID: 96, Name: &mgt}}}, // no VLAN 2
+	}
+	res, err := New(q).SearchMAC(context.Background(), mac)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp := res.SwitchPort[0]
+	if !sp.VLANSuspect || sp.VLANConfigured {
+		t.Fatalf("FDB VLAN 2 is not configured: want suspect=true configured=false, got suspect=%v configured=%v", sp.VLANSuspect, sp.VLANConfigured)
+	}
+	for _, p := range res.Path {
+		if p.Role == "access" && p.VLANID != nil {
+			t.Fatalf("access hop must not assert unconfigured VLAN, got %d", *p.VLANID)
+		}
+	}
+}
+
+// TestSearchMAC_KeepsConfiguredFDBVlan: a real configured VLAN is kept, named, and
+// asserted in the path.
+func TestSearchMAC_KeepsConfiguredFDBVlan(t *testing.T) {
+	mac := "aa:bb:cc:dd:ee:01"
+	sw := uuid.New()
+	idx := int32(5)
+	role := "access"
+	mgt := "MGT"
+	q := &fakeQuerier{
+		macRows: []db.SearchByMACRow{
+			{Mac: mac, VlanID: 96, IfIndex: &idx, DeviceID: sw, SwitchName: "SW1", PortRole: &role},
+		},
+		portCounts: map[uuid.UUID][]db.MACCountByPortRow{sw: {{IfIndex: &idx, MacCount: 3}}},
+		vlans:      map[uuid.UUID][]db.Vlan{sw: {{VlanID: 96, Name: &mgt}}},
+	}
+	res, err := New(q).SearchMAC(context.Background(), mac)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp := res.SwitchPort[0]
+	if !sp.VLANConfigured || sp.VLANSuspect {
+		t.Fatalf("VLAN 96 is configured: want configured=true suspect=false, got configured=%v suspect=%v", sp.VLANConfigured, sp.VLANSuspect)
+	}
+	if sp.VLANName == nil || *sp.VLANName != "MGT" {
+		t.Errorf("VLANName = %v, want MGT", sp.VLANName)
+	}
+	got := int32(-1)
+	for _, p := range res.Path {
+		if p.Role == "access" && p.VLANID != nil {
+			got = *p.VLANID
+		}
+	}
+	if got != 96 {
+		t.Errorf("access hop VLAN = %d, want 96", got)
 	}
 }
 

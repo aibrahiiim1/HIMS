@@ -420,6 +420,9 @@ export interface SwitchPortEntry {
   if_index?: number | null
   if_name?: string | null
   vlan_id: number
+  vlan_configured?: boolean // FDB VLAN is a real 802.1Q VLAN configured on the switch
+  vlan_suspect?: boolean // switch HAS VLANs but this FDB VLAN isn't one (FdbId artifact)
+  vlan_name?: string | null // configured VLAN name when known
   port_role?: string | null
   source?: string | null
   last_seen_at?: string | null

@@ -118,7 +118,7 @@ export function SearchPage() {
                   {res.switch_port.length > 0 && (
                     <table className="data-table"><thead><tr><th>Switch</th><th>IP</th><th>Port</th><th>VLAN</th><th>Role</th></tr></thead>
                       <tbody>{res.switch_port.map((sp, j) => (
-                        <tr key={j}><td className="cell-name">{sp.switch_name}</td><td className="mono">{sp.switch_ip ?? '—'}</td><td>{sp.if_name ?? sp.if_index}</td><td>{sp.vlan_id}</td><td>{sp.port_role ? <span className={`badge badge-${sp.port_role}`}>{sp.port_role}</span> : '—'}</td></tr>
+                        <tr key={j}><td className="cell-name">{sp.switch_name}</td><td className="mono">{sp.switch_ip ?? '—'}</td><td>{sp.if_name ?? sp.if_index}</td><td>{sp.vlan_suspect ? <span title="Not a configured VLAN on this switch (FDB artifact)">{sp.vlan_id} <span className="muted">⚠</span></span> : (sp.vlan_id || '—')}{sp.vlan_name ? <span className="muted"> {sp.vlan_name}</span> : ''}</td><td>{sp.port_role ? <span className={`badge badge-${sp.port_role}`}>{sp.port_role}</span> : '—'}</td></tr>
                       ))}</tbody>
                     </table>
                   )}

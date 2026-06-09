@@ -50,6 +50,9 @@ type Querier interface {
 	// Wireless association (Path Finder: start the path at the AP a client is on).
 	FindWirelessClient(ctx context.Context, term string) ([]db.FindWirelessClientRow, error)
 	GetAccessPointByName(ctx context.Context, arg db.GetAccessPointByNameParams) (db.GetAccessPointByNameRow, error)
+	// Configured VLANs per switch (to validate an FDB VLAN is a real 802.1Q VLAN
+	// and not a bridge/FdbId artifact).
+	ListVlans(ctx context.Context, deviceID uuid.UUID) ([]db.Vlan, error)
 }
 
 // Link is a directed network link for API/UI consumption.
@@ -133,9 +136,18 @@ type SwitchPortEntry struct {
 	IfIndex    *int32    `json:"if_index,omitempty"`
 	IfName     *string   `json:"if_name,omitempty"`
 	VLANID     int32     `json:"vlan_id"`
-	PortRole   *string   `json:"port_role,omitempty"`
-	Source     *string   `json:"source,omitempty"`       // mac-table collection_source: snmp|cli|api
-	LastSeenAt *string   `json:"last_seen_at,omitempty"` // mac-table last_seen_at (RFC3339)
+	// VLANConfigured is true when VLANID is a real 802.1Q VLAN configured on the
+	// switch; VLANName is its configured name when known. VLANSuspect is true when
+	// the switch HAS VLANs collected but VLANID is not among them — i.e. the FDB
+	// reported a bridge/FdbId index, not a real VLAN — so the VLAN is not asserted in
+	// the path. (When no VLANs are collected we can't validate, so neither is set and
+	// the VLAN is still shown.)
+	VLANConfigured bool    `json:"vlan_configured"`
+	VLANSuspect    bool    `json:"vlan_suspect,omitempty"`
+	VLANName       *string `json:"vlan_name,omitempty"`
+	PortRole       *string `json:"port_role,omitempty"`
+	Source         *string `json:"source,omitempty"`       // mac-table collection_source: snmp|cli|api
+	LastSeenAt     *string `json:"last_seen_at,omitempty"` // mac-table last_seen_at (RFC3339)
 	// MACCount is how many MACs are learned on this switch port. The true point of
 	// attachment is the port with the FEWEST (an edge port carrying just this
 	// device); a transit uplink/trunk that also learned the MAC carries hundreds.
@@ -520,6 +532,9 @@ func (e *Engine) macToPort(ctx context.Context, mac string) []SwitchPortEntry {
 	// Cache per-device, per-port MAC fan-out (count of MACs on each port) so we can
 	// pick the true point of attachment (lowest fan-out) over transit uplinks.
 	fanCache := map[uuid.UUID]map[int32]int64{}
+	// Cache per-device configured VLANs (id → name) to validate that an FDB VLAN is
+	// a real 802.1Q VLAN and not a bridge/FdbId artifact.
+	vlanCache := map[uuid.UUID]map[int32]*string{}
 	out := make([]SwitchPortEntry, 0, len(rows))
 	for _, r := range rows {
 		entry := SwitchPortEntry{
@@ -567,6 +582,31 @@ func (e *Engine) macToPort(ctx context.Context, mac string) []SwitchPortEntry {
 			if n, ok := fc[*r.IfIndex]; ok {
 				nn := n
 				entry.MACCount = &nn
+			}
+		}
+		// Validate the FDB VLAN against the switch's configured VLANs. FDB tables can
+		// report a bridge/FdbId index that is not a real 802.1Q VLAN (e.g. "2" on a
+		// switch with no VLAN 2); only assert the VLAN when it is actually configured.
+		if entry.VLANID > 0 {
+			vc, ok := vlanCache[r.DeviceID]
+			if !ok {
+				vc = map[int32]*string{}
+				if vlans, verr := e.q.ListVlans(ctx, r.DeviceID); verr == nil {
+					for _, v := range vlans {
+						vc[v.VlanID] = v.Name
+					}
+				}
+				vlanCache[r.DeviceID] = vc
+			}
+			// Only judge the FDB VLAN if the switch has any VLANs collected at all;
+			// without that list we can't validate, so leave it unmarked (still shown).
+			if len(vc) > 0 {
+				if name, ok := vc[entry.VLANID]; ok {
+					entry.VLANConfigured = true
+					entry.VLANName = name
+				} else {
+					entry.VLANSuspect = true // present FDB VLAN is not a configured VLAN
+				}
 			}
 		}
 		out = append(out, entry)
@@ -665,7 +705,6 @@ func (e *Engine) buildPath(ctx context.Context, res *SearchResult) []PathStep {
 
 	// Access switch hop (first, access-sorted entry).
 	acc := res.SwitchPort[0]
-	v := acc.VLANID
 	src := "mac"
 	if acc.Source != nil {
 		src = *acc.Source
@@ -673,7 +712,11 @@ func (e *Engine) buildPath(ctx context.Context, res *SearchResult) []PathStep {
 	accStep := PathStep{
 		Hop: hop, Role: "access",
 		DeviceID: &acc.SwitchID, DeviceName: &acc.SwitchName, IP: acc.SwitchIP,
-		IfIndex: acc.IfIndex, IfName: acc.IfName, VLANID: &v, PortRole: acc.PortRole, Source: &src,
+		IfIndex: acc.IfIndex, IfName: acc.IfName, PortRole: acc.PortRole, Source: &src,
+	}
+	if acc.VLANID > 0 && !acc.VLANSuspect { // don't assert an FDB VLAN that isn't a real VLAN
+		v := acc.VLANID
+		accStep.VLANID = &v
 	}
 	steps = append(steps, accStep)
 	hop++
@@ -856,16 +899,20 @@ func (e *Engine) buildWirelessPath(ctx context.Context, res *SearchResult) []Pat
 	if len(ports) > 0 {
 		res.SwitchPort = ports
 		acc := ports[0]
-		v := acc.VLANID
 		msrc := "mac"
 		if acc.Source != nil {
 			msrc = *acc.Source
 		}
-		steps = append(steps, PathStep{
+		accStep := PathStep{
 			Hop: hop, Role: "access",
 			DeviceID: &acc.SwitchID, DeviceName: &acc.SwitchName, IP: acc.SwitchIP,
-			IfIndex: acc.IfIndex, IfName: acc.IfName, VLANID: &v, PortRole: acc.PortRole, Source: &msrc,
-		})
+			IfIndex: acc.IfIndex, IfName: acc.IfName, PortRole: acc.PortRole, Source: &msrc,
+		}
+		if acc.VLANConfigured { // only assert a real, configured VLAN (not an FDB artifact)
+			v := acc.VLANID
+			accStep.VLANID = &v
+		}
+		steps = append(steps, accStep)
 		hop++
 
 		// Walk upstream from the access switch toward the edge.
