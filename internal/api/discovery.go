@@ -712,7 +712,7 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 						}
 					} else {
 						profRes = &scanProfileResult{Resolved: false}
-						cctx, ccancel := context.WithTimeout(ctx, 90*time.Second)
+						cctx, ccancel := context.WithTimeout(ctx, 120*time.Second) // room for ONVIF phase + reserved ISAPI fallback
 						// Try each operator-selected web credential (first success binds).
 						cv := s.runCCTVCollection(cctx, dev, scanWebCreds)
 						ccancel()

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -127,6 +128,16 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device, selectedCre
 	// web bases, not just http://ip:80 — same "discovered before guessing" rule as
 	// the ISAPI ladder. http://ip first (the common case), then the candidates.
 	onvifBases := dedupeStrings(append([]string{"http://" + ip}, prefer...))
+	if len(onvifBases) > 4 {
+		onvifBases = onvifBases[:4] // bound ONVIF probing so it fits the per-device budget
+	}
+	// ONVIF authenticates with the ONVIF user (WS-Security), usually a dedicated
+	// account — try ONVIF-kind creds before http_basic web logins so the right one
+	// is reached early. (The old order ground through wrong http_basic creds first,
+	// exhausting the 90s budget before the real ONVIF cred — and before ISAPI.)
+	sort.SliceStable(cands, func(i, j int) bool {
+		return cands[i].kind == string(domain.CredONVIF) && cands[j].kind != string(domain.CredONVIF)
+	})
 
 	var attempts []discovery.CredAttempt
 	lastReason, lastDetail := "auth_failed", "ONVIF authentication rejected"
@@ -134,11 +145,18 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device, selectedCre
 		if d.WebPrefProto == "isapi" {
 			break // operator forced ISAPI for this device — skip the ONVIF-first attempts
 		}
+		// Reserve budget for the ISAPI fallback: a long ONVIF phase (many creds ×
+		// bases) must not leave ISAPI a dead context. When the per-device deadline is
+		// near, stop ONVIF and let ISAPI run. (No deadline ⇒ standalone/fleet collect
+		// with a generous budget ⇒ try everything.)
+		if dl, ok := ctx.Deadline(); ok && time.Until(dl) < 25*time.Second {
+			break
+		}
 		var info onvif.CameraInfo
 		err := fmt.Errorf("no onvif endpoint answered")
 		okBase := ""
 		for _, base := range onvifBases {
-			cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			cctx, cancel := context.WithTimeout(ctx, 6*time.Second) // a port speaks ONVIF fast or not at all
 			info, err = onvif.Collect(cctx, onvif.NewClient(base, cd.user, cd.pass, doer))
 			cancel()
 			if err == nil {
@@ -194,7 +212,10 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device, selectedCre
 	// IPCamera) + identity AND, for recorders, the full inventory (channels, HDDs,
 	// recording/health). Bound-credential-only (above) avoids the lockout.
 	for _, cd := range cands {
-		ictx, cancel := context.WithTimeout(ctx, 90*time.Second) // deviceInfo + channel/storage endpoints
+		if dl, ok := ctx.Deadline(); ok && time.Until(dl) < 6*time.Second {
+			break // out of budget — don't fire an ISAPI request that will insta-timeout
+		}
+		ictx, cancel := context.WithTimeout(ctx, 90*time.Second) // deviceInfo + channel/storage (bounded by remaining budget)
 		nvr, err := isapi.Collect(ictx, ip, cd.user, cd.pass, nil, prefer)
 		cancel()
 		category, detail := "success", "ISAPI authenticated"
