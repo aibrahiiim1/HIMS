@@ -92,7 +92,34 @@ func (c *Client) ListPhones(ctx context.Context) ([]Phone, error) {
 	if resp.StatusCode == http.StatusUnauthorized {
 		return nil, fmt.Errorf("cucm: AXL auth failed (401)")
 	}
+	// A non-200 status is an error — NOT an empty phone list. Cisco returns an
+	// HTML error page (e.g. HTTP 599 "The specified version is not available.
+	// Available versions are 1.0, 6.0, 6.1, 7.0 and 7.1" on legacy CUCM), which
+	// is not a SOAP body; surface it instead of silently reporting 0 phones.
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("cucm: AXL HTTP %d — %s", resp.StatusCode, axlErrorSummary(raw))
+	}
 	return parsePhones(raw)
+}
+
+// axlErrorSummary pulls a short human message out of a Cisco error response —
+// the AXL <axl:message> for a SOAP fault, else the visible bit of an HTML page.
+func axlErrorSummary(raw []byte) string {
+	s := string(raw)
+	if i := strings.Index(s, "HTTP Status"); i >= 0 { // Cisco HTML error report
+		end := strings.IndexAny(s[i:], "<\n")
+		if end < 0 {
+			end = len(s) - i
+		}
+		return strings.TrimSpace(s[i : i+end])
+	}
+	if lr := (listPhoneResp{}); xml.Unmarshal(raw, &lr) == nil && lr.Fault != "" {
+		return lr.Fault
+	}
+	if len(s) > 200 {
+		s = s[:200]
+	}
+	return strings.TrimSpace(s)
 }
 
 func parsePhones(raw []byte) ([]Phone, error) {

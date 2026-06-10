@@ -54,11 +54,27 @@ func parseVPConfig(b []byte) vpConfig {
 	return c
 }
 
-// insecureDoer is an HTTP client that tolerates self-signed vendor certs.
+// insecureDoer is an HTTP client that tolerates self-signed vendor certs AND
+// the legacy TLS of old appliances (e.g. CUCM 7.x, ESXi). MinVersion TLS 1.0
+// alone is not enough — old boxes offer only legacy/insecure cipher suites that
+// Go disables by default, so the handshake fails ("remote error: tls: handshake
+// failure"). Enabling the full cipher list (secure + insecure) is what lets the
+// CUCM AXL endpoint complete the handshake. Verified live against CUCM 120.0.200.10.
 func insecureDoer(timeout time.Duration) *http.Client {
+	var ids []uint16
+	for _, s := range tls.CipherSuites() {
+		ids = append(ids, s.ID)
+	}
+	for _, s := range tls.InsecureCipherSuites() {
+		ids = append(ids, s.ID)
+	}
 	return &http.Client{
-		Timeout:   timeout,
-		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS10}},
+		Timeout: timeout,
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: true,
+			MinVersion:         tls.VersionTLS10,
+			CipherSuites:       ids,
+		}},
 	}
 }
 

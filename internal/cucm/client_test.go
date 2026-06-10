@@ -62,3 +62,18 @@ func TestListPhones_AuthFailed(t *testing.T) {
 		t.Fatal("401 should error")
 	}
 }
+
+// A non-200 Cisco error page (legacy CUCM returns HTTP 599 + HTML when the AXL
+// schema version is wrong) must be an ERROR, never a silent "0 phones".
+func TestListPhones_VersionError599(t *testing.T) {
+	html := `<html><head><title>Cisco System - Error report</title></head><body>` +
+		`HTTP Status 599 - The specified version is not available.  Available versions are 1.0, 6.0, 6.1, 7.0 and 7.1</body></html>`
+	c := NewClient("https://cucm:8443", "u", "p", "12.5", fakeDoer{body: html, code: 599})
+	phones, err := c.ListPhones(context.Background())
+	if err == nil {
+		t.Fatalf("HTTP 599 version error must error, got %d phones", len(phones))
+	}
+	if !strings.Contains(err.Error(), "599") || !strings.Contains(err.Error(), "version") {
+		t.Fatalf("error should surface the Cisco status/message, got: %v", err)
+	}
+}
