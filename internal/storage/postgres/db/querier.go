@@ -711,6 +711,9 @@ type Querier interface {
 	UpsertAccessPoint(ctx context.Context, arg UpsertAccessPointParams) (AccessPoint, error)
 	UpsertBMCInfo(ctx context.Context, arg UpsertBMCInfoParams) error
 	UpsertBMCSensor(ctx context.Context, arg UpsertBMCSensorParams) error
+	// Enriched read-only camera facts from ISAPI (NIC + time + firmware/serial).
+	// COALESCE keeps an existing value when a re-collect doesn't re-resolve a field.
+	UpsertCameraEnrichment(ctx context.Context, arg UpsertCameraEnrichmentParams) error
 	UpsertCameraInfo(ctx context.Context, arg UpsertCameraInfoParams) (CameraInfo, error)
 	UpsertDeviceFact(ctx context.Context, arg UpsertDeviceFactParams) error
 	UpsertDeviceLifecycle(ctx context.Context, arg UpsertDeviceLifecycleParams) (DeviceLifecycle, error)
