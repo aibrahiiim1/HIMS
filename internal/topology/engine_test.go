@@ -111,6 +111,15 @@ func (f *fakeQuerier) ListVlans(_ context.Context, id uuid.UUID) ([]db.Vlan, err
 func (f *fakeQuerier) ListPortVlans(_ context.Context, id uuid.UUID) ([]db.PortVlan, error) {
 	return f.portVlans[id], nil
 }
+func (f *fakeQuerier) FindPhoneByIP(_ context.Context, _ *string) ([]db.FindPhoneByIPRow, error) {
+	return nil, nil
+}
+func (f *fakeQuerier) FindNVRsForCamera(_ context.Context, _ *uuid.UUID) ([]db.FindNVRsForCameraRow, error) {
+	return nil, nil
+}
+func (f *fakeQuerier) NVRChannelStats(_ context.Context, _ uuid.UUID) (db.NVRChannelStatsRow, error) {
+	return db.NVRChannelStatsRow{}, nil
+}
 
 func TestSearchMAC_NoResults(t *testing.T) {
 	e := New(&fakeQuerier{})

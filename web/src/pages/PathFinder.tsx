@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { useMutation } from '@tanstack/react-query'
 import {
   Route as RouteIcon, Search, MonitorSmartphone, Network, Flame, Router, Server,
-  ArrowDown, CircleHelp, ShieldCheck, Clock, Share2, List, Wifi,
+  ArrowDown, CircleHelp, ShieldCheck, Clock, Share2, List, Wifi, Video, Phone,
 } from 'lucide-react'
 import { api, type SearchResult, type SwitchPortEntry } from '../api'
 import { PageHeader, Panel, EmptyState, timeAgo } from '../components/ui'
@@ -160,6 +160,8 @@ function PathGraphCard({ res }: { res: SearchResult }) {
           </span>
         </div>
       )}
+      <VoiceBanner v={res.voice} />
+      <CctvBanner c={res.cctv} />
       {res.path.length === 0 ? (
         <EmptyState icon={CircleHelp} title="No path to draw" message="The endpoint was not found in any MAC/FDB table, so there is no Layer-2 path to visualize." />
       ) : (
@@ -196,6 +198,8 @@ function ResultCard({ res }: { res: SearchResult }) {
       subtitle={res.query_type.toUpperCase()}
       actions={<span className={`badge ${conf.cls}`}><ShieldCheck size={13} /> {conf.label}</span>}
     >
+      <VoiceBanner v={res.voice} />
+      <CctvBanner c={res.cctv} />
       <div className="grid-2" style={{ alignItems: 'start', gap: 24 }}>
         {/* The path chain */}
         <div>
@@ -276,6 +280,53 @@ function ResultCard({ res }: { res: SearchResult }) {
         </div>
       </div>
     </Panel>
+  )
+}
+
+// VoiceBanner: an IP phone at the searched IP — its directory number + the CM node
+// (registrar) / PBX cluster it registers to, plus live registration state.
+function VoiceBanner({ v }: { v?: import('../api').VoiceTrace | null }) {
+  if (!v) return null
+  const reg = (v.registration ?? '').toLowerCase()
+  const tone = reg === 'registered' ? 'ok' : reg && reg !== 'unknown' ? 'crit' : 'info'
+  const where = v.registrar || v.pbx_name
+  return (
+    <div className={`enc-banner ${tone === 'ok' ? 'ok' : tone === 'crit' ? 'crit' : 'info'}`}
+      style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+      <Phone size={15} />
+      <span>
+        IP phone{v.extension && <> · extension <strong>{v.extension}</strong></>}
+        {v.model && <> · {v.model}</>}
+        {where && <> · registered to <strong>{where}</strong></>}
+        {v.registration && <> · {v.registration}</>}
+      </span>
+    </div>
+  )
+}
+
+// CctvBanner: a camera's recorder(s) (which NVR + channel), or an NVR's channel count.
+function CctvBanner({ c }: { c?: import('../api').CctvTrace | null }) {
+  if (!c || (!c.is_nvr && !(c.recorded_by && c.recorded_by.length))) return null
+  return (
+    <div className="enc-banner info" style={{ marginBottom: 12, display: 'flex', alignItems: 'flex-start', gap: 8, flexWrap: 'wrap' }}>
+      <Video size={15} style={{ marginTop: 2 }} />
+      <span>
+        {c.is_nvr ? (
+          <>NVR / DVR — <strong>{c.channel_total ?? 0}</strong> camera channel{(c.channel_total ?? 0) === 1 ? '' : 's'}
+            {c.channel_linked ? <> · {c.channel_linked} linked to an inventoried camera</> : null}</>
+        ) : (
+          <>Camera recorded by{' '}
+            {c.recorded_by!.map((r, i) => (
+              <span key={i}>
+                {i > 0 && ', '}
+                <strong>{r.nvr_name}</strong>{r.channel_no ? <> ch {r.channel_no}</> : null}
+                {r.status && <> ({r.status})</>}
+              </span>
+            ))}
+          </>
+        )}
+      </span>
+    </div>
   )
 }
 

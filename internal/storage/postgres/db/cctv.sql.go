@@ -38,6 +38,50 @@ func (q *Queries) CountNVRChannels(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+const findNVRsForCamera = `-- name: FindNVRsForCamera :many
+SELECT ch.nvr_device_id, d.name AS nvr_name, COALESCE(host(d.primary_ip),'')::text AS nvr_ip,
+       ch.channel_no, COALESCE(ch.status,'')::text AS status
+FROM nvr_channels ch JOIN devices d ON d.id = ch.nvr_device_id AND d.deleted_at IS NULL
+WHERE ch.camera_device_id = $1
+ORDER BY d.name, ch.channel_no
+`
+
+type FindNVRsForCameraRow struct {
+	NvrDeviceID uuid.UUID `json:"nvr_device_id"`
+	NvrName     string    `json:"nvr_name"`
+	NvrIp       string    `json:"nvr_ip"`
+	ChannelNo   int32     `json:"channel_no"`
+	Status      string    `json:"status"`
+}
+
+// Path Finder: which NVR/DVR(s) record this camera device, with the channel +
+// recording status, so a camera's path shows the recorder it feeds.
+func (q *Queries) FindNVRsForCamera(ctx context.Context, cameraDeviceID *uuid.UUID) ([]FindNVRsForCameraRow, error) {
+	rows, err := q.db.Query(ctx, findNVRsForCamera, cameraDeviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []FindNVRsForCameraRow{}
+	for rows.Next() {
+		var i FindNVRsForCameraRow
+		if err := rows.Scan(
+			&i.NvrDeviceID,
+			&i.NvrName,
+			&i.NvrIp,
+			&i.ChannelNo,
+			&i.Status,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getCameraInfo = `-- name: GetCameraInfo :one
 SELECT device_id, manufacturer, model, resolution, rtsp_url, onvif_url, last_seen_at, device_name, firmware, serial, mac_address, ip_address, subnet_mask, gateway, dns_server, ntp_server, time_zone FROM camera_info WHERE device_id = $1
 `
@@ -158,6 +202,24 @@ func (q *Queries) ListNVRStorage(ctx context.Context, nvrDeviceID uuid.UUID) ([]
 		return nil, err
 	}
 	return items, nil
+}
+
+const nVRChannelStats = `-- name: NVRChannelStats :one
+SELECT count(*)::bigint AS total, count(camera_device_id)::bigint AS linked
+FROM nvr_channels WHERE nvr_device_id = $1
+`
+
+type NVRChannelStatsRow struct {
+	Total  int64 `json:"total"`
+	Linked int64 `json:"linked"`
+}
+
+// Path Finder: per-NVR channel totals (and how many are linked to a camera device).
+func (q *Queries) NVRChannelStats(ctx context.Context, nvrDeviceID uuid.UUID) (NVRChannelStatsRow, error) {
+	row := q.db.QueryRow(ctx, nVRChannelStats, nvrDeviceID)
+	var i NVRChannelStatsRow
+	err := row.Scan(&i.Total, &i.Linked)
+	return i, err
 }
 
 const reconcileNVRChannelLinks = `-- name: ReconcileNVRChannelLinks :execrows

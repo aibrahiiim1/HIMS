@@ -34,6 +34,20 @@ ON CONFLICT (device_id) DO UPDATE SET
 -- name: ListNVRChannels :many
 SELECT * FROM nvr_channels WHERE nvr_device_id = $1 ORDER BY channel_no;
 
+-- name: FindNVRsForCamera :many
+-- Path Finder: which NVR/DVR(s) record this camera device, with the channel +
+-- recording status, so a camera's path shows the recorder it feeds.
+SELECT ch.nvr_device_id, d.name AS nvr_name, COALESCE(host(d.primary_ip),'')::text AS nvr_ip,
+       ch.channel_no, COALESCE(ch.status,'')::text AS status
+FROM nvr_channels ch JOIN devices d ON d.id = ch.nvr_device_id AND d.deleted_at IS NULL
+WHERE ch.camera_device_id = $1
+ORDER BY d.name, ch.channel_no;
+
+-- name: NVRChannelStats :one
+-- Path Finder: per-NVR channel totals (and how many are linked to a camera device).
+SELECT count(*)::bigint AS total, count(camera_device_id)::bigint AS linked
+FROM nvr_channels WHERE nvr_device_id = $1;
+
 -- name: UpsertNVRChannel :one
 INSERT INTO nvr_channels (nvr_device_id, channel_no, camera_name, camera_ip, camera_device_id, status, enabled)
 VALUES ($1,$2,$3,$4,$5,$6,$7)

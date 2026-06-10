@@ -56,6 +56,11 @@ type Querier interface {
 	// Per-port VLAN membership (untagged/native + tagged) — the authoritative VLAN
 	// config for a switch port, preferred over the FDB-derived VLAN.
 	ListPortVlans(ctx context.Context, deviceID uuid.UUID) ([]db.PortVlan, error)
+	// Voice + CCTV relationship enrichment for the Path Finder: an IP phone's
+	// directory number/registrar, and a camera's recording NVR / an NVR's channels.
+	FindPhoneByIP(ctx context.Context, ipAddress *string) ([]db.FindPhoneByIPRow, error)
+	FindNVRsForCamera(ctx context.Context, cameraDeviceID *uuid.UUID) ([]db.FindNVRsForCameraRow, error)
+	NVRChannelStats(ctx context.Context, nvrDeviceID uuid.UUID) (db.NVRChannelStatsRow, error)
 }
 
 // Link is a directed network link for API/UI consumption.
@@ -111,6 +116,44 @@ type SearchResult struct {
 	// the path then starts at the AP the client is on, then AP → controller → wired
 	// uplink switch → core.
 	Wireless *WirelessTrace `json:"wireless,omitempty"`
+	// CCTV relationship (set when the searched device is a camera or an NVR): the
+	// recorder(s) a camera feeds, or an NVR's channel totals.
+	Cctv *CctvTrace `json:"cctv,omitempty"`
+	// Voice association (set when the searched IP belongs to an IP phone): its
+	// directory number + the CM node / PBX it registers to.
+	Voice *VoiceTrace `json:"voice,omitempty"`
+}
+
+// CctvRecorder is one NVR/DVR that records a camera, with the channel + status.
+type CctvRecorder struct {
+	NVRDeviceID uuid.UUID `json:"nvr_device_id"`
+	NVRName     string    `json:"nvr_name"`
+	NVRIP       string    `json:"nvr_ip,omitempty"`
+	ChannelNo   int32     `json:"channel_no"`
+	Status      string    `json:"status,omitempty"`
+}
+
+// CctvTrace links a camera to the recorder(s) that capture it, or summarizes an
+// NVR's own channels — so a CCTV device's path shows the recording relationship.
+type CctvTrace struct {
+	IsNVR         bool           `json:"is_nvr,omitempty"`
+	ChannelTotal  int64          `json:"channel_total,omitempty"`  // NVR side: total channels
+	ChannelLinked int64          `json:"channel_linked,omitempty"` // NVR side: channels mapped to a camera device
+	RecordedBy    []CctvRecorder `json:"recorded_by,omitempty"`    // camera side: NVR(s) recording this camera
+}
+
+// VoiceTrace describes an IP phone found at the searched IP — its directory
+// number, model, registration status, and the CM node (registrar) + PBX cluster
+// it registers to.
+type VoiceTrace struct {
+	Extension    string     `json:"extension,omitempty"`
+	DeviceName   string     `json:"device_name,omitempty"` // SEP<mac> / set name
+	Model        string     `json:"model,omitempty"`
+	Description  string     `json:"description,omitempty"`
+	Registration string     `json:"registration,omitempty"`
+	Registrar    string     `json:"registrar,omitempty"`     // CM node IP the phone registers to
+	PBXDeviceID  *uuid.UUID `json:"pbx_device_id,omitempty"` // the owning CUCM/PBX device
+	PBXName      string     `json:"pbx_name,omitempty"`
 }
 
 // WirelessTrace describes a searched endpoint's wireless association — the client,
@@ -447,8 +490,51 @@ func (e *Engine) SearchIP(ctx context.Context, ip netip.Addr) (SearchResult, err
 			"IP resolved to its MAC via " + via + " (no ARP entry for this IP)",
 		}, res.ConfidenceReasons...)
 	}
+	e.attachVoiceCctv(ctx, &res, ip.String())
 	res.normalizeSlices()
 	return res, nil
+}
+
+// attachVoiceCctv enriches a result with voice + CCTV relationships: an IP phone
+// at the searched IP (directory number + registrar + PBX), and — when the resolved
+// device is a camera or NVR — the recorder(s) it feeds or its channel totals.
+// Best-effort: query failures leave the trace nil.
+func (e *Engine) attachVoiceCctv(ctx context.Context, res *SearchResult, ip string) {
+	if ip != "" {
+		if rows, err := e.q.FindPhoneByIP(ctx, &ip); err == nil && len(rows) > 0 {
+			r := rows[0]
+			id := r.PbxDeviceID
+			res.Voice = &VoiceTrace{
+				Extension: ds(r.Extension), DeviceName: r.Name, Model: ds(r.Model),
+				Description: ds(r.Description), Registration: ds(r.Registration),
+				Registrar: ds(r.Registrar), PBXDeviceID: &id, PBXName: r.PbxName,
+			}
+		}
+	}
+	if res.DeviceID != nil {
+		ct := &CctvTrace{}
+		if nvrs, err := e.q.FindNVRsForCamera(ctx, res.DeviceID); err == nil {
+			for _, n := range nvrs {
+				ct.RecordedBy = append(ct.RecordedBy, CctvRecorder{
+					NVRDeviceID: n.NvrDeviceID, NVRName: n.NvrName, NVRIP: n.NvrIp,
+					ChannelNo: n.ChannelNo, Status: n.Status,
+				})
+			}
+		}
+		if stats, err := e.q.NVRChannelStats(ctx, *res.DeviceID); err == nil && stats.Total > 0 {
+			ct.IsNVR, ct.ChannelTotal, ct.ChannelLinked = true, stats.Total, stats.Linked
+		}
+		if ct.IsNVR || len(ct.RecordedBy) > 0 {
+			res.Cctv = ct
+		}
+	}
+}
+
+func ds(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }
 
 // SearchMAC resolves a MAC address to the switch port(s) that carry it.
@@ -503,6 +589,12 @@ func (e *Engine) SearchHostname(ctx context.Context, name string) ([]SearchResul
 			sr.ARPDeviceID, sr.ARPDeviceName = sub.ARPDeviceID, sub.ARPDeviceName
 			sr.ARPSource, sr.ARPLastSeen = sub.ARPSource, sub.ARPLastSeen
 			sr.Confidence, sr.ConfidenceReasons = sub.Confidence, sub.ConfidenceReasons
+			sr.Voice, sr.Cctv = sub.Voice, sub.Cctv
+		}
+		// A device matched by name may itself be a camera/NVR even without a usable
+		// IP path — attach the CCTV relationship directly.
+		if sr.Cctv == nil {
+			e.attachVoiceCctv(ctx, &sr, "")
 		}
 		sr.normalizeSlices()
 		out = append(out, sr)

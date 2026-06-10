@@ -584,12 +584,12 @@ func (s *Server) collectCUCMProfile(ctx context.Context, p db.VendorConnectionPr
 	}
 	now := time.Now().UTC()
 	for _, ph := range phones {
-		ip, reg := ph.IP, ""
+		ip, reg, registrar := ph.IP, "", ""
 		if st, ok := ris[ph.Name]; ok {
 			if ip == "" {
 				ip = st.IP
 			}
-			reg = st.Status
+			reg, registrar = st.Status, st.Registrar
 		}
 		if ip != "" {
 			ipCount++
@@ -598,7 +598,7 @@ func (s *Server) collectCUCMProfile(ctx context.Context, p db.VendorConnectionPr
 			DeviceID: dev.ID, Name: ph.Name, Model: nzPtr(ph.Model), Description: nzPtr(ph.Description),
 			DevicePool: nzPtr(ph.DevicePool), CollectionSource: "axl", LastSeenAt: now,
 			Extension: nzPtr(ph.Extension), MacAddress: nzPtr(ph.MAC), IpAddress: nzPtr(ip),
-			Registration: nzPtr(reg),
+			Registration: nzPtr(reg), Registrar: nzPtr(registrar),
 		})
 	}
 	if blob, merr := domain.MarshalEvidence(nil); merr == nil {

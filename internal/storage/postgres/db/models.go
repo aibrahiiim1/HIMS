@@ -844,6 +844,7 @@ type PbxPhone struct {
 	MacAddress       *string   `json:"mac_address"`
 	IpAddress        *string   `json:"ip_address"`
 	Registration     *string   `json:"registration"`
+	Registrar        *string   `json:"registrar"`
 }
 
 type Permission struct {

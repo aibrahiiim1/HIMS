@@ -226,6 +226,12 @@ type Querier interface {
 	FindMACByIP(ctx context.Context, ipAddress netip.Addr) ([]FindMACByIPRow, error)
 	// Topology search: which switch + port + VLAN carries a MAC?
 	FindMACOnSwitches(ctx context.Context, mac string) ([]FindMACOnSwitchesRow, error)
+	// Path Finder: which NVR/DVR(s) record this camera device, with the channel +
+	// recording status, so a camera's path shows the recorder it feeds.
+	FindNVRsForCamera(ctx context.Context, cameraDeviceID *uuid.UUID) ([]FindNVRsForCameraRow, error)
+	// Path Finder: which phone(s) carry this IP, the directory number, registration
+	// status + the CM node (registrar), and the owning PBX device (CUCM cluster).
+	FindPhoneByIP(ctx context.Context, ipAddress *string) ([]FindPhoneByIPRow, error)
 	// Path Finder: exact-match a search term (MAC / IP / hostname) to an associated
 	// wireless client that has a known AP, so the traced path can START at the access
 	// point the client is connected to. Exact (not substring) match avoids tracing an
@@ -546,6 +552,8 @@ type Querier interface {
 	// score and is clickable, but never inflates the "down"/offline bucket. A device
 	// is "monitored" when it has at least one enabled check.
 	MonitoringStatusOverview(ctx context.Context) ([]MonitoringStatusOverviewRow, error)
+	// Path Finder: per-NVR channel totals (and how many are linked to a camera device).
+	NVRChannelStats(ctx context.Context, nvrDeviceID uuid.UUID) (NVRChannelStatsRow, error)
 	// ---- Alerts ---------------------------------------------------------------
 	// Atomic open: ON CONFLICT against idx_alerts_one_open means a second open
 	// for the same (rule, check) is a no-op. RETURNING yields a row ONLY on a

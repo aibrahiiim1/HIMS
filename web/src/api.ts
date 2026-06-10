@@ -452,6 +452,40 @@ export interface SearchResult {
   // Set only when the searched endpoint is a Wi-Fi client: the path then starts at
   // the AP the client is associated to (client → AP → controller → wired uplink).
   wireless?: WirelessTrace | null
+  // Set when the searched device is a camera or NVR: the recorder(s) a camera feeds
+  // or an NVR's channel totals.
+  cctv?: CctvTrace | null
+  // Set when the searched IP belongs to an IP phone: directory number + registrar.
+  voice?: VoiceTrace | null
+}
+
+// One NVR/DVR that records a camera.
+export interface CctvRecorder {
+  nvr_device_id: string
+  nvr_name: string
+  nvr_ip?: string
+  channel_no: number
+  status?: string
+}
+
+// A CCTV device's recording relationship — a camera's recorder(s), or an NVR's channels.
+export interface CctvTrace {
+  is_nvr?: boolean
+  channel_total?: number
+  channel_linked?: number
+  recorded_by?: CctvRecorder[]
+}
+
+// An IP phone found at the searched IP — directory number + where it registers.
+export interface VoiceTrace {
+  extension?: string
+  device_name?: string
+  model?: string
+  description?: string
+  registration?: string
+  registrar?: string
+  pbx_device_id?: string | null
+  pbx_name?: string
 }
 
 // PathStep.role values:

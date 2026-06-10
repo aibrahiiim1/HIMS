@@ -1,6 +1,6 @@
 -- name: UpsertPbxPhone :exec
-INSERT INTO pbx_phones (device_id, name, model, description, device_pool, collection_source, last_seen_at, extension, mac_address, ip_address, registration)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+INSERT INTO pbx_phones (device_id, name, model, description, device_pool, collection_source, last_seen_at, extension, mac_address, ip_address, registration, registrar)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 ON CONFLICT (device_id, name) DO UPDATE SET
     model = EXCLUDED.model,
     description = EXCLUDED.description,
@@ -10,7 +10,18 @@ ON CONFLICT (device_id, name) DO UPDATE SET
     extension = COALESCE(NULLIF(EXCLUDED.extension,''), pbx_phones.extension),
     mac_address = COALESCE(NULLIF(EXCLUDED.mac_address,''), pbx_phones.mac_address),
     ip_address = COALESCE(NULLIF(EXCLUDED.ip_address,''), pbx_phones.ip_address),
-    registration = COALESCE(NULLIF(EXCLUDED.registration,''), pbx_phones.registration);
+    registration = COALESCE(NULLIF(EXCLUDED.registration,''), pbx_phones.registration),
+    registrar = COALESCE(NULLIF(EXCLUDED.registrar,''), pbx_phones.registrar);
+
+-- name: FindPhoneByIP :many
+-- Path Finder: which phone(s) carry this IP, the directory number, registration
+-- status + the CM node (registrar), and the owning PBX device (CUCM cluster).
+SELECT p.extension, p.name, p.model, p.description, p.registration, p.registrar,
+       p.device_id AS pbx_device_id, d.name AS pbx_name, d.category AS pbx_category
+FROM pbx_phones p JOIN devices d ON d.id = p.device_id AND d.deleted_at IS NULL
+WHERE p.ip_address = $1
+ORDER BY p.extension
+LIMIT 10;
 
 -- name: ListPbxPhones :many
 SELECT * FROM pbx_phones WHERE device_id = $1 ORDER BY name;

@@ -18,8 +18,9 @@ import (
 
 // DeviceStatus is one device's real-time registration snapshot.
 type DeviceStatus struct {
-	IP     string // registered IP, "" if not registered / unknown
-	Status string // Registered | UnRegistered | Rejected | Unknown | PartiallyRegistered
+	IP        string // registered IP, "" if not registered / unknown
+	Status    string // Registered | UnRegistered | Rejected | Unknown | PartiallyRegistered
+	Registrar string // the CM node (IP/name) the phone is registered to
 }
 
 type risDevice struct {
@@ -29,6 +30,7 @@ type risDevice struct {
 }
 type risResp struct {
 	Nodes []struct {
+		Name    string      `xml:"Name"` // the CM node — the registrar for its devices
 		Devices []risDevice `xml:"CmDevices>item"`
 	} `xml:"Body>SelectCmDeviceResponse>SelectCmDeviceResult>CmNodes>item"`
 	StateInfo string `xml:"Body>SelectCmDeviceResponse>StateInfo"`
@@ -58,7 +60,7 @@ func (c *Client) RegisteredPhoneStatus(ctx context.Context) (map[string]DeviceSt
 				if _, seen := out[d.Name]; !seen {
 					added++
 				}
-				out[d.Name] = DeviceStatus{IP: d.IP, Status: d.Status}
+				out[d.Name] = DeviceStatus{IP: d.IP, Status: d.Status, Registrar: n.Name}
 			}
 		}
 		// Stop when a page adds nothing new or the cluster echoes a stable state.
