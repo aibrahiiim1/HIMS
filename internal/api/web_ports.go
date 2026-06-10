@@ -161,7 +161,18 @@ func (s *Server) webCandidateBases(ctx context.Context, d db.Device) []string {
 			add(c.Scheme, int(c.Port))
 		}
 	}
-	return out
+	// Dedupe, preserving first-seen order (same as the collector's internal dedupe),
+	// so the displayed "endpoints tried" list is clean.
+	seen := make(map[string]bool, len(out))
+	deduped := out[:0]
+	for _, b := range out {
+		if seen[b] {
+			continue
+		}
+		seen[b] = true
+		deduped = append(deduped, b)
+	}
+	return deduped
 }
 
 // enabledWebPorts returns the enabled configured candidate ports, for injection
@@ -333,7 +344,12 @@ func (s *Server) deviceWebAccess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	disc := []discoveredPortDTO{}
+	seenPort := map[int]bool{}
 	for _, p := range s.deviceOpenPorts(ctx, d.ID) {
+		if seenPort[p] {
+			continue
+		}
+		seenPort[p] = true
 		sch, kind, web := webClass(p, d.Category)
 		disc = append(disc, discoveredPortDTO{Port: p, Scheme: sch, Kind: kind, Web: web})
 	}

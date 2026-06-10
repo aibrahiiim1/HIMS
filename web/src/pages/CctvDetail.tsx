@@ -71,6 +71,7 @@ export function CctvDetail() {
               message="Bind the device's web (ONVIF/http_basic) credential and click Collect — identity populates from ONVIF/ISAPI. Reachability is already monitored." />
           )}
         </Panel>
+        <WebAccessPanel deviceId={id!} />
       </div>
     )
   }
