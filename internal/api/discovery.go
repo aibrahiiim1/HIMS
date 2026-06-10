@@ -412,7 +412,19 @@ func (s *Server) scanCredentialTier(ctx context.Context, credIDStrs, groupIDStrs
 // runScanJob is the background scan worker. It owns its own context (the HTTP
 // request's is long gone) and records per-host outcomes + a final job status.
 func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUID, concurrency int, extraGroups []credresolver.ScopedGroup, snmpTO, portTO time.Duration) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	// Overall job budget scales with the host count: a flat 30m can't cover a large
+	// multi-subnet scan whose deep collection is slow (camera ONVIF/ISAPI walks),
+	// which truncated the tail of a 764-host two-subnet scan ("context deadline
+	// exceeded" with the last /24 left unprocessed). Budget ~10s/host on a 45m floor,
+	// capped at 4h so a hung run can't linger indefinitely.
+	deadline := 45 * time.Minute
+	if perHost := time.Duration(len(hosts)) * 10 * time.Second; perHost > deadline {
+		deadline = perHost
+	}
+	if deadline > 4*time.Hour {
+		deadline = 4 * time.Hour
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), deadline)
 	defer cancel()
 
 	cfg := discovery.PipelineConfig{
