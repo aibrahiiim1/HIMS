@@ -41,13 +41,14 @@ var protocolLabels = map[string]string{
 	"vmware":        "VMware",
 	"fortigate_api": "FortiGate API",
 	"cucm_axl":      "CUCM AXL",
+	"omnipcx":       "OmniPCX (mgr)",
 	"ldap":          "LDAP",
 }
 
 // protocolOrder is the stable display order for the breakdown.
 var protocolOrder = []string{
 	"snmp_v2c", "snmp_v3", "ssh", "winrm", "wmi", "smb", "onvif", "isapi", "http", "rtsp",
-	"http_basic", "api_token", "vendor_api", "vmware", "fortigate_api", "cucm_axl", "ldap",
+	"http_basic", "api_token", "vendor_api", "vmware", "fortigate_api", "cucm_axl", "omnipcx", "ldap",
 }
 
 func protocolLabel(p string) string {

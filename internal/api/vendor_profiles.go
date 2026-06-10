@@ -20,6 +20,7 @@ import (
 	"github.com/coralsearesorts/hims/internal/domain"
 	"github.com/coralsearesorts/hims/internal/extreme"
 	"github.com/coralsearesorts/hims/internal/omada"
+	"github.com/coralsearesorts/hims/internal/omnipcx"
 	"github.com/coralsearesorts/hims/internal/onvif"
 	"github.com/coralsearesorts/hims/internal/ruckus"
 	"github.com/coralsearesorts/hims/internal/ruckuszd"
@@ -372,7 +373,13 @@ func (s *Server) runVendorProfileCollection(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "invalid id", http.StatusBadRequest)
 		return
 	}
-	ctx := r.Context()
+	// Detach the collection from the request lifecycle: some vendor collections
+	// run for minutes (e.g. the OmniPCX mgr telnet walk of ~800 subscribers), and
+	// a client navigation or dev-proxy timeout would otherwise cancel r.Context()
+	// and abort the collection mid-run. WithoutCancel keeps config values but not
+	// cancellation; a generous deadline still bounds it.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 6*time.Minute)
+	defer cancel()
 	p, err := s.queries.GetVendorProfile(ctx, id)
 	if err != nil {
 		writeErr(w, err)
@@ -426,6 +433,9 @@ func (s *Server) runVendorProfileCollection(w http.ResponseWriter, r *http.Reque
 		_ = s.queries.SetVendorProfileTest(ctx, db.SetVendorProfileTestParams{ID: id, LastTestOk: &ok, LastTestDetail: detail})
 	case "cucm":
 		ok, detail = s.collectCUCMProfile(ctx, p, dev)
+		_ = s.queries.SetVendorProfileTest(ctx, db.SetVendorProfileTestParams{ID: id, LastTestOk: &ok, LastTestDetail: detail})
+	case "alcatel":
+		ok, detail = s.collectAlcatelProfile(ctx, p, dev)
 		_ = s.queries.SetVendorProfileTest(ctx, db.SetVendorProfileTestParams{ID: id, LastTestOk: &ok, LastTestDetail: detail})
 	default:
 		detail = p.VendorType + " deep collection not implemented yet — detection + classification + this gate remain active"
@@ -596,6 +606,53 @@ func (s *Server) collectCUCMProfile(ctx context.Context, p db.VendorConnectionPr
 	}
 	_ = s.queries.UpdateDeviceMonitoringStatus(ctx, db.UpdateDeviceMonitoringStatusParams{ID: dev.ID, Status: "up"})
 	return true, "CUCM collected — " + itoaN(len(phones)) + " phone(s)"
+}
+
+// collectAlcatelProfile pulls the Alcatel OmniPCX Enterprise subscriber directory
+// over the `mgr` telnet CLI (see internal/omnipcx) and persists it to pbx_phones
+// with source "omnipcx". TargetUrl is the OXE host (telnet :23). Per-subscriber
+// name/set-type is a future enrichment (it needs a per-instance drilldown).
+func (s *Server) collectAlcatelProfile(ctx context.Context, p db.VendorConnectionProfile, dev db.Device) (bool, string) {
+	user, pass, hasCred := s.vendorProfileSecret(ctx, p)
+	if !hasCred {
+		return false, "no usable credential bound to this profile"
+	}
+	cctx, cancel := context.WithTimeout(ctx, 180*time.Second)
+	defer cancel()
+	c := &omnipcx.Client{Host: stripScheme(p.TargetUrl), User: user, Pass: pass}
+	res, err := c.ListSubscribers(cctx)
+	if err != nil {
+		return false, "OmniPCX mgr failed: " + shortErr(err)
+	}
+	now := time.Now().UTC()
+	for _, sub := range res.Subscribers {
+		var desc, model *string
+		if sub.Name != "" {
+			d := sub.Name
+			desc = &d
+		}
+		if sub.SetType != "" {
+			m := sub.SetType
+			model = &m
+		}
+		_ = s.queries.UpsertPbxPhone(ctx, db.UpsertPbxPhoneParams{
+			DeviceID: dev.ID, Name: sub.Number, Model: model, Description: desc,
+			CollectionSource: "omnipcx", LastSeenAt: now,
+		})
+	}
+	if blob, merr := domain.MarshalEvidence(nil); merr == nil {
+		conf := int16(85)
+		dc := "omnipcx"
+		_, _ = s.queries.UpdateDeviceClassification(ctx, db.UpdateDeviceClassificationParams{
+			ID: dev.ID, Category: string(domain.CatPBX), OsFamily: "", DeviceClass: &dc,
+			ConfidenceScore: &conf, ClassificationEvidence: blob,
+		})
+	}
+	if p.CredentialID != nil {
+		_ = s.queries.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: dev.ID, CredentialID: p.CredentialID})
+	}
+	_ = s.queries.UpdateDeviceMonitoringStatus(ctx, db.UpdateDeviceMonitoringStatusParams{ID: dev.ID, Status: "up"})
+	return true, "OmniPCX collected — " + itoaN(len(res.Subscribers)) + " subscriber(s)"
 }
 
 // resolveScanProfile finds the best enabled Vendor Connection Profile for a

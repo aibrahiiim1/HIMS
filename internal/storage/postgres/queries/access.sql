@@ -69,9 +69,12 @@ SELECT device_id, protocol::text AS protocol, source::text AS source FROM (
   UNION ALL
   SELECT DISTINCT device_id, 'snmp_v2c' AS protocol, 'evidence' AS source FROM printer_supplies
 
-  -- 9) PBX phone registry (Cisco CUCM AXL).
+  -- 9) PBX subscriber/phone registry — protocol per its collection_source so the
+  --    "Managed via" label is accurate: Cisco CUCM (AXL) vs Alcatel OmniPCX (mgr).
   UNION ALL
-  SELECT DISTINCT device_id, 'cucm_axl' AS protocol, 'evidence' AS source FROM pbx_phones
+  SELECT DISTINCT device_id,
+         CASE WHEN collection_source = 'omnipcx' THEN 'omnipcx' ELSE 'cucm_axl' END AS protocol,
+         'evidence' AS source FROM pbx_phones
 
   -- 10) Switch interface collection — SNMP or CLI(SSH) per its collection_source.
   UNION ALL
