@@ -1,12 +1,15 @@
 -- name: UpsertPbxPhone :exec
-INSERT INTO pbx_phones (device_id, name, model, description, device_pool, collection_source, last_seen_at)
-VALUES ($1,$2,$3,$4,$5,$6,$7)
+INSERT INTO pbx_phones (device_id, name, model, description, device_pool, collection_source, last_seen_at, extension, mac_address, ip_address)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 ON CONFLICT (device_id, name) DO UPDATE SET
     model = EXCLUDED.model,
     description = EXCLUDED.description,
     device_pool = EXCLUDED.device_pool,
     collection_source = EXCLUDED.collection_source,
-    last_seen_at = EXCLUDED.last_seen_at;
+    last_seen_at = EXCLUDED.last_seen_at,
+    extension = COALESCE(NULLIF(EXCLUDED.extension,''), pbx_phones.extension),
+    mac_address = COALESCE(NULLIF(EXCLUDED.mac_address,''), pbx_phones.mac_address),
+    ip_address = COALESCE(NULLIF(EXCLUDED.ip_address,''), pbx_phones.ip_address);
 
 -- name: ListPbxPhones :many
 SELECT * FROM pbx_phones WHERE device_id = $1 ORDER BY name;

@@ -29,7 +29,7 @@ func (q *Queries) DeleteStalePbxPhones(ctx context.Context, arg DeleteStalePbxPh
 }
 
 const listPbxPhones = `-- name: ListPbxPhones :many
-SELECT id, device_id, name, model, description, device_pool, collection_source, last_seen_at FROM pbx_phones WHERE device_id = $1 ORDER BY name
+SELECT id, device_id, name, model, description, device_pool, collection_source, last_seen_at, extension, mac_address, ip_address FROM pbx_phones WHERE device_id = $1 ORDER BY name
 `
 
 func (q *Queries) ListPbxPhones(ctx context.Context, deviceID uuid.UUID) ([]PbxPhone, error) {
@@ -50,6 +50,9 @@ func (q *Queries) ListPbxPhones(ctx context.Context, deviceID uuid.UUID) ([]PbxP
 			&i.DevicePool,
 			&i.CollectionSource,
 			&i.LastSeenAt,
+			&i.Extension,
+			&i.MacAddress,
+			&i.IpAddress,
 		); err != nil {
 			return nil, err
 		}
@@ -62,14 +65,17 @@ func (q *Queries) ListPbxPhones(ctx context.Context, deviceID uuid.UUID) ([]PbxP
 }
 
 const upsertPbxPhone = `-- name: UpsertPbxPhone :exec
-INSERT INTO pbx_phones (device_id, name, model, description, device_pool, collection_source, last_seen_at)
-VALUES ($1,$2,$3,$4,$5,$6,$7)
+INSERT INTO pbx_phones (device_id, name, model, description, device_pool, collection_source, last_seen_at, extension, mac_address, ip_address)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 ON CONFLICT (device_id, name) DO UPDATE SET
     model = EXCLUDED.model,
     description = EXCLUDED.description,
     device_pool = EXCLUDED.device_pool,
     collection_source = EXCLUDED.collection_source,
-    last_seen_at = EXCLUDED.last_seen_at
+    last_seen_at = EXCLUDED.last_seen_at,
+    extension = COALESCE(NULLIF(EXCLUDED.extension,''), pbx_phones.extension),
+    mac_address = COALESCE(NULLIF(EXCLUDED.mac_address,''), pbx_phones.mac_address),
+    ip_address = COALESCE(NULLIF(EXCLUDED.ip_address,''), pbx_phones.ip_address)
 `
 
 type UpsertPbxPhoneParams struct {
@@ -80,6 +86,9 @@ type UpsertPbxPhoneParams struct {
 	DevicePool       *string   `json:"device_pool"`
 	CollectionSource string    `json:"collection_source"`
 	LastSeenAt       time.Time `json:"last_seen_at"`
+	Extension        *string   `json:"extension"`
+	MacAddress       *string   `json:"mac_address"`
+	IpAddress        *string   `json:"ip_address"`
 }
 
 func (q *Queries) UpsertPbxPhone(ctx context.Context, arg UpsertPbxPhoneParams) error {
@@ -91,6 +100,9 @@ func (q *Queries) UpsertPbxPhone(ctx context.Context, arg UpsertPbxPhoneParams) 
 		arg.DevicePool,
 		arg.CollectionSource,
 		arg.LastSeenAt,
+		arg.Extension,
+		arg.MacAddress,
+		arg.IpAddress,
 	)
 	return err
 }

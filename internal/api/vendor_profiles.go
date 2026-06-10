@@ -578,19 +578,10 @@ func (s *Server) collectCUCMProfile(ctx context.Context, p db.VendorConnectionPr
 	}
 	now := time.Now().UTC()
 	for _, ph := range phones {
-		var model, desc, pool *string
-		if ph.Model != "" {
-			model = &ph.Model
-		}
-		if ph.Description != "" {
-			desc = &ph.Description
-		}
-		if ph.DevicePool != "" {
-			pool = &ph.DevicePool
-		}
 		_ = s.queries.UpsertPbxPhone(ctx, db.UpsertPbxPhoneParams{
-			DeviceID: dev.ID, Name: ph.Name, Model: model, Description: desc, DevicePool: pool,
-			CollectionSource: "axl", LastSeenAt: now,
+			DeviceID: dev.ID, Name: ph.Name, Model: nzPtr(ph.Model), Description: nzPtr(ph.Description),
+			DevicePool: nzPtr(ph.DevicePool), CollectionSource: "axl", LastSeenAt: now,
+			Extension: nzPtr(ph.Extension), MacAddress: nzPtr(ph.MAC), IpAddress: nzPtr(ph.IP),
 		})
 	}
 	if blob, merr := domain.MarshalEvidence(nil); merr == nil {
@@ -626,18 +617,10 @@ func (s *Server) collectAlcatelProfile(ctx context.Context, p db.VendorConnectio
 	}
 	now := time.Now().UTC()
 	for _, sub := range res.Subscribers {
-		var desc, model *string
-		if sub.Name != "" {
-			d := sub.Name
-			desc = &d
-		}
-		if sub.SetType != "" {
-			m := sub.SetType
-			model = &m
-		}
+		// On OXE the directory number IS the entry key, so extension = number.
 		_ = s.queries.UpsertPbxPhone(ctx, db.UpsertPbxPhoneParams{
-			DeviceID: dev.ID, Name: sub.Number, Model: model, Description: desc,
-			CollectionSource: "omnipcx", LastSeenAt: now,
+			DeviceID: dev.ID, Name: sub.Number, Model: nzPtr(sub.SetType), Description: nzPtr(sub.Name),
+			CollectionSource: "omnipcx", LastSeenAt: now, Extension: nzPtr(sub.Number),
 		})
 	}
 	if blob, merr := domain.MarshalEvidence(nil); merr == nil {

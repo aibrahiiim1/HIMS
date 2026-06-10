@@ -122,15 +122,30 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device, selectedCre
 	// guessing"). The ISAPI ladder is the fallback after these.
 	prefer := s.webCandidateBases(ctx, d)
 
+	// ONVIF can live on a non-standard port — budget gSOAP cameras commonly serve
+	// the device_service on :8000 (not :80). Try the device's discovered/candidate
+	// web bases, not just http://ip:80 — same "discovered before guessing" rule as
+	// the ISAPI ladder. http://ip first (the common case), then the candidates.
+	onvifBases := dedupeStrings(append([]string{"http://" + ip}, prefer...))
+
 	var attempts []discovery.CredAttempt
 	lastReason, lastDetail := "auth_failed", "ONVIF authentication rejected"
 	for _, cd := range cands {
 		if d.WebPrefProto == "isapi" {
 			break // operator forced ISAPI for this device — skip the ONVIF-first attempts
 		}
-		cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-		info, err := onvif.Collect(cctx, onvif.NewClient("http://"+ip, cd.user, cd.pass, doer))
-		cancel()
+		var info onvif.CameraInfo
+		err := fmt.Errorf("no onvif endpoint answered")
+		okBase := ""
+		for _, base := range onvifBases {
+			cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			info, err = onvif.Collect(cctx, onvif.NewClient(base, cd.user, cd.pass, doer))
+			cancel()
+			if err == nil {
+				okBase = base
+				break
+			}
+		}
 		category, detail := "success", "ONVIF authenticated"
 		if err != nil {
 			category, detail = categorizeCollectErr("onvif", err.Error())
@@ -157,7 +172,7 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device, selectedCre
 			ID: d.ID, Vendor: info.Manufacturer, Model: info.Model, Serial: info.Serial,
 		})
 		mfr, model, resolution := info.Manufacturer, info.Model, info.Resolution()
-		onvifURL := "http://" + ip + "/onvif/device_service"
+		onvifURL := okBase + "/onvif/device_service"
 		_, _ = s.queries.UpsertCameraInfo(ctx, db.UpsertCameraInfoParams{
 			DeviceID: d.ID, Manufacturer: strPtrOrNil(mfr), Model: strPtrOrNil(model),
 			Resolution: strPtrOrNil(resolution), OnvifUrl: &onvifURL,
@@ -165,7 +180,7 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device, selectedCre
 		cid := cd.id
 		_ = s.queries.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: d.ID, CredentialID: &cid})
 		_ = s.queries.SetDeviceCCTVCredential(ctx, db.SetDeviceCCTVCredentialParams{ID: d.ID, CctvCredentialID: &cid}) // durable CCTV web credential
-		s.recordWebSuccess(ctx, d.ID, "onvif", "http://"+ip, &cid)                                                    // real source = ONVIF
+		s.recordWebSuccess(ctx, d.ID, "onvif", okBase, &cid)                                                          // real source = ONVIF (actual port)
 		_ = s.queries.UpdateDeviceMonitoringStatus(ctx, db.UpdateDeviceMonitoringStatusParams{ID: d.ID, Status: "up"})
 
 		res = cctvResult{Status: "collected", CredentialUsed: cd.name, Category: string(cat),
@@ -360,6 +375,20 @@ func strPtrOrNil(s string) *string {
 		return nil
 	}
 	return &s
+}
+
+// dedupeStrings drops empties + duplicates, preserving first-seen order.
+func dedupeStrings(xs []string) []string {
+	seen := make(map[string]bool, len(xs))
+	out := make([]string, 0, len(xs))
+	for _, x := range xs {
+		if x == "" || seen[x] {
+			continue
+		}
+		seen[x] = true
+		out = append(out, x)
+	}
+	return out
 }
 
 // schemePortOf splits a base endpoint URL into its scheme + port (defaulting to

@@ -43,12 +43,15 @@ func NewClient(baseURL, user, pass, version string, doer Doer) *Client {
 	return &Client{BaseURL: strings.TrimRight(baseURL, "/"), Username: user, Password: pass, Version: version, Doer: doer}
 }
 
-// Phone is one registered phone from the CUCM device registry.
+// Phone is one phone from the CUCM device registry.
 type Phone struct {
 	Name        string
 	Model       string
 	Description string
 	DevicePool  string
+	Extension   string // primary line directory number (numplan.dnorpattern)
+	MAC         string // derived from a SEP<mac> hardware-phone name
+	IP          string // registered IP (real-time, best-effort; blank if unavailable)
 }
 
 type phoneXML struct {
@@ -141,11 +144,16 @@ func (c *Client) post(ctx context.Context, method, inner string) ([]byte, int, e
 }
 
 // listPhonesViaSQL pulls the registry with a raw query against the CUCM DB
-// (Informix; tkclass=1 is a phone). Column aliases map onto sqlPhoneRow.
+// (Informix; tkclass=1 is a phone). The numplan join yields the primary line's
+// directory number (extension); the MAC is derived from the SEP<mac> device name.
+// Column aliases map onto sqlPhoneRow.
 func (c *Client) listPhonesViaSQL(ctx context.Context) ([]Phone, error) {
-	const q = `select d.name as name, d.description as description, tm.name as model, dp.name as pool ` +
+	const q = `select d.name as name, d.description as description, tm.name as model, dp.name as pool, np.dnorpattern as dn ` +
 		`from device as d inner join typemodel as tm on d.tkmodel=tm.enum ` +
-		`inner join devicepool as dp on d.fkdevicepool=dp.pkid where d.tkclass=1`
+		`inner join devicepool as dp on d.fkdevicepool=dp.pkid ` +
+		`left outer join devicenumplanmap as dnpm on dnpm.fkdevice=d.pkid and dnpm.numplanindex=1 ` +
+		`left outer join numplan as np on np.pkid=dnpm.fknumplan ` +
+		`where d.tkclass=1`
 	raw, err := c.call(ctx, "executeSQLQuery", `<ns:executeSQLQuery><sql>`+q+`</sql></ns:executeSQLQuery>`)
 	if err != nil {
 		return nil, err
@@ -159,9 +167,35 @@ func (c *Client) listPhonesViaSQL(ctx context.Context) ([]Phone, error) {
 	}
 	out := make([]Phone, 0, len(sr.Rows))
 	for _, r := range sr.Rows {
-		out = append(out, Phone{Name: r.Name, Model: r.Model, Description: r.Description, DevicePool: r.Pool})
+		out = append(out, Phone{
+			Name: r.Name, Model: r.Model, Description: r.Description, DevicePool: r.Pool,
+			Extension: r.DN, MAC: macFromDeviceName(r.Name),
+		})
 	}
 	return out, nil
+}
+
+// macFromDeviceName turns a Cisco hardware-phone device name ("SEP6C504DDA6A82")
+// into a colon-separated MAC ("6c:50:4d:da:6a:82"). Non-SEP names (analog/SIP
+// trunk endpoints) have no MAC and return "".
+func macFromDeviceName(name string) string {
+	if len(name) != 15 || !strings.HasPrefix(name, "SEP") {
+		return ""
+	}
+	h := strings.ToLower(name[3:])
+	for _, r := range h {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
+			return ""
+		}
+	}
+	var b strings.Builder
+	for i := 0; i < len(h); i += 2 {
+		if i > 0 {
+			b.WriteByte(':')
+		}
+		b.WriteString(h[i : i+2])
+	}
+	return b.String()
 }
 
 type sqlPhoneRow struct {
@@ -169,6 +203,7 @@ type sqlPhoneRow struct {
 	Description string `xml:"description"`
 	Model       string `xml:"model"`
 	Pool        string `xml:"pool"`
+	DN          string `xml:"dn"`
 }
 
 type sqlPhoneResp struct {

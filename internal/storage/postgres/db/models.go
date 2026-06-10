@@ -840,6 +840,9 @@ type PbxPhone struct {
 	DevicePool       *string   `json:"device_pool"`
 	CollectionSource string    `json:"collection_source"`
 	LastSeenAt       time.Time `json:"last_seen_at"`
+	Extension        *string   `json:"extension"`
+	MacAddress       *string   `json:"mac_address"`
+	IpAddress        *string   `json:"ip_address"`
 }
 
 type Permission struct {
