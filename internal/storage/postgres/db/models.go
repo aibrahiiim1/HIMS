@@ -276,6 +276,12 @@ type Device struct {
 	// Operator-entered placeholder device (not auto-discovered/probed); its inventory data is manual.
 	IsVirtual        bool       `json:"is_virtual"`
 	CctvCredentialID *uuid.UUID `json:"cctv_credential_id"`
+	WebSchemePref    string     `json:"web_scheme_pref"`
+	WebPortPref      *int32     `json:"web_port_pref"`
+	WebAltPorts      string     `json:"web_alt_ports"`
+	WebNotes         string     `json:"web_notes"`
+	WebLastOk        string     `json:"web_last_ok"`
+	WebLastOkAt      *time.Time `json:"web_last_ok_at"`
 }
 
 type DeviceFact struct {
@@ -1079,6 +1085,15 @@ type Vlan struct {
 	Name             *string   `json:"name"`
 	CollectionSource string    `json:"collection_source"`
 	LastSeenAt       time.Time `json:"last_seen_at"`
+}
+
+type WebPortCandidate struct {
+	ID        uuid.UUID `json:"id"`
+	Port      int32     `json:"port"`
+	Scheme    string    `json:"scheme"`
+	Enabled   bool      `json:"enabled"`
+	Note      string    `json:"note"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type WirelessClient struct {

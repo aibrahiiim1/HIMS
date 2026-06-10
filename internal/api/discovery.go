@@ -423,6 +423,10 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 		// driver categories from product evidence (e.g. ExtremeCloud IQ Controller
 		// → wireless_controller, not "Extreme switch"). Loaded once per job.
 		Fingerprints: s.scanFingerprintLibrary(ctx),
+		// Operator-configured HTTP/Web candidate ports (Settings → Web Ports) are
+		// added to the scan's TCP port set so a device's custom web port (8008/8012/
+		// 8081…) is discovered open and stored, then preferred by the collectors.
+		ExtraPorts: s.enabledWebPorts(ctx),
 	}
 	applier := apply.New(s.queries)
 

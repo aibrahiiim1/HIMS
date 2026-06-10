@@ -75,12 +75,16 @@ func (n NVR) IsRecorder() bool {
 // channels, per-channel online status, HDD/storage, recording tracks and working
 // status. A nil doer uses PermissiveClient. Optional endpoints that 4xx are
 // recorded as probes (not failures). Only DeviceInfo is required.
-func Collect(ctx context.Context, ip, user, pass string, doer Doer) (NVR, error) {
+// prefer is an ordered list of base URLs (scheme://ip[:port]) to try BEFORE the
+// default scheme/port ladder — the device's last-OK endpoint, operator override,
+// scanned-open web ports, then the configured candidate ports. Pass nil to use
+// only the default ladder.
+func Collect(ctx context.Context, ip, user, pass string, doer Doer, prefer []string) (NVR, error) {
 	if doer == nil {
 		doer = PermissiveClient(15 * time.Second)
 	}
 	var out NVR
-	info, err := CollectDeviceInfo(ctx, ip, user, pass, doer)
+	info, err := CollectDeviceInfo(ctx, ip, user, pass, doer, prefer)
 	if err != nil {
 		return out, err
 	}

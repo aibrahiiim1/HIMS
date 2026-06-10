@@ -290,7 +290,7 @@ func PermissiveClient(timeout time.Duration) *http.Client {
 // HTTPS rungs negotiate with the device's legacy TLS. Each attempt is bounded so a
 // closed/hung port doesn't stall the ladder; an authentication rejection short-
 // circuits (we found ISAPI — another port won't fix a wrong password).
-func CollectDeviceInfo(ctx context.Context, ip, user, pass string, doer Doer) (DeviceInfo, error) {
+func CollectDeviceInfo(ctx context.Context, ip, user, pass string, doer Doer, prefer []string) (DeviceInfo, error) {
 	if doer == nil {
 		doer = PermissiveClient(15 * time.Second)
 	}
@@ -301,16 +301,22 @@ func CollectDeviceInfo(ctx context.Context, ip, user, pass string, doer Doer) (D
 	// sweeps the whole band over HTTP plus the standard schemes. First port that
 	// answers wins; closed ports RST instantly so the extra entries cost little on a
 	// reachable device.
-	ladder := []string{
+	def := []string{
 		"https://" + ip,
 		"https://" + ip + ":8443",
 		"http://" + ip,
 		"http://" + ip + ":8080",
 	}
 	for p := 8000; p <= 8020; p++ {
-		ladder = append(ladder, fmt.Sprintf("http://%s:%d", ip, p))
+		def = append(def, fmt.Sprintf("http://%s:%d", ip, p))
 	}
-	ladder = append(ladder, "https://"+ip+":8008")
+	def = append(def, "https://"+ip+":8008")
+	// "Use discovered ports before guessing": the caller's prefer list (the device's
+	// last-OK endpoint, its operator override, its scanned-open web ports, then the
+	// configured candidate ports) is tried FIRST, in order; the default ladder is the
+	// fallback. Deduped + order-preserving so a candidate already in prefer is not
+	// retried by the ladder.
+	ladder := dedupBases(append(append([]string{}, prefer...), def...))
 	var lastErr error
 	for _, base := range ladder {
 		// Short per-attempt timeout: the ladder sweeps ~25 endpoints, so a filtered
@@ -331,4 +337,20 @@ func CollectDeviceInfo(ctx context.Context, ip, user, pass string, doer Doer) (D
 		lastErr = fmt.Errorf("isapi: no endpoint answered")
 	}
 	return DeviceInfo{}, lastErr
+}
+
+// dedupBases returns bases with empty strings dropped and duplicates removed,
+// preserving first-seen order (so caller-preferred endpoints keep priority).
+func dedupBases(bases []string) []string {
+	seen := make(map[string]bool, len(bases))
+	out := make([]string, 0, len(bases))
+	for _, b := range bases {
+		b = strings.TrimRight(strings.TrimSpace(b), "/")
+		if b == "" || seen[b] {
+			continue
+		}
+		seen[b] = true
+		out = append(out, b)
+	}
+	return out
 }

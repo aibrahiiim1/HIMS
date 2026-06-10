@@ -125,6 +125,7 @@ type Querier interface {
 	// Vendor connection profile CRUD + resolution. No secrets are stored here; the
 	// credential reference points at the encrypted credentials table.
 	CreateVendorProfile(ctx context.Context, arg CreateVendorProfileParams) (VendorConnectionProfile, error)
+	CreateWebPortCandidate(ctx context.Context, arg CreateWebPortCandidateParams) (WebPortCandidate, error)
 	CreateWorkOrder(ctx context.Context, arg CreateWorkOrderParams) (WorkOrder, error)
 	// Whether a group is already bound to a location (guards duplicate binds).
 	CredentialGroupLocationBound(ctx context.Context, arg CredentialGroupLocationBoundParams) (bool, error)
@@ -197,6 +198,7 @@ type Querier interface {
 	DeleteUserSessions(ctx context.Context, userID uuid.UUID) error
 	DeleteVendorFingerprint(ctx context.Context, id uuid.UUID) error
 	DeleteVendorProfile(ctx context.Context, id uuid.UUID) error
+	DeleteWebPortCandidate(ctx context.Context, id uuid.UUID) error
 	// Replace an event set for a source (collectors re-publish the current window).
 	DeleteWirelessEventsForSource(ctx context.Context, arg DeleteWirelessEventsForSourceParams) error
 	DeviceCountByCategory(ctx context.Context) ([]DeviceCountByCategoryRow, error)
@@ -414,6 +416,7 @@ type Querier interface {
 	// The evaluator's input: every enabled check joined to its device so rules
 	// can filter by category and alerts can carry a readable device name.
 	ListEnabledChecksWithDevice(ctx context.Context) ([]ListEnabledChecksWithDeviceRow, error)
+	ListEnabledWebPortCandidates(ctx context.Context) ([]WebPortCandidate, error)
 	// Every interface MAC belonging to a topology-capable fabric device (switch /
 	// router / ISP router). Used to map an observed FDB MAC back to the device that
 	// owns it, for vendor-neutral L2 link inference (FDB-based topology).
@@ -508,6 +511,7 @@ type Querier interface {
 	ListVendorProfiles(ctx context.Context) ([]VendorConnectionProfile, error)
 	ListVlans(ctx context.Context, deviceID uuid.UUID) ([]Vlan, error)
 	ListVpnTunnels(ctx context.Context, deviceID uuid.UUID) ([]FirewallVpnTunnel, error)
+	ListWebPortCandidates(ctx context.Context) ([]WebPortCandidate, error)
 	ListWirelessClients(ctx context.Context, controllerDeviceID uuid.UUID) ([]WirelessClient, error)
 	ListWirelessEvents(ctx context.Context, arg ListWirelessEventsParams) ([]WirelessEvent, error)
 	ListWirelessRadios(ctx context.Context, controllerDeviceID uuid.UUID) ([]WirelessRadioStatus, error)
@@ -626,6 +630,13 @@ type Querier interface {
 	SetDeviceCCTVCredential(ctx context.Context, arg SetDeviceCCTVCredentialParams) error
 	// Bind-on-success: record the credential that last authenticated.
 	SetDeviceCredential(ctx context.Context, arg SetDeviceCredentialParams) error
+	// Record the base URL (scheme://ip[:port]) that last authenticated/collected over
+	// HTTP/ISAPI/ONVIF, so the UI shows the working endpoint and the collector can
+	// prefer it on the next run.
+	SetDeviceWebLastOK(ctx context.Context, arg SetDeviceWebLastOKParams) error
+	// Operator-set per-device web-access override: preferred scheme/port, alternate
+	// ports (comma-separated), and a free-text note. Collectors try these first.
+	SetDeviceWebOverride(ctx context.Context, arg SetDeviceWebOverrideParams) error
 	// Stores the scan spec (mode/targets/creds) so the job can be re-run as-is.
 	SetDiscoveryJobMetadata(ctx context.Context, arg SetDiscoveryJobMetadataParams) error
 	SetMibPackCollected(ctx context.Context, arg SetMibPackCollectedParams) error
@@ -691,6 +702,7 @@ type Querier interface {
 	UpdateUser(ctx context.Context, arg UpdateUserParams) (User, error)
 	UpdateVendorFingerprint(ctx context.Context, arg UpdateVendorFingerprintParams) (VendorFingerprint, error)
 	UpdateVendorProfile(ctx context.Context, arg UpdateVendorProfileParams) (VendorConnectionProfile, error)
+	UpdateWebPortCandidate(ctx context.Context, arg UpdateWebPortCandidateParams) (WebPortCandidate, error)
 	UpdateWorkOrder(ctx context.Context, arg UpdateWorkOrderParams) (WorkOrder, error)
 	// ---- ARP entries ---------------------------------------------------------
 	UpsertARP(ctx context.Context, arg UpsertARPParams) error

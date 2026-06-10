@@ -115,6 +115,10 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device, selectedCre
 		Timeout:   15 * time.Second,
 		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS10}},
 	}
+	// Ordered web endpoints to try first: device last-OK + override + scanned-open
+	// web ports + configured candidate ports ("use discovered ports before
+	// guessing"). The ISAPI ladder is the fallback after these.
+	prefer := s.webCandidateBases(ctx, d)
 
 	var attempts []discovery.CredAttempt
 	lastReason, lastDetail := "auth_failed", "ONVIF authentication rejected"
@@ -156,6 +160,7 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device, selectedCre
 		cid := cd.id
 		_ = s.queries.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: d.ID, CredentialID: &cid})
 		_ = s.queries.SetDeviceCCTVCredential(ctx, db.SetDeviceCCTVCredentialParams{ID: d.ID, CctvCredentialID: &cid}) // durable CCTV web credential
+		_ = s.queries.SetDeviceWebLastOK(ctx, db.SetDeviceWebLastOKParams{ID: d.ID, WebLastOk: "http://" + ip})        // ONVIF base that worked
 		_ = s.queries.UpdateDeviceMonitoringStatus(ctx, db.UpdateDeviceMonitoringStatusParams{ID: d.ID, Status: "up"})
 
 		res = cctvResult{Status: "collected", CredentialUsed: cd.name, Category: string(cat),
@@ -170,7 +175,7 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device, selectedCre
 	// recording/health). Bound-credential-only (above) avoids the lockout.
 	for _, cd := range cands {
 		ictx, cancel := context.WithTimeout(ctx, 90*time.Second) // deviceInfo + channel/storage endpoints
-		nvr, err := isapi.Collect(ictx, ip, cd.user, cd.pass, nil)
+		nvr, err := isapi.Collect(ictx, ip, cd.user, cd.pass, nil, prefer)
 		cancel()
 		category, detail := "success", "ISAPI authenticated"
 		if err != nil {
@@ -215,6 +220,9 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device, selectedCre
 		cid := cd.id
 		_ = s.queries.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: d.ID, CredentialID: &cid})
 		_ = s.queries.SetDeviceCCTVCredential(ctx, db.SetDeviceCCTVCredentialParams{ID: d.ID, CctvCredentialID: &cid}) // durable CCTV web credential
+		if info.Endpoint != "" {
+			_ = s.queries.SetDeviceWebLastOK(ctx, db.SetDeviceWebLastOKParams{ID: d.ID, WebLastOk: info.Endpoint}) // ISAPI base that worked
+		}
 		_ = s.queries.UpdateDeviceMonitoringStatus(ctx, db.UpdateDeviceMonitoringStatusParams{ID: d.ID, Status: "up"})
 
 		res = cctvResult{Status: "collected", CredentialUsed: cd.name, Category: string(cat),
@@ -262,7 +270,7 @@ func (s *Server) collectCCTVProfile(ctx context.Context, p db.VendorConnectionPr
 	if err != nil {
 		// ONVIF unavailable — fall back to full Hikvision ISAPI collection over HTTPS.
 		ictx, icancel := context.WithTimeout(ctx, 90*time.Second)
-		nvr, ierr := isapi.Collect(ictx, host, user, pass, nil) // nil → permissive TLS
+		nvr, ierr := isapi.Collect(ictx, host, user, pass, nil, s.webCandidateBases(ctx, d)) // nil → permissive TLS
 		icancel()
 		icat, idet := "success", "ISAPI authenticated"
 		if ierr != nil {
@@ -296,6 +304,9 @@ func (s *Server) collectCCTVProfile(ctx context.Context, p db.VendorConnectionPr
 		if p.CredentialID != nil {
 			_ = s.queries.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: d.ID, CredentialID: p.CredentialID})
 			_ = s.queries.SetDeviceCCTVCredential(ctx, db.SetDeviceCCTVCredentialParams{ID: d.ID, CctvCredentialID: p.CredentialID}) // durable CCTV web credential
+		}
+		if info2.Endpoint != "" {
+			_ = s.queries.SetDeviceWebLastOK(ctx, db.SetDeviceWebLastOKParams{ID: d.ID, WebLastOk: info2.Endpoint})
 		}
 		_ = s.queries.UpdateDeviceMonitoringStatus(ctx, db.UpdateDeviceMonitoringStatusParams{ID: d.ID, Status: "up"})
 		out.CollectionOK = true

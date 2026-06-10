@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams, Link } from 'react-router-dom'
-import { Camera, Video, Film, HardDrive, Disc, Network, Activity, Wrench, Cpu } from 'lucide-react'
-import { api, type CameraInfo, type NVRChannel, type NVRDetail, type Device } from '../api'
+import { Camera, Video, Film, HardDrive, Disc, Network, Activity, Wrench, Cpu, Globe } from 'lucide-react'
+import { api, type CameraInfo, type NVRChannel, type NVRDetail, type Device, type DeviceWebAccess } from '../api'
 import { DeviceHeader } from '../components/DeviceHeader'
 import { CctvCollect } from '../components/CctvCollect'
 import { Panel, Kpi, DefList, EmptyState, StatusPill } from '../components/ui'
@@ -213,7 +213,89 @@ export function CctvDetail() {
           <CctvCollect deviceId={id!} boundCredId={dev?.cctv_credential_id ?? dev?.credential_id} generalCredId={dev?.credential_id} label="Collect NVR data" />
         </Panel>
       )}
+
+      {tab === 'ops' && <WebAccessPanel deviceId={id!} />}
     </div>
+  )
+}
+
+// WebAccessPanel shows the device's discovered web ports (classified), the ordered
+// endpoints the collector will try, the last successful endpoint, and a per-device
+// override (preferred scheme/port + alternates + notes) for devices on custom web
+// ports. Discovered ports are always tried before any guessed ladder.
+function WebAccessPanel({ deviceId }: { deviceId: string }) {
+  const q = useQuery({ queryKey: ['web-access', deviceId], queryFn: () => api.get<DeviceWebAccess>(`/devices/${deviceId}/web-access`) })
+  if (q.isLoading || !q.data) {
+    return <Panel title="Web / API Access" icon={Globe}><div className="loading">Loading…</div></Panel>
+  }
+  return <WebAccessForm deviceId={deviceId} data={q.data} />
+}
+
+function WebAccessForm({ deviceId, data: d }: { deviceId: string; data: DeviceWebAccess }) {
+  const qc = useQueryClient()
+  // Initialised once from the loaded data (state initialisers run on mount only);
+  // the read-only sections below render from the `d` prop, which refreshes on save.
+  const [scheme, setScheme] = useState(d.scheme)
+  const [port, setPort] = useState(d.port != null ? String(d.port) : '')
+  const [alt, setAlt] = useState(d.alt_ports)
+  const [notes, setNotes] = useState(d.notes)
+  const save = useMutation({
+    mutationFn: () => api.put<DeviceWebAccess>(`/devices/${deviceId}/web-access`, {
+      scheme, port: port ? Number(port) : null, alt_ports: alt, notes,
+    }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['web-access', deviceId] }),
+  })
+  return (
+    <Panel title="Web / API Access" icon={Globe} subtitle="discovered ports, the endpoints HIMS tries, and per-device overrides">
+      {(
+        <>
+          <div className="row" style={{ gap: 24, flexWrap: 'wrap', marginBottom: 12 }}>
+            <div>
+              <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Last successful endpoint</div>
+              <div className="mono">{d.last_ok || '—'}{d.last_ok_at ? <span className="muted" style={{ fontSize: 11 }}> · {d.last_ok_at.slice(0, 19).replace('T', ' ')}</span> : null}</div>
+            </div>
+          </div>
+
+          <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>Discovered ports</div>
+          {d.discovered.length === 0 ? <div className="muted" style={{ fontSize: 12, marginBottom: 12 }}>No open ports recorded — run a scan.</div> : (
+            <table style={{ marginBottom: 14 }}>
+              <thead><tr><th>Port</th><th>Looks like</th><th>Scheme</th><th>Web candidate</th></tr></thead>
+              <tbody>
+                {d.discovered.map((p) => (
+                  <tr key={p.port}>
+                    <td className="mono"><strong>{p.port}</strong></td>
+                    <td>{p.kind}</td>
+                    <td className="mono">{p.scheme || '—'}</td>
+                    <td>{p.web ? <span className="badge badge-up">yes</span> : <span className="muted">—</span>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+
+          <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>Endpoints tried (in order)</div>
+          <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>The collector tries these before any default ladder — discovered/override/configured first.</div>
+          <ol style={{ margin: '0 0 14px 18px', fontSize: 13 }}>
+            {d.candidates.length === 0 ? <li className="muted">none — falls back to the default scheme/port ladder</li> : d.candidates.map((c, i) => <li key={i} className="mono">{c}</li>)}
+          </ol>
+
+          <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>Per-device override</div>
+          <div className="row" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <label>Preferred scheme
+              <select className="field" style={{ display: 'block' }} value={scheme} onChange={(e) => setScheme(e.target.value)}>
+                <option value="">(auto)</option><option value="http">http</option><option value="https">https</option>
+              </select>
+            </label>
+            <label>Preferred port<input className="field" style={{ width: 110, display: 'block' }} type="number" value={port} onChange={(e) => setPort(e.target.value)} placeholder="8010" /></label>
+            <label style={{ minWidth: 160 }}>Alternate ports<input className="field" style={{ width: '100%', display: 'block' }} value={alt} onChange={(e) => setAlt(e.target.value)} placeholder="8000, 8008" /></label>
+            <label style={{ flex: 1, minWidth: 180 }}>Notes<input className="field" style={{ width: '100%', display: 'block' }} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. uses 8010" /></label>
+            <button className="btn btn-primary" disabled={save.isPending} onClick={() => save.mutate()}>{save.isPending ? 'Saving…' : 'Save'}</button>
+            {save.isSuccess && <span className="badge badge-up">saved</span>}
+          </div>
+          {save.error && <div className="error-msg" style={{ marginTop: 8 }}>{(save.error as Error).message}</div>}
+        </>
+      )}
+    </Panel>
   )
 }
 

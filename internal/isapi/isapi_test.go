@@ -2,6 +2,7 @@ package isapi
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -119,6 +120,45 @@ func (f *fakeDoer) Do(req *http.Request) (*http.Response, error) {
 	return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(nvrXML))}, nil
 }
 
+// recordingDoer records the first base URL tried and answers deviceInfo ONLY on
+// the expected host:port (others "connection refused"), so a test can prove the
+// caller's prefer list is tried before the default ladder.
+type recordingDoer struct {
+	first      string
+	okHostPort string
+}
+
+func (d *recordingDoer) Do(req *http.Request) (*http.Response, error) {
+	if d.first == "" {
+		d.first = req.URL.Scheme + "://" + req.URL.Host
+	}
+	if req.URL.Host != d.okHostPort {
+		return nil, fmt.Errorf("connection refused")
+	}
+	if req.Header.Get("Authorization") == "" {
+		h := http.Header{}
+		h.Set("WWW-Authenticate", `Digest realm="x", qop="auth", nonce="n"`)
+		return &http.Response{StatusCode: 401, Header: h, Body: io.NopCloser(strings.NewReader(""))}, nil
+	}
+	return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(nvrXML))}, nil
+}
+
+// "Use discovered ports before guessing": a prefer endpoint (e.g. the scanned-open
+// custom web port) must be tried FIRST, ahead of the default scheme/port ladder.
+func TestCollectDeviceInfo_PrefersGivenEndpoint(t *testing.T) {
+	d := &recordingDoer{okHostPort: "10.0.0.10:8010"}
+	info, err := CollectDeviceInfo(context.Background(), "10.0.0.10", "u", "p", d, []string{"http://10.0.0.10:8010"})
+	if err != nil {
+		t.Fatalf("collect err = %v", err)
+	}
+	if d.first != "http://10.0.0.10:8010" {
+		t.Fatalf("first endpoint tried = %q, want the preferred http://10.0.0.10:8010", d.first)
+	}
+	if info.Endpoint != "http://10.0.0.10:8010" {
+		t.Fatalf("Endpoint = %q, want http://10.0.0.10:8010", info.Endpoint)
+	}
+}
+
 // always401 rejects every authenticated request (wrong password).
 type always401 struct{ calls int }
 
@@ -133,7 +173,7 @@ func (a *always401) Do(req *http.Request) (*http.Response, error) {
 // port ladder (reaching a 401 means ISAPI was found — other ports won't help).
 func TestCollectDeviceInfo_ShortCircuitsOnAuthReject(t *testing.T) {
 	d := &always401{}
-	_, err := CollectDeviceInfo(context.Background(), "10.0.0.10", "u", "wrong", d)
+	_, err := CollectDeviceInfo(context.Background(), "10.0.0.10", "u", "wrong", d, nil)
 	if err == nil || !strings.Contains(err.Error(), "authentication rejected") {
 		t.Fatalf("err = %v, want authentication rejected", err)
 	}

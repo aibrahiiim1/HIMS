@@ -1227,6 +1227,36 @@ export interface CredentialDevice {
   bound_cctv: boolean    // bound as the device's CCTV web credential
 }
 
+// Fleet-wide HTTP/Web candidate port (Settings → Web Ports). Used by the scan +
+// HTTP/ISAPI/ONVIF collectors so custom web ports (8008/8012/8081…) are tried.
+export interface WebPortCandidate {
+  id: string
+  port: number
+  scheme: 'http' | 'https' | 'both'
+  enabled: boolean
+  note: string
+}
+
+// One open port classified for a device (GET /devices/{id}/web-access).
+export interface DiscoveredPort {
+  port: number
+  scheme: string // http / https / "" for non-web
+  kind: string   // RTSP / HTTPS / ISAPI-capable / ONVIF / web UI / unknown open TCP
+  web: boolean   // is an HTTP/ISAPI candidate
+}
+
+// Device web-access view + override.
+export interface DeviceWebAccess {
+  discovered: DiscoveredPort[]
+  candidates: string[]   // ordered base URLs the collector tries first
+  scheme: string         // override: '', http, https
+  port: number | null    // override preferred port
+  alt_ports: string      // override alternates (CSV)
+  notes: string
+  last_ok: string        // last successful base URL
+  last_ok_at: string     // RFC3339 or ""
+}
+
 // Vendor Connection Profile — operator-configured integration endpoint
 // (vCenter / Hikvision / wireless controller / CUCM) that closes a "config
 // gate" so the scan and manual Test/Run can authenticate + collect. Secrets are
