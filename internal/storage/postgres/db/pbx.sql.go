@@ -29,7 +29,7 @@ func (q *Queries) DeleteStalePbxPhones(ctx context.Context, arg DeleteStalePbxPh
 }
 
 const listPbxPhones = `-- name: ListPbxPhones :many
-SELECT id, device_id, name, model, description, device_pool, collection_source, last_seen_at, extension, mac_address, ip_address FROM pbx_phones WHERE device_id = $1 ORDER BY name
+SELECT id, device_id, name, model, description, device_pool, collection_source, last_seen_at, extension, mac_address, ip_address, registration FROM pbx_phones WHERE device_id = $1 ORDER BY name
 `
 
 func (q *Queries) ListPbxPhones(ctx context.Context, deviceID uuid.UUID) ([]PbxPhone, error) {
@@ -53,6 +53,7 @@ func (q *Queries) ListPbxPhones(ctx context.Context, deviceID uuid.UUID) ([]PbxP
 			&i.Extension,
 			&i.MacAddress,
 			&i.IpAddress,
+			&i.Registration,
 		); err != nil {
 			return nil, err
 		}
@@ -65,8 +66,8 @@ func (q *Queries) ListPbxPhones(ctx context.Context, deviceID uuid.UUID) ([]PbxP
 }
 
 const upsertPbxPhone = `-- name: UpsertPbxPhone :exec
-INSERT INTO pbx_phones (device_id, name, model, description, device_pool, collection_source, last_seen_at, extension, mac_address, ip_address)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+INSERT INTO pbx_phones (device_id, name, model, description, device_pool, collection_source, last_seen_at, extension, mac_address, ip_address, registration)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
 ON CONFLICT (device_id, name) DO UPDATE SET
     model = EXCLUDED.model,
     description = EXCLUDED.description,
@@ -75,7 +76,8 @@ ON CONFLICT (device_id, name) DO UPDATE SET
     last_seen_at = EXCLUDED.last_seen_at,
     extension = COALESCE(NULLIF(EXCLUDED.extension,''), pbx_phones.extension),
     mac_address = COALESCE(NULLIF(EXCLUDED.mac_address,''), pbx_phones.mac_address),
-    ip_address = COALESCE(NULLIF(EXCLUDED.ip_address,''), pbx_phones.ip_address)
+    ip_address = COALESCE(NULLIF(EXCLUDED.ip_address,''), pbx_phones.ip_address),
+    registration = COALESCE(NULLIF(EXCLUDED.registration,''), pbx_phones.registration)
 `
 
 type UpsertPbxPhoneParams struct {
@@ -89,6 +91,7 @@ type UpsertPbxPhoneParams struct {
 	Extension        *string   `json:"extension"`
 	MacAddress       *string   `json:"mac_address"`
 	IpAddress        *string   `json:"ip_address"`
+	Registration     *string   `json:"registration"`
 }
 
 func (q *Queries) UpsertPbxPhone(ctx context.Context, arg UpsertPbxPhoneParams) error {
@@ -103,6 +106,7 @@ func (q *Queries) UpsertPbxPhone(ctx context.Context, arg UpsertPbxPhoneParams) 
 		arg.Extension,
 		arg.MacAddress,
 		arg.IpAddress,
+		arg.Registration,
 	)
 	return err
 }

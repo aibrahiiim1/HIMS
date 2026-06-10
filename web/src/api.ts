@@ -738,6 +738,7 @@ export interface PhoneExtension {
   extension?: string | null
   mac_address?: string | null
   ip_address?: string | null
+  registration?: string | null
   collection_source?: string | null
   last_seen_at?: string | null
 }

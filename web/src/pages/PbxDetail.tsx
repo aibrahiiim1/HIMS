@@ -26,6 +26,8 @@ export function PbxDetail() {
   const f = new Map((facts.data ?? []).map((x) => [x.key, x.value ?? '']))
   const withExt = list.filter((p) => (p.extension ?? '').trim() !== '').length
   const withIP = list.filter((p) => (p.ip_address ?? '').trim() !== '').length
+  const haveReg = list.some((p) => (p.registration ?? '').trim() !== '')
+  const registered = list.filter((p) => (p.registration ?? '').toLowerCase() === 'registered').length
   const pools = useMemo(() => countBy(list, (p) => p.device_pool), [list])
   const models = useMemo(() => countBy(list, (p) => p.model), [list])
   const source = list.find((p) => p.collection_source)?.collection_source ?? ''
@@ -37,7 +39,7 @@ export function PbxDetail() {
       (p.extension ?? '').toLowerCase().includes(s) || p.name.toLowerCase().includes(s) ||
       (p.mac_address ?? '').toLowerCase().includes(s) || (p.description ?? '').toLowerCase().includes(s) ||
       (p.model ?? '').toLowerCase().includes(s) || (p.device_pool ?? '').toLowerCase().includes(s) ||
-      (p.ip_address ?? '').toLowerCase().includes(s),
+      (p.ip_address ?? '').toLowerCase().includes(s) || (p.registration ?? '').toLowerCase().includes(s),
   })
 
   const showIP = withIP > 0
@@ -54,6 +56,7 @@ export function PbxDetail() {
       <div className="kpi-grid">
         <Kpi label="Phones / Subscribers" value={list.length || (f.get('phone_count') ?? '—')} icon={PhoneCall} tone="info" />
         <Kpi label="With Directory No." value={list.length ? `${withExt}` : '—'} sub={list.length ? `${pct(withExt, list.length)}%` : undefined} icon={Hash} />
+        {haveReg && <Kpi label="Registered" value={`${registered}`} sub={`${pct(registered, list.length)}% live`} icon={PhoneCall} tone={registered === list.length ? 'ok' : 'warn'} />}
         <Kpi label="Device Pools" value={pools.length || '—'} icon={Server} />
         <Kpi label="Phone Models" value={models.length || '—'} icon={Cpu} />
       </div>
@@ -84,7 +87,7 @@ export function PbxDetail() {
               <table className="data-table">
                 <thead><tr>
                   <th>Directory No.</th><th>Device / MAC</th><th>Model</th>
-                  <th>Description</th><th>Device Pool</th>{showIP && <th>IP</th>}
+                  <th>Description</th><th>Device Pool</th>{showIP && <th>IP</th>}{haveReg && <th>Status</th>}
                 </tr></thead>
                 <tbody>
                   {paged.slice.map((p) => (
@@ -98,10 +101,11 @@ export function PbxDetail() {
                       <td>{p.description ?? '—'}</td>
                       <td>{p.device_pool ?? '—'}</td>
                       {showIP && <td>{p.ip_address ?? '—'}</td>}
+                      {haveReg && <td><RegBadge s={p.registration} /></td>}
                     </tr>
                   ))}
                   {paged.total === 0 && (
-                    <tr><td colSpan={showIP ? 6 : 5} className="muted" style={{ textAlign: 'center', padding: 20 }}>No phones match “{q}”.</td></tr>
+                    <tr><td colSpan={5 + (showIP ? 1 : 0) + (haveReg ? 1 : 0)} className="muted" style={{ textAlign: 'center', padding: 20 }}>No phones match “{q}”.</td></tr>
                   )}
                 </tbody>
               </table>
@@ -151,4 +155,23 @@ function donutData(rows: { label: string; value: number }[]) {
 
 function pct(n: number, total: number) {
   return total ? Math.round((n / total) * 100) : 0
+}
+
+// RegBadge renders the CUCM RisPort registration status as a colored pill.
+function RegBadge({ s }: { s?: string | null }) {
+  const v = (s ?? '').trim()
+  if (!v) return <span className="muted">—</span>
+  const low = v.toLowerCase()
+  const tone =
+    low === 'registered' ? { bg: 'var(--ok-bg, #e8f5e9)', fg: 'var(--ok, #2e7d32)' }
+      : low === 'partiallyregistered' ? { bg: 'var(--warn-bg, #fff8e1)', fg: 'var(--warn, #b26a00)' }
+        : low === 'unknown' ? { bg: 'var(--muted-bg, #eee)', fg: 'var(--muted, #777)' }
+          : { bg: 'var(--bad-bg, #fdecea)', fg: 'var(--bad, #c62828)' } // UnRegistered / Rejected
+  const label = low === 'partiallyregistered' ? 'Partial' : low === 'unregistered' ? 'Unregistered' : v
+  return (
+    <span style={{
+      display: 'inline-block', padding: '2px 9px', borderRadius: 999, fontSize: 11,
+      fontWeight: 600, background: tone.bg, color: tone.fg,
+    }}>{label}</span>
+  )
 }
