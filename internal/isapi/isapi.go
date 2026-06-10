@@ -294,13 +294,20 @@ func CollectDeviceInfo(ctx context.Context, ip, user, pass string, doer Doer) (D
 	if doer == nil {
 		doer = PermissiveClient(15 * time.Second)
 	}
+	// Try the common Hikvision/OEM web-service ports over both schemes. Operators
+	// frequently move the device web port off 80/443 (e.g. 8008/8010/8000), so the
+	// ladder must cover those — a CCTV device whose only management surface is on a
+	// non-standard port is otherwise uncollectable. First port that answers wins;
+	// closed ports RST instantly so the extra entries cost little.
 	ladder := []string{
 		"https://" + ip,
 		"https://" + ip + ":8443",
 		"http://" + ip,
+		"http://" + ip + ":8008",
+		"http://" + ip + ":8010",
 		"http://" + ip + ":8000",
 		"http://" + ip + ":8080",
-		"http://" + ip + ":8010",
+		"https://" + ip + ":8008",
 	}
 	var lastErr error
 	for _, base := range ladder {

@@ -208,7 +208,7 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 	// keys on (DNS/DC/DB). This breadth lets the scan DETECT non-SNMP hosts
 	// (Windows workstations, Linux, cameras) that the old switch-centric list
 	// missed entirely.
-	ports := []int{22, 23, 53, 80, 88, 135, 161, 389, 443, 445, 554, 636, 1433, 1521, 3389, 5432, 5985, 5986, 8000, 8080, 8443, 9100}
+	ports := []int{22, 23, 53, 80, 88, 135, 161, 389, 443, 445, 554, 636, 1433, 1521, 3389, 5432, 5985, 5986, 8000, 8008, 8010, 8080, 8443, 9100}
 	for _, p := range cfg.ExtraPorts { // targeted-retry: a missed known device's last-known open ports
 		if p > 0 && p < 65536 {
 			ports = append(ports, p)
