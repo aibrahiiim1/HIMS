@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -62,44 +63,150 @@ type listPhoneResp struct {
 	Fault  string     `xml:"Body>Fault>faultstring"`
 }
 
-// ListPhones runs AXL listPhone and returns the parsed registry.
+// ListPhones returns the CUCM phone registry. It negotiates a supported AXL
+// schema version (legacy CUCM rejects a newer version with HTTP 599 and lists
+// the ones it serves), runs listPhone, and — when a release doesn't serve the
+// typed listPhone method (legacy 7.x faults "No method found", AXL code 5003) —
+// falls back to executeSQLQuery against the CUCM (Informix) DB, which every
+// release from 6.x to 15.x supports. Verified live against CUCM 7.1.3.
 func (c *Client) ListPhones(ctx context.Context) ([]Phone, error) {
-	ns := "http://www.cisco.com/AXL/API/" + c.Version
-	body := `<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ns="` + ns + `">` +
-		`<soapenv:Header/><soapenv:Body><ns:listPhone>` +
+	listInner := `<ns:listPhone>` +
 		`<searchCriteria><name>%</name></searchCriteria>` +
 		`<returnedTags><name/><model/><description/><devicePoolName/></returnedTags>` +
-		`</ns:listPhone></soapenv:Body></soapenv:Envelope>`
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/axl/", strings.NewReader(body))
+		`</ns:listPhone>`
+	raw, err := c.call(ctx, "listPhone", listInner)
 	if err != nil {
 		return nil, err
 	}
+	phones, perr := parsePhones(raw)
+	if perr == nil {
+		return phones, nil
+	}
+	if !isUnsupportedMethod(perr) {
+		return nil, perr
+	}
+	return c.listPhonesViaSQL(ctx) // legacy release: typed listPhone not served
+}
+
+// call POSTs one AXL request, transparently re-negotiating the schema version
+// when the box reports the requested one unavailable (HTTP 599 + "Available
+// versions are …"). The chosen version is cached for subsequent calls.
+func (c *Client) call(ctx context.Context, method, inner string) ([]byte, error) {
+	raw, status, err := c.post(ctx, method, inner)
+	if err != nil {
+		return nil, err
+	}
+	if status != http.StatusOK {
+		if v := highestAvailableVersion(raw); v != "" && v != c.Version {
+			c.Version = v
+			if raw, status, err = c.post(ctx, method, inner); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if status == http.StatusUnauthorized {
+		return nil, fmt.Errorf("cucm: AXL auth failed (401)")
+	}
+	// A non-200 is an error — NOT an empty result. Cisco returns an HTML error
+	// page (not a SOAP body); surface it instead of silently reporting nothing.
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("cucm: AXL HTTP %d — %s", status, axlErrorSummary(raw))
+	}
+	return raw, nil
+}
+
+func (c *Client) post(ctx context.Context, method, inner string) ([]byte, int, error) {
+	ns := "http://www.cisco.com/AXL/API/" + c.Version
+	body := `<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ns="` + ns + `">` +
+		`<soapenv:Header/><soapenv:Body>` + inner + `</soapenv:Body></soapenv:Envelope>`
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/axl/", strings.NewReader(body))
+	if err != nil {
+		return nil, 0, err
+	}
 	req.Header.Set("Content-Type", "text/xml; charset=utf-8")
-	req.Header.Set("SOAPAction", `CUCM:DB ver=`+c.Version+` listPhone`)
+	req.Header.Set("SOAPAction", `CUCM:DB ver=`+c.Version+` `+method)
 	if c.Username != "" {
 		req.SetBasicAuth(c.Username, c.Password) // never logged
 	}
 	resp, err := c.Doer.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
 	if err != nil {
+		return nil, 0, err
+	}
+	return raw, resp.StatusCode, nil
+}
+
+// listPhonesViaSQL pulls the registry with a raw query against the CUCM DB
+// (Informix; tkclass=1 is a phone). Column aliases map onto sqlPhoneRow.
+func (c *Client) listPhonesViaSQL(ctx context.Context) ([]Phone, error) {
+	const q = `select d.name as name, d.description as description, tm.name as model, dp.name as pool ` +
+		`from device as d inner join typemodel as tm on d.tkmodel=tm.enum ` +
+		`inner join devicepool as dp on d.fkdevicepool=dp.pkid where d.tkclass=1`
+	raw, err := c.call(ctx, "executeSQLQuery", `<ns:executeSQLQuery><sql>`+q+`</sql></ns:executeSQLQuery>`)
+	if err != nil {
 		return nil, err
 	}
-	if resp.StatusCode == http.StatusUnauthorized {
-		return nil, fmt.Errorf("cucm: AXL auth failed (401)")
+	var sr sqlPhoneResp
+	if err := xml.Unmarshal(raw, &sr); err != nil {
+		return nil, err
 	}
-	// A non-200 status is an error — NOT an empty phone list. Cisco returns an
-	// HTML error page (e.g. HTTP 599 "The specified version is not available.
-	// Available versions are 1.0, 6.0, 6.1, 7.0 and 7.1" on legacy CUCM), which
-	// is not a SOAP body; surface it instead of silently reporting 0 phones.
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("cucm: AXL HTTP %d — %s", resp.StatusCode, axlErrorSummary(raw))
+	if sr.Fault != "" {
+		return nil, fmt.Errorf("cucm: AXL executeSQLQuery fault: %s", sr.Fault)
 	}
-	return parsePhones(raw)
+	out := make([]Phone, 0, len(sr.Rows))
+	for _, r := range sr.Rows {
+		out = append(out, Phone{Name: r.Name, Model: r.Model, Description: r.Description, DevicePool: r.Pool})
+	}
+	return out, nil
+}
+
+type sqlPhoneRow struct {
+	Name        string `xml:"name"`
+	Description string `xml:"description"`
+	Model       string `xml:"model"`
+	Pool        string `xml:"pool"`
+}
+
+type sqlPhoneResp struct {
+	Rows  []sqlPhoneRow `xml:"Body>executeSQLQueryResponse>return>row"`
+	Fault string        `xml:"Body>Fault>faultstring"`
+}
+
+// isUnsupportedMethod reports whether a parse error is CUCM's "method not served
+// by this release" fault (AXL code 5003 / "No method found for processing request").
+func isUnsupportedMethod(err error) bool {
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "no method") || strings.Contains(s, "5003")
+}
+
+// highestAvailableVersion parses a legacy-CUCM HTTP 599 body ("…Available
+// versions are 1.0, 6.0, 6.1, 7.0 and 7.1") and returns the newest one, or "".
+func highestAvailableVersion(raw []byte) string {
+	s := string(raw)
+	i := strings.Index(s, "Available versions are")
+	if i < 0 {
+		return ""
+	}
+	tail := s[i+len("Available versions are"):]
+	if j := strings.IndexAny(tail, "<\n"); j >= 0 { // stop before the next tag; keep version dots
+		tail = tail[:j]
+	}
+	tail = strings.NewReplacer(" and ", ",", " ", "").Replace(tail)
+	var best string
+	var bestF float64
+	for _, v := range strings.Split(tail, ",") {
+		if v = strings.TrimSpace(v); v == "" {
+			continue
+		}
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f >= bestF {
+			bestF, best = f, v
+		}
+	}
+	return best
 }
 
 // axlErrorSummary pulls a short human message out of a Cisco error response —
