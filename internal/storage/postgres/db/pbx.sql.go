@@ -81,6 +81,60 @@ func (q *Queries) FindPhoneByIP(ctx context.Context, ipAddress *string) ([]FindP
 	return items, nil
 }
 
+const findPhoneByMAC = `-- name: FindPhoneByMAC :many
+SELECT p.extension, p.name, p.model, p.description, p.registration, p.registrar,
+       p.device_id AS pbx_device_id, d.name AS pbx_name, d.category AS pbx_category
+FROM pbx_phones p JOIN devices d ON d.id = p.device_id AND d.deleted_at IS NULL
+WHERE lower(translate(p.mac_address, ':-.', '')) = lower(translate($1, ':-.', ''))
+ORDER BY (p.registration IS NOT NULL) DESC, p.extension
+LIMIT 10
+`
+
+type FindPhoneByMACRow struct {
+	Extension    *string   `json:"extension"`
+	Name         string    `json:"name"`
+	Model        *string   `json:"model"`
+	Description  *string   `json:"description"`
+	Registration *string   `json:"registration"`
+	Registrar    *string   `json:"registrar"`
+	PbxDeviceID  uuid.UUID `json:"pbx_device_id"`
+	PbxName      string    `json:"pbx_name"`
+	PbxCategory  string    `json:"pbx_category"`
+}
+
+// Path Finder: resolve a MAC to the IP phone that carries it (CUCM SEP<mac>),
+// with directory number, registration + registrar. Compares the MAC ignoring
+// separators/case so 00:23:eb:.. , 0023eb.. and 00-23-.. all match.
+func (q *Queries) FindPhoneByMAC(ctx context.Context, translate string) ([]FindPhoneByMACRow, error) {
+	rows, err := q.db.Query(ctx, findPhoneByMAC, translate)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []FindPhoneByMACRow{}
+	for rows.Next() {
+		var i FindPhoneByMACRow
+		if err := rows.Scan(
+			&i.Extension,
+			&i.Name,
+			&i.Model,
+			&i.Description,
+			&i.Registration,
+			&i.Registrar,
+			&i.PbxDeviceID,
+			&i.PbxName,
+			&i.PbxCategory,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPbxPhones = `-- name: ListPbxPhones :many
 SELECT id, device_id, name, model, description, device_pool, collection_source, last_seen_at, extension, mac_address, ip_address, registration, registrar FROM pbx_phones WHERE device_id = $1 ORDER BY name
 `
@@ -108,6 +162,63 @@ func (q *Queries) ListPbxPhones(ctx context.Context, deviceID uuid.UUID) ([]PbxP
 			&i.IpAddress,
 			&i.Registration,
 			&i.Registrar,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const searchPhones = `-- name: SearchPhones :many
+SELECT DISTINCT ON (p.name) p.extension, p.name, p.model, p.registration, p.registrar,
+       p.ip_address, p.mac_address, p.device_id AS pbx_device_id, d.name AS pbx_name, d.category AS pbx_category
+FROM pbx_phones p
+JOIN devices d ON d.id = p.device_id AND d.deleted_at IS NULL
+WHERE p.extension ILIKE '%'||$1||'%' OR p.name ILIKE '%'||$1||'%'
+   OR p.mac_address ILIKE '%'||$1||'%' OR p.ip_address ILIKE '%'||$1||'%'
+ORDER BY p.name, (p.registration IS NOT NULL) DESC
+LIMIT 40
+`
+
+type SearchPhonesRow struct {
+	Extension    *string   `json:"extension"`
+	Name         string    `json:"name"`
+	Model        *string   `json:"model"`
+	Registration *string   `json:"registration"`
+	Registrar    *string   `json:"registrar"`
+	IpAddress    *string   `json:"ip_address"`
+	MacAddress   *string   `json:"mac_address"`
+	PbxDeviceID  uuid.UUID `json:"pbx_device_id"`
+	PbxName      string    `json:"pbx_name"`
+	PbxCategory  string    `json:"pbx_category"`
+}
+
+// Global search: IP phones / PBX subscribers by extension / SEP name / MAC / IP.
+// Deduped across the CUCM pub/sub pair (the same phone appears under each node).
+func (q *Queries) SearchPhones(ctx context.Context, dollar_1 *string) ([]SearchPhonesRow, error) {
+	rows, err := q.db.Query(ctx, searchPhones, dollar_1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SearchPhonesRow{}
+	for rows.Next() {
+		var i SearchPhonesRow
+		if err := rows.Scan(
+			&i.Extension,
+			&i.Name,
+			&i.Model,
+			&i.Registration,
+			&i.Registrar,
+			&i.IpAddress,
+			&i.MacAddress,
+			&i.PbxDeviceID,
+			&i.PbxName,
+			&i.PbxCategory,
 		); err != nil {
 			return nil, err
 		}

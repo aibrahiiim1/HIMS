@@ -522,7 +522,7 @@ export interface WirelessTrace {
 // Unified global-search hit — a MAC/IP/name observed anywhere (access point,
 // wireless client, bridge FDB, ARP table) linked back to the device that owns it.
 export interface EntityHit {
-  kind: 'access_point' | 'wireless_client' | 'nvr_channel' | 'fdb' | 'arp'
+  kind: 'access_point' | 'wireless_client' | 'nvr_channel' | 'phone' | 'fdb' | 'arp'
   title: string
   subtitle: string
   ip?: string
@@ -538,6 +538,7 @@ export interface SearchEntities {
   access_points: EntityHit[]
   wireless_clients: EntityHit[]
   nvr_channels: EntityHit[]
+  phones: EntityHit[]
   fdb: EntityHit[]
   arp: EntityHit[]
 }

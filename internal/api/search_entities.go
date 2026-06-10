@@ -29,6 +29,7 @@ type searchEntitiesResponse struct {
 	AccessPoints   []entityHit `json:"access_points"`
 	WirelessClient []entityHit `json:"wireless_clients"`
 	NvrChannels    []entityHit `json:"nvr_channels"`
+	Phones         []entityHit `json:"phones"`
 	Fdb            []entityHit `json:"fdb"`
 	Arp            []entityHit `json:"arp"`
 }
@@ -62,6 +63,7 @@ func (s *Server) searchEntities(w http.ResponseWriter, r *http.Request) {
 		AccessPoints:   []entityHit{},
 		WirelessClient: []entityHit{},
 		NvrChannels:    []entityHit{},
+		Phones:         []entityHit{},
 		Fdb:            []entityHit{},
 		Arp:            []entityHit{},
 	}
@@ -131,6 +133,29 @@ func (s *Server) searchEntities(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// --- IP phones / PBX subscribers (extension / SEP name / MAC / IP) --------
+	if phs, err := s.queries.SearchPhones(ctx, &term); err != nil {
+		writeErr(w, err)
+		return
+	} else {
+		for _, p := range phs {
+			title := derefStr(p.Extension)
+			if strings.TrimSpace(title) == "" {
+				title = p.Name
+			}
+			resp.Phones = append(resp.Phones, entityHit{
+				Kind:           "phone",
+				Title:          title,
+				Subtitle:       phoneSubtitle(derefStr(p.Model), derefStr(p.Registration), derefStr(p.Registrar)),
+				IP:             derefStr(p.IpAddress),
+				Mac:            derefStr(p.MacAddress),
+				DeviceID:       p.PbxDeviceID.String(), // link to the owning CUCM/PBX device
+				DeviceName:     p.PbxName,
+				DeviceCategory: p.PbxCategory,
+			})
+		}
+	}
+
 	// --- Learned MACs / bridge FDB (which switch + port saw a MAC) ------------
 	if macs, err := s.queries.SearchFdbMacs(ctx, &term); err != nil {
 		writeErr(w, err)
@@ -172,8 +197,23 @@ func (s *Server) searchEntities(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	resp.Total = len(resp.AccessPoints) + len(resp.WirelessClient) + len(resp.NvrChannels) + len(resp.Fdb) + len(resp.Arp)
+	resp.Total = len(resp.AccessPoints) + len(resp.WirelessClient) + len(resp.NvrChannels) + len(resp.Phones) + len(resp.Fdb) + len(resp.Arp)
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// phoneSubtitle renders an IP phone hit: model · registration · registrar.
+func phoneSubtitle(model, registration, registrar string) string {
+	parts := []string{}
+	if model != "" {
+		parts = append(parts, model)
+	}
+	if registration != "" {
+		parts = append(parts, registration)
+	}
+	if registrar != "" {
+		parts = append(parts, "reg "+registrar)
+	}
+	return strings.Join(parts, " · ")
 }
 
 func nvrChannelSubtitle(nvrName string, ch int, status string, linked bool) string {

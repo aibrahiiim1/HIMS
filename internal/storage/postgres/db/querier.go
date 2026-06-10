@@ -232,6 +232,10 @@ type Querier interface {
 	// Path Finder: which phone(s) carry this IP, the directory number, registration
 	// status + the CM node (registrar), and the owning PBX device (CUCM cluster).
 	FindPhoneByIP(ctx context.Context, ipAddress *string) ([]FindPhoneByIPRow, error)
+	// Path Finder: resolve a MAC to the IP phone that carries it (CUCM SEP<mac>),
+	// with directory number, registration + registrar. Compares the MAC ignoring
+	// separators/case so 00:23:eb:.. , 0023eb.. and 00-23-.. all match.
+	FindPhoneByMAC(ctx context.Context, translate string) ([]FindPhoneByMACRow, error)
 	// Path Finder: exact-match a search term (MAC / IP / hostname) to an associated
 	// wireless client that has a known AP, so the traced path can START at the access
 	// point the client is connected to. Exact (not substring) match avoids tracing an
@@ -625,6 +629,9 @@ type Querier interface {
 	// anywhere links back to the NVR detail page, plus any linked standalone camera
 	// device. Channels are recorder-owned rows, not separate inventory devices.
 	SearchNVRChannels(ctx context.Context, dollar_1 *string) ([]SearchNVRChannelsRow, error)
+	// Global search: IP phones / PBX subscribers by extension / SEP name / MAC / IP.
+	// Deduped across the CUCM pub/sub pair (the same phone appears under each node).
+	SearchPhones(ctx context.Context, dollar_1 *string) ([]SearchPhonesRow, error)
 	// Global-search: associated wireless clients by MAC / IP / hostname / SSID / AP.
 	SearchWirelessClients(ctx context.Context, dollar_1 *string) ([]SearchWirelessClientsRow, error)
 	SetAlertRuleEnabled(ctx context.Context, arg SetAlertRuleEnabledParams) (AlertRule, error)

@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
-import { Search as SearchIcon, Boxes, Building2, ClipboardList, Wrench, Network, Route as RouteIcon, Clock, X, Wifi, Smartphone, Cpu, Globe, Video } from 'lucide-react'
+import { Search as SearchIcon, Boxes, Building2, ClipboardList, Wrench, Network, Route as RouteIcon, Clock, X, Wifi, Smartphone, Cpu, Globe, Video, Phone } from 'lucide-react'
 import { api, type Device, type WorkOrder, type SystemLicense, type Location, type SearchResult, type SearchEntities, type EntityHit, locationPaths } from '../api'
 import { PageHeader, Panel, StatusPill, EmptyState, colorFor } from '../components/ui'
 
@@ -56,9 +56,10 @@ export function SearchPage() {
   const aps = ent.data?.access_points ?? []
   const wcs = ent.data?.wireless_clients ?? []
   const nch = ent.data?.nvr_channels ?? []
+  const phs = ent.data?.phones ?? []
   const fdb = ent.data?.fdb ?? []
   const arp = ent.data?.arp ?? []
-  const entTotal = aps.length + wcs.length + nch.length + fdb.length + arp.length
+  const entTotal = aps.length + wcs.length + nch.length + phs.length + fdb.length + arp.length
   const totalHits = devHits.length + locHits.length + woHits.length + sysHits.length + entTotal
 
   // Deep-link an entity hit to the device that owns the observation (controller
@@ -212,6 +213,21 @@ export function SearchPage() {
                     <td className="mono">{h.ip || '—'}</td>
                     <td className="muted">{h.subtitle || '—'}</td>
                     <td>{lk ? <Link className="cell-name" to={lk}>{h.device_name || '—'}</Link> : (h.device_name || '—')}</td>
+                  </tr>)})}</tbody>
+              </table>
+            </Panel>
+          )}
+
+          {phs.length > 0 && (
+            <Panel title="IP Phones / Subscribers" icon={Phone} subtitle={`${phs.length}`} pad={false}>
+              <table className="data-table"><thead><tr><th>Directory No.</th><th>IP</th><th>MAC</th><th>Details</th><th>PBX</th><th>Trace</th></tr></thead>
+                <tbody>{phs.map((h, i) => { const lk = entLink(h); const trace = h.ip || h.mac; return (
+                  <tr key={`ph-${i}`}>
+                    <td className="cell-name">{h.title}</td>
+                    <td className="mono">{h.ip || '—'}</td><td className="mono">{h.mac || '—'}</td>
+                    <td className="muted">{h.subtitle || '—'}</td>
+                    <td>{lk ? <Link className="cell-name" to={lk}>{h.device_name || '—'}</Link> : (h.device_name || '—')}</td>
+                    <td>{trace ? <Link className="btn btn-ghost btn-xs" to={`/path-finder?q=${encodeURIComponent(trace)}`}><RouteIcon size={13} /> Path</Link> : '—'}</td>
                   </tr>)})}</tbody>
               </table>
             </Panel>

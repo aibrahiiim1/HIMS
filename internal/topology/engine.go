@@ -59,6 +59,7 @@ type Querier interface {
 	// Voice + CCTV relationship enrichment for the Path Finder: an IP phone's
 	// directory number/registrar, and a camera's recording NVR / an NVR's channels.
 	FindPhoneByIP(ctx context.Context, ipAddress *string) ([]db.FindPhoneByIPRow, error)
+	FindPhoneByMAC(ctx context.Context, mac string) ([]db.FindPhoneByMACRow, error)
 	FindNVRsForCamera(ctx context.Context, cameraDeviceID *uuid.UUID) ([]db.FindNVRsForCameraRow, error)
 	NVRChannelStats(ctx context.Context, nvrDeviceID uuid.UUID) (db.NVRChannelStatsRow, error)
 }
@@ -490,17 +491,21 @@ func (e *Engine) SearchIP(ctx context.Context, ip netip.Addr) (SearchResult, err
 			"IP resolved to its MAC via " + via + " (no ARP entry for this IP)",
 		}, res.ConfidenceReasons...)
 	}
-	e.attachVoiceCctv(ctx, &res, ip.String())
+	macStr := ""
+	if res.MAC != nil {
+		macStr = *res.MAC
+	}
+	e.attachVoiceCctv(ctx, &res, ip.String(), macStr)
 	res.normalizeSlices()
 	return res, nil
 }
 
 // attachVoiceCctv enriches a result with voice + CCTV relationships: an IP phone
-// at the searched IP (directory number + registrar + PBX), and — when the resolved
-// device is a camera or NVR — the recorder(s) it feeds or its channel totals.
-// Best-effort: query failures leave the trace nil.
-func (e *Engine) attachVoiceCctv(ctx context.Context, res *SearchResult, ip string) {
-	if ip != "" {
+// at the searched IP or MAC (directory number + registrar + PBX), and — when the
+// resolved device is a camera or NVR — the recorder(s) it feeds or its channel
+// totals. Best-effort: query failures leave the trace nil.
+func (e *Engine) attachVoiceCctv(ctx context.Context, res *SearchResult, ip, mac string) {
+	if res.Voice == nil && ip != "" {
 		if rows, err := e.q.FindPhoneByIP(ctx, &ip); err == nil && len(rows) > 0 {
 			r := rows[0]
 			id := r.PbxDeviceID
@@ -510,6 +515,26 @@ func (e *Engine) attachVoiceCctv(ctx context.Context, res *SearchResult, ip stri
 				Registrar: ds(r.Registrar), PBXDeviceID: &id, PBXName: r.PbxName,
 			}
 		}
+	}
+	// MAC lookup — a phone searched by its MAC (or whose IP isn't in pbx_phones).
+	// The voice-VLAN switch FDB often isn't collected, so this is the only path
+	// that resolves an IP phone by MAC.
+	if res.Voice == nil && mac != "" {
+		if rows, err := e.q.FindPhoneByMAC(ctx, mac); err == nil && len(rows) > 0 {
+			r := rows[0]
+			id := r.PbxDeviceID
+			res.Voice = &VoiceTrace{
+				Extension: ds(r.Extension), DeviceName: r.Name, Model: ds(r.Model),
+				Description: ds(r.Description), Registration: ds(r.Registration),
+				Registrar: ds(r.Registrar), PBXDeviceID: &id, PBXName: r.PbxName,
+			}
+		}
+	}
+	// If the searched value is an IP phone but HIMS has no managed device row for
+	// it, surface the phone's identity as the result's name so the card has a title.
+	if res.Voice != nil && res.DeviceName == nil && res.Voice.DeviceName != "" {
+		dn := res.Voice.DeviceName
+		res.DeviceName = &dn
 	}
 	if res.DeviceID != nil {
 		ct := &CctvTrace{}
@@ -550,6 +575,7 @@ func (e *Engine) SearchMAC(ctx context.Context, mac string) (SearchResult, error
 	}
 	res.Confidence, res.ConfidenceReasons = assessConfidence(&res)
 	applyWirelessConfidence(&res)
+	e.attachVoiceCctv(ctx, &res, "", mac)
 	res.normalizeSlices()
 	return res, nil
 }
@@ -594,7 +620,7 @@ func (e *Engine) SearchHostname(ctx context.Context, name string) ([]SearchResul
 		// A device matched by name may itself be a camera/NVR even without a usable
 		// IP path — attach the CCTV relationship directly.
 		if sr.Cctv == nil {
-			e.attachVoiceCctv(ctx, &sr, "")
+			e.attachVoiceCctv(ctx, &sr, "", "")
 		}
 		sr.normalizeSlices()
 		out = append(out, sr)

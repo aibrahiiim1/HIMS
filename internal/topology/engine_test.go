@@ -114,6 +114,9 @@ func (f *fakeQuerier) ListPortVlans(_ context.Context, id uuid.UUID) ([]db.PortV
 func (f *fakeQuerier) FindPhoneByIP(_ context.Context, _ *string) ([]db.FindPhoneByIPRow, error) {
 	return nil, nil
 }
+func (f *fakeQuerier) FindPhoneByMAC(_ context.Context, _ string) ([]db.FindPhoneByMACRow, error) {
+	return nil, nil
+}
 func (f *fakeQuerier) FindNVRsForCamera(_ context.Context, _ *uuid.UUID) ([]db.FindNVRsForCameraRow, error) {
 	return nil, nil
 }
