@@ -15,6 +15,12 @@ func TestWebVendorMarkers_VoiceVsSwitch(t *testing.T) {
 		{"cucm", "", "Cisco Unified CM Administration", "", string(domain.CatPBX)},
 		{"omniswitch", "", "OmniSwitch 6900", "Alcatel-Lucent Enterprise", string(domain.CatSwitch)},
 		{"omnipcx", "", "Alcatel OmniPCX Enterprise", "", string(domain.CatPBX)},
+		// Real banners captured from the live systems (120.0.200.10:8443 / 150.0.0.131:80)
+		// — these are the exact titles a scan now sees, so discovery auto-classifies
+		// them as pbx without a manual lock.
+		{"cucm-8443-real", "", "Cisco Unified CM Console", "", string(domain.CatPBX)},
+		{"cucm-body-only", "", "", "<html>cisco unified communications manager</html>", string(domain.CatPBX)},
+		{"omnipcx-real", "Apache", "OmniPCX for Enterprise", "", string(domain.CatPBX)},
 	}
 	for _, c := range cases {
 		got := WebVendorMarkers(c.server, c.title, c.body)

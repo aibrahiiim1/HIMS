@@ -12,7 +12,6 @@ package discovery
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
@@ -33,6 +32,7 @@ import (
 	"github.com/coralsearesorts/hims/internal/driver"
 	"github.com/coralsearesorts/hims/internal/driver/swsnmp"
 	"github.com/coralsearesorts/hims/internal/fingerprint"
+	"github.com/coralsearesorts/hims/internal/isapi"
 	"github.com/coralsearesorts/hims/internal/snmp"
 )
 
@@ -591,53 +591,63 @@ func httpPort(ports []int) bool {
 	return false
 }
 
-// httpBanner does a single GET against the first open web port and returns the
-// Server header, the page <title>, and a lowercased body snippet (≤4KB). It is
-// best-effort: any error yields empty strings. TLS is insecure (mgmt-LAN
-// self-signed certs are normal).
+// httpBanner GETs the open web port(s) and returns the Server header, the page
+// <title>, and a lowercased body snippet. It probes up to 3 open web ports in
+// priority order (443, 8443, 80, 8080, 8000) and MERGES their bodies/titles, so a
+// classification marker on a secondary port is still seen — e.g. Cisco CUCM serves
+// its "Cisco Unified CM Console" page on 8443 while 443 is also open. TLS uses the
+// legacy-permissive client (full cipher set, TLS1.0+) because voice/appliance web
+// stacks (CUCM 8443, OmniPCX) won't negotiate with Go's modern defaults — a plain
+// client gets "tls: handshake failure" and the banner is lost. Best-effort: errors
+// on any single port are skipped.
 func httpBanner(ctx context.Context, ip netip.Addr, ports []int, timeout time.Duration) (server, title, body string) {
 	if timeout <= 0 {
 		timeout = 2 * time.Second
 	} else if timeout > 3*time.Second {
 		timeout = 3 * time.Second // keep the scan snappy regardless of SNMP timeout
 	}
-	scheme, port := "https", 443
-	switch {
-	case hasPort(ports, 443):
-		scheme, port = "https", 443
-	case hasPort(ports, 8443):
-		scheme, port = "https", 8443
-	case hasPort(ports, 80):
-		scheme, port = "http", 80
-	case hasPort(ports, 8080):
-		scheme, port = "http", 8080
-	case hasPort(ports, 8000):
-		scheme, port = "http", 8000
+	client := isapi.PermissiveClient(timeout) // legacy ciphers for CUCM/OmniPCX/appliance TLS
+	client.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse // don't chase redirects off-host
 	}
-	client := &http.Client{
-		Timeout:   timeout,
-		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}, //nolint:gosec
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse // don't chase redirects off-host
-		},
+	type cand struct {
+		scheme string
+		port   int
 	}
-	url := fmt.Sprintf("%s://%s:%d/", scheme, ip, port)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return "", "", ""
+	var cands []cand
+	for _, c := range []cand{{"https", 443}, {"https", 8443}, {"http", 80}, {"http", 8080}, {"http", 8000}} {
+		if hasPort(ports, c.port) {
+			cands = append(cands, c)
+		}
 	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", "", ""
+	var bodySb strings.Builder
+	for tried, c := range cands {
+		if tried >= 3 { // cap probes to keep the scan snappy
+			break
+		}
+		url := fmt.Sprintf("%s://%s:%d/", c.scheme, ip, c.port)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			continue
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		_ = resp.Body.Close()
+		if server == "" {
+			server = resp.Header.Get("Server")
+		}
+		if title == "" {
+			if m := titleRe.FindStringSubmatch(string(raw)); len(m) > 1 {
+				title = strings.TrimSpace(m[1])
+			}
+		}
+		bodySb.WriteString(strings.ToLower(string(raw)))
+		bodySb.WriteByte('\n')
 	}
-	defer resp.Body.Close()
-	server = resp.Header.Get("Server")
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	low := strings.ToLower(string(raw))
-	if m := titleRe.FindStringSubmatch(string(raw)); len(m) > 1 {
-		title = strings.TrimSpace(m[1])
-	}
-	return server, title, low
+	return server, title, bodySb.String()
 }
 
 func hasPort(ports []int, port int) bool {
