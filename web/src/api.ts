@@ -735,6 +735,11 @@ export interface PhoneExtension {
   model?: string | null
   description?: string | null
   device_pool?: string | null
+  extension?: string | null
+  mac_address?: string | null
+  ip_address?: string | null
+  collection_source?: string | null
+  last_seen_at?: string | null
 }
 
 export interface BMCInfo {
