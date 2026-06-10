@@ -294,24 +294,29 @@ func CollectDeviceInfo(ctx context.Context, ip, user, pass string, doer Doer) (D
 	if doer == nil {
 		doer = PermissiveClient(15 * time.Second)
 	}
-	// Try the common Hikvision/OEM web-service ports over both schemes. Operators
-	// frequently move the device web port off 80/443 (e.g. 8008/8010/8000), so the
-	// ladder must cover those — a CCTV device whose only management surface is on a
-	// non-standard port is otherwise uncollectable. First port that answers wins;
-	// closed ports RST instantly so the extra entries cost little.
+	// Try the common Hikvision/OEM web-service ports. Operators frequently move the
+	// device web port off 80/443 — often into the 8000–8020 band, and commonly
+	// "8000 + host octet" (e.g. .12 → 8012, .14 → 8014). A CCTV device whose only
+	// management surface is on such a port is otherwise uncollectable, so the ladder
+	// sweeps the whole band over HTTP plus the standard schemes. First port that
+	// answers wins; closed ports RST instantly so the extra entries cost little on a
+	// reachable device.
 	ladder := []string{
 		"https://" + ip,
 		"https://" + ip + ":8443",
 		"http://" + ip,
-		"http://" + ip + ":8008",
-		"http://" + ip + ":8010",
-		"http://" + ip + ":8000",
 		"http://" + ip + ":8080",
-		"https://" + ip + ":8008",
 	}
+	for p := 8000; p <= 8020; p++ {
+		ladder = append(ladder, fmt.Sprintf("http://%s:%d", ip, p))
+	}
+	ladder = append(ladder, "https://"+ip+":8008")
 	var lastErr error
 	for _, base := range ladder {
-		actx, cancel := context.WithTimeout(ctx, 8*time.Second)
+		// Short per-attempt timeout: the ladder sweeps ~25 endpoints, so a filtered
+		// (silently dropped) port must not cost 8s each. A closed port RSTs instantly
+		// and a real web port answers well under 4s.
+		actx, cancel := context.WithTimeout(ctx, 4*time.Second)
 		info, err := NewClient(base, user, pass, doer).DeviceInfo(actx)
 		cancel()
 		if err == nil {

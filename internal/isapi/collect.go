@@ -50,10 +50,24 @@ type Probe struct {
 	Note   string `json:"note"`
 }
 
-// IsRecorder reports whether the identified deviceType is an NVR/DVR.
+// IsRecorder reports whether the device is an NVR/DVR (so channel/HDD/recording
+// collection should run). deviceType is the primary signal, but Hikvision Turbo HD
+// DVRs report a generic deviceType ("IPC") over ISAPI, so we also recognise the
+// recorder by its model code — …HGHI/…HQHI/…HUHI/…HVR = DVR; …NI…/…NXI…/NVR = NVR.
+// Plain IP cameras (DS-2CD…/DS-2DE…) match none of these, so they correctly stay
+// non-recorders.
 func (n NVR) IsRecorder() bool {
 	dt := strings.ToLower(n.Info.DeviceType)
-	return strings.Contains(dt, "nvr") || strings.Contains(dt, "dvr")
+	if strings.Contains(dt, "nvr") || strings.Contains(dt, "dvr") || strings.Contains(dt, "hvr") || strings.Contains(dt, "hybrid") {
+		return true
+	}
+	m := strings.ToUpper(n.Info.Model)
+	for _, code := range []string{"HGHI", "HQHI", "HUHI", "HVR", "DVR", "NVR", "NXI"} {
+		if strings.Contains(m, code) {
+			return true
+		}
+	}
+	return false
 }
 
 // Collect runs the full read-only ISAPI inventory: DeviceInfo first (also
