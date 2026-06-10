@@ -32,6 +32,17 @@ SELECT device_id, protocol::text AS protocol, source::text AS source FROM (
   UNION ALL
   SELECT DISTINCT device_id, 'onvif' AS protocol, 'evidence' AS source FROM camera_info
 
+  -- 3b) Hikvision NVR/DVR ISAPI inventory (authenticated recorder collection).
+  --     Recorders persist identity + channels + HDDs to nvr_info; a plain camera
+  --     keeps its identity in camera_info, but a recorder collected over ISAPI
+  --     does NOT always get a camera_info row, so nvr_info must be its own proven
+  --     evidence — an nvr_info row only exists because a WEB credential
+  --     authenticated and HIMS collected the recorder over ISAPI. Labelled
+  --     'onvif' to match the CCTV-web convention (camera_info above) and the
+  --     camera/nvr expected protocol (access_coverage.go expectedProtocols).
+  UNION ALL
+  SELECT DISTINCT device_id, 'onvif' AS protocol, 'evidence' AS source FROM nvr_info
+
   -- 4) Wireless controller REST (UniFi/Omada/Ruckus/Extreme).
   UNION ALL
   SELECT DISTINCT device_id, 'vendor_api' AS protocol, 'evidence' AS source FROM wlan_controller_info
