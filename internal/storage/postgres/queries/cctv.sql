@@ -13,6 +13,24 @@ ON CONFLICT (device_id) DO UPDATE SET
     last_seen_at = now()
 RETURNING *;
 
+-- name: UpsertCameraEnrichment :exec
+-- Enriched read-only camera facts from ISAPI (NIC + time + firmware/serial).
+-- COALESCE keeps an existing value when a re-collect doesn't re-resolve a field.
+INSERT INTO camera_info (device_id, device_name, firmware, serial, mac_address, ip_address, subnet_mask, gateway, dns_server, ntp_server, time_zone)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+ON CONFLICT (device_id) DO UPDATE SET
+    device_name = COALESCE(NULLIF(EXCLUDED.device_name,''), camera_info.device_name),
+    firmware    = COALESCE(NULLIF(EXCLUDED.firmware,''), camera_info.firmware),
+    serial      = COALESCE(NULLIF(EXCLUDED.serial,''), camera_info.serial),
+    mac_address = COALESCE(NULLIF(EXCLUDED.mac_address,''), camera_info.mac_address),
+    ip_address  = COALESCE(NULLIF(EXCLUDED.ip_address,''), camera_info.ip_address),
+    subnet_mask = COALESCE(NULLIF(EXCLUDED.subnet_mask,''), camera_info.subnet_mask),
+    gateway     = COALESCE(NULLIF(EXCLUDED.gateway,''), camera_info.gateway),
+    dns_server  = COALESCE(NULLIF(EXCLUDED.dns_server,''), camera_info.dns_server),
+    ntp_server  = COALESCE(NULLIF(EXCLUDED.ntp_server,''), camera_info.ntp_server),
+    time_zone   = COALESCE(NULLIF(EXCLUDED.time_zone,''), camera_info.time_zone),
+    last_seen_at = now();
+
 -- name: ListNVRChannels :many
 SELECT * FROM nvr_channels WHERE nvr_device_id = $1 ORDER BY channel_no;
 

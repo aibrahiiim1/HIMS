@@ -162,6 +162,16 @@ type CameraInfo struct {
 	RtspUrl      *string   `json:"rtsp_url"`
 	OnvifUrl     *string   `json:"onvif_url"`
 	LastSeenAt   time.Time `json:"last_seen_at"`
+	DeviceName   *string   `json:"device_name"`
+	Firmware     *string   `json:"firmware"`
+	Serial       *string   `json:"serial"`
+	MacAddress   *string   `json:"mac_address"`
+	IpAddress    *string   `json:"ip_address"`
+	SubnetMask   *string   `json:"subnet_mask"`
+	Gateway      *string   `json:"gateway"`
+	DnsServer    *string   `json:"dns_server"`
+	NtpServer    *string   `json:"ntp_server"`
+	TimeZone     *string   `json:"time_zone"`
 }
 
 type ConfigBackup struct {

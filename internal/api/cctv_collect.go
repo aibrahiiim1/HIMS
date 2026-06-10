@@ -221,6 +221,13 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device, selectedCre
 		_, _ = s.queries.UpsertCameraInfo(ctx, db.UpsertCameraInfoParams{
 			DeviceID: d.ID, Manufacturer: strPtrOrNil(vendor), Model: strPtrOrNil(info.Model),
 		})
+		// Enrichment: NIC (MAC/IP/mask/gw/DNS) + firmware/serial + time/NTP from ISAPI.
+		_ = s.queries.UpsertCameraEnrichment(ctx, db.UpsertCameraEnrichmentParams{
+			DeviceID: d.ID, DeviceName: strPtrOrNil(info.DeviceName), Firmware: strPtrOrNil(info.Firmware),
+			Serial: strPtrOrNil(info.Serial), MacAddress: strPtrOrNil(info.MAC),
+			IpAddress: strPtrOrNil(nvr.Net.IP), SubnetMask: strPtrOrNil(nvr.Net.Mask), Gateway: strPtrOrNil(nvr.Net.Gateway),
+			DnsServer: strPtrOrNil(nvr.Net.DNS), NtpServer: strPtrOrNil(nvr.TimeCfg.NTPServer), TimeZone: strPtrOrNil(nvr.TimeCfg.TimeZone),
+		})
 		s.persistNVR(ctx, d, vendor, nvr) // nvr_info + channels + HDDs (recorders)
 		cid := cd.id
 		_ = s.queries.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: d.ID, CredentialID: &cid})

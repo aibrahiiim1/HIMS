@@ -60,8 +60,18 @@ export function CctvDetail() {
         <Panel title="Device Information" icon={Camera}>
           {c && c.device_id ? (
             <DefList items={[
+              { label: 'Device name', value: c?.device_name || '—' },
               { label: 'Manufacturer', value: c?.manufacturer || '—' },
               { label: 'Model', value: c?.model || '—' },
+              { label: 'Firmware', value: c?.firmware || '—' },
+              { label: 'Serial', value: c?.serial ? <span className="mono">{c.serial}</span> : '—' },
+              { label: 'MAC address', value: c?.mac_address ? <span className="mono">{c.mac_address}</span> : '—' },
+              { label: 'IP address', value: c?.ip_address ? <span className="mono">{c.ip_address}</span> : '—' },
+              { label: 'Subnet mask', value: c?.subnet_mask ? <span className="mono">{c.subnet_mask}</span> : '—' },
+              { label: 'Gateway', value: c?.gateway ? <span className="mono">{c.gateway}</span> : '—' },
+              { label: 'DNS', value: c?.dns_server ? <span className="mono">{c.dns_server}</span> : '—' },
+              { label: 'NTP server', value: c?.ntp_server ? <span className="mono">{c.ntp_server}</span> : '—' },
+              { label: 'Time zone', value: c?.time_zone || '—' },
               { label: 'Resolution', value: c?.resolution || '—' },
               { label: 'RTSP stream', value: c?.rtsp_url ? <span className="mono">{c.rtsp_url}</span> : '—' },
               { label: 'ONVIF endpoint', value: c?.onvif_url ? <span className="mono">{c.onvif_url}</span> : '—' },

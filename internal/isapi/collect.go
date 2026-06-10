@@ -19,7 +19,19 @@ type NVR struct {
 	Storage   []HDD
 	Recording string  // human summary; "" = not exposed by this firmware
 	Health    string  // working-status summary; "" = not exposed
+	Net       NetInfo // NIC config (IP/mask/gateway/DNS/MAC) — cameras + recorders
+	TimeCfg   TimeInfo
 	Probes    []Probe // every endpoint tried + its HTTP status/outcome
+}
+
+// NetInfo is the device's primary network interface config (ISAPI System/Network).
+type NetInfo struct {
+	IP, Mask, Gateway, DNS, MAC string
+}
+
+// TimeInfo is the device's clock config (ISAPI System/time).
+type TimeInfo struct {
+	TimeZone, NTPServer string
 }
 
 // Channel is one camera/input on the recorder.
@@ -119,7 +131,19 @@ func Collect(ctx context.Context, ip, user, pass string, doer Doer, prefer []str
 		return body, true
 	}
 
-	// Only recorders have channels/HDDs; a plain camera stops at identity.
+	// Network + time config — collected for cameras AND recorders (the useful
+	// "other data" a camera exposes over ISAPI beyond bare identity).
+	if b, ok := probe("/ISAPI/System/Network/interfaces"); ok {
+		out.Net = parseNetworkInterfaces(b)
+	}
+	if b, ok := probe("/ISAPI/System/time"); ok {
+		out.TimeCfg.TimeZone = parseTimeZone(b)
+	}
+	if b, ok := probe("/ISAPI/System/time/ntpServers"); ok {
+		out.TimeCfg.NTPServer = parseNTPServer(b)
+	}
+
+	// Only recorders have channels/HDDs; a plain camera stops here.
 	if !out.IsRecorder() {
 		return out, nil
 	}
@@ -300,6 +324,58 @@ func parseHDDs(b []byte) []HDD {
 		})
 	}
 	return out
+}
+
+// parseNetworkInterfaces reads the device's primary NIC config (first interface).
+func parseNetworkInterfaces(b []byte) NetInfo {
+	type gw struct {
+		IP string `xml:"ipAddress"`
+	}
+	type addr struct {
+		IP   string `xml:"ipAddress"`
+		Mask string `xml:"subnetMask"`
+		GW   gw     `xml:"DefaultGateway"`
+		DNS  gw     `xml:"PrimaryDNS"`
+	}
+	var doc struct {
+		Iface []struct {
+			Addr addr   `xml:"IPAddress"`
+			MAC  string `xml:"Link>MACAddress"`
+		} `xml:"NetworkInterface"`
+	}
+	if xml.Unmarshal(b, &doc) != nil || len(doc.Iface) == 0 {
+		return NetInfo{}
+	}
+	i := doc.Iface[0]
+	return NetInfo{
+		IP: strings.TrimSpace(i.Addr.IP), Mask: strings.TrimSpace(i.Addr.Mask),
+		Gateway: strings.TrimSpace(i.Addr.GW.IP), DNS: strings.TrimSpace(i.Addr.DNS.IP),
+		MAC: strings.TrimSpace(i.MAC),
+	}
+}
+
+func parseTimeZone(b []byte) string {
+	var doc struct {
+		TZ string `xml:"timeZone"`
+	}
+	_ = xml.Unmarshal(b, &doc)
+	return strings.TrimSpace(doc.TZ)
+}
+
+func parseNTPServer(b []byte) string {
+	var doc struct {
+		Servers []struct {
+			IP   string `xml:"ipAddress"`
+			Host string `xml:"hostName"`
+		} `xml:"NTPServer"`
+	}
+	if xml.Unmarshal(b, &doc) != nil || len(doc.Servers) == 0 {
+		return ""
+	}
+	if v := strings.TrimSpace(doc.Servers[0].IP); v != "" {
+		return v
+	}
+	return strings.TrimSpace(doc.Servers[0].Host)
 }
 
 func summarizeWorkingStatus(b []byte) string {

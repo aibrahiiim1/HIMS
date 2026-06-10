@@ -39,7 +39,7 @@ func (q *Queries) CountNVRChannels(ctx context.Context) (int64, error) {
 }
 
 const getCameraInfo = `-- name: GetCameraInfo :one
-SELECT device_id, manufacturer, model, resolution, rtsp_url, onvif_url, last_seen_at FROM camera_info WHERE device_id = $1
+SELECT device_id, manufacturer, model, resolution, rtsp_url, onvif_url, last_seen_at, device_name, firmware, serial, mac_address, ip_address, subnet_mask, gateway, dns_server, ntp_server, time_zone FROM camera_info WHERE device_id = $1
 `
 
 func (q *Queries) GetCameraInfo(ctx context.Context, deviceID uuid.UUID) (CameraInfo, error) {
@@ -53,6 +53,16 @@ func (q *Queries) GetCameraInfo(ctx context.Context, deviceID uuid.UUID) (Camera
 		&i.RtspUrl,
 		&i.OnvifUrl,
 		&i.LastSeenAt,
+		&i.DeviceName,
+		&i.Firmware,
+		&i.Serial,
+		&i.MacAddress,
+		&i.IpAddress,
+		&i.SubnetMask,
+		&i.Gateway,
+		&i.DnsServer,
+		&i.NtpServer,
+		&i.TimeZone,
 	)
 	return i, err
 }
@@ -240,6 +250,56 @@ func (q *Queries) SearchNVRChannels(ctx context.Context, dollar_1 *string) ([]Se
 	return items, nil
 }
 
+const upsertCameraEnrichment = `-- name: UpsertCameraEnrichment :exec
+INSERT INTO camera_info (device_id, device_name, firmware, serial, mac_address, ip_address, subnet_mask, gateway, dns_server, ntp_server, time_zone)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+ON CONFLICT (device_id) DO UPDATE SET
+    device_name = COALESCE(NULLIF(EXCLUDED.device_name,''), camera_info.device_name),
+    firmware    = COALESCE(NULLIF(EXCLUDED.firmware,''), camera_info.firmware),
+    serial      = COALESCE(NULLIF(EXCLUDED.serial,''), camera_info.serial),
+    mac_address = COALESCE(NULLIF(EXCLUDED.mac_address,''), camera_info.mac_address),
+    ip_address  = COALESCE(NULLIF(EXCLUDED.ip_address,''), camera_info.ip_address),
+    subnet_mask = COALESCE(NULLIF(EXCLUDED.subnet_mask,''), camera_info.subnet_mask),
+    gateway     = COALESCE(NULLIF(EXCLUDED.gateway,''), camera_info.gateway),
+    dns_server  = COALESCE(NULLIF(EXCLUDED.dns_server,''), camera_info.dns_server),
+    ntp_server  = COALESCE(NULLIF(EXCLUDED.ntp_server,''), camera_info.ntp_server),
+    time_zone   = COALESCE(NULLIF(EXCLUDED.time_zone,''), camera_info.time_zone),
+    last_seen_at = now()
+`
+
+type UpsertCameraEnrichmentParams struct {
+	DeviceID   uuid.UUID `json:"device_id"`
+	DeviceName *string   `json:"device_name"`
+	Firmware   *string   `json:"firmware"`
+	Serial     *string   `json:"serial"`
+	MacAddress *string   `json:"mac_address"`
+	IpAddress  *string   `json:"ip_address"`
+	SubnetMask *string   `json:"subnet_mask"`
+	Gateway    *string   `json:"gateway"`
+	DnsServer  *string   `json:"dns_server"`
+	NtpServer  *string   `json:"ntp_server"`
+	TimeZone   *string   `json:"time_zone"`
+}
+
+// Enriched read-only camera facts from ISAPI (NIC + time + firmware/serial).
+// COALESCE keeps an existing value when a re-collect doesn't re-resolve a field.
+func (q *Queries) UpsertCameraEnrichment(ctx context.Context, arg UpsertCameraEnrichmentParams) error {
+	_, err := q.db.Exec(ctx, upsertCameraEnrichment,
+		arg.DeviceID,
+		arg.DeviceName,
+		arg.Firmware,
+		arg.Serial,
+		arg.MacAddress,
+		arg.IpAddress,
+		arg.SubnetMask,
+		arg.Gateway,
+		arg.DnsServer,
+		arg.NtpServer,
+		arg.TimeZone,
+	)
+	return err
+}
+
 const upsertCameraInfo = `-- name: UpsertCameraInfo :one
 INSERT INTO camera_info (device_id, manufacturer, model, resolution, rtsp_url, onvif_url)
 VALUES ($1,$2,$3,$4,$5,$6)
@@ -250,7 +310,7 @@ ON CONFLICT (device_id) DO UPDATE SET
     rtsp_url = EXCLUDED.rtsp_url,
     onvif_url = EXCLUDED.onvif_url,
     last_seen_at = now()
-RETURNING device_id, manufacturer, model, resolution, rtsp_url, onvif_url, last_seen_at
+RETURNING device_id, manufacturer, model, resolution, rtsp_url, onvif_url, last_seen_at, device_name, firmware, serial, mac_address, ip_address, subnet_mask, gateway, dns_server, ntp_server, time_zone
 `
 
 type UpsertCameraInfoParams struct {
@@ -280,6 +340,16 @@ func (q *Queries) UpsertCameraInfo(ctx context.Context, arg UpsertCameraInfoPara
 		&i.RtspUrl,
 		&i.OnvifUrl,
 		&i.LastSeenAt,
+		&i.DeviceName,
+		&i.Firmware,
+		&i.Serial,
+		&i.MacAddress,
+		&i.IpAddress,
+		&i.SubnetMask,
+		&i.Gateway,
+		&i.DnsServer,
+		&i.NtpServer,
+		&i.TimeZone,
 	)
 	return i, err
 }

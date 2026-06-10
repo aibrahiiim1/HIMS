@@ -1141,6 +1141,17 @@ export interface CameraInfo {
   resolution?: string | null
   rtsp_url?: string | null
   onvif_url?: string | null
+  // enrichment (ISAPI): NIC + firmware/serial + time
+  device_name?: string | null
+  firmware?: string | null
+  serial?: string | null
+  mac_address?: string | null
+  ip_address?: string | null
+  subnet_mask?: string | null
+  gateway?: string | null
+  dns_server?: string | null
+  ntp_server?: string | null
+  time_zone?: string | null
 }
 
 export interface NVRChannel {
