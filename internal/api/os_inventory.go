@@ -145,8 +145,18 @@ func categorizeCollectErr(method, errStr string) (reason, detail string) {
 		return "ssh_timeout", "SSH timed out (host slow, firewalled, or 22 filtered)"
 	case strings.Contains(e, "no route") || strings.Contains(e, "no such host") || strings.Contains(e, "unreachable"):
 		return "unreachable", "host unreachable from the collector"
+	case strings.Contains(e, "locked") || strings.Contains(e, "lockout") || strings.Contains(e, "too many") || (strings.Contains(e, "account") && strings.Contains(e, "lock")):
+		// Hikvision (and others) return an explicit lock message after repeated
+		// wrong logins. Surface it distinctly so the operator stops, not sprays.
+		return "lockout_suspected", "device reports the account is locked — wait for the lockout window before retrying"
+	case strings.Contains(e, "certificate") || strings.Contains(e, "x509") || strings.Contains(e, "tls:") || strings.Contains(e, "remote error: tls"):
+		return "tls_error", "TLS/certificate negotiation failed — legacy/self-signed cert or wrong scheme"
 	case strings.Contains(e, "kex") || strings.Contains(e, "handshake"):
 		return "handshake_failed", "SSH/TLS handshake failed (legacy algorithms?)"
+	case strings.Contains(e, "not exposed") || strings.Contains(e, "no endpoint answered") || strings.Contains(e, "404") || strings.Contains(e, "501"):
+		return "not_exposed", "the management endpoint is not exposed on the tried ports — check the device's web/API port"
+	case strings.Contains(e, "not a deviceinfo") || strings.Contains(e, "unsupported") || strings.Contains(e, "parse"):
+		return "unsupported_firmware", "the device answered but not with a recognised response — firmware may be unsupported or the wrong protocol"
 	default:
 		return "collection_error", strings.TrimSpace(errStr)
 	}

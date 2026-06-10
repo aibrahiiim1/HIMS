@@ -630,13 +630,15 @@ type Querier interface {
 	SetDeviceCCTVCredential(ctx context.Context, arg SetDeviceCCTVCredentialParams) error
 	// Bind-on-success: record the credential that last authenticated.
 	SetDeviceCredential(ctx context.Context, arg SetDeviceCredentialParams) error
-	// Record the base URL (scheme://ip[:port]) that last authenticated/collected over
-	// HTTP/ISAPI/ONVIF, so the UI shows the working endpoint and the collector can
-	// prefer it on the next run.
-	SetDeviceWebLastOK(ctx context.Context, arg SetDeviceWebLastOKParams) error
 	// Operator-set per-device web-access override: preferred scheme/port, alternate
-	// ports (comma-separated), and a free-text note. Collectors try these first.
+	// ports (comma-separated), preferred protocol, and a free-text note. Collectors
+	// try these first.
 	SetDeviceWebOverride(ctx context.Context, arg SetDeviceWebOverrideParams) error
+	// Record EXACTLY what worked on the last successful web/CCTV collection: the
+	// protocol (isapi/onvif/http/…), scheme, port, base endpoint, and the credential
+	// that authenticated. Drives the accurate "Managed via X" source in the UI and
+	// lets the next collect/scan prefer the known-good endpoint instead of guessing.
+	SetDeviceWebSuccess(ctx context.Context, arg SetDeviceWebSuccessParams) error
 	// Stores the scan spec (mode/targets/creds) so the job can be re-run as-is.
 	SetDiscoveryJobMetadata(ctx context.Context, arg SetDiscoveryJobMetadataParams) error
 	SetMibPackCollected(ctx context.Context, arg SetMibPackCollectedParams) error

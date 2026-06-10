@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams, Link } from 'react-router-dom'
 import { Camera, Video, Film, HardDrive, Disc, Network, Activity, Wrench, Cpu, Globe } from 'lucide-react'
-import { api, type CameraInfo, type NVRChannel, type NVRDetail, type Device, type DeviceWebAccess } from '../api'
+import { api, type CameraInfo, type NVRChannel, type NVRDetail, type Device, type DeviceWebAccess, type CredTestResult } from '../api'
 import { DeviceHeader } from '../components/DeviceHeader'
 import { CctvCollect } from '../components/CctvCollect'
 import { Panel, Kpi, DefList, EmptyState, StatusPill } from '../components/ui'
@@ -239,21 +239,39 @@ function WebAccessForm({ deviceId, data: d }: { deviceId: string; data: DeviceWe
   const [port, setPort] = useState(d.port != null ? String(d.port) : '')
   const [alt, setAlt] = useState(d.alt_ports)
   const [notes, setNotes] = useState(d.notes)
+  const [prefProto, setPrefProto] = useState(d.pref_proto)
   const save = useMutation({
     mutationFn: () => api.put<DeviceWebAccess>(`/devices/${deviceId}/web-access`, {
-      scheme, port: port ? Number(port) : null, alt_ports: alt, notes,
+      scheme, port: port ? Number(port) : null, alt_ports: alt, notes, pref_proto: prefProto,
     }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['web-access', deviceId] }),
   })
+  // Recent failed collection attempts (categorised) for this device.
+  const fails = useQuery({
+    queryKey: ['cred-tests', deviceId],
+    queryFn: () => api.get<CredTestResult[]>(`/devices/${deviceId}/credential-tests?limit=20`),
+  })
+  const recentFails = (fails.data ?? []).filter((r) => !r.success).slice(0, 8)
   return (
     <Panel title="Web / API Access" icon={Globe} subtitle="discovered ports, the endpoints HIMS tries, and per-device overrides">
       {(
         <>
-          <div className="row" style={{ gap: 24, flexWrap: 'wrap', marginBottom: 12 }}>
-            <div>
-              <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Last successful endpoint</div>
-              <div className="mono">{d.last_ok || '—'}{d.last_ok_at ? <span className="muted" style={{ fontSize: 11 }}> · {d.last_ok_at.slice(0, 19).replace('T', ' ')}</span> : null}</div>
+          <div style={{ marginBottom: 14, padding: 10, border: '1px solid var(--border, #2a3a47)', borderRadius: 8 }}>
+            <div className="row" style={{ gap: 10, alignItems: 'center', marginBottom: 6 }}>
+              <span className="muted" style={{ fontSize: 12 }}>Last successful source</span>
+              {d.last_proto
+                ? <span className="badge badge-up" style={{ textTransform: 'uppercase' }}>{d.last_proto}</span>
+                : <span className="muted">— never collected</span>}
             </div>
+            {d.last_ok && (
+              <div className="row" style={{ gap: 18, flexWrap: 'wrap', fontSize: 13 }}>
+                <span>Endpoint <span className="mono">{d.last_ok}</span></span>
+                <span>Scheme <strong>{d.last_scheme || '—'}</strong></span>
+                <span>Port <strong>{d.last_port ?? '—'}</strong></span>
+                <span>Credential <strong>{d.last_credential || '—'}</strong></span>
+                {d.last_ok_at && <span className="muted">{d.last_ok_at.slice(0, 19).replace('T', ' ')}</span>}
+              </div>
+            )}
           </div>
 
           <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>Discovered ports</div>
@@ -281,18 +299,43 @@ function WebAccessForm({ deviceId, data: d }: { deviceId: string; data: DeviceWe
 
           <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>Per-device override</div>
           <div className="row" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <label>Preferred protocol
+              <select className="field" style={{ display: 'block' }} value={prefProto} onChange={(e) => setPrefProto(e.target.value)}>
+                <option value="">(auto)</option><option value="isapi">ISAPI</option><option value="onvif">ONVIF</option><option value="http">HTTP</option>
+              </select>
+            </label>
             <label>Preferred scheme
               <select className="field" style={{ display: 'block' }} value={scheme} onChange={(e) => setScheme(e.target.value)}>
                 <option value="">(auto)</option><option value="http">http</option><option value="https">https</option>
               </select>
             </label>
             <label>Preferred port<input className="field" style={{ width: 110, display: 'block' }} type="number" value={port} onChange={(e) => setPort(e.target.value)} placeholder="8010" /></label>
-            <label style={{ minWidth: 160 }}>Alternate ports<input className="field" style={{ width: '100%', display: 'block' }} value={alt} onChange={(e) => setAlt(e.target.value)} placeholder="8000, 8008" /></label>
-            <label style={{ flex: 1, minWidth: 180 }}>Notes<input className="field" style={{ width: '100%', display: 'block' }} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. uses 8010" /></label>
+            <label style={{ minWidth: 150 }}>Alternate ports<input className="field" style={{ width: '100%', display: 'block' }} value={alt} onChange={(e) => setAlt(e.target.value)} placeholder="8000, 8008" /></label>
+            <label style={{ flex: 1, minWidth: 160 }}>Notes<input className="field" style={{ width: '100%', display: 'block' }} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. uses 8010" /></label>
             <button className="btn btn-primary" disabled={save.isPending} onClick={() => save.mutate()}>{save.isPending ? 'Saving…' : 'Save'}</button>
             {save.isSuccess && <span className="badge badge-up">saved</span>}
           </div>
           {save.error && <div className="error-msg" style={{ marginTop: 8 }}>{(save.error as Error).message}</div>}
+
+          {recentFails.length > 0 && (
+            <div style={{ marginTop: 16 }}>
+              <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>Recent failed attempts</div>
+              <table>
+                <thead><tr><th>When</th><th>Protocol</th><th>Credential</th><th>Reason</th><th>Detail</th></tr></thead>
+                <tbody>
+                  {recentFails.map((r, i) => (
+                    <tr key={i}>
+                      <td className="muted" style={{ fontSize: 12 }}>{r.tested_at?.slice(0, 19).replace('T', ' ')}</td>
+                      <td>{r.protocol || r.kind}</td>
+                      <td>{r.credential_name}</td>
+                      <td><span className="badge badge-warning">{r.category.replace(/_/g, ' ')}</span></td>
+                      <td className="muted" style={{ fontSize: 12, maxWidth: 360 }}>{r.detail}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </>
       )}
     </Panel>

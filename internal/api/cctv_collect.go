@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/netip"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -123,6 +125,9 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device, selectedCre
 	var attempts []discovery.CredAttempt
 	lastReason, lastDetail := "auth_failed", "ONVIF authentication rejected"
 	for _, cd := range cands {
+		if d.WebPrefProto == "isapi" {
+			break // operator forced ISAPI for this device — skip the ONVIF-first attempts
+		}
 		cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		info, err := onvif.Collect(cctx, onvif.NewClient("http://"+ip, cd.user, cd.pass, doer))
 		cancel()
@@ -160,7 +165,7 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device, selectedCre
 		cid := cd.id
 		_ = s.queries.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: d.ID, CredentialID: &cid})
 		_ = s.queries.SetDeviceCCTVCredential(ctx, db.SetDeviceCCTVCredentialParams{ID: d.ID, CctvCredentialID: &cid}) // durable CCTV web credential
-		_ = s.queries.SetDeviceWebLastOK(ctx, db.SetDeviceWebLastOKParams{ID: d.ID, WebLastOk: "http://" + ip})        // ONVIF base that worked
+		s.recordWebSuccess(ctx, d.ID, "onvif", "http://"+ip, &cid)                                                    // real source = ONVIF
 		_ = s.queries.UpdateDeviceMonitoringStatus(ctx, db.UpdateDeviceMonitoringStatusParams{ID: d.ID, Status: "up"})
 
 		res = cctvResult{Status: "collected", CredentialUsed: cd.name, Category: string(cat),
@@ -220,9 +225,7 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device, selectedCre
 		cid := cd.id
 		_ = s.queries.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: d.ID, CredentialID: &cid})
 		_ = s.queries.SetDeviceCCTVCredential(ctx, db.SetDeviceCCTVCredentialParams{ID: d.ID, CctvCredentialID: &cid}) // durable CCTV web credential
-		if info.Endpoint != "" {
-			_ = s.queries.SetDeviceWebLastOK(ctx, db.SetDeviceWebLastOKParams{ID: d.ID, WebLastOk: info.Endpoint}) // ISAPI base that worked
-		}
+		s.recordWebSuccess(ctx, d.ID, "isapi", info.Endpoint, &cid)                                                   // real source = ISAPI
 		_ = s.queries.UpdateDeviceMonitoringStatus(ctx, db.UpdateDeviceMonitoringStatusParams{ID: d.ID, Status: "up"})
 
 		res = cctvResult{Status: "collected", CredentialUsed: cd.name, Category: string(cat),
@@ -305,9 +308,7 @@ func (s *Server) collectCCTVProfile(ctx context.Context, p db.VendorConnectionPr
 			_ = s.queries.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: d.ID, CredentialID: p.CredentialID})
 			_ = s.queries.SetDeviceCCTVCredential(ctx, db.SetDeviceCCTVCredentialParams{ID: d.ID, CctvCredentialID: p.CredentialID}) // durable CCTV web credential
 		}
-		if info2.Endpoint != "" {
-			_ = s.queries.SetDeviceWebLastOK(ctx, db.SetDeviceWebLastOKParams{ID: d.ID, WebLastOk: info2.Endpoint})
-		}
+		s.recordWebSuccess(ctx, d.ID, "isapi", info2.Endpoint, p.CredentialID)
 		_ = s.queries.UpdateDeviceMonitoringStatus(ctx, db.UpdateDeviceMonitoringStatusParams{ID: d.ID, Status: "up"})
 		out.CollectionOK = true
 		out.Category = string(cat)
@@ -337,6 +338,7 @@ func (s *Server) collectCCTVProfile(ctx context.Context, p db.VendorConnectionPr
 		_ = s.queries.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: d.ID, CredentialID: p.CredentialID})
 		_ = s.queries.SetDeviceCCTVCredential(ctx, db.SetDeviceCCTVCredentialParams{ID: d.ID, CctvCredentialID: p.CredentialID}) // durable CCTV web credential
 	}
+	s.recordWebSuccess(ctx, d.ID, "onvif", "http://"+host, p.CredentialID)
 	_ = s.queries.UpdateDeviceMonitoringStatus(ctx, db.UpdateDeviceMonitoringStatusParams{ID: d.ID, Status: "up"})
 
 	out.CollectionOK = true
@@ -351,6 +353,43 @@ func strPtrOrNil(s string) *string {
 		return nil
 	}
 	return &s
+}
+
+// schemePortOf splits a base endpoint URL into its scheme + port (defaulting to
+// the scheme's standard port when none is present).
+func schemePortOf(endpoint string) (scheme string, port int) {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return "", 0
+	}
+	scheme = u.Scheme
+	if p := u.Port(); p != "" {
+		port, _ = strconv.Atoi(p)
+	} else if scheme == "https" {
+		port = 443
+	} else {
+		port = 80
+	}
+	return scheme, port
+}
+
+// recordWebSuccess stamps EXACTLY what worked for a web-managed device — protocol
+// (isapi/onvif/http), scheme, port, endpoint, and the credential — so the UI shows
+// the real source and the next collect/scan prefers the known-good endpoint.
+func (s *Server) recordWebSuccess(ctx context.Context, devID uuid.UUID, proto, endpoint string, credID *uuid.UUID) {
+	if endpoint == "" {
+		return
+	}
+	scheme, port := schemePortOf(endpoint)
+	var pp *int32
+	if port > 0 {
+		p := int32(port)
+		pp = &p
+	}
+	_ = s.queries.SetDeviceWebSuccess(ctx, db.SetDeviceWebSuccessParams{
+		ID: devID, WebLastProto: proto, WebLastScheme: scheme, WebLastPort: pp,
+		WebLastOk: endpoint, WebLastCredentialID: credID,
+	})
 }
 
 // recorderCategory picks the device category from ISAPI classification evidence:

@@ -34,6 +34,8 @@ var protocolLabels = map[string]string{
 	"http_basic":    "HTTP Basic",
 	"api_token":     "API Token",
 	"onvif":         "ONVIF",
+	"isapi":         "ISAPI",
+	"http":          "HTTP",
 	"rtsp":          "RTSP",
 	"vendor_api":    "Vendor API",
 	"vmware":        "VMware",
@@ -44,7 +46,7 @@ var protocolLabels = map[string]string{
 
 // protocolOrder is the stable display order for the breakdown.
 var protocolOrder = []string{
-	"snmp_v2c", "snmp_v3", "ssh", "winrm", "wmi", "smb", "onvif", "rtsp",
+	"snmp_v2c", "snmp_v3", "ssh", "winrm", "wmi", "smb", "onvif", "isapi", "http", "rtsp",
 	"http_basic", "api_token", "vendor_api", "vmware", "fortigate_api", "cucm_axl", "ldap",
 }
 
@@ -474,13 +476,18 @@ func expectedProtocols(category, osFamily string) []string {
 }
 
 // accessSatisfies reports whether the device's working access methods include the
-// expected protocol (treating snmp_v2c/snmp_v3 as interchangeable).
+// expected protocol (treating snmp_v2c/snmp_v3 as interchangeable, and the web
+// family onvif/isapi/http as interchangeable — a camera proven via ISAPI still
+// satisfies an "onvif" expectation).
 func accessSatisfies(da *deviceAccess, expected string) bool {
 	if da.has(expected) {
 		return true
 	}
-	if expected == "snmp_v2c" || expected == "snmp_v3" {
+	switch expected {
+	case "snmp_v2c", "snmp_v3":
 		return da.has("snmp_v2c") || da.has("snmp_v3")
+	case "onvif", "isapi", "http":
+		return da.has("onvif") || da.has("isapi") || da.has("http")
 	}
 	return false
 }

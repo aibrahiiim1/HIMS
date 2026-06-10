@@ -305,14 +305,21 @@ type discoveredPortDTO struct {
 }
 
 type deviceWebAccessDTO struct {
-	Discovered []discoveredPortDTO `json:"discovered"`   // every open port, classified
-	Candidates []string            `json:"candidates"`   // ordered base URLs the collector will try first
-	Scheme     string              `json:"scheme"`       // override: '', http, https
-	Port       *int                `json:"port"`         // override preferred port
-	AltPorts   string              `json:"alt_ports"`    // override alternates (CSV)
-	Notes      string              `json:"notes"`        // override notes
-	LastOK     string              `json:"last_ok"`      // last successful base URL
-	LastOKAt   string              `json:"last_ok_at"`   // RFC3339, "" if never
+	Discovered []discoveredPortDTO `json:"discovered"` // every open port, classified
+	Candidates []string            `json:"candidates"` // ordered base URLs the collector will try first
+	// Override
+	Scheme    string `json:"scheme"`     // '', http, https
+	Port      *int   `json:"port"`       // preferred port
+	AltPorts  string `json:"alt_ports"`  // alternates (CSV)
+	Notes     string `json:"notes"`      // notes
+	PrefProto string `json:"pref_proto"` // '', isapi, onvif, http
+	// Last successful collection — exactly what worked.
+	LastProto      string `json:"last_proto"`      // isapi | onvif | http | …
+	LastScheme     string `json:"last_scheme"`     // http | https
+	LastPort       *int   `json:"last_port"`       // port that answered
+	LastOK         string `json:"last_ok"`         // last successful base URL
+	LastOKAt       string `json:"last_ok_at"`      // RFC3339, "" if never
+	LastCredential string `json:"last_credential"` // credential name that authenticated
 }
 
 func (s *Server) deviceWebAccess(w http.ResponseWriter, r *http.Request) {
@@ -336,23 +343,36 @@ func (s *Server) deviceWebAccess(w http.ResponseWriter, r *http.Request) {
 		Scheme:     d.WebSchemePref,
 		AltPorts:   d.WebAltPorts,
 		Notes:      d.WebNotes,
+		PrefProto:  d.WebPrefProto,
+		LastProto:  d.WebLastProto,
+		LastScheme: d.WebLastScheme,
 		LastOK:     d.WebLastOk,
 	}
 	if d.WebPortPref != nil {
 		p := int(*d.WebPortPref)
 		out.Port = &p
 	}
+	if d.WebLastPort != nil {
+		p := int(*d.WebLastPort)
+		out.LastPort = &p
+	}
 	if d.WebLastOkAt != nil {
 		out.LastOKAt = d.WebLastOkAt.Format("2006-01-02T15:04:05Z07:00")
+	}
+	if d.WebLastCredentialID != nil {
+		if c, err := s.queries.GetCredential(ctx, *d.WebLastCredentialID); err == nil {
+			out.LastCredential = c.Name
+		}
 	}
 	writeJSON(w, http.StatusOK, out)
 }
 
 type setWebAccessReq struct {
-	Scheme   string `json:"scheme"`    // '', http, https
-	Port     *int   `json:"port"`      // null clears
-	AltPorts string `json:"alt_ports"` // CSV
-	Notes    string `json:"notes"`
+	Scheme    string `json:"scheme"`     // '', http, https
+	Port      *int   `json:"port"`       // null clears
+	AltPorts  string `json:"alt_ports"`  // CSV
+	Notes     string `json:"notes"`
+	PrefProto string `json:"pref_proto"` // '', isapi, onvif, http
 }
 
 func (s *Server) setDeviceWebAccess(w http.ResponseWriter, r *http.Request) {
@@ -367,6 +387,12 @@ func (s *Server) setDeviceWebAccess(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Scheme != "" && req.Scheme != "http" && req.Scheme != "https" {
 		http.Error(w, "scheme must be empty, http or https", http.StatusBadRequest)
+		return
+	}
+	switch req.PrefProto {
+	case "", "isapi", "onvif", "http":
+	default:
+		http.Error(w, "pref_proto must be empty, isapi, onvif or http", http.StatusBadRequest)
 		return
 	}
 	var port *int32
@@ -386,6 +412,7 @@ func (s *Server) setDeviceWebAccess(w http.ResponseWriter, r *http.Request) {
 	if err := s.queries.SetDeviceWebOverride(ctx, db.SetDeviceWebOverrideParams{
 		ID: id, WebSchemePref: req.Scheme, WebPortPref: port,
 		WebAltPorts: strings.Join(alt, ","), WebNotes: strings.TrimSpace(req.Notes),
+		WebPrefProto: req.PrefProto,
 	}); err != nil {
 		writeErr(w, err)
 		return

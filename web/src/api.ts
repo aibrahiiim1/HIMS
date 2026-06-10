@@ -1245,16 +1245,23 @@ export interface DiscoveredPort {
   web: boolean   // is an HTTP/ISAPI candidate
 }
 
-// Device web-access view + override.
+// Device web-access view + override + last-success record.
 export interface DeviceWebAccess {
   discovered: DiscoveredPort[]
   candidates: string[]   // ordered base URLs the collector tries first
-  scheme: string         // override: '', http, https
-  port: number | null    // override preferred port
-  alt_ports: string      // override alternates (CSV)
+  // override
+  scheme: string         // '', http, https
+  port: number | null    // preferred port
+  alt_ports: string      // alternates (CSV)
   notes: string
+  pref_proto: string     // '', isapi, onvif, http
+  // last successful collection — exactly what worked
+  last_proto: string     // isapi | onvif | http | …
+  last_scheme: string    // http | https
+  last_port: number | null
   last_ok: string        // last successful base URL
   last_ok_at: string     // RFC3339 or ""
+  last_credential: string // credential name that authenticated
 }
 
 // Vendor Connection Profile — operator-configured integration endpoint
@@ -1774,6 +1781,7 @@ export interface CredTestResult {
   success: boolean
   detail: string
   latency_ms: number
+  tested_at?: string // present on the per-device history endpoint
 }
 export interface CredTestResponse {
   results: CredTestResult[]

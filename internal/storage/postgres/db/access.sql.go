@@ -28,20 +28,27 @@ SELECT device_id, protocol::text AS protocol, source::text AS source FROM (
          'evidence' AS source
     FROM os_inventory WHERE collection_method IN ('winrm', 'ssh', 'winrm-native', 'wmi')
 
-  -- 3) ONVIF camera inventory (authenticated device-info / profiles).
+  -- 3) Camera inventory (authenticated device-info / profiles). The PROTOCOL is
+  --    the device's actual last-successful web protocol (web_last_proto: isapi vs
+  --    onvif vs http) so the UI shows what really worked — never "ONVIF" when
+  --    ISAPI is what succeeded. Legacy rows with no recorded protocol default to
+  --    'onvif' (cameras historically onboarded via ONVIF); a re-collect stamps the
+  --    real protocol.
   UNION ALL
-  SELECT DISTINCT device_id, 'onvif' AS protocol, 'evidence' AS source FROM camera_info
+  SELECT DISTINCT ci.device_id,
+         COALESCE(NULLIF(d.web_last_proto, ''), 'onvif') AS protocol, 'evidence' AS source
+    FROM camera_info ci JOIN devices d ON d.id = ci.device_id
 
   -- 3b) Hikvision NVR/DVR ISAPI inventory (authenticated recorder collection).
   --     Recorders persist identity + channels + HDDs to nvr_info; a plain camera
   --     keeps its identity in camera_info, but a recorder collected over ISAPI
   --     does NOT always get a camera_info row, so nvr_info must be its own proven
-  --     evidence — an nvr_info row only exists because a WEB credential
-  --     authenticated and HIMS collected the recorder over ISAPI. Labelled
-  --     'onvif' to match the CCTV-web convention (camera_info above) and the
-  --     camera/nvr expected protocol (access_coverage.go expectedProtocols).
+  --     evidence. Protocol = web_last_proto (recorders are ISAPI, so legacy rows
+  --     default to 'isapi').
   UNION ALL
-  SELECT DISTINCT device_id, 'onvif' AS protocol, 'evidence' AS source FROM nvr_info
+  SELECT DISTINCT ni.device_id,
+         COALESCE(NULLIF(d.web_last_proto, ''), 'isapi') AS protocol, 'evidence' AS source
+    FROM nvr_info ni JOIN devices d ON d.id = ni.device_id
 
   -- 4) Wireless controller REST (UniFi/Omada/Ruckus/Extreme).
   UNION ALL

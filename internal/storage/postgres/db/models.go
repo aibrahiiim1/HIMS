@@ -274,14 +274,19 @@ type Device struct {
 	MonitoringEnabled          bool        `json:"monitoring_enabled"`
 	ManualClassificationReason string      `json:"manual_classification_reason"`
 	// Operator-entered placeholder device (not auto-discovered/probed); its inventory data is manual.
-	IsVirtual        bool       `json:"is_virtual"`
-	CctvCredentialID *uuid.UUID `json:"cctv_credential_id"`
-	WebSchemePref    string     `json:"web_scheme_pref"`
-	WebPortPref      *int32     `json:"web_port_pref"`
-	WebAltPorts      string     `json:"web_alt_ports"`
-	WebNotes         string     `json:"web_notes"`
-	WebLastOk        string     `json:"web_last_ok"`
-	WebLastOkAt      *time.Time `json:"web_last_ok_at"`
+	IsVirtual           bool       `json:"is_virtual"`
+	CctvCredentialID    *uuid.UUID `json:"cctv_credential_id"`
+	WebSchemePref       string     `json:"web_scheme_pref"`
+	WebPortPref         *int32     `json:"web_port_pref"`
+	WebAltPorts         string     `json:"web_alt_ports"`
+	WebNotes            string     `json:"web_notes"`
+	WebLastOk           string     `json:"web_last_ok"`
+	WebLastOkAt         *time.Time `json:"web_last_ok_at"`
+	WebLastProto        string     `json:"web_last_proto"`
+	WebLastScheme       string     `json:"web_last_scheme"`
+	WebLastPort         *int32     `json:"web_last_port"`
+	WebLastCredentialID *uuid.UUID `json:"web_last_credential_id"`
+	WebPrefProto        string     `json:"web_pref_proto"`
 }
 
 type DeviceFact struct {

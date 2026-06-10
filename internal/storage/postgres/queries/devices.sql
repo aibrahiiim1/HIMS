@@ -108,14 +108,19 @@ UPDATE devices SET cctv_credential_id = $2, updated_at = now() WHERE id = $1;
 
 -- name: SetDeviceWebOverride :exec
 -- Operator-set per-device web-access override: preferred scheme/port, alternate
--- ports (comma-separated), and a free-text note. Collectors try these first.
-UPDATE devices SET web_scheme_pref = $2, web_port_pref = $3, web_alt_ports = $4, web_notes = $5, updated_at = now() WHERE id = $1;
+-- ports (comma-separated), preferred protocol, and a free-text note. Collectors
+-- try these first.
+UPDATE devices SET web_scheme_pref = $2, web_port_pref = $3, web_alt_ports = $4, web_notes = $5, web_pref_proto = $6, updated_at = now() WHERE id = $1;
 
--- name: SetDeviceWebLastOK :exec
--- Record the base URL (scheme://ip[:port]) that last authenticated/collected over
--- HTTP/ISAPI/ONVIF, so the UI shows the working endpoint and the collector can
--- prefer it on the next run.
-UPDATE devices SET web_last_ok = $2, web_last_ok_at = now(), updated_at = now() WHERE id = $1;
+-- name: SetDeviceWebSuccess :exec
+-- Record EXACTLY what worked on the last successful web/CCTV collection: the
+-- protocol (isapi/onvif/http/…), scheme, port, base endpoint, and the credential
+-- that authenticated. Drives the accurate "Managed via X" source in the UI and
+-- lets the next collect/scan prefer the known-good endpoint instead of guessing.
+UPDATE devices SET
+    web_last_proto = $2, web_last_scheme = $3, web_last_port = $4,
+    web_last_ok = $5, web_last_credential_id = $6, web_last_ok_at = now(), updated_at = now()
+WHERE id = $1;
 
 -- name: TouchDeviceDiscovery :exec
 UPDATE devices SET last_discovery_at = $2, updated_at = now() WHERE id = $1;
