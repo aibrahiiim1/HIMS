@@ -576,12 +576,27 @@ func (s *Server) collectCUCMProfile(ctx context.Context, p db.VendorConnectionPr
 	if err != nil {
 		return false, "CUCM AXL failed: " + shortErr(err)
 	}
+	// Best-effort real-time IP + registration status via RisPort (the AXL DB has
+	// no live IP). A RisPort failure is non-fatal — phones still persist sans IP.
+	ris, ipCount := map[string]cucm.DeviceStatus{}, 0
+	if r, rerr := c.RegisteredPhoneStatus(cctx); rerr == nil {
+		ris = r
+	}
 	now := time.Now().UTC()
 	for _, ph := range phones {
+		ip := ph.IP
+		if ip == "" {
+			if st, ok := ris[ph.Name]; ok {
+				ip = st.IP
+			}
+		}
+		if ip != "" {
+			ipCount++
+		}
 		_ = s.queries.UpsertPbxPhone(ctx, db.UpsertPbxPhoneParams{
 			DeviceID: dev.ID, Name: ph.Name, Model: nzPtr(ph.Model), Description: nzPtr(ph.Description),
 			DevicePool: nzPtr(ph.DevicePool), CollectionSource: "axl", LastSeenAt: now,
-			Extension: nzPtr(ph.Extension), MacAddress: nzPtr(ph.MAC), IpAddress: nzPtr(ph.IP),
+			Extension: nzPtr(ph.Extension), MacAddress: nzPtr(ph.MAC), IpAddress: nzPtr(ip),
 		})
 	}
 	if blob, merr := domain.MarshalEvidence(nil); merr == nil {
@@ -596,7 +611,11 @@ func (s *Server) collectCUCMProfile(ctx context.Context, p db.VendorConnectionPr
 		_ = s.queries.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: dev.ID, CredentialID: p.CredentialID})
 	}
 	_ = s.queries.UpdateDeviceMonitoringStatus(ctx, db.UpdateDeviceMonitoringStatusParams{ID: dev.ID, Status: "up"})
-	return true, "CUCM collected — " + itoaN(len(phones)) + " phone(s)"
+	detail := "CUCM collected — " + itoaN(len(phones)) + " phone(s)"
+	if ipCount > 0 {
+		detail += " (" + itoaN(ipCount) + " with live IP)"
+	}
+	return true, detail
 }
 
 // collectAlcatelProfile pulls the Alcatel OmniPCX Enterprise subscriber directory
