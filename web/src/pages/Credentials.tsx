@@ -38,6 +38,7 @@ export function Credentials() {
   const [editName, setEditName] = useState('')
   const [editSecret, setEditSecret] = useState('')
   const [hist, setHist] = useState<{ id: string; name: string } | null>(null)
+  const [usage, setUsage] = useState<{ id: string; name: string } | null>(null)
   const list = useQuery({ queryKey: ['credentials'], queryFn: () => api.get<Credential[]>('/credentials') })
   const refresh = () => qc.invalidateQueries({ queryKey: ['credentials'] })
 
@@ -75,14 +76,14 @@ export function Credentials() {
         {list.data && list.data.length === 0 && <div className="muted">No credentials yet.</div>}
         {list.data && list.data.length > 0 && (
           <table>
-            <thead><tr><th>Name</th><th>Kind</th><th>Weak</th><th>Created</th><th></th></tr></thead>
+            <thead><tr><th>Name</th><th>Kind</th><th>Weak</th><th>Usage</th><th>Created</th><th></th></tr></thead>
             <tbody>
               {list.data.map((c) => (
                 edit === c.id ? (
                   <tr key={c.id} style={{ background: '#1a2733' }}>
                     <td><input style={cell} value={editName} onChange={(e) => setEditName(e.target.value)} /></td>
                     <td>{c.kind}</td>
-                    <td colSpan={2}>
+                    <td colSpan={3}>
                       <input style={{ ...cell, width: 220 }} type="password" placeholder="new secret (leave blank to keep)" value={editSecret} onChange={(e) => setEditSecret(e.target.value)} autoComplete="new-password" />
                     </td>
                     <td style={{ whiteSpace: 'nowrap' }}>
@@ -95,6 +96,19 @@ export function Credentials() {
                     <td><strong>{c.name}</strong></td>
                     <td>{c.kind}</td>
                     <td>{c.weak ? <span className="badge badge-warning">weak</span> : '—'}</td>
+                    <td>
+                      {c.usage_count && c.usage_count > 0 ? (
+                        <button
+                          style={{ ...ghost, color: '#90caf9', borderColor: '#90caf9' }}
+                          title="Show the devices bound to this credential"
+                          onClick={() => setUsage(usage?.id === c.id ? null : { id: c.id, name: c.name })}
+                        >
+                          {c.usage_count} device{c.usage_count === 1 ? '' : 's'}
+                        </button>
+                      ) : (
+                        <span className="muted">0</span>
+                      )}
+                    </td>
                     <td>{c.created_at?.slice(0, 10)}</td>
                     <td style={{ whiteSpace: 'nowrap' }}>
                       <button style={ghost} onClick={() => setHist(hist?.id === c.id ? null : { id: c.id, name: c.name })}>History</button>{' '}
@@ -112,9 +126,52 @@ export function Credentials() {
         )}
       </div>
 
+      {usage && <CredentialUsagePanel credentialId={usage.id} credentialName={usage.name} onClose={() => setUsage(null)} />}
+
       {hist && <CredentialHistoryPanel credentialId={hist.id} credentialName={hist.name} />}
 
       <CredentialRunsPanel />
+    </div>
+  )
+}
+
+// CredentialUsagePanel lists every device that uses a credential — opened by
+// clicking its usage count. Each row links to the device, and a badge says
+// whether it's bound as the device's main credential or its CCTV web credential.
+function CredentialUsagePanel({ credentialId, credentialName, onClose }: { credentialId: string; credentialName: string; onClose: () => void }) {
+  const q = useQuery({
+    queryKey: ['credential-devices', credentialId],
+    queryFn: () => api.get<import('../api').CredentialDevice[]>(`/credentials/${credentialId}/devices`),
+  })
+  return (
+    <div className="card">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <h2 style={{ margin: 0 }}>Devices using “{credentialName}”</h2>
+        <button style={ghost} onClick={onClose}>Close</button>
+      </div>
+      {q.isLoading && <div className="loading">Loading…</div>}
+      {q.error && <div className="error-msg">{(q.error as Error).message}</div>}
+      {q.data && q.data.length === 0 && <div className="muted" style={{ marginTop: 8 }}>No devices are bound to this credential.</div>}
+      {q.data && q.data.length > 0 && (
+        <table style={{ marginTop: 8 }}>
+          <thead><tr><th>Device</th><th>IP</th><th>Category</th><th>Status</th><th>Bound as</th></tr></thead>
+          <tbody>
+            {q.data.map((d) => (
+              <tr key={d.id}>
+                <td><Link to={`/devices/${d.id}`}><strong>{d.name}</strong></Link></td>
+                <td className="mono" style={{ fontSize: 12 }}>{d.primary_ip || '—'}</td>
+                <td>{d.category}</td>
+                <td>{d.status}</td>
+                <td style={{ whiteSpace: 'nowrap' }}>
+                  {d.bound_primary && <span className="badge badge-up">primary</span>}
+                  {d.bound_primary && d.bound_cctv ? ' ' : null}
+                  {d.bound_cctv && <span className="badge badge-info">CCTV web</span>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   )
 }

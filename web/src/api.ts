@@ -1213,6 +1213,18 @@ export interface Credential {
   kind: string
   weak: boolean
   created_at: string
+  usage_count?: number // distinct devices bound to this credential (primary or CCTV)
+}
+
+// One device that uses a credential, from GET /credentials/{id}/devices.
+export interface CredentialDevice {
+  id: string
+  name: string
+  primary_ip: string
+  category: string
+  status: string
+  bound_primary: boolean // bound as the device's main management credential
+  bound_cctv: boolean    // bound as the device's CCTV web credential
 }
 
 // Vendor Connection Profile — operator-configured integration endpoint

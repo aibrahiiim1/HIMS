@@ -382,6 +382,7 @@ func (s *Server) routes() {
 		r.Post("/credentials/winrm-diagnose", s.winrmDiagnose)
 		r.Post("/credentials/wmi-diagnose", s.wmiDiagnose)
 		r.Get("/credentials/{id}/credential-tests", s.credentialCredentialTests)
+		r.Get("/credentials/{id}/devices", s.credentialDevices)
 		r.Post("/credentials/{id}/apply-to-scope", s.applyCredentialToScope)
 		r.Get("/credential-tests/runs", s.listCredentialTestRuns)
 		r.Get("/credential-tests/runs/{id}/results", s.listCredentialTestRunResults)
