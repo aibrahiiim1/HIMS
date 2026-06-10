@@ -144,6 +144,25 @@ func (s *Server) cctvSummary(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// relinkCCTVChannels handles POST /cctv/relink-channels — link every NVR/DVR
+// channel to the standalone camera device at its IP (and vice-versa). The
+// per-channel link is set once at NVR-collect time, so a camera discovered after
+// its NVR was collected stays unlinked until this runs. Idempotent; an operator
+// can trigger it on demand, and a scan does it automatically on completion.
+func (s *Server) relinkCCTVChannels(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	n, err := s.queries.ReconcileNVRChannelLinks(ctx)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if n > 0 {
+		s.audit(r, "inventory", "cctv.relink_channels", "cctv", "",
+			itoa(int(n))+" NVR/DVR channel(s) linked to camera devices", map[string]any{"linked": n})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"linked": n})
+}
+
 // getCCTVFleet handles GET /cctv/collect-fleet — the current/last run summary.
 func (s *Server) getCCTVFleet(w http.ResponseWriter, r *http.Request) {
 	if cur := s.cctvFleet.Load(); cur != nil {

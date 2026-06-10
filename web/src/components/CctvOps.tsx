@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Video, RefreshCw } from 'lucide-react'
+import { Video, RefreshCw, Link2 } from 'lucide-react'
 import { api, type CCTVSummary, type CCTVFleetRun, type CCTVFleetItem } from '../api'
 import { Panel, StatusPill } from './ui'
 
@@ -27,6 +27,14 @@ export function CctvOps() {
     mutationFn: () => api.post<{ started: boolean; total: number }>('/cctv/collect-fleet', {}),
     onSuccess: () => { setShowItems(true); qc.invalidateQueries({ queryKey: ['cctv-fleet'] }) },
   })
+  const [relinkMsg, setRelinkMsg] = useState<string | null>(null)
+  const relink = useMutation({
+    mutationFn: () => api.post<{ linked: number }>('/cctv/relink-channels', {}),
+    onSuccess: (r) => {
+      setRelinkMsg(r.linked > 0 ? `${r.linked} channel(s) linked to camera devices` : 'All channels already linked')
+      qc.invalidateQueries({ queryKey: ['cctv-summary'] })
+    },
+  })
   // When a run finishes, refresh the breakdown + device lists.
   const run = fleet.data
   const running = !!run?.running
@@ -40,10 +48,16 @@ export function CctvOps() {
     <Panel title="CCTV Fleet" icon={Video}
       subtitle="NVRs · DVRs · standalone cameras · camera channels"
       actions={
-        <button className="btn btn-primary btn-sm" disabled={running || start.isPending}
-          onClick={() => start.mutate()} title="Collect every camera/NVR/DVR using its bound credential only (no spraying)">
-          <RefreshCw size={14} className={running || start.isPending ? 'spin' : ''} /> {running ? 'Collecting…' : 'Collect all CCTV'}
-        </button>
+        <div className="row" style={{ gap: 8 }}>
+          <button className="btn btn-ghost btn-sm" disabled={relink.isPending}
+            onClick={() => relink.mutate()} title="Match recorder channels to the standalone camera devices at their IPs (links cameras discovered after their NVR was collected)">
+            <Link2 size={14} className={relink.isPending ? 'spin' : ''} /> {relink.isPending ? 'Linking…' : 'Re-link channels'}
+          </button>
+          <button className="btn btn-primary btn-sm" disabled={running || start.isPending}
+            onClick={() => start.mutate()} title="Collect every camera/NVR/DVR using its bound credential only (no spraying)">
+            <RefreshCw size={14} className={running || start.isPending ? 'spin' : ''} /> {running ? 'Collecting…' : 'Collect all CCTV'}
+          </button>
+        </div>
       }>
       <div className="row" style={{ flexWrap: 'wrap', gap: 18, fontSize: 14 }}>
         <Stat label="NVRs" value={s?.nvrs} />
@@ -52,6 +66,7 @@ export function CctvOps() {
         <Stat label="Camera channels" value={s?.channels} sub={s ? `${s.channels_linked} linked to a device` : undefined} />
         <Stat label="CCTV devices" value={s?.devices_total} sub="channels excluded" />
       </div>
+      {relinkMsg && <p className="muted" style={{ marginTop: 8, fontSize: 12, color: 'var(--ok)' }}>{relinkMsg}</p>}
 
       {run && (running || run.done > 0) && (
         <div style={{ marginTop: 14 }}>

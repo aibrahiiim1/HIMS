@@ -768,6 +768,11 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 			}
 		}
 	}
+	// Link any NVR/DVR channels to the camera devices at their IPs. The per-channel
+	// link is computed once at NVR-collect time, so a camera discovered in THIS scan
+	// that an NVR referenced earlier (or one whose apply raced an NVR collect) would
+	// otherwise stay unlinked. Fleet-wide, idempotent, best-effort.
+	_, _ = s.queries.ReconcileNVRChannelLinks(context.Background())
 	_ = s.queries.UpdateDiscoveryJobStatus(context.Background(), db.UpdateDiscoveryJobStatusParams{
 		// scanned_count = host_count so a finished job reads exactly 100% even if a
 		// per-host increment was missed.

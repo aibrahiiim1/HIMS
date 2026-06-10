@@ -22,11 +22,39 @@ VALUES ($1,$2,$3,$4,$5,$6,$7)
 ON CONFLICT (nvr_device_id, channel_no) DO UPDATE SET
     camera_name = EXCLUDED.camera_name,
     camera_ip = EXCLUDED.camera_ip,
-    camera_device_id = EXCLUDED.camera_device_id,
+    -- Sticky link: a re-collect that resolves a device repoints the link, but one
+    -- that momentarily can't (transient lookup miss / race during a parallel scan)
+    -- keeps the existing link instead of nulling it. Links are only added/repointed
+    -- here; they are cleared only when the camera device is deleted (FK ON DELETE
+    -- SET NULL). ReconcileNVRChannelLinks heals any that were never set.
+    camera_device_id = COALESCE(EXCLUDED.camera_device_id, nvr_channels.camera_device_id),
     status = EXCLUDED.status,
     enabled = EXCLUDED.enabled,
     last_seen_at = now()
 RETURNING *;
+
+-- name: ReconcileNVRChannelLinks :execrows
+-- Link every NVR/DVR channel to the live device at its camera_ip, so a channel
+-- and the standalone camera device cross-reference regardless of the order they
+-- were discovered/collected. The per-channel link is computed once at NVR-collect
+-- time (persistNVR via LiveDeviceByIP), so a camera discovered AFTER its NVR was
+-- collected — or one whose apply raced the NVR collect — would otherwise stay
+-- unlinked forever. Idempotent + set-based: exact primary_ip match, never links a
+-- channel to its own NVR, picks the most-recently-updated device when an IP
+-- recurs. Device deletes clear links via the FK (ON DELETE SET NULL), so this
+-- only ADDS/repoints. Returns the number of channels (re)linked.
+UPDATE nvr_channels ch
+SET camera_device_id = pick.id
+FROM (
+    SELECT DISTINCT ON (primary_ip) primary_ip, id
+    FROM devices
+    WHERE deleted_at IS NULL AND primary_ip IS NOT NULL
+    ORDER BY primary_ip, updated_at DESC
+) pick
+WHERE ch.camera_ip IS NOT NULL
+  AND pick.primary_ip = ch.camera_ip
+  AND pick.id <> ch.nvr_device_id
+  AND ch.camera_device_id IS DISTINCT FROM pick.id;
 
 -- name: GetNVRInfo :one
 SELECT * FROM nvr_info WHERE device_id = $1;

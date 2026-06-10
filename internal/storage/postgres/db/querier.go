@@ -552,6 +552,16 @@ type Querier interface {
 	PermissionsForRole(ctx context.Context, roleID uuid.UUID) ([]Permission, error)
 	// All permission codes a user holds via any of their roles.
 	PermissionsForUser(ctx context.Context, userID uuid.UUID) ([]string, error)
+	// Link every NVR/DVR channel to the live device at its camera_ip, so a channel
+	// and the standalone camera device cross-reference regardless of the order they
+	// were discovered/collected. The per-channel link is computed once at NVR-collect
+	// time (persistNVR via LiveDeviceByIP), so a camera discovered AFTER its NVR was
+	// collected — or one whose apply raced the NVR collect — would otherwise stay
+	// unlinked forever. Idempotent + set-based: exact primary_ip match, never links a
+	// channel to its own NVR, picks the most-recently-updated device when an IP
+	// recurs. Device deletes clear links via the FK (ON DELETE SET NULL), so this
+	// only ADDS/repoints. Returns the number of channels (re)linked.
+	ReconcileNVRChannelLinks(ctx context.Context) (int64, error)
 	// Persist the rollup the engine computed (status + failure counter) onto the
 	// check after a poll. History rows go to monitoring_samples separately.
 	RecordMonitoringResult(ctx context.Context, arg RecordMonitoringResultParams) (MonitoringCheck, error)

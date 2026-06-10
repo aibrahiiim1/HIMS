@@ -216,6 +216,7 @@ func (s *Server) routes() {
 		r.Post("/cctv/collect-fleet", s.collectCCTVFleet)
 		r.Get("/cctv/collect-fleet", s.getCCTVFleet)
 		r.Get("/cctv/summary", s.cctvSummary)
+		r.Post("/cctv/relink-channels", s.relinkCCTVChannels)
 		r.Post("/devices/{id}/classification-lock", s.setClassificationLock)
 		r.Get("/devices/{id}/interfaces", s.deviceInterfaces)
 		r.Get("/devices/{id}/vlans", s.deviceVLANs)
