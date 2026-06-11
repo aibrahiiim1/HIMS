@@ -445,9 +445,11 @@ func deviceNeedsClassification(d db.Device) bool {
 	return false
 }
 
-// badgeCounts handles GET /dashboard/badge-counts. Both counts are derived from
-// the same site-scoped device set + proven-only access map used by the Missing
-// Classification / Unmanaged Devices pages, so the badges match those pages.
+// badgeCounts handles GET /dashboard/badge-counts. Counts are derived from the
+// same site-scoped device set + management derivation used by the Missing
+// Classification / Unmanaged Devices pages, so the badges match those pages
+// exactly (unmanaged = the not-managed set per deriveManagement, which honours
+// the managed-via-NVR rule — not a raw proven-only check).
 func (s *Server) badgeCounts(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	devices, err := s.queries.ListAllDevices(ctx)
@@ -456,7 +458,12 @@ func (s *Server) badgeCounts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	devices = s.scopeDevices(ctx, devices)
-	am, err := s.deviceAccessMap(ctx)
+	// Use the SAME management derivation the Unmanaged Devices page lists by
+	// (?management=not_managed). deriveManagement applies the managed-via-NVR rule
+	// (an RTSP camera recorded by an NVR is managed VIA the recorder) and the
+	// credential_failed/needs_credential/etc. classification — so the badge equals
+	// the page. A raw !hasProven() check over-counts by every NVR-channel camera.
+	sm, err := s.buildStatusMaps(ctx)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -467,8 +474,8 @@ func (s *Server) badgeCounts(w http.ResponseWriter, r *http.Request) {
 		if deviceNeedsClassification(d) {
 			missing++
 		}
-		if !am[d.ID].hasProven() { // proven-only: a bare binding is NOT managed
-			unmanaged++
+		if st, _ := sm.deriveManagement(d); st != MgmtManaged {
+			unmanaged++ // matches the "needs attention" set the Unmanaged Devices page lists
 		}
 		if isUnmappedFabric(d, mapped) {
 			unmapped++
