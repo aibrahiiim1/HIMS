@@ -209,7 +209,7 @@ func (s *Server) runCCTVFleet(ctx context.Context, devices []db.Device) {
 				return
 			}
 			dctx, cancel := context.WithTimeout(ctx, 60*time.Second)
-			res := s.runCCTVCollection(dctx, d, nil) // fleet = bound-credential-only (never sprays)
+			res := s.runCCTVCollection(dctx, d, nil, "bound") // fleet = bound-credential-only (never sprays)
 			cancel()
 			it := s.fleetItem(ctx, d, res)
 			update(func(run *cctvFleetRun) {

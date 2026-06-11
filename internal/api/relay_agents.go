@@ -405,7 +405,7 @@ func (s *Server) agentJobResult(w http.ResponseWriter, r *http.Request) {
 			CredentialID: *job.CredentialID, Kind: domain.CredentialKind(job.Protocol),
 			Protocol: job.Protocol, Success: status == "done", Category: cat,
 			Detail: "via relay agent " + a.Name,
-		}})
+		}}, "default")
 	}
 	_ = s.queries.CompleteAgentJob(r.Context(), db.CompleteAgentJobParams{
 		ID: jobID, Status: status, Result: nilIfEmpty(req.Report), Category: req.Category, Error: req.Error,

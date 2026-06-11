@@ -47,6 +47,11 @@ type CredAttempt struct {
 	Category     string // credtest category: success|auth_failed|unreachable|...
 	Detail       string // non-secret reason
 	Relevant     bool   // protocol is the expected/relevant one for this candidate
+	// Source attributes WHY this credential was tried, for the credential-test
+	// history: "subnet" (the IP's site subnet has assigned credentials, so only
+	// those were tried), or "default" (normal global/scope resolution). Manual
+	// per-device collects record "manual" outside the pipeline.
+	Source string
 }
 
 func hasPortN(ports []int, p int) bool {
@@ -114,6 +119,10 @@ type HostResult struct {
 	BoundCred *credresolver.CredRef
 	// CredAttempts is every authentication attempt made this run (for history).
 	CredAttempts []CredAttempt
+	// CredScope, when non-empty, is the human label of the site subnet whose
+	// assigned credentials were the EXCLUSIVE set tried for this IP (e.g.
+	// "CCTV Cameras 172.21.210.0/24"). Empty ⇒ normal/global resolution was used.
+	CredScope string
 	// Plan is the expected-protocol decision made before credential testing.
 	Plan  ProtocolPlan
 	Facts *driver.Facts
@@ -127,6 +136,10 @@ type HostResult struct {
 // CandidateFetcher abstracts the DB call that assembles credentials for an IP.
 type CandidateFetcher interface {
 	CredentialCandidates(ctx context.Context, ip netip.Addr, locationID *uuid.UUID) ([]credresolver.ScopedGroup, error)
+	// SubnetScopedCredentials returns the EXCLUSIVE credential set for the IP's
+	// site subnet (when that subnet has assignments) plus a human label for
+	// reporting. Empty slice ⇒ no subnet scoping ⇒ normal resolution applies.
+	SubnetScopedCredentials(ctx context.Context, ip netip.Addr, locationID *uuid.UUID) ([]credresolver.CredRef, string, error)
 }
 
 // DecryptedCred is a credential with its secret already decrypted (by the
@@ -193,6 +206,18 @@ const explicitTierSpecificity = 100
 // Run runs the pipeline for a single IP and returns its result.
 // All steps are attempted; errors within optional steps (e.g. deep collect)
 // are recorded in result.Error but do not abort the pipeline.
+// finalizeCredSource stamps the credential-test source ("subnet" | "default")
+// on every attempt that didn't already carry one, so the history can report why
+// each credential was tried (subnet-scoped vs normal resolution).
+func finalizeCredSource(r HostResult, source string) HostResult {
+	for i := range r.CredAttempts {
+		if r.CredAttempts[i].Source == "" {
+			r.CredAttempts[i].Source = source
+		}
+	}
+	return r
+}
+
 func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg PipelineConfig) HostResult { //nolint:gocritic
 	r := HostResult{IP: ip}
 	emit := func(stage, proto, status, msg string) {
@@ -227,8 +252,22 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 		r.Error = fmt.Errorf("fetch credentials: %w", ferr)
 	}
 	groups = append(groups, cfg.ExtraGroups...)
+	// Subnet-scoped credentials: if this IP's site subnet has assigned
+	// credentials, they become the EXCLUSIVE set — the resolver discards every
+	// global/scope/operator group above. This is the anti-spray / lockout-safety
+	// lever (a CCTV subnet is never sprayed with Windows/switch credentials).
+	exclusive, scopeLabel, serr := cfg.Fetcher.SubnetScopedCredentials(ctx, ip, locationID)
+	if serr != nil && r.Error == nil {
+		r.Error = fmt.Errorf("subnet-scoped credentials: %w", serr)
+	}
+	credSource := "default"
+	if len(exclusive) > 0 {
+		r.CredScope = scopeLabel
+		credSource = "subnet"
+		emit("credential_scope", "", "subnet", scopeLabel)
+	}
 	candidates := credresolver.Resolve(credresolver.Input{
-		Fingerprint: fingerprintFromPorts(r.OpenPorts), Groups: groups,
+		Fingerprint: fingerprintFromPorts(r.OpenPorts), Groups: groups, Exclusive: exclusive,
 	})
 
 	// Step 2b: Cheap unauthenticated banners (HTTP Server/title/body + SSH ident)
@@ -398,7 +437,7 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 		if authCli != nil {
 			_ = authCli.Close()
 		}
-		return r
+		return finalizeCredSource(r, credSource)
 	}
 
 	// Step 5: Driver classification (now informed by the real-credential probe).
@@ -469,7 +508,7 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 		}
 		_ = authCli.Close()
 	}
-	return r
+	return finalizeCredSource(r, credSource)
 }
 
 // applyFingerprints runs the fingerprint library against the host's evidence and,

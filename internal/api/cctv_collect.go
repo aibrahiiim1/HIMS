@@ -45,7 +45,7 @@ func (r cctvResult) ok() bool { return r.Status == "collected" }
 // Collect UI; when empty the collection falls back to the single credential bound
 // to the device (the bound-credential-only default that cannot spray). The fleet
 // collector always passes nil to keep bulk runs lockout-safe.
-func (s *Server) runCCTVCollection(ctx context.Context, d db.Device, selectedCreds []uuid.UUID) cctvResult {
+func (s *Server) runCCTVCollection(ctx context.Context, d db.Device, selectedCreds []uuid.UUID, source string) cctvResult {
 	res := cctvResult{Status: "failed"}
 	if d.PrimaryIp == nil || !d.PrimaryIp.IsValid() {
 		res.Reason, res.Detail = "no_ip", "device has no IP to collect from"
@@ -203,7 +203,7 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device, selectedCre
 
 		res = cctvResult{Status: "collected", CredentialUsed: cd.name, Category: string(cat),
 			Detail: "collected via ONVIF using credential " + cd.name}
-		s.persistScanCredAttempts(ctx, d, attempts)
+		s.persistScanCredAttempts(ctx, d, attempts, source)
 		return res
 	}
 
@@ -273,11 +273,11 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device, selectedCre
 
 		res = cctvResult{Status: "collected", CredentialUsed: cd.name, Category: string(cat),
 			Detail: nvrDetail(cat, vendor, info, nvr)}
-		s.persistScanCredAttempts(ctx, d, attempts)
+		s.persistScanCredAttempts(ctx, d, attempts, source)
 		return res
 	}
 
-	s.persistScanCredAttempts(ctx, d, attempts)
+	s.persistScanCredAttempts(ctx, d, attempts, source)
 	res.Reason, res.Detail = lastReason, lastDetail
 	return res
 }
@@ -312,7 +312,7 @@ func (s *Server) collectCCTVProfile(ctx context.Context, p db.VendorConnectionPr
 	s.persistScanCredAttempts(ctx, d, []discovery.CredAttempt{{
 		CredentialID: credID, Kind: kind, Protocol: "onvif",
 		Success: err == nil, Category: category, Detail: detail,
-	}})
+	}}, "default")
 	if err != nil {
 		// ONVIF unavailable — fall back to full Hikvision ISAPI collection over HTTPS.
 		ictx, icancel := context.WithTimeout(ctx, 90*time.Second)
@@ -325,7 +325,7 @@ func (s *Server) collectCCTVProfile(ctx context.Context, p db.VendorConnectionPr
 		s.persistScanCredAttempts(ctx, d, []discovery.CredAttempt{{
 			CredentialID: credID, Kind: kind, Protocol: "isapi",
 			Success: ierr == nil, Category: icat, Detail: idet,
-		}})
+		}}, "default")
 		if ierr != nil {
 			out.Detail = "ONVIF failed: " + detail + "; ISAPI failed: " + idet
 			return out
@@ -548,7 +548,11 @@ func (s *Server) collectCCTV(w http.ResponseWriter, r *http.Request) {
 			creds = append(creds, cid)
 		}
 	}
-	res := s.runCCTVCollection(ctx, d, creds)
+	collectSource := "manual" // operator opened per-device Collect and chose credentials
+	if len(creds) == 0 {
+		collectSource = "bound" // empty selection ⇒ device's bound credential only
+	}
+	res := s.runCCTVCollection(ctx, d, creds, collectSource)
 	if res.ok() {
 		s.audit(r, "inventory", "device.collect_cctv", "device", id.String(),
 			"Collected ONVIF facts for "+d.Name, map[string]any{"category": res.Category, "credentials_tried": len(creds)})

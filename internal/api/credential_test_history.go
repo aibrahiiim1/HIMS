@@ -42,6 +42,8 @@ type credTestResultDTO struct {
 	TestedAt       string `json:"tested_at"`
 	Actor          string `json:"actor"`
 	Relevant       bool   `json:"relevant"`
+	// Source: subnet | default | manual | bound — why this credential was tried.
+	Source string `json:"source,omitempty"`
 }
 
 func uuidPtrStr(p *uuid.UUID) string {
@@ -97,6 +99,7 @@ func (s *Server) listCredentialTestRunResults(w http.ResponseWriter, r *http.Req
 			CredentialID: uuidPtrStr(x.CredentialID), CredentialName: x.CredentialName,
 			Kind: x.Kind, Protocol: x.Protocol, Category: x.Category, Success: x.Success,
 			Detail: x.Detail, LatencyMS: x.LatencyMs, TestedAt: x.TestedAt.Format(time.RFC3339), Actor: x.Actor,
+			Source: x.Source,
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -120,7 +123,7 @@ func (s *Server) deviceCredentialTests(w http.ResponseWriter, r *http.Request) {
 			CredentialID: uuidPtrStr(x.CredentialID), CredentialName: x.CredentialName,
 			Kind: x.Kind, Protocol: x.Protocol, Category: x.Category, Success: x.Success,
 			Detail: x.Detail, LatencyMS: x.LatencyMs, TestedAt: x.TestedAt.Format(time.RFC3339), Actor: x.Actor,
-			Relevant: x.Relevant,
+			Relevant: x.Relevant, Source: x.Source,
 		})
 	}
 	writeJSON(w, http.StatusOK, out)

@@ -239,6 +239,7 @@ type CredentialTestResult struct {
 	TestedAt       time.Time  `json:"tested_at"`
 	Actor          string     `json:"actor"`
 	Relevant       bool       `json:"relevant"`
+	Source         string     `json:"source"`
 }
 
 type CredentialTestRun struct {

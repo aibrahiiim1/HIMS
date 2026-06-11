@@ -409,6 +409,30 @@ func (s *Server) scanCredentialTier(ctx context.Context, credIDStrs, groupIDStrs
 	return out, nil
 }
 
+// cctvWebCredsForScan returns the web (ONVIF/HTTP-Basic) credentials to try for a
+// camera during a scan, honouring subnet scope. If the IP's site subnet has
+// assigned credentials, ONLY its web creds are returned (and a human label of the
+// subnet) — even an empty set, so the global scan web creds are NOT sprayed at a
+// scoped CCTV subnet. With no subnet scope, the scan's selected web creds (the
+// fallback) are returned and the label is empty.
+func (s *Server) cctvWebCredsForScan(ctx context.Context, ip netip.Addr, locID *uuid.UUID, fallback []uuid.UUID) ([]uuid.UUID, string) {
+	scoped, err := s.queries.SubnetScopedCredentialsForIP(ctx, db.SubnetScopedCredentialsForIPParams{LocationID: locID, Ip: ip})
+	if err != nil || len(scoped) == 0 {
+		return fallback, ""
+	}
+	var web []uuid.UUID
+	for _, c := range scoped {
+		if c.Kind == string(domain.CredONVIF) || c.Kind == string(domain.CredHTTPBasic) {
+			web = append(web, c.ID)
+		}
+	}
+	label := scoped[0].Cidr
+	if scoped[0].SubnetName != nil && *scoped[0].SubnetName != "" {
+		label = *scoped[0].SubnetName + " " + scoped[0].Cidr
+	}
+	return web, label
+}
+
 // runScanJob is the background scan worker. It owns its own context (the HTTP
 // request's is long gone) and records per-host outcomes + a final job status.
 func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUID, concurrency int, extraGroups []credresolver.ScopedGroup, snmpTO, portTO time.Duration) {
@@ -512,7 +536,8 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 				}
 				// Persist every credential auth attempt (success + failure + reason)
 				// to credential-test history → feeds Coverage / Data Quality.
-				s.persistScanCredAttempts(ctx, dev, r.CredAttempts)
+				// Pipeline attempts already carry their own Source ("subnet"/"default").
+				s.persistScanCredAttempts(ctx, dev, r.CredAttempts, "")
 				// Point this host's reachability check at a port it actually answered
 				// on (or SNMP), so a freshly-discovered/up host is never marked
 				// "offline" for a category-default port it doesn't serve.
@@ -713,15 +738,30 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 					} else {
 						profRes = &scanProfileResult{Resolved: false}
 						cctx, ccancel := context.WithTimeout(ctx, 120*time.Second) // room for ONVIF phase + reserved ISAPI fallback
-						// Try each operator-selected web credential (first success binds).
-						cv := s.runCCTVCollection(cctx, dev, scanWebCreds)
+						// Subnet-scoped credentials: if this camera's site subnet has
+						// assigned credentials, use ONLY its web (ONVIF/HTTP-Basic) creds
+						// — never the global scan web creds. This is the CCTV anti-spray
+						// / lockout-safety path (mirrors the resolver exclusivity used for
+						// SNMP/SSH/WinRM). Empty fall-through keeps current behaviour.
+						webCreds, scopedLabel := s.cctvWebCredsForScan(ctx, ip, locID, scanWebCreds)
+						scopeNote, cctvSource := "", "default"
+						if scopedLabel != "" {
+							scopeNote = " [subnet-scoped: " + scopedLabel + "]"
+							cctvSource = "subnet"
+						}
+						// Try each selected web credential (first success binds).
+						cv := s.runCCTVCollection(cctx, dev, webCreds, cctvSource)
 						ccancel()
 						if cv.ok() {
-							enrichment = "CCTV collected (" + cv.Category + ") via " + cv.CredentialUsed
+							enrichment = "CCTV collected (" + cv.Category + ") via " + cv.CredentialUsed + scopeNote
 						} else if cv.Reason == "no_credential" {
-							enrichment = "CCTV candidate — select an ONVIF/HTTP-Basic credential in the scan (or add a CCTV Vendor Connection Profile)"
+							if scopedLabel != "" {
+								enrichment = "CCTV candidate — subnet " + scopedLabel + " has no ONVIF/HTTP-Basic credential assigned (assign one under Locations → Subnet)"
+							} else {
+								enrichment = "CCTV candidate — select an ONVIF/HTTP-Basic credential in the scan (or add a CCTV Vendor Connection Profile)"
+							}
 						} else {
-							enrichment = "CCTV collection incomplete: " + cv.Reason
+							enrichment = "CCTV collection incomplete: " + cv.Reason + scopeNote
 						}
 					}
 				}
@@ -851,7 +891,7 @@ func (s *Server) retryMissedKnown(ctx context.Context, jobID uuid.UUID, locID *u
 				id, aerr := applier.Apply(actx, rr, locID)
 				if aerr == nil && id != uuid.Nil {
 					if d2, e := s.queries.GetDevice(actx, id); e == nil {
-						s.persistScanCredAttempts(actx, d2, rr.CredAttempts)
+						s.persistScanCredAttempts(actx, d2, rr.CredAttempts, "")
 						s.seedReachabilityCheck(actx, d2, rr.OpenPorts, rr.Probe.SNMPSysDescr != "")
 					}
 				}
@@ -893,6 +933,8 @@ type scanCredAttemptDTO struct {
 	Detail   string `json:"detail"`
 	Success  bool   `json:"success"`
 	Relevant bool   `json:"relevant"`
+	// Source: why this credential was tried — "subnet" (subnet-scoped) | "default".
+	Source string `json:"source,omitempty"`
 }
 
 type scanDetail struct {
@@ -918,6 +960,10 @@ type scanDetail struct {
 	// classification was preserved this run even though the fresh probe pointed
 	// elsewhere (transient SNMP failure or an operator lock). Empty in the normal case.
 	ClassNote string `json:"class_note,omitempty"`
+	// CredScope, when set, names the site subnet whose assigned credentials were the
+	// EXCLUSIVE set tried for this host (subnet-scoped credentials). Empty ⇒ normal
+	// global/scope resolution was used.
+	CredScope string `json:"cred_scope,omitempty"`
 }
 
 // scanSSHSummary is the per-result SSH CLI collection rollup shown in Job Results.
@@ -1211,7 +1257,7 @@ func (s *Server) recordResult(ctx context.Context, jobID uuid.UUID, ip netip.Add
 	attempts := make([]scanCredAttemptDTO, 0, len(r.CredAttempts))
 	for _, a := range r.CredAttempts {
 		attempts = append(attempts, scanCredAttemptDTO{
-			Kind: string(a.Kind), Protocol: a.Protocol, Category: a.Category, Detail: a.Detail, Success: a.Success, Relevant: a.Relevant,
+			Kind: string(a.Kind), Protocol: a.Protocol, Category: a.Category, Detail: a.Detail, Success: a.Success, Relevant: a.Relevant, Source: a.Source,
 		})
 	}
 
@@ -1224,6 +1270,7 @@ func (s *Server) recordResult(ctx context.Context, jobID uuid.UUID, ip netip.Add
 		Enrichment: enrichment, Profile: profRes,
 		NextAction:   scanNextActionWithPlan(category, bound, boundKind, profRes, r.Plan, attempts),
 		CollectedVia: collectedVia, AgentName: agentName, SSH: sshSum, ClassNote: classNote,
+		CredScope: r.CredScope,
 	}
 	// Sharpen the next action for agent-routed Windows hosts.
 	switch collectedVia {

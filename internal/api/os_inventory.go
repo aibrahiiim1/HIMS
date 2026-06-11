@@ -443,13 +443,13 @@ func (s *Server) tryWMIFallback(ctx context.Context, d db.Device, ip string, can
 	}
 	if reachable, cat, det := osinv.WMIProbeReachable(ctx, ip, 4*time.Second); !reachable {
 		// record a non-secret wmi attempt so history/coverage/DQ reflect it
-		s.persistScanCredAttempts(ctx, d, []discovery.CredAttempt{{Kind: domain.CredWMI, Protocol: "wmi", Success: false, Category: cat, Detail: det}})
+		s.persistScanCredAttempts(ctx, d, []discovery.CredAttempt{{Kind: domain.CredWMI, Protocol: "wmi", Success: false, Category: cat, Detail: det}}, "default")
 		return false, cat, det
 	}
 	for _, cd := range cands {
 		rep, err := osinv.CollectViaWMICollector(ctx, url, token, ip, cd.user, cd.pass, 120*time.Second)
 		cat, det := osinv.ClassifyWMIError(err)
-		s.persistScanCredAttempts(ctx, d, []discovery.CredAttempt{{CredentialID: cd.id, Kind: domain.CredWMI, Protocol: "wmi", Success: err == nil, Category: cat, Detail: det}})
+		s.persistScanCredAttempts(ctx, d, []discovery.CredAttempt{{CredentialID: cd.id, Kind: domain.CredWMI, Protocol: "wmi", Success: err == nil, Category: cat, Detail: det}}, "default")
 		if err != nil {
 			reason, detail = cat, det
 			continue
