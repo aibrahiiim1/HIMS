@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { X, Lock, Save } from 'lucide-react'
-import { api, locationPaths, type Device, type Location } from '../api'
+import { api, locationPaths, type Device, type Location, type DeviceWebAccess } from '../api'
 
 // Categories the backend accepts (kept in step with internal/api validCategory).
 const CATEGORIES = [
@@ -25,6 +25,19 @@ export function EditDevice({ device, onClose, onSaved }: {
   const qc = useQueryClient()
   const locs = useQuery({ queryKey: ['locations-all'], queryFn: () => api.get<Location[]>('/locations/all') })
   const locPaths = locationPaths(locs.data ?? [])
+
+  // Web/management port override — lets the operator pin the device's web/ISAPI
+  // port (+ scheme) when discovery missed it (e.g. a camera/NVR on a non-standard
+  // port). webCandidateBases reads this FIRST, so the next scan/Collect tries it.
+  const webAcc = useQuery({ queryKey: ['web-access', device.id], queryFn: () => api.get<DeviceWebAccess>(`/devices/${device.id}/web-access`) })
+  const [web, setWeb] = useState({ port: '', scheme: '' })
+  const [webLoaded, setWebLoaded] = useState(false)
+  useEffect(() => {
+    if (webAcc.data && !webLoaded) {
+      setWeb({ port: webAcc.data.port != null ? String(webAcc.data.port) : '', scheme: webAcc.data.scheme || '' })
+      setWebLoaded(true)
+    }
+  }, [webAcc.data, webLoaded])
 
   const [f, setF] = useState({
     name: device.name ?? '',
@@ -61,6 +74,19 @@ export function EditDevice({ device, onClose, onSaved }: {
         manual_classification_reason: f.classification_locked ? f.manual_classification_reason : '',
       }
       const updated = await api.patch<Device>(`/devices/${device.id}`, body)
+      // Web/management port override — only PUT when changed (preserve alt_ports /
+      // notes / pref_proto the operator may have set in the Web Access panel).
+      if (webAcc.data) {
+        const newPort = web.port.trim() ? Number(web.port.trim()) : null
+        const changed = newPort !== (webAcc.data.port ?? null) || (web.scheme || '') !== (webAcc.data.scheme || '')
+        if (changed) {
+          await api.put(`/devices/${device.id}/web-access`, {
+            scheme: web.scheme, port: newPort, alt_ports: webAcc.data.alt_ports,
+            notes: webAcc.data.notes, pref_proto: webAcc.data.pref_proto,
+          })
+          qc.invalidateQueries({ queryKey: ['web-access', device.id] })
+        }
+      }
       // Refresh every device-backed view so the edit shows immediately.
       qc.invalidateQueries({ queryKey: ['devices'] })
       qc.invalidateQueries({ queryKey: ['device', device.id] })
@@ -134,6 +160,29 @@ export function EditDevice({ device, onClose, onSaved }: {
             ))}
           </div>
           {field('Notes', <textarea value={f.notes} onChange={(e) => set('notes', e.target.value)} rows={2} style={{ padding: '6px 8px', fontSize: 13 }} />)}
+
+          <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12, display: 'grid', gap: 8 }}>
+            <span className="muted" style={{ fontSize: 12, fontWeight: 600 }}>Web / management port override</span>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              {field('Port', (
+                <input value={web.port} inputMode="numeric" placeholder="auto-detect"
+                  onChange={(e) => setWeb((s) => ({ ...s, port: e.target.value.replace(/[^0-9]/g, '') }))}
+                  style={{ padding: '6px 8px', fontSize: 13 }} />
+              ))}
+              {field('Scheme', (
+                <select value={web.scheme} onChange={(e) => setWeb((s) => ({ ...s, scheme: e.target.value }))} style={{ padding: '6px 8px', fontSize: 13 }}>
+                  <option value="">auto (try both)</option>
+                  <option value="http">http</option>
+                  <option value="https">https</option>
+                </select>
+              ))}
+            </div>
+            <span className="muted" style={{ fontSize: 11 }}>
+              Set this if discovery missed the device&apos;s web/ISAPI port (e.g. a camera/NVR on a non-standard port). The next scan or Collect tries it first.
+              {webAcc.data?.discovered?.length ? ' · Discovered ports: ' + webAcc.data.discovered.map((p) => p.port).join(', ') : ''}
+              {webAcc.data?.last_ok ? ' · Last OK: ' + webAcc.data.last_ok : ''}
+            </span>
+          </div>
 
           <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12, display: 'grid', gap: 8 }}>
             <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
