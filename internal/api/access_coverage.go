@@ -276,6 +276,16 @@ func (s *Server) accessCoverage(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	// Cameras that are an NVR/DVR channel are managed VIA the recorder (see
+	// deriveManagement) — don't count an RTSP-only feed as a credential failure.
+	nvrCams := map[uuid.UUID]bool{}
+	if ids, cerr := s.queries.ListLinkedCameraDeviceIDs(ctx); cerr == nil {
+		for _, id := range ids {
+			if id != nil {
+				nvrCams[*id] = true
+			}
+		}
+	}
 
 	type agg struct {
 		sources map[string]bool // bound_credential | evidence | test_result
@@ -303,6 +313,19 @@ func (s *Server) accessCoverage(w http.ResponseWriter, r *http.Request) {
 					a.sources[da.provenSrc[p]] = true
 				}
 			}
+			continue
+		}
+		// Camera that is an NVR/DVR channel → managed via the recorder (RTSP-only
+		// feeds have no web/ONVIF to authenticate; the NVR is the management point).
+		if d.Category == "camera" && nvrCams[d.ID] {
+			managed++
+			a := byProto["nvr"]
+			if a == nil {
+				a = &agg{sources: map[string]bool{}}
+				byProto["nvr"] = a
+			}
+			a.count++
+			a.sources["evidence"] = true
 			continue
 		}
 		// Unmanaged → classify the reason from REAL signals (mutually exclusive,

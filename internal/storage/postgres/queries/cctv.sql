@@ -43,6 +43,12 @@ FROM nvr_channels ch JOIN devices d ON d.id = ch.nvr_device_id AND d.deleted_at 
 WHERE ch.camera_device_id = $1
 ORDER BY d.name, ch.channel_no;
 
+-- name: ListLinkedCameraDeviceIDs :many
+-- Camera device_ids that are an NVR/DVR channel (recorded by a recorder). These
+-- are managed VIA the recorder even when they expose no directly-authenticable
+-- web/ONVIF interface (RTSP-only feeds) — so they must not show credential_failed.
+SELECT DISTINCT camera_device_id FROM nvr_channels WHERE camera_device_id IS NOT NULL;
+
 -- name: NVRChannelStats :one
 -- Path Finder: per-NVR channel totals (and how many are linked to a camera device).
 SELECT count(*)::bigint AS total, count(camera_device_id)::bigint AS linked

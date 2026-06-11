@@ -135,6 +135,33 @@ func (q *Queries) GetNVRInfo(ctx context.Context, deviceID uuid.UUID) (NvrInfo, 
 	return i, err
 }
 
+const listLinkedCameraDeviceIDs = `-- name: ListLinkedCameraDeviceIDs :many
+SELECT DISTINCT camera_device_id FROM nvr_channels WHERE camera_device_id IS NOT NULL
+`
+
+// Camera device_ids that are an NVR/DVR channel (recorded by a recorder). These
+// are managed VIA the recorder even when they expose no directly-authenticable
+// web/ONVIF interface (RTSP-only feeds) — so they must not show credential_failed.
+func (q *Queries) ListLinkedCameraDeviceIDs(ctx context.Context) ([]*uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listLinkedCameraDeviceIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*uuid.UUID{}
+	for rows.Next() {
+		var camera_device_id *uuid.UUID
+		if err := rows.Scan(&camera_device_id); err != nil {
+			return nil, err
+		}
+		items = append(items, camera_device_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listNVRChannels = `-- name: ListNVRChannels :many
 SELECT id, nvr_device_id, channel_no, camera_name, camera_ip, camera_device_id, status, last_seen_at, enabled FROM nvr_channels WHERE nvr_device_id = $1 ORDER BY channel_no
 `

@@ -439,6 +439,10 @@ type Querier interface {
 	// long-lived deployment cannot blow up the query.
 	ListKnownDeviceScanDispositions(ctx context.Context) ([]ListKnownDeviceScanDispositionsRow, error)
 	ListLicenses(ctx context.Context, deviceID uuid.UUID) ([]FirewallLicense, error)
+	// Camera device_ids that are an NVR/DVR channel (recorded by a recorder). These
+	// are managed VIA the recorder even when they expose no directly-authenticable
+	// web/ONVIF interface (RTSP-only feeds) — so they must not show credential_failed.
+	ListLinkedCameraDeviceIDs(ctx context.Context) ([]*uuid.UUID, error)
 	// Full flat list for building the location tree client-side.
 	ListLocations(ctx context.Context) ([]Location, error)
 	ListLookups(ctx context.Context, kind string) ([]Lookup, error)

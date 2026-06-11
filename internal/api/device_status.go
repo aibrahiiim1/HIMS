@@ -68,6 +68,10 @@ type statusMaps struct {
 	test        map[uuid.UUID]*deviceTestStatus
 	onlineSites map[uuid.UUID]bool // location → has an online relay agent
 	anySites    map[uuid.UUID]bool // location → has any relay agent (online or not)
+	// nvrChannelCams are camera device_ids that are a channel on an NVR/DVR — they
+	// are managed VIA the recorder, so an RTSP-only feed (no web/ONVIF to
+	// authenticate) must not be reported as credential_failed.
+	nvrChannelCams map[uuid.UUID]bool
 }
 
 func (s *Server) buildStatusMaps(ctx context.Context) (*statusMaps, error) {
@@ -91,7 +95,15 @@ func (s *Server) buildStatusMaps(ctx context.Context) (*statusMaps, error) {
 			}
 		}
 	}
-	return &statusMaps{access: am, test: tm, onlineSites: onlineSites, anySites: anySites}, nil
+	nvrCams := map[uuid.UUID]bool{}
+	if ids, cerr := s.queries.ListLinkedCameraDeviceIDs(ctx); cerr == nil {
+		for _, id := range ids {
+			if id != nil {
+				nvrCams[*id] = true
+			}
+		}
+	}
+	return &statusMaps{access: am, test: tm, onlineSites: onlineSites, anySites: anySites, nvrChannelCams: nvrCams}, nil
 }
 
 // windowsLike reports whether a device is (or is most likely) a Windows host even
@@ -113,6 +125,15 @@ func (m *statusMaps) deriveManagement(d db.Device) (state string, managedBy []st
 		managedBy = da.provenProtocols()
 		sort.Slice(managedBy, func(i, j int) bool { return protocolRank(managedBy[i]) < protocolRank(managedBy[j]) })
 		return MgmtManaged, managedBy
+	}
+
+	// A camera that is a channel on an NVR/DVR is managed VIA the recorder — its
+	// inventory + recording state come through the NVR. Many such cameras are
+	// RTSP-only (port 554, no web/ONVIF to authenticate), so web-cred attempts
+	// during a scan "fail" and would otherwise mis-flag them credential_failed.
+	// The recorder is the management point, so report managed-via-NVR instead.
+	if d.Category == "camera" && m.nvrChannelCams[d.ID] {
+		return MgmtManaged, []string{"nvr"}
 	}
 
 	// Not managed — classify the gap so the operator knows the next action.
