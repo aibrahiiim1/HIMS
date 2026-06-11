@@ -234,12 +234,21 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 	// (Windows workstations, Linux, cameras) that the old switch-centric list
 	// missed entirely.
 	ports := []int{22, 23, 53, 80, 88, 135, 161, 389, 443, 445, 554, 636, 1433, 1521, 3389, 5432, 5985, 5986, 8000, 8008, 8010, 8080, 8443, 9100}
+	// Hikvision/CCTV convention: a recorder/camera's web/ISAPI port is commonly
+	// 8000 + the host's last octet (.2 -> 8002, .15 -> 8015). Probe it per-host so
+	// these recorders are discovered automatically — the operator never has to
+	// hand-add each port to the web-port settings.
+	if u := ip.Unmap(); u.Is4() {
+		if octet := int(u.As4()[3]); octet >= 1 && octet <= 255 {
+			ports = append(ports, 8000+octet)
+		}
+	}
 	for _, p := range cfg.ExtraPorts { // targeted-retry: a missed known device's last-known open ports
 		if p > 0 && p < 65536 {
 			ports = append(ports, p)
 		}
 	}
-	r.OpenPorts = scanPorts(ctx, ip, ports, cfg.PortTimeout)
+	r.OpenPorts = scanPorts(ctx, ip, dedupInts(ports), cfg.PortTimeout)
 	r.Probe = driver.Probe{IP: ip, OpenTCPPorts: r.OpenPorts}
 	if len(r.OpenPorts) > 0 {
 		emit("tcp_port_found", "", "found", intsCSV(r.OpenPorts))
@@ -743,6 +752,22 @@ func anyWebPort(ports []int) bool {
 		}
 	}
 	return false
+}
+
+// dedupInts returns ports with duplicates removed, preserving first-seen order
+// (so a configured/derived port that duplicates a base port isn't probed — or
+// reported open — twice).
+func dedupInts(ports []int) []int {
+	seen := make(map[int]bool, len(ports))
+	out := ports[:0:0]
+	for _, p := range ports {
+		if seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	return out
 }
 
 // webPortsOf returns the open ports that are web/management surfaces, so the

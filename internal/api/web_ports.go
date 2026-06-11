@@ -181,19 +181,23 @@ func (s *Server) webCandidateBases(ctx context.Context, d db.Device) []string {
 // result, since the discovery_result probe_data webCandidateBases reads is not yet
 // persisted while the scan's collection runs. Non-web ports (e.g. 554/RTSP) drop.
 func webBasesForPorts(ip, category string, ports []int) []string {
-	var out []string
+	// HTTP bases first, HTTPS after: the 8000-octet CCTV web/ISAPI ports are plain
+	// HTTP and answer instantly, whereas a stray open HTTPS port (e.g. 8443) on these
+	// recorders frequently hangs the full TLS timeout — trying it first burns the
+	// collection budget before the working HTTP port is reached.
+	var httpB, httpsB []string
 	for _, p := range ports {
 		sch, _, web := webClass(p, category)
 		if !web {
 			continue
 		}
 		if sch == "https" {
-			out = append(out, baseURL(ip, "https", p))
+			httpsB = append(httpsB, baseURL(ip, "https", p))
 		} else {
-			out = append(out, baseURL(ip, "http", p))
+			httpB = append(httpB, baseURL(ip, "http", p))
 		}
 	}
-	return out
+	return append(httpB, httpsB...)
 }
 
 // enabledWebPorts returns the enabled configured candidate ports, for injection
