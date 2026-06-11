@@ -11,7 +11,12 @@ export const LOW_CONFIDENCE = 50
 export function needsClassification(d: Device): { why: string[] } | null {
   const why: string[] = []
   if (!d.category || d.category === 'unknown') why.push('category unknown')
-  if (!d.vendor || !d.vendor.trim()) why.push('vendor missing')
+  // A camera is classified BY being a camera; its vendor (esp. RTSP-only cameras
+  // recorded by an NVR/DVR, never directly identified) is enrichment HIMS often
+  // can't obtain, so a blank vendor is not a classification gap for cameras. Keep
+  // this in lock-step with deviceNeedsClassification in the backend so the badge
+  // matches this page.
+  if (d.category !== 'camera' && (!d.vendor || !d.vendor.trim())) why.push('vendor missing')
   if (typeof d.confidence_score === 'number' && d.confidence_score > 0 && d.confidence_score < LOW_CONFIDENCE && !d.classification_locked) {
     why.push(`low confidence ${d.confidence_score}%`)
   }

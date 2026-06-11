@@ -436,7 +436,12 @@ func deviceNeedsClassification(d db.Device) bool {
 	if d.Category == "" || d.Category == "unknown" {
 		return true
 	}
-	if d.Vendor == nil || strings.TrimSpace(*d.Vendor) == "" {
+	// A camera is classified BY being a camera; its vendor — especially for
+	// RTSP-only cameras recorded by an NVR/DVR, which are never directly
+	// identified — is enrichment HIMS frequently can't obtain, so a blank vendor
+	// is NOT a classification gap for cameras (it was flooding this list with the
+	// site's NVR-channel cameras). Other categories still require a vendor.
+	if d.Category != "camera" && (d.Vendor == nil || strings.TrimSpace(*d.Vendor) == "") {
 		return true
 	}
 	if d.ConfidenceScore != nil && *d.ConfidenceScore > 0 && int(*d.ConfidenceScore) < missingClassLowConf && !d.ClassificationLocked {
