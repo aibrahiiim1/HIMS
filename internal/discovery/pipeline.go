@@ -72,7 +72,7 @@ func fingerprintFromPorts(ports []int) credresolver.Fingerprint {
 		SNMP:  true,
 		SSH:   hasPortN(ports, 22),
 		WinRM: hasPortN(ports, 5985) || hasPortN(ports, 5986),
-		HTTP:  hasPortN(ports, 80) || hasPortN(ports, 443) || hasPortN(ports, 8000) || hasPortN(ports, 8080) || hasPortN(ports, 8443),
+		HTTP:  anyWebPort(ports),
 		LDAP:  hasPortN(ports, 389) || hasPortN(ports, 636),
 	}
 }
@@ -86,7 +86,7 @@ func portAllowsProto(ports []int, kind domain.CredentialKind) bool {
 	case domain.CredWinRM:
 		return hasPortN(ports, 5985) || hasPortN(ports, 5986)
 	case domain.CredONVIF, domain.CredHTTPBasic, domain.CredVendorAPI:
-		return hasPortN(ports, 80) || hasPortN(ports, 443) || hasPortN(ports, 8000) || hasPortN(ports, 8080) || hasPortN(ports, 8443)
+		return anyWebPort(ports)
 	}
 	return false
 }
@@ -482,6 +482,16 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 		}
 	}
 
+	// Camera-by-port-shape: the protocol plan inferred camera/recorder purely from
+	// the Hikvision "8000 + host octet" web/ISAPI port (no other service, often a
+	// generic banner). When nothing else set a category, adopt that hint so the
+	// orchestrator routes the host to ONVIF/ISAPI onboarding (with subnet-scoped
+	// web creds) instead of leaving it unknown + SNMP-only. ISAPI deviceInfo then
+	// confirms camera vs nvr/dvr at high confidence on a successful collect.
+	if (r.Match.Category == "" || r.Match.Category == domain.CatUnknown) && r.Plan.Candidate == "camera" {
+		r.Match = driver.Match{Category: domain.CatCamera, Confidence: 40}
+	}
+
 	// Step 5c: Vendor-fingerprint override. The fingerprint library (operator-defined
 	// ∪ built-in) is matched against the SNMP/HTTP/SSH evidence. Match() ranks exact
 	// sysObjectID > sysDescr/sysName regex > generic prefix, so a PRODUCT fingerprint
@@ -620,14 +630,10 @@ func scanPorts(ctx context.Context, ip netip.Addr, ports []int, timeout time.Dur
 
 var titleRe = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
 
-// httpPort reports whether any common web port is open.
+// httpPort reports whether any web/management port is open (incl. the Hikvision
+// 8000+octet range), gating whether a banner grab runs at all.
 func httpPort(ports []int) bool {
-	for _, p := range []int{443, 80, 8443, 8080, 8000} {
-		if hasPort(ports, p) {
-			return true
-		}
-	}
-	return false
+	return anyWebPort(ports)
 }
 
 // httpBanner GETs the open web port(s) and returns the Server header, the page
@@ -657,6 +663,22 @@ func httpBanner(ctx context.Context, ip netip.Addr, ports []int, timeout time.Du
 	for _, c := range []cand{{"https", 443}, {"https", 8443}, {"http", 80}, {"http", 8080}, {"http", 8000}} {
 		if hasPort(ports, c.port) {
 			cands = append(cands, c)
+		}
+	}
+	// Hikvision-style 8000+octet ports (e.g. 8011) — probe over http so a camera/
+	// recorder that exposes ONLY that port still yields a banner for classification.
+	for _, p := range ports {
+		if p >= 8001 && p <= 8255 && p != 8080 && !hasPort([]int{443, 8443, 80, 8080, 8000}, p) {
+			dup := false
+			for _, c := range cands {
+				if c.port == p {
+					dup = true
+					break
+				}
+			}
+			if !dup {
+				cands = append(cands, cand{"http", p})
+			}
 		}
 	}
 	var bodySb strings.Builder
@@ -696,6 +718,48 @@ func hasPort(ports []int, port int) bool {
 		}
 	}
 	return false
+}
+
+// isWebPort reports whether a TCP port is an HTTP/management web surface worth a
+// banner grab + an HTTP/ONVIF/ISAPI credential. Beyond the standard web ports it
+// recognises the Hikvision-style "8000 + host octet" CCTV/ISAPI convention
+// (e.g. .11 -> 8011, .130 -> 8130): many recorders/cameras expose ONLY that port,
+// and without recognising it they were read as "no web surface" -> mis-classified
+// unknown (SNMP-expected) with their ONVIF/HTTP-Basic credentials filtered out by
+// the resolver's fingerprint, even when the subnet was scoped to CCTV creds.
+func isWebPort(p int) bool {
+	switch p {
+	case 80, 443, 8080, 8443:
+		return true
+	}
+	return p >= 8000 && p <= 8255
+}
+
+// anyWebPort reports whether any open port is a web/management surface.
+func anyWebPort(ports []int) bool {
+	for _, p := range ports {
+		if isWebPort(p) {
+			return true
+		}
+	}
+	return false
+}
+
+// cctvWebPortPattern reports the Hikvision CCTV signature: every open port is in
+// the 8000+octet range (8001-8255) and none is the common 8080 web-app port. A
+// camera/recorder that exposes ONLY its 8000+octet web/ISAPI port matches; a plain
+// 8080 or 8000 web app does not. Used as a camera classification signal so such a
+// device is onboarded over ONVIF/ISAPI rather than dropped into the SNMP bucket.
+func cctvWebPortPattern(ports []int) bool {
+	if len(ports) == 0 {
+		return false
+	}
+	for _, p := range ports {
+		if p < 8001 || p > 8255 || p == 8080 {
+			return false
+		}
+	}
+	return true
 }
 
 // ScopeRange is a sequence of IPs to scan; the engine generates them from a

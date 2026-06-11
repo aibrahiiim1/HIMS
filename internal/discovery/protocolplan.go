@@ -46,11 +46,15 @@ func containsAny(haystack string, needles ...string) bool {
 func planProtocols(ports []int, sshBanner, httpServer, httpTitle, httpBody string) ProtocolPlan {
 	sb := strings.ToLower(sshBanner)
 	web := strings.ToLower(httpServer + " " + httpTitle + " " + httpBody)
-	httpOpen := hasPort(ports, 80) || hasPort(ports, 443) || hasPort(ports, 8000) || hasPort(ports, 8080) || hasPort(ports, 8443)
+	httpOpen := anyWebPort(ports)
 
 	windows := hasPort(ports, 445) || hasPort(ports, 135) || hasPort(ports, 3389) || hasPort(ports, 5985) || hasPort(ports, 5986)
 	linux := hasPort(ports, 22) && containsAny(sb, "openssh", "ubuntu", "debian", "linux", "centos", "rocky", "raspbian")
-	camera := hasPort(ports, 554) || containsAny(web, "hikvision", "dahua", "onvif", "isapi", "ip camera", "webcam", "nvr", "dvr", "uniview", "axis")
+	// Cameras/recorders: RTSP, a vendor/ONVIF web marker, OR the Hikvision
+	// "8000 + host octet" web/ISAPI port pattern (a host whose only open port(s)
+	// sit in 8001-8255) — these expose nothing else, so the port shape is the
+	// signal that routes them to ONVIF/ISAPI instead of the SNMP bucket.
+	camera := hasPort(ports, 554) || cctvWebPortPattern(ports) || containsAny(web, "hikvision", "dahua", "onvif", "isapi", "ip camera", "webcam", "nvr", "dvr", "uniview", "axis")
 	vmware := containsAny(web, "vmware", "esxi", "vsphere", "/sdk", "vmware esx")
 	netVendor := containsAny(web, "cisco", "huawei", "hp ", "hpe", "aruba", "extreme", "fortinet", "fortigate", "mikrotik", "ruckus", "juniper", "ubiquiti", "edgeos")
 
