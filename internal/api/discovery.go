@@ -41,6 +41,9 @@ type scanReq struct {
 	CredentialIDs      []string `json:"credential_ids"`
 	CredentialGroupIDs []string `json:"credential_group_ids"`
 	Concurrency        int      `json:"concurrency"`
+	// Exclude carves IPs out of the resolved scope (single IP / range / CIDR /
+	// comma-or-space-separated mix) — e.g. scan a /24 but skip a few hosts.
+	Exclude string `json:"exclude"`
 }
 
 // startScan launches a background subnet scan and returns the job immediately
@@ -108,6 +111,7 @@ func (s *Server) startScan(w http.ResponseWriter, r *http.Request) {
 	if spec, err := json.Marshal(rerunSpec{
 		Mode: req.Mode, Targets: req.Targets, CIDR: req.CIDR,
 		CredentialIDs: req.CredentialIDs, CredentialGroupIDs: req.CredentialGroupIDs,
+		Exclude: req.Exclude,
 	}); err == nil {
 		_ = s.queries.SetDiscoveryJobMetadata(r.Context(), db.SetDiscoveryJobMetadataParams{ID: job.ID, Metadata: spec})
 	}
@@ -295,12 +299,16 @@ type rerunSpec struct {
 	CIDR               string   `json:"cidr"`
 	CredentialIDs      []string `json:"credential_ids"`
 	CredentialGroupIDs []string `json:"credential_group_ids"`
+	Exclude            string   `json:"exclude,omitempty"`
 }
 
 // resolveScanHosts expands the request's input mode into a host list. It
 // returns a scope label (a CIDR string when the scope is a single prefix, for
 // the job record; otherwise a free-text summary).
 func (s *Server) resolveScanHosts(ctx context.Context, req scanReq, locID *uuid.UUID) ([]netip.Addr, string, error) {
+	var hosts []netip.Addr
+	var label string
+
 	if req.Mode == "site_subnets" {
 		if locID == nil {
 			return nil, "", errBadRequest("site_subnets mode requires location_id")
@@ -312,32 +320,49 @@ func (s *Server) resolveScanHosts(ctx context.Context, req scanReq, locID *uuid.
 		if len(subnets) == 0 {
 			return nil, "", errBadRequest("no subnets configured for this site")
 		}
-		var all []netip.Addr
 		for _, sn := range subnets {
-			hosts, err := discovery.ExpandCIDR(sn.Cidr, scanMaxHosts)
+			h, err := discovery.ExpandCIDR(sn.Cidr, scanMaxHosts)
 			if err != nil {
 				return nil, "", err
 			}
-			all = append(all, hosts...)
-			if len(all) > scanMaxHosts {
+			hosts = append(hosts, h...)
+			if len(hosts) > scanMaxHosts {
 				return nil, "", errBadRequest("site subnets expand beyond the scan cap; scan a subset")
 			}
 		}
-		return all, "site_subnets", nil
+		label = "site_subnets"
+	} else {
+		spec := req.Targets
+		if spec == "" {
+			spec = req.CIDR // legacy single-CIDR field
+		}
+		if spec == "" {
+			return nil, "", errBadRequest("provide targets (IP / range / CIDR) or location_id with mode=site_subnets")
+		}
+		h, err := discovery.ParseTargets(spec, scanMaxHosts)
+		if err != nil {
+			return nil, "", err
+		}
+		hosts, label = h, spec
 	}
 
-	spec := req.Targets
-	if spec == "" {
-		spec = req.CIDR // legacy single-CIDR field
+	// Carve out operator-excluded IPs/ranges/CIDRs from the resolved scope — so a
+	// /24 or site-subnet scan can skip a few specific hosts the operator names.
+	if strings.TrimSpace(req.Exclude) != "" {
+		filtered, removed, err := discovery.FilterExcluded(hosts, req.Exclude, scanMaxHosts)
+		if err != nil {
+			return nil, "", errBadRequest(err.Error())
+		}
+		hosts = filtered
+		if removed > 0 {
+			label = fmt.Sprintf("%s (excluded %d)", label, removed)
+		}
+		if len(hosts) == 0 {
+			return nil, "", errBadRequest("every target was excluded — nothing left to scan")
+		}
 	}
-	if spec == "" {
-		return nil, "", errBadRequest("provide targets (IP / range / CIDR) or location_id with mode=site_subnets")
-	}
-	hosts, err := discovery.ParseTargets(spec, scanMaxHosts)
-	if err != nil {
-		return nil, "", err
-	}
-	return hosts, spec, nil
+
+	return hosts, label, nil
 }
 
 // explicitGroups loads the operator-selected credential groups' members into
@@ -1491,7 +1516,7 @@ func (s *Server) rerunDiscoveryJob(w http.ResponseWriter, r *http.Request) {
 	if len(prev.Metadata) > 0 {
 		var spec rerunSpec
 		if json.Unmarshal(prev.Metadata, &spec) == nil {
-			req = scanReq{Mode: spec.Mode, Targets: spec.Targets, CIDR: spec.CIDR, CredentialIDs: spec.CredentialIDs, CredentialGroupIDs: spec.CredentialGroupIDs}
+			req = scanReq{Mode: spec.Mode, Targets: spec.Targets, CIDR: spec.CIDR, CredentialIDs: spec.CredentialIDs, CredentialGroupIDs: spec.CredentialGroupIDs, Exclude: spec.Exclude}
 		}
 	}
 	if req.Targets == "" && req.CIDR == "" && req.Mode != "site_subnets" {

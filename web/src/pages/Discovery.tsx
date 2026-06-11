@@ -199,17 +199,20 @@ export function Discovery() {
 function NetworkScan({ locations, locPath, creds, onLaunch, setMsg }: { locations: Location[]; locPath: Record<string, string>; creds: Credential[]; onLaunch: (j: DiscoveryJob) => void; setMsg: (s: string) => void }) {
   const [mode, setMode] = useState<ScanMode>('cidr')
   const [targets, setTargets] = useState('')
+  const [exclude, setExclude] = useState('')
   const [location, setLocation] = useState('')
   const [credIDs, setCredIDs] = useState<string[]>([])
   const siteMode = mode === 'site_subnets'
   const canScan = siteMode ? !!location : !!targets.trim()
+  // Exclude only makes sense for multi-host scopes (range / CIDR / site subnets).
+  const showExclude = mode === 'range' || mode === 'cidr' || siteMode
 
   const scan = useMutation({
     mutationFn: () => api.post<DiscoveryJob>('/discovery/scan', {
       mode: siteMode ? 'site_subnets' : 'targets', targets: siteMode ? '' : targets.trim(),
-      location_id: location || null, credential_ids: credIDs,
+      location_id: location || null, credential_ids: credIDs, exclude: exclude.trim(),
     }),
-    onSuccess: (j) => { setTargets(''); onLaunch(j as DiscoveryJob); setMsg('Scan launched — see Jobs.') },
+    onSuccess: (j) => { setTargets(''); setExclude(''); onLaunch(j as DiscoveryJob); setMsg('Scan launched — see Jobs.') },
     onError: (e) => setMsg((e as Error).message),
   })
   const toggleCred = (id: string) => setCredIDs((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]))
@@ -254,6 +257,14 @@ function NetworkScan({ locations, locPath, creds, onLaunch, setMsg }: { location
         <button style={btn} disabled={!canScan || scan.isPending} onClick={() => scan.mutate()}>{scan.isPending ? 'Launching…' : 'Start scan'}</button>
       </div>
       {siteMode && <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>{MODE_PH.site_subnets}</div>}
+
+      {showExclude && (
+        <div style={{ marginTop: 10 }}>
+          <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Exclude IPs (optional)</div>
+          <input style={{ ...input, width: 360 }} placeholder="e.g. 172.21.96.10, 172.21.96.20-25, 172.21.96.0/28" value={exclude} onChange={(e) => setExclude(e.target.value)} />
+          <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>Single IPs, ranges, or CIDRs (comma/space-separated) carved out of the scope above — those hosts are not scanned.</div>
+        </div>
+      )}
 
       <div style={{ marginTop: 12 }}>
         <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Credentials to try</div>
