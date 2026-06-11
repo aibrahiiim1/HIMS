@@ -774,8 +774,10 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 							scopeNote = " [subnet-scoped: " + scopedLabel + "]"
 							cctvSource = "subnet"
 						}
-						// Try each selected web credential (first success binds).
-						cv := s.runCCTVCollection(cctx, dev, webCreds, cctvSource)
+						// Try each selected web credential (first success binds). Pass the
+						// LIVE discovered open ports so the device's actual web port is tried
+						// first (probe_data isn't persisted until after this runs).
+						cv := s.runCCTVCollection(cctx, dev, webCreds, cctvSource, r.OpenPorts...)
 						ccancel()
 						if cv.ok() {
 							enrichment = "CCTV collected (" + cv.Category + ") via " + cv.CredentialUsed + scopeNote

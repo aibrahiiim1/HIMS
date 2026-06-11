@@ -175,6 +175,27 @@ func (s *Server) webCandidateBases(ctx context.Context, d db.Device) []string {
 	return deduped
 }
 
+// webBasesForPorts turns a set of just-discovered open ports into ordered web
+// base URLs (scheme decided by webClass; the Hikvision 8000-octet ports are plain
+// HTTP). Used to seed the CCTV collector's prefer list directly from the live scan
+// result, since the discovery_result probe_data webCandidateBases reads is not yet
+// persisted while the scan's collection runs. Non-web ports (e.g. 554/RTSP) drop.
+func webBasesForPorts(ip, category string, ports []int) []string {
+	var out []string
+	for _, p := range ports {
+		sch, _, web := webClass(p, category)
+		if !web {
+			continue
+		}
+		if sch == "https" {
+			out = append(out, baseURL(ip, "https", p))
+		} else {
+			out = append(out, baseURL(ip, "http", p))
+		}
+	}
+	return out
+}
+
 // enabledWebPorts returns the enabled configured candidate ports, for injection
 // into the discovery scan's TCP port set (PipelineConfig.ExtraPorts) so custom
 // web ports are discovered open and stored.

@@ -45,7 +45,14 @@ func (r cctvResult) ok() bool { return r.Status == "collected" }
 // Collect UI; when empty the collection falls back to the single credential bound
 // to the device (the bound-credential-only default that cannot spray). The fleet
 // collector always passes nil to keep bulk runs lockout-safe.
-func (s *Server) runCCTVCollection(ctx context.Context, d db.Device, selectedCreds []uuid.UUID, source string) cctvResult {
+// liveOpenPorts are the ports just discovered for this device on THIS scan (the
+// pipeline's r.OpenPorts). They are passed in because the scan persists the
+// discovery_result probe_data only AFTER collection runs, so webCandidateBases'
+// DB lookup is stale/empty mid-scan — without this a recorder whose only web
+// surface is a non-standard port (e.g. a Hikvision NVR on 8015) had its ISAPI
+// ladder blind-sweep 8000-8020 and time out before reaching the real port. Pass
+// nil from the per-device/fleet paths (the device row already has its ports).
+func (s *Server) runCCTVCollection(ctx context.Context, d db.Device, selectedCreds []uuid.UUID, source string, liveOpenPorts ...int) cctvResult {
 	res := cctvResult{Status: "failed"}
 	if d.PrimaryIp == nil || !d.PrimaryIp.IsValid() {
 		res.Reason, res.Detail = "no_ip", "device has no IP to collect from"
@@ -122,6 +129,14 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device, selectedCre
 	// web ports + configured candidate ports ("use discovered ports before
 	// guessing"). The ISAPI ladder is the fallback after these.
 	prefer := s.webCandidateBases(ctx, d)
+	// Seed the prefer list from THIS scan's just-discovered open ports (not yet
+	// persisted to probe_data when called from the scan path) so the device's
+	// actual web port is tried FIRST, not swept for. This is what lets a recorder
+	// on a non-standard port (e.g. 8015) collect on a fresh scan instead of
+	// timing out.
+	if len(liveOpenPorts) > 0 {
+		prefer = dedupeStrings(append(webBasesForPorts(ip, d.Category, liveOpenPorts), prefer...))
+	}
 
 	// ONVIF can live on a non-standard port — budget gSOAP cameras commonly serve
 	// the device_service on :8000 (not :80). Try the device's discovered/candidate
