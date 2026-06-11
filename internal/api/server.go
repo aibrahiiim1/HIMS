@@ -310,8 +310,11 @@ func (s *Server) routes() {
 		r.Get("/locations/{id}/children", s.childLocations)
 		r.Get("/locations/{id}/subnets", s.locationSubnets)
 		r.Post("/locations/{id}/subnets", s.createSubnet)
+		r.Get("/locations/{id}/subnet-credential-counts", s.locationSubnetCredentialCounts)
 		r.Get("/subnets", s.listAllSubnets)
 		r.Delete("/subnets/{id}", s.deleteSubnet)
+		r.Get("/subnets/{id}/credentials", s.getSubnetCredentials)
+		r.Put("/subnets/{id}/credentials", s.setSubnetCredentials)
 
 		// --- Operations: work orders + systems/licenses --------------
 		// --- Reports Pro (#21): server-side multi-format export -------

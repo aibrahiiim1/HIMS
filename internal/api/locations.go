@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
 )
 
@@ -149,6 +151,107 @@ func (s *Server) deleteSubnet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+type subnetCredentialDTO struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Kind string `json:"kind"`
+}
+
+// getSubnetCredentials — GET /subnets/{id}/credentials. Lists the credentials
+// assigned to a subnet (empty ⇒ the subnet falls back to global resolution).
+func (s *Server) getSubnetCredentials(w http.ResponseWriter, r *http.Request) {
+	ctx, id, ok := pathUUID(w, r, "id")
+	if !ok {
+		return
+	}
+	rows, err := s.queries.ListSubnetCredentials(ctx, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	out := make([]subnetCredentialDTO, 0, len(rows))
+	for _, x := range rows {
+		out = append(out, subnetCredentialDTO{ID: x.ID.String(), Name: x.Name, Kind: x.Kind})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+type setSubnetCredentialsReq struct {
+	CredentialIDs []string `json:"credential_ids"`
+}
+
+// setSubnetCredentials — PUT /subnets/{id}/credentials. Replaces the subnet's
+// assigned-credential set (clear + re-add). An empty/omitted list clears the
+// scoping so the subnet reverts to normal/default credential resolution. This is
+// the only write path for subnet scope — optional, multi-select, clearable.
+func (s *Server) setSubnetCredentials(w http.ResponseWriter, r *http.Request) {
+	ctx, id, ok := pathUUID(w, r, "id")
+	if !ok {
+		return
+	}
+	var req setSubnetCredentialsReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.queries.ClearSubnetCredentials(ctx, id); err != nil {
+		writeErr(w, err)
+		return
+	}
+	for _, cs := range req.CredentialIDs {
+		cid, perr := uuid.Parse(strings.TrimSpace(cs))
+		if perr != nil {
+			continue
+		}
+		if err := s.queries.AddSubnetCredential(ctx, db.AddSubnetCredentialParams{SubnetID: id, CredentialID: cid}); err != nil {
+			writeErr(w, err)
+			return
+		}
+	}
+	s.audit(r, "settings", "subnet.set_credentials", "subnet", id.String(),
+		"Set subnet-scoped credentials", map[string]any{"count": len(req.CredentialIDs)})
+	rows, err := s.queries.ListSubnetCredentials(ctx, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	out := make([]subnetCredentialDTO, 0, len(rows))
+	for _, x := range rows {
+		out = append(out, subnetCredentialDTO{ID: x.ID.String(), Name: x.Name, Kind: x.Kind})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+type subnetCredentialCountDTO struct {
+	SubnetID string   `json:"subnet_id"`
+	Count    int64    `json:"count"`
+	Kinds    []string `json:"kinds"`
+}
+
+// locationSubnetCredentialCounts — GET /locations/{id}/subnet-credential-counts.
+// Per-subnet assignment count + distinct credential kinds, so the Locations page
+// can badge each subnet row (and warn when none are assigned → fallback-to-global).
+func (s *Server) locationSubnetCredentialCounts(w http.ResponseWriter, r *http.Request) {
+	ctx, id, ok := pathUUID(w, r, "id")
+	if !ok {
+		return
+	}
+	rows, err := s.queries.SubnetCredentialCounts(ctx, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	out := make([]subnetCredentialCountDTO, 0, len(rows))
+	for _, x := range rows {
+		kinds := x.Kinds
+		if kinds == nil {
+			kinds = []string{}
+		}
+		out = append(out, subnetCredentialCountDTO{SubnetID: x.SubnetID.String(), Count: x.CredCount, Kinds: kinds})
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // deleteLocation removes a node and its whole subtree (FK ON DELETE CASCADE);
