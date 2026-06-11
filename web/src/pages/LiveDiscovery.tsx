@@ -400,7 +400,7 @@ function protoBadges(r?: DiscoveryResult) {
     out.push({ kind: a.kind || a.protocol, tone, title: a.success ? 'success' : a.category })
   }
   for (const op of p.opportunistic_protocols ?? []) out.push({ kind: op, tone: 'info', title: 'opportunistic' })
-  for (const sk of p.skipped_protocols ?? []) out.push({ kind: sk, tone: 'muted', title: 'skipped' })
+  for (const sk of p.skipped_protocols ?? []) out.push({ kind: sk, tone: 'muted', title: 'not applicable to this device type' })
   return out
 }
 
@@ -479,7 +479,7 @@ function DetailPanel({ n, locPath, events, onClose, onEdit, onRescan, onReclassi
         {row('Open ports', (p.open_ports ?? []).join(', ') || undefined)}
         {row('Expected', (p.expected_protocols ?? []).join(', ').toUpperCase() || undefined)}
         {row('Opportunistic', (p.opportunistic_protocols ?? []).join(', ').toUpperCase() || undefined)}
-        {row('Skipped', (p.skipped_protocols ?? []).join(', ') || undefined)}
+        {row('Not applicable', (p.skipped_protocols ?? []).join(', ') || undefined)}
         {row('Bound credential', p.bound_cred)}
         {row('Collected via', p.collected_via)}
         {n.r?.retry_count ? row('Retries', `${n.r.retry_count}×`) : null}
