@@ -412,7 +412,7 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 				continue
 			}
 			emit(string(cand.Kind)+"_attempt_started", string(cand.Kind), "started", "")
-			out := credtest.Test(ctx, string(cand.Kind), dec.Community, ip.String(), credtest.Options{})
+			out := credtest.Test(ctx, string(cand.Kind), dec.Community, ip.String(), credtest.Options{WebPorts: webPortsOf(r.OpenPorts)})
 			r.CredAttempts = append(r.CredAttempts, CredAttempt{
 				CredentialID: cand.ID, Kind: cand.Kind, Protocol: out.Protocol,
 				Success: out.OK(), Category: out.Category, Detail: out.Detail, Relevant: true,
@@ -743,6 +743,19 @@ func anyWebPort(ports []int) bool {
 		}
 	}
 	return false
+}
+
+// webPortsOf returns the open ports that are web/management surfaces, so the
+// http_basic credential test probes the device's actual web port (e.g. 8015 on a
+// Hikvision NVR) instead of only :80/:443.
+func webPortsOf(ports []int) []int {
+	var out []int
+	for _, p := range ports {
+		if isWebPort(p) {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // cctvWebPortPattern reports the Hikvision CCTV signature: every open port is in
