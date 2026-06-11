@@ -71,6 +71,13 @@ type Input struct {
 	// device (bind-on-success); tried first when still viable.
 	BoundCredentialID *uuid.UUID
 	Groups            []ScopedGroup
+	// Exclusive, when non-empty, is the subnet-scoped credential set: the IP's
+	// site subnet has assigned credentials, so ONLY these are tried — Groups
+	// (global/scope/operator tiers) are ignored entirely. This is the
+	// anti-spray / lockout-safety lever for CCTV and other tightly-scoped
+	// subnets. The bound credential + fingerprint filtering + ordering still
+	// apply within this set.
+	Exclusive []CredRef
 }
 
 // Resolve returns the ordered, de-duplicated candidate list to try.
@@ -85,8 +92,17 @@ func Resolve(in Input) []CredRef {
 		spec    int
 		isBound bool
 	}
+	// Subnet-scoped exclusivity: when the IP's site subnet has assigned
+	// credentials, they are the ONLY tier — all global/scope/operator groups
+	// are discarded. This is what stops a CCTV subnet from being sprayed with
+	// Windows/iDRAC/switch credentials. Bound-credential-first + fingerprint
+	// filtering + ordering still run over this set below.
+	groups := in.Groups
+	if len(in.Exclusive) > 0 {
+		groups = []ScopedGroup{{Specificity: SpecSubnet, Members: in.Exclusive}}
+	}
 	best := map[uuid.UUID]*cand{}
-	for _, g := range in.Groups {
+	for _, g := range groups {
 		for _, m := range g.Members {
 			if !in.Fingerprint.Allows(m.Kind) {
 				continue

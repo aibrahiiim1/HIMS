@@ -22,6 +22,7 @@ type Querier interface {
 	// A part not tracked in stock (free-text): just record it, no decrement.
 	AddFreeWorkOrderPart(ctx context.Context, arg AddFreeWorkOrderPartParams) (WorkOrderPart, error)
 	AddRolePermission(ctx context.Context, arg AddRolePermissionParams) error
+	AddSubnetCredential(ctx context.Context, arg AddSubnetCredentialParams) error
 	AddUserRole(ctx context.Context, arg AddUserRoleParams) error
 	AddWorkOrderEvent(ctx context.Context, arg AddWorkOrderEventParams) (WorkOrderEvent, error)
 	// Absolute set of on-hand quantity (a stock count / receiving correction).
@@ -44,6 +45,7 @@ type Querier interface {
 	// metadata, assignments and group memberships. Flag for re-entry.
 	ClearAllCredentialSecrets(ctx context.Context) error
 	ClearReentryFlag(ctx context.Context, id uuid.UUID) error
+	ClearSubnetCredentials(ctx context.Context, subnetID uuid.UUID) error
 	CompleteAgentJob(ctx context.Context, arg CompleteAgentJobParams) error
 	// ---- Work-order parts (stock consumption) ---------------------------------
 	// Atomic: decrement stock AND record the consumption in ONE statement. The
@@ -510,6 +512,8 @@ type Querier interface {
 	ListServerStorage(ctx context.Context, deviceID uuid.UUID) ([]ServerStorage, error)
 	ListSettings(ctx context.Context) ([]ListSettingsRow, error)
 	ListSpareParts(ctx context.Context) ([]SparePart, error)
+	// Credentials assigned to a subnet (for the editor + indicators).
+	ListSubnetCredentials(ctx context.Context, subnetID uuid.UUID) ([]ListSubnetCredentialsRow, error)
 	ListSubnets(ctx context.Context) ([]Subnet, error)
 	ListSubnetsByLocation(ctx context.Context, locationID uuid.UUID) ([]Subnet, error)
 	ListSystems(ctx context.Context) ([]System, error)
@@ -680,6 +684,12 @@ type Querier interface {
 	SetUserRolesClear(ctx context.Context, userID uuid.UUID) error
 	SetVendorProfileCollection(ctx context.Context, arg SetVendorProfileCollectionParams) error
 	SetVendorProfileTest(ctx context.Context, arg SetVendorProfileTestParams) error
+	// Per-subnet assignment count + distinct kinds for a location (UI row badges).
+	SubnetCredentialCounts(ctx context.Context, locationID uuid.UUID) ([]SubnetCredentialCountsRow, error)
+	// The EXCLUSIVE credential set for the most-specific site subnet that (a) contains
+	// the IP and (b) has assignments. Empty result ⇒ no subnet scoping ⇒ caller falls
+	// back to normal resolution. location_id is optional (NULL = match any location).
+	SubnetScopedCredentialsForIP(ctx context.Context, arg SubnetScopedCredentialsForIPParams) ([]SubnetScopedCredentialsForIPRow, error)
 	// Roll up aggregate rows of one kind over a recent window, highest bytes first.
 	TopFlowEntries(ctx context.Context, arg TopFlowEntriesParams) ([]TopFlowEntriesRow, error)
 	TotalExpenses(ctx context.Context) (float64, error)

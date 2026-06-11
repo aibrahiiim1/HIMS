@@ -997,6 +997,12 @@ type Subnet struct {
 	UpdatedAt  time.Time    `json:"updated_at"`
 }
 
+type SubnetCredential struct {
+	SubnetID     uuid.UUID `json:"subnet_id"`
+	CredentialID uuid.UUID `json:"credential_id"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
 type System struct {
 	ID            uuid.UUID  `json:"id"`
 	Name          string     `json:"name"`
