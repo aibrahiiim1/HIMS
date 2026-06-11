@@ -263,6 +263,9 @@ function NetworkScan({ locations, locPath, creds, onLaunch, setMsg }: { location
             ⚠ {webOverLimit.join(', ')} credentials selected — the scan tries each on every camera/NVR until one works, which can trip a Hikvision IP lockout on hosts where none match.
           </div>
         )}
+        <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+          🔒 Subnet-scoped credentials apply where configured: an IP inside a site subnet that has assigned credentials (Locations → subnet → set creds) is tried with ONLY those, ignoring the selection above. Subnets with none assigned use this default/global selection.
+        </div>
       </div>
 
       {preflight.data && <ScanPreflightPanel pf={preflight.data} siteSelected={!!location} />}

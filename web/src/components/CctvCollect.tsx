@@ -104,7 +104,7 @@ export function CctvCollect({ deviceId, boundCredId, generalCredId, compact, lab
         <button className={`btn btn-primary ${compact ? 'btn-sm' : ''}`} disabled={collect.isPending || selected.size === 0} onClick={run}>
           <RefreshCw size={14} className={collect.isPending ? 'spin' : ''} /> {collect.isPending ? 'Collecting…' : (label ?? 'Collect')}
         </button>
-        {selected.size > 0 && <span className="muted" style={{ fontSize: 12 }}>{selected.size} credential{selected.size > 1 ? 's' : ''} selected</span>}
+        {selected.size > 0 && <span className="muted" style={{ fontSize: 12 }}>🖐 {selected.size} manually-selected credential{selected.size > 1 ? 's' : ''} — this one-off collect overrides any subnet-scoped credentials</span>}
         {overLimit.length > 0 && <span style={{ fontSize: 12, color: 'var(--warn, #d97706)' }}><AlertTriangle size={12} /> {overLimit.map((o) => `${o.count} ${o.kind}`).join(', ')} — lockout risk</span>}
       </div>
 

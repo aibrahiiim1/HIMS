@@ -1771,6 +1771,21 @@ export interface Subnet {
   vlan_id?: number | null
 }
 
+// A credential assigned to a subnet (subnet-scoped credentials). When a subnet
+// has any, scans of IPs inside it try ONLY these — never the global set.
+export interface SubnetCredential {
+  id: string
+  name: string
+  kind: string
+}
+
+// Per-subnet credential-assignment summary for the Locations page row badges.
+export interface SubnetCredCount {
+  subnet_id: string
+  count: number
+  kinds: string[]
+}
+
 // Bulk OS collection (Data Quality action). Per-device, actionable on failure.
 export interface OSCollectResult {
   device_id: string; name: string; ip: string
