@@ -122,6 +122,23 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device, selectedCre
 		return res
 	}
 
+	// Hard overall ceiling when the caller set no deadline — the per-device Collect
+	// button passes the bare request context, so a slow or half-reachable device
+	// (e.g. a recorder accepting TCP but stalling every HTTP request) could otherwise
+	// run the ONVIF + ISAPI phases for many minutes. Scale with the number of creds
+	// tried (each gets ~one ISAPI budget) and cap firmly. Having a deadline also
+	// activates the ONVIF phase's budget-reservation check below. The scan/fleet
+	// paths already pass a bounded context, so this only guards the per-device call.
+	if _, has := ctx.Deadline(); !has {
+		budget := time.Duration(len(cands))*130*time.Second + 20*time.Second
+		if budget > 5*time.Minute {
+			budget = 5 * time.Minute
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, budget)
+		defer cancel()
+	}
+
 	doer := &http.Client{
 		Timeout:   15 * time.Second,
 		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS10}},
@@ -158,8 +175,13 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device, selectedCre
 	var attempts []discovery.CredAttempt
 	lastReason, lastDetail := "auth_failed", "ONVIF authentication rejected"
 	for _, cd := range cands {
-		if d.WebPrefProto == "isapi" {
-			break // operator forced ISAPI for this device — skip the ONVIF-first attempts
+		if d.WebPrefProto == "isapi" || d.Category == string(domain.CatNVR) || d.Category == string(domain.CatDVR) {
+			// Operator forced ISAPI, OR the device is an already-classified recorder:
+			// ISAPI is the correct and richer path for NVRs/DVRs (full channel/HDD/
+			// recording inventory), and ONVIF SOAP probing against a recorder's non-
+			// ONVIF web port is the main source of multi-minute collection hangs. Skip
+			// straight to ISAPI. (Unknown/camera devices still try ONVIF first.)
+			break
 		}
 		// Reserve budget for the ISAPI fallback: a long ONVIF phase (many creds ×
 		// bases) must not leave ISAPI a dead context. When the per-device deadline is

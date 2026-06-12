@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/coralsearesorts/hims/internal/domain"
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -137,6 +138,13 @@ func (s *Server) webCandidateBases(ctx context.Context, d db.Device) []string {
 	if strings.TrimSpace(d.WebLastOk) != "" {
 		out = append(out, d.WebLastOk)
 	}
+	// 1.5) Hikvision recorder web-port convention (8000 + host octet, e.g. .12 ->
+	//      8012). Seed it early so deviceInfo hits the real port immediately instead
+	//      of sweeping dead candidate ports (each a slow connect timeout) on these
+	//      recorders. Plain HTTP — these ports don't speak TLS.
+	if hp := hikvisionRecorderPort(ip, d.Category, d.Vendor); hp > 0 {
+		out = append(out, baseURL(ip, "http", hp))
+	}
 	// 2) per-device override — preferred port, then alternates. Unset scheme ⇒ try
 	//    both (we don't know which the device speaks).
 	ovScheme := d.WebSchemePref
@@ -173,6 +181,29 @@ func (s *Server) webCandidateBases(ctx context.Context, d db.Device) []string {
 		deduped = append(deduped, b)
 	}
 	return deduped
+}
+
+// hikvisionRecorderPort returns the conventional Hikvision recorder web/ISAPI
+// port (8000 + the host's last IPv4 octet, e.g. .12 -> 8012) for a device that
+// looks like a Hikvision NVR/DVR, or 0 otherwise. It's a fast-path hint for the
+// collector's prefer list, not a hard rule — the device's real port (last-OK or
+// discovered) is still tried, so a wrong guess just fails fast on connect.
+func hikvisionRecorderPort(ip, category string, vendor *string) int {
+	if category != string(domain.CatNVR) && category != string(domain.CatDVR) {
+		return 0
+	}
+	if vendor != nil && *vendor != "" && !strings.Contains(strings.ToLower(*vendor), "hik") {
+		return 0 // a known non-Hikvision recorder — don't assume the convention
+	}
+	parts := strings.Split(ip, ".")
+	if len(parts) != 4 {
+		return 0 // IPv6 / malformed — the convention is IPv4-only
+	}
+	oct, err := strconv.Atoi(parts[3])
+	if err != nil || oct <= 0 || oct > 254 {
+		return 0
+	}
+	return 8000 + oct
 }
 
 // webBasesForPorts turns a set of just-discovered open ports into ordered web
