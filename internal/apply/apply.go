@@ -681,6 +681,12 @@ func identity(res discovery.HostResult) (name string, hostname, vendor, model, s
 	if res.Model != "" {
 		model = strptr(res.Model)
 	}
+	// Canonicalize vendor casing/legal-name forms so the same manufacturer from
+	// different discovery sources doesn't split into duplicate inventory entries.
+	if vendor != nil {
+		v := domain.CanonicalVendor(*vendor)
+		vendor = &v
+	}
 	return
 }
 

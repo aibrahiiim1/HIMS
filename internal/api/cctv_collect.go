@@ -202,9 +202,9 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device, selectedCre
 			})
 		}
 		_ = s.queries.UpdateDeviceHardwareInfo(ctx, db.UpdateDeviceHardwareInfoParams{
-			ID: d.ID, Vendor: info.Manufacturer, Model: info.Model, Serial: info.Serial,
+			ID: d.ID, Vendor: domain.CanonicalVendor(info.Manufacturer), Model: info.Model, Serial: info.Serial,
 		})
-		mfr, model, resolution := info.Manufacturer, info.Model, info.Resolution()
+		mfr, model, resolution := domain.CanonicalVendor(info.Manufacturer), info.Model, info.Resolution()
 		onvifURL := okBase + "/onvif/device_service"
 		_, _ = s.queries.UpsertCameraInfo(ctx, db.UpsertCameraInfoParams{
 			DeviceID: d.ID, Manufacturer: strPtrOrNil(mfr), Model: strPtrOrNil(model),
@@ -262,7 +262,7 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device, selectedCre
 				DeviceClass: &dc, ConfidenceScore: &conf, ClassificationEvidence: blob,
 			})
 		}
-		vendor := info.Manufacturer
+		vendor := domain.CanonicalVendor(info.Manufacturer)
 		if vendor == "" {
 			vendor = "Hikvision"
 		}
@@ -355,7 +355,7 @@ func (s *Server) collectCCTVProfile(ctx context.Context, p db.VendorConnectionPr
 				DeviceClass: &dc, ConfidenceScore: &conf, ClassificationEvidence: blob,
 			})
 		}
-		vendor := info2.Manufacturer
+		vendor := domain.CanonicalVendor(info2.Manufacturer)
 		if vendor == "" {
 			vendor = "Hikvision"
 		}
