@@ -147,6 +147,17 @@ export function Dashboard() {
   const devs = devices.data ?? []
   const total = devs.length
 
+  // ---- Manageability: can HIMS actually collect from each device? ----
+  // `management` is set on every device that has a management dimension; "managed"
+  // = a credential that actually works. Devices with no management state (n/a) are
+  // excluded from the ratio so it reflects the manageable fleet, not phones/VMs.
+  const managed = devs.filter((d) => d.management === 'managed').length
+  const manageable = devs.filter((d) => !!d.management).length
+  const unmanagedCount = manageable - managed
+  const naCount = total - manageable
+  const mgmtPct = manageable > 0 ? Math.round((managed / manageable) * 100) : (total > 0 ? 100 : 0)
+  const mgmtTone: 'ok' | 'warn' | 'crit' = unmanagedCount === 0 ? 'ok' : (mgmtPct >= 80 ? 'warn' : 'crit')
+
   const monMap = new Map((mon.data ?? []).map((r) => [r.status, r.count]))
   const up = monMap.get('up') ?? 0, warning = monMap.get('warning') ?? 0, down = monMap.get('down') ?? 0, unknown = monMap.get('unknown') ?? 0
   const monitored = up + warning + down
@@ -254,12 +265,33 @@ export function Dashboard() {
               </>
             ) : <EmptyState icon={HeartPulse} title="No availability history" message="Seed monitoring checks and run a sweep to build SLA history." action={<Link className="btn btn-primary btn-sm" to="/monitoring">Go to Monitoring</Link>} />}
           </Panel>
+          <Panel
+            title="Manageability" icon={KeyRound}
+            actions={<span className={`badge ${mgmtTone === 'ok' ? 'badge-up' : mgmtTone === 'warn' ? 'badge-warning' : 'badge-down'}`}>{mgmtPct}% managed</span>}
+          >
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+              <div style={{ fontSize: 40, fontWeight: 800, color: 'var(--ok)' }}>{managed.toLocaleString()}</div>
+              <div className="muted" style={{ fontSize: 12 }}>of {total.toLocaleString()} devices managed<br />{manageable.toLocaleString()} manageable · {mgmtPct}% covered</div>
+            </div>
+            <div style={{ marginTop: 10, height: 8, borderRadius: 4, background: 'var(--border)', overflow: 'hidden' }}>
+              <div style={{ width: `${manageable > 0 ? (managed / manageable) * 100 : 0}%`, height: '100%', background: 'var(--ok)' }} />
+            </div>
+            <div className="stat-strip" style={{ marginTop: 12 }}>
+              <div className="s-item"><b style={{ color: 'var(--ok)' }}>{managed.toLocaleString()}</b><small>managed</small></div>
+              <div className="s-item" style={{ cursor: unmanagedCount > 0 ? 'pointer' : undefined }} onClick={unmanagedCount > 0 ? () => navigate('/inventory/unmanaged') : undefined}>
+                <b style={{ color: unmanagedCount > 0 ? 'var(--warn)' : undefined }}>{unmanagedCount.toLocaleString()}{unmanagedCount > 0 ? ' ›' : ''}</b><small>unmanaged</small>
+              </div>
+              <div className="s-item"><b>{naCount.toLocaleString()}</b><small>n/a</small></div>
+            </div>
+          </Panel>
         </div>
       </div>
 
       {/* KPI row */}
       <div className="kpi-grid kpi-6">
-        <Kpi label="Total Devices" value={total} icon={Boxes} tone="info" sub={h.virtual_devices ? `${h.discovered_devices ?? (total - h.virtual_devices)} discovered · ${h.virtual_devices} virtual` : `${byType.length} categories`} />
+        <Kpi label="Total Devices" value={total} icon={Boxes} tone="info"
+          sub={h.virtual_devices ? `${h.discovered_devices ?? (total - h.virtual_devices)} discovered · ${h.virtual_devices} virtual` : `${byType.length} categories`}
+          footerRight={manageable > 0 ? <span style={{ color: 'var(--ok)' }}>{managed.toLocaleString()} managed</span> : undefined} />
         <Kpi
           label="Online"
           value={up}
