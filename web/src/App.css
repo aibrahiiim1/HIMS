@@ -649,6 +649,9 @@ select.field { cursor: pointer; }
 .kpi-grid.kpi-6 { grid-template-columns: repeat(6, 1fr); }
 @media (max-width: 1280px) { .kpi-grid.kpi-6 { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 680px) { .kpi-grid.kpi-6 { grid-template-columns: repeat(2, 1fr); } }
+.kpi-grid.kpi-5 { grid-template-columns: repeat(5, 1fr); }
+@media (max-width: 1180px) { .kpi-grid.kpi-5 { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 680px) { .kpi-grid.kpi-5 { grid-template-columns: repeat(2, 1fr); } }
 
 /* ---- Segmented filter chips ----------------------------------------------- */
 .seg { display: inline-flex; flex-wrap: wrap; gap: 6px; }

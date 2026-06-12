@@ -14,6 +14,7 @@ import { EndpointDetail } from './pages/EndpointDetail'
 import { FirewallDetail } from './pages/FirewallDetail'
 import { VirtualHostDetail } from './pages/VirtualHostDetail'
 import { CctvDetail } from './pages/CctvDetail'
+import { Cameras } from './pages/Cameras'
 import { PrinterDetail } from './pages/PrinterDetail'
 import { UPSDetail } from './pages/UPSDetail'
 import { PbxDetail } from './pages/PbxDetail'
@@ -126,7 +127,7 @@ function Shell({ me, onLogout }: { me?: AuthMe; onLogout: () => void }) {
             <Route path="/virtual-hosts" element={<DeviceList category="virtual_host" title="Virtual Hosts" detailBase="/virtual-hosts" />} />
             <Route path="/virtual-hosts/:id" element={<VirtualHostDetail />} />
             <Route path="/firewalls/:id" element={<FirewallDetail />} />
-            <Route path="/cameras" element={<DeviceList category="camera" title="Cameras" detailBase="/cctv" headerExtra={<AddVirtualButton type="camera" label="Camera" />} />} />
+            <Route path="/cameras" element={<Cameras />} />
             <Route path="/nvrs" element={<DeviceList category="nvr,dvr" title="NVR / DVR" detailBase="/cctv" headerExtra={<AddVirtualButton type="nvr" label="NVR" />} preContent={<CctvOps />} />} />
             <Route path="/cctv/:id" element={<CctvDetail />} />
             <Route path="/wlan" element={<WirelessControllers />} />
