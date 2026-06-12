@@ -242,10 +242,9 @@ export function Dashboard() {
         }
       />
 
-      {/* ===== Posture: infra health + availability SLA hero ===== */}
-      <div className="grid-side">
-        <div className="stack"><InfraHealthCard data={infra.data} /></div>
-        <div className="stack">
+      {/* ===== Posture hero: infra health · availability · manageability ===== */}
+      <div className="grid-hero">
+        <InfraHealthCard data={infra.data} />
           <Panel
             title={`Availability · ${win}`} icon={ShieldCheck}
             actions={<span className={`badge ${availTone === 'ok' ? 'badge-up' : availTone === 'warn' ? 'badge-warning' : availTone === 'crit' ? 'badge-down' : 'badge-unknown'}`}>SLA {SLA_TARGET}%</span>}
@@ -284,7 +283,6 @@ export function Dashboard() {
               <div className="s-item"><b>{naCount.toLocaleString()}</b><small>n/a</small></div>
             </div>
           </Panel>
-        </div>
       </div>
 
       {/* KPI row */}

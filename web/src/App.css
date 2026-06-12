@@ -628,11 +628,16 @@ select.field { cursor: pointer; }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); }
 .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-4); }
 .grid-side { display: grid; grid-template-columns: 2fr 1fr; gap: var(--space-4); align-items: start; }
+/* Hero row: 3 equal-height posture cards (health a touch wider). Cards stretch to
+   the tallest so the row lines up — no orphan gap when one card has more content. */
+.grid-hero { display: grid; grid-template-columns: 1.3fr 1fr 1fr; gap: var(--space-4); align-items: stretch; margin-bottom: var(--space-4); }
+.grid-hero > .panel { height: 100%; margin-bottom: 0; }
 .row { display: flex; gap: var(--space-3); align-items: center; flex-wrap: wrap; }
 .row-between { display: flex; gap: var(--space-3); align-items: center; justify-content: space-between; flex-wrap: wrap; }
 .stack { display: flex; flex-direction: column; gap: var(--space-4); }
+@media (max-width: 1180px) { .grid-hero { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 980px) {
-  .grid-2, .grid-3, .grid-side { grid-template-columns: 1fr; }
+  .grid-2, .grid-3, .grid-side, .grid-hero { grid-template-columns: 1fr; }
 }
 /* Cards that sit side-by-side in a row-grid stretch to equal height so the row
    lines up cleanly; `.panel`'s own margin-bottom is dropped inside flex/grid
