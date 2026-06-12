@@ -529,7 +529,12 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 
 	res := scan.Scope(ctx, hosts, concurrency, func(ctx context.Context, ip netip.Addr) (uuid.UUID, error) {
 		defer s.bumpScanned(jobID) // advance the 0→100% progress counter (once per host)
-		hctx, hcancel := context.WithTimeout(ctx, 45*time.Second)
+		// Per-host budget: the whole pipeline (TCP port scan → credential resolution
+		// → SNMP classify → deep collect) must finish within this, else the host is
+		// recorded "context deadline exceeded" and left in discovery (not enrolled).
+		// 60s (raised from 45s) gives slow/large SNMP walks and multi-credential
+		// hosts room to enroll; the outer job budget still caps the whole run.
+		hctx, hcancel := context.WithTimeout(ctx, 60*time.Second)
 		defer hcancel()
 		hcfg := cfg
 		hcfg.OnEvent = s.pipelineEventEmitter(jobID, ip) // live per-stage events for this host
