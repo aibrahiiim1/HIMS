@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams, Link } from 'react-router-dom'
-import { Camera, Video, Film, HardDrive, Disc, Network, Activity, Wrench, Cpu, Globe } from 'lucide-react'
+import { Camera, Video, Film, HardDrive, Disc, Network, Activity, Wrench, Cpu, Globe, ShieldCheck, RefreshCw } from 'lucide-react'
 import { api, type CameraInfo, type NVRChannel, type NVRDetail, type Device, type DeviceWebAccess, type CredTestResult } from '../api'
 import { DeviceHeader } from '../components/DeviceHeader'
 import { CctvCollect } from '../components/CctvCollect'
@@ -42,45 +42,57 @@ export function CctvDetail() {
   const chOnline = channels.filter((x) => x.status === 'online').length
   const ip = dev?.primary_ip || ''
 
-  // ---- camera (non-recorder): compact layout --------------------------------
+  // ---- camera (non-recorder): organized identity + network layout -----------
   if (!isNVR) {
-    const ch = channels
+    const mgmt = dev?.management
+    const mgmtLabel = mgmt === 'managed' ? 'Managed' : mgmt ? mgmt.replace(/_/g, ' ') : '—'
+    const collected = !!(c && c.device_id)
     return (
       <div>
         <DeviceHeader deviceId={id!} icon={Camera} />
-        <Panel>
-          <CctvCollect deviceId={id!} boundCredId={dev?.cctv_credential_id ?? dev?.credential_id} generalCredId={dev?.credential_id} compact label="Collect" />
-        </Panel>
-        <div className="kpi-grid">
-          <Kpi label="Manufacturer" value={c?.manufacturer || '—'} icon={Camera} tone="info" />
-          <Kpi label="Model" value={c?.model || '—'} icon={Video} />
-          <Kpi label="Resolution" value={c?.resolution || '—'} icon={Film} />
-          <Kpi label="Channels" value={ch.length || '—'} icon={Video} sub={ch.length ? `${chOnline} online` : undefined} />
+        <div className="row-between" style={{ margin: '0 0 12px' }}>
+          <span className="muted" style={{ fontSize: 13 }}>Identity &amp; network collected read-only via ONVIF / ISAPI. Reachability is monitored separately.</span>
+          <ReCollect deviceId={id!} />
         </div>
-        <Panel title="Device Information" icon={Camera}>
-          {c && c.device_id ? (
-            <DefList items={[
-              { label: 'Device name', value: c?.device_name || '—' },
-              { label: 'Manufacturer', value: c?.manufacturer || '—' },
-              { label: 'Model', value: c?.model || '—' },
-              { label: 'Firmware', value: c?.firmware || '—' },
-              { label: 'Serial', value: c?.serial ? <span className="mono">{c.serial}</span> : '—' },
-              { label: 'MAC address', value: c?.mac_address ? <span className="mono">{c.mac_address}</span> : '—' },
-              { label: 'IP address', value: c?.ip_address ? <span className="mono">{c.ip_address}</span> : '—' },
-              { label: 'Subnet mask', value: c?.subnet_mask ? <span className="mono">{c.subnet_mask}</span> : '—' },
-              { label: 'Gateway', value: c?.gateway ? <span className="mono">{c.gateway}</span> : '—' },
-              { label: 'DNS', value: c?.dns_server ? <span className="mono">{c.dns_server}</span> : '—' },
-              { label: 'NTP server', value: c?.ntp_server ? <span className="mono">{c.ntp_server}</span> : '—' },
-              { label: 'Time zone', value: c?.time_zone || '—' },
-              { label: 'Resolution', value: c?.resolution || '—' },
-              { label: 'RTSP stream', value: c?.rtsp_url ? <span className="mono">{c.rtsp_url}</span> : '—' },
-              { label: 'ONVIF endpoint', value: c?.onvif_url ? <span className="mono">{c.onvif_url}</span> : '—' },
-            ]} />
-          ) : (
+        <div className="kpi-grid kpi-5">
+          <Kpi label="Vendor" value={c?.manufacturer || dev?.vendor || '—'} icon={Camera} tone="info" />
+          <Kpi label="Model" value={c?.model || dev?.model || '—'} icon={Video} />
+          <Kpi label="Resolution" value={c?.resolution || '—'} icon={Film} />
+          <Kpi label="Firmware" value={c?.firmware || '—'} icon={Cpu} />
+          <Kpi label="Management" value={mgmtLabel} icon={ShieldCheck} tone={mgmt === 'managed' ? 'ok' : mgmt ? 'warn' : 'default'} />
+        </div>
+        {collected ? (
+          <div className="grid-2">
+            <Panel title="Identity" icon={Camera}>
+              <DefList items={[
+                { label: 'Device name', value: c?.device_name || '—' },
+                { label: 'Vendor', value: c?.manufacturer || dev?.vendor || '—' },
+                { label: 'Model', value: c?.model || dev?.model || '—' },
+                { label: 'Firmware', value: c?.firmware || '—' },
+                { label: 'Serial', value: c?.serial ? <span className="mono">{c.serial}</span> : '—' },
+                { label: 'MAC address', value: c?.mac_address ? <span className="mono">{c.mac_address}</span> : '—' },
+                { label: 'Resolution', value: c?.resolution || '—' },
+              ]} />
+            </Panel>
+            <Panel title="Network & Streams" icon={Network}>
+              <DefList items={[
+                { label: 'IP address', value: (c?.ip_address || ip) ? <span className="mono">{c?.ip_address || ip}</span> : '—' },
+                { label: 'Subnet mask', value: c?.subnet_mask ? <span className="mono">{c.subnet_mask}</span> : '—' },
+                { label: 'Gateway', value: c?.gateway ? <span className="mono">{c.gateway}</span> : '—' },
+                { label: 'DNS', value: c?.dns_server ? <span className="mono">{c.dns_server}</span> : '—' },
+                { label: 'NTP server', value: c?.ntp_server ? <span className="mono">{c.ntp_server}</span> : '—' },
+                { label: 'Time zone', value: c?.time_zone || '—' },
+                { label: 'RTSP stream', value: c?.rtsp_url ? <span className="mono">{c.rtsp_url}</span> : '—' },
+                { label: 'ONVIF endpoint', value: c?.onvif_url ? <span className="mono">{c.onvif_url}</span> : '—' },
+              ]} />
+            </Panel>
+          </div>
+        ) : (
+          <Panel title="Device Information" icon={Camera}>
             <EmptyState icon={Camera} title="No detail collected yet"
-              message="Bind the device's web (ONVIF/http_basic) credential and click Collect — identity populates from ONVIF/ISAPI. Reachability is already monitored." />
-          )}
-        </Panel>
+              message="This camera's web credential isn't bound yet. Assign its ONVIF/HTTP credential to the site subnet (Locations) and re-scan, or use Re-collect above once a credential is bound — identity then populates from ONVIF/ISAPI." />
+          </Panel>
+        )}
         <WebAccessPanel deviceId={id!} />
       </div>
     )
@@ -227,6 +239,34 @@ export function CctvDetail() {
 
       {tab === 'ops' && <WebAccessPanel deviceId={id!} />}
     </div>
+  )
+}
+
+// ReCollect is a single-click re-collection using the device's already-bound web
+// credential — no credential picker (the bound credential, set by scan/onboarding,
+// is reused). For first-time onboarding of an unbound device, assign the credential
+// to the site subnet and re-scan instead.
+function ReCollect({ deviceId }: { deviceId: string }) {
+  const qc = useQueryClient()
+  const [msg, setMsg] = useState('')
+  const m = useMutation({
+    mutationFn: () => api.post<{ collected?: boolean; category?: string; reason?: string }>(`/devices/${deviceId}/collect-cctv`, { credential_ids: [] }),
+    onSuccess: (r) => {
+      setMsg(r?.collected ? `Collected (${r.category || 'cctv'})` : r?.reason === 'no_credential' ? 'No credential bound — assign one via the subnet + re-scan' : `No new data${r?.reason ? ': ' + r.reason : ''}`)
+      qc.invalidateQueries({ queryKey: ['camera', deviceId] })
+      qc.invalidateQueries({ queryKey: ['nvr', deviceId] })
+      qc.invalidateQueries({ queryKey: ['web-access', deviceId] })
+      qc.invalidateQueries({ queryKey: ['devices'] })
+    },
+    onError: (e) => setMsg((e as Error).message),
+  })
+  return (
+    <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
+      {msg && <span className="muted" style={{ fontSize: 12 }}>{msg}</span>}
+      <button className="btn btn-ghost btn-sm" disabled={m.isPending} onClick={() => m.mutate()} title="Re-collect using the bound credential">
+        <RefreshCw size={13} /> {m.isPending ? 'Collecting…' : 'Re-collect'}
+      </button>
+    </span>
   )
 }
 
