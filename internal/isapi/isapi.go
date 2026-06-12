@@ -21,6 +21,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -290,27 +291,41 @@ func PermissiveClient(timeout time.Duration) *http.Client {
 // HTTPS rungs negotiate with the device's legacy TLS. Each attempt is bounded so a
 // closed/hung port doesn't stall the ladder; an authentication rejection short-
 // circuits (we found ISAPI — another port won't fix a wrong password).
+// hikPortFromIP returns the Hikvision "8000 + last IPv4 octet" web-port convention
+// (e.g. 172.21.210.12 → 8012), or 0 for IPv6 / out-of-range. A cheap front-of-ladder
+// hint so deviceInfo hits these recorders' real port immediately instead of sweeping.
+func hikPortFromIP(ip string) int {
+	parts := strings.Split(ip, ".")
+	if len(parts) != 4 {
+		return 0
+	}
+	oct, err := strconv.Atoi(parts[3])
+	if err != nil || oct <= 0 || oct > 254 {
+		return 0
+	}
+	return 8000 + oct
+}
+
 func CollectDeviceInfo(ctx context.Context, ip, user, pass string, doer Doer, prefer []string) (DeviceInfo, error) {
 	if doer == nil {
 		doer = PermissiveClient(15 * time.Second)
 	}
 	// Try the common Hikvision/OEM web-service ports. Operators frequently move the
 	// device web port off 80/443 — often into the 8000–8020 band, and commonly
-	// "8000 + host octet" (e.g. .12 → 8012, .14 → 8014). A CCTV device whose only
-	// management surface is on such a port is otherwise uncollectable, so the ladder
-	// sweeps the whole band over HTTP plus the standard schemes. First port that
-	// answers wins; closed ports RST instantly so the extra entries cost little on a
-	// reachable device.
-	def := []string{
-		"https://" + ip,
-		"https://" + ip + ":8443",
-		"http://" + ip,
-		"http://" + ip + ":8080",
+	// "8000 + host octet" (e.g. .12 → 8012, .14 → 8014). Ordering matters: a filtered
+	// (silently dropped) port costs the full per-attempt timeout, and TLS handshakes
+	// to a filtered port are the slowest of all — so try the recorder convention and
+	// the plain-HTTP band FIRST and leave the HTTPS guesses for last. First port that
+	// answers wins; closed ports RST instantly.
+	var def []string
+	if hp := hikPortFromIP(ip); hp > 0 { // 8000 + host octet — the recorder convention, tried first
+		def = append(def, fmt.Sprintf("http://%s:%d", ip, hp))
 	}
+	def = append(def, "http://"+ip, "http://"+ip+":8080")
 	for p := 8000; p <= 8020; p++ {
 		def = append(def, fmt.Sprintf("http://%s:%d", ip, p))
 	}
-	def = append(def, "https://"+ip+":8008")
+	def = append(def, "https://"+ip, "https://"+ip+":8443", "https://"+ip+":8008") // TLS last (slowest on filtered ports)
 	// "Use discovered ports before guessing": the caller's prefer list (the device's
 	// last-OK endpoint, its operator override, its scanned-open web ports, then the
 	// configured candidate ports) is tried FIRST, in order; the default ladder is the
@@ -319,10 +334,13 @@ func CollectDeviceInfo(ctx context.Context, ip, user, pass string, doer Doer, pr
 	ladder := dedupBases(append(append([]string{}, prefer...), def...))
 	var lastErr error
 	for _, base := range ladder {
+		if ctx.Err() != nil { // budget exhausted — stop sweeping instead of firing already-dead attempts
+			return DeviceInfo{}, ctx.Err()
+		}
 		// Short per-attempt timeout: the ladder sweeps ~25 endpoints, so a filtered
-		// (silently dropped) port must not cost 8s each. A closed port RSTs instantly
-		// and a real web port answers well under 4s.
-		actx, cancel := context.WithTimeout(ctx, 4*time.Second)
+		// (silently dropped) port must not cost seconds each. A closed port RSTs
+		// instantly and a real web port answers well under 2s.
+		actx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		info, err := NewClient(base, user, pass, doer).DeviceInfo(actx)
 		cancel()
 		if err == nil {

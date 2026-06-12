@@ -59,11 +59,12 @@ type HDD struct {
 
 // Probe records the outcome of one ISAPI endpoint (for the Collection-health view).
 type Probe struct {
-	Path   string `json:"path"`
-	Status int    `json:"status"` // HTTP status (0 = transport error)
-	OK     bool   `json:"ok"`
-	Note   string `json:"note"`
-	Sample string `json:"sample,omitempty"` // truncated response body (OK probes) — diagnostics + schema discovery
+	Path       string `json:"path"`
+	Status     int    `json:"status"` // HTTP status (0 = transport error)
+	OK         bool   `json:"ok"`
+	Note       string `json:"note"`
+	Sample     string `json:"sample,omitempty"`      // truncated response body (OK probes) — diagnostics + schema discovery
+	DurationMs int64  `json:"duration_ms,omitempty"` // wall-clock of this probe — latency diagnostics
 }
 
 // IsRecorder reports whether the device is an NVR/DVR (so channel/HDD/recording
@@ -110,9 +111,11 @@ func Collect(ctx context.Context, ip, user, pass string, doer Doer, prefer []str
 	cl := NewClient(info.Endpoint, user, pass, doer)
 	probe := func(path string) ([]byte, bool) {
 		pctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		t0 := time.Now()
 		body, status, err := cl.GetStatus(pctx, path)
 		cancel()
 		p, ok := makeProbe(path, body, status, err)
+		p.DurationMs = time.Since(t0).Milliseconds()
 		out.Probes = append(out.Probes, p)
 		if !ok {
 			return nil, false
