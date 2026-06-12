@@ -592,7 +592,7 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 				specialized := func(cat string) bool {
 					switch domain.DeviceCategory(cat) {
 					case domain.CatVirtualHost, domain.CatWirelessController, domain.CatAccessPoint,
-						domain.CatPBX, domain.CatVoiceGateway, domain.CatCamera, domain.CatNVR:
+						domain.CatPBX, domain.CatVoiceGateway, domain.CatCamera, domain.CatNVR, domain.CatDVR:
 						return true
 					}
 					return false
@@ -743,7 +743,7 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 						profRes = &scanProfileResult{Resolved: false}
 						enrichment = "Voice/PBX — add a Vendor Connection Profile (Discovery → Vendor Profiles) to onboard"
 					}
-				} else if cat := dev.Category; (cat == string(domain.CatCamera) || cat == string(domain.CatNVR)) && s.cipher() != nil {
+				} else if cat := dev.Category; (cat == string(domain.CatCamera) || cat == string(domain.CatNVR) || cat == string(domain.CatDVR)) && s.cipher() != nil {
 					// Camera/NVR/DVR candidate. PREFER a matching CCTV Vendor Connection
 					// Profile (device > site > global) so we authenticate to the
 					// configured target with the linked ONVIF/HTTP credential; fall back
@@ -773,6 +773,16 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 						if scopedLabel != "" {
 							scopeNote = " [subnet-scoped: " + scopedLabel + "]"
 							cctvSource = "subnet"
+						}
+						// Already-onboarded CCTV device: it has a durable bound web credential
+						// that works. Re-use ONLY that (bound-credential-only — pass no
+						// selection) instead of re-spraying the subnet's full web-credential set
+						// at it every scan; each wrong digest on a Hikvision recorder costs a
+						// ~15s throttle and risks an IP lockout. New/unbound devices still try
+						// the subnet set for first-time onboarding.
+						if dev.CctvCredentialID != nil {
+							webCreds = nil
+							scopeNote, cctvSource = " [bound credential]", "bound"
 						}
 						// Try each selected web credential (first success binds). Pass the
 						// LIVE discovered open ports so the device's actual web port is tried
