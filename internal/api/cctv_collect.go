@@ -35,7 +35,8 @@ type cctvResult struct {
 	Reason         string
 	Detail         string
 	CredentialUsed string
-	Category       string // camera | nvr
+	Category       string        // camera | nvr
+	Probes         []isapi.Probe // per-endpoint ISAPI outcomes (recorders) — Collection-health diagnostics
 }
 
 func (r cctvResult) ok() bool { return r.Status == "collected" }
@@ -287,7 +288,7 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device, selectedCre
 		_ = s.queries.UpdateDeviceMonitoringStatus(ctx, db.UpdateDeviceMonitoringStatusParams{ID: d.ID, Status: "up"})
 
 		res = cctvResult{Status: "collected", CredentialUsed: cd.name, Category: string(cat),
-			Detail: nvrDetail(cat, vendor, info, nvr)}
+			Detail: nvrDetail(cat, vendor, info, nvr), Probes: nvr.Probes}
 		s.persistScanCredAttempts(ctx, d, attempts, source)
 		return res
 	}
@@ -575,5 +576,6 @@ func (s *Server) collectCCTV(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"collected": res.ok(), "reason": res.Reason, "detail": res.Detail,
 		"credential_used": res.CredentialUsed, "category": res.Category,
+		"probes": res.Probes, // per-endpoint ISAPI outcomes + body samples (recorders)
 	})
 }

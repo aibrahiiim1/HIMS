@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -60,6 +61,7 @@ type Probe struct {
 	Status int    `json:"status"` // HTTP status (0 = transport error)
 	OK     bool   `json:"ok"`
 	Note   string `json:"note"`
+	Sample string `json:"sample,omitempty"` // truncated response body (OK probes) — diagnostics + schema discovery
 }
 
 // IsRecorder reports whether the device is an NVR/DVR (so channel/HDD/recording
@@ -108,23 +110,8 @@ func Collect(ctx context.Context, ip, user, pass string, doer Doer, prefer []str
 		pctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		body, status, err := cl.GetStatus(pctx, path)
 		cancel()
-		if err != nil {
-			out.Probes = append(out.Probes, Probe{Path: path, Status: 0, OK: false, Note: err.Error()})
-			return nil, false
-		}
-		ok := status >= 200 && status < 300
-		note := ""
-		if !ok {
-			switch {
-			case status == 401:
-				note = "authentication rejected"
-			case status == 400 || status == 403 || status == 404 || status == 501:
-				note = "not exposed by device"
-			default:
-				note = fmt.Sprintf("HTTP %d", status)
-			}
-		}
-		out.Probes = append(out.Probes, Probe{Path: path, Status: status, OK: ok, Note: note})
+		p, ok := makeProbe(path, body, status, err)
+		out.Probes = append(out.Probes, p)
 		if !ok {
 			return nil, false
 		}
@@ -151,6 +138,7 @@ func Collect(ctx context.Context, ip, user, pass string, doer Doer, prefer []str
 	// Camera channels: NVRs proxy IP cameras (InputProxy); DVRs/encoders expose
 	// local video inputs. Try both; merge names from streaming channels.
 	chByNo := map[int]*Channel{}
+	videoInputNos := []int{} // local analog inputs (DVRs/encoders) — status fetched separately from IP-camera proxy
 	if b, ok := probe("/ISAPI/ContentMgmt/InputProxy/channels"); ok {
 		for _, c := range parseInputProxyChannels(b) {
 			cc := c
@@ -159,12 +147,14 @@ func Collect(ctx context.Context, ip, user, pass string, doer Doer, prefer []str
 	}
 	if b, ok := probe("/ISAPI/System/Video/inputs/channels"); ok {
 		for _, c := range parseVideoInputChannels(b) {
+			videoInputNos = append(videoInputNos, c.No)
 			if _, seen := chByNo[c.No]; !seen {
 				cc := c
 				chByNo[c.No] = &cc
 			}
 		}
 	}
+	// IP-camera channel online status (NVRs): the camera-behind-the-channel link state.
 	if b, ok := probe("/ISAPI/ContentMgmt/InputProxy/channels/status"); ok {
 		for no, online := range parseInputProxyStatus(b) {
 			if ch := chByNo[no]; ch != nil {
@@ -173,6 +163,11 @@ func Collect(ctx context.Context, ip, user, pass string, doer Doer, prefer []str
 			}
 		}
 	}
+	// Analog-input signal status (DVRs/Turbo-HD/encoders): whether a camera is wired
+	// to each local BNC input. The IP-camera proxy status above never covers these,
+	// so without this every analog channel shows "unknown". Try the aggregate list
+	// first; per-channel fills any input the aggregate didn't (firmware schemas vary).
+	out.Probes = append(out.Probes, collectVideoInputStatus(ctx, cl, chByNo, videoInputNos)...)
 	if b, ok := probe("/ISAPI/Streaming/channels"); ok {
 		for no, name := range parseStreamingChannelNames(b) {
 			if ch := chByNo[no]; ch != nil && ch.Name == "" {
@@ -265,6 +260,197 @@ func parseInputProxyStatus(b []byte) map[int]bool {
 		out[atoi(s.ID)] = strings.EqualFold(strings.TrimSpace(s.Online), "true")
 	}
 	return out
+}
+
+// makeProbe builds a Probe record from a single GET outcome, capturing a short
+// body sample for 2xx responses (diagnostics + analog-DVR schema discovery).
+func makeProbe(path string, body []byte, status int, err error) (Probe, bool) {
+	if err != nil {
+		return Probe{Path: path, Status: 0, OK: false, Note: err.Error()}, false
+	}
+	ok := status >= 200 && status < 300
+	p := Probe{Path: path, Status: status, OK: ok}
+	if ok {
+		p.Sample = bodySample(body)
+	} else {
+		switch {
+		case status == 401:
+			p.Note = "authentication rejected"
+		case status == 400 || status == 403 || status == 404 || status == 501:
+			p.Note = "not exposed by device"
+		default:
+			p.Note = fmt.Sprintf("HTTP %d", status)
+		}
+	}
+	return p, ok
+}
+
+// videoStatusTimeout bounds each analog-input status probe. It's short because
+// these are best-effort enrichment, and on firmwares that don't expose the
+// endpoint the request often hangs until timeout rather than returning a clean
+// 404 — a long timeout there would stall the whole collection.
+const videoStatusTimeout = 5 * time.Second
+
+// videoStatusConcurrency caps simultaneous per-channel status probes. DVRs answer
+// each request slowly, so a sequential walk of 16–32 inputs would dominate the
+// collection's wall-clock; bounded concurrency keeps it to a couple of round-trips.
+const videoStatusConcurrency = 8
+
+// collectVideoInputStatus fills Channel.Online for local analog video inputs
+// (DVRs/Turbo-HD/encoders) — whether a camera is actually wired to each BNC input.
+// The IP-camera proxy status never covers these, so without this every analog
+// channel reads "unknown". It returns the probe records it made (for the caller
+// to append to the collection-health view).
+//
+// It tries the aggregate list first (one request covers every input). Per-channel
+// is only used to fill inputs the aggregate left blank, and is capability-gated: a
+// single probe on the first pending input decides whether to fan out, so a firmware
+// that doesn't expose the per-channel endpoint costs 2 probes, not one per channel.
+// The fan-out runs concurrently (bounded) because DVRs are slow per request. Inputs
+// whose status can't be positively read stay nil ("unknown"), never guessed offline.
+func collectVideoInputStatus(ctx context.Context, cl *Client, chByNo map[int]*Channel, videoInputNos []int) []Probe {
+	if len(videoInputNos) == 0 {
+		return nil // pure NVR (IP-camera proxy only) — no local analog inputs
+	}
+	var probes []Probe
+	pathOf := func(no int) string { return fmt.Sprintf("/ISAPI/System/Video/inputs/channels/%d/status", no) }
+	get := func(path string) ([]byte, bool) {
+		pctx, cancel := context.WithTimeout(ctx, videoStatusTimeout)
+		body, status, err := cl.GetStatus(pctx, path)
+		cancel()
+		p, ok := makeProbe(path, body, status, err)
+		probes = append(probes, p)
+		if !ok {
+			return nil, false
+		}
+		return body, true
+	}
+
+	// Aggregate first — one request covers every input.
+	if b, ok := get("/ISAPI/System/Video/inputs/channels/status"); ok {
+		for no, online := range parseVideoInputStatus(b) {
+			if ch := chByNo[no]; ch != nil && ch.Online == nil {
+				o := online
+				ch.Online = &o
+			}
+		}
+	}
+
+	// Inputs still without a status after the aggregate.
+	var pending []int
+	for _, no := range videoInputNos {
+		if ch := chByNo[no]; ch != nil && ch.Online == nil {
+			pending = append(pending, no)
+		}
+	}
+	if len(pending) == 0 {
+		return probes
+	}
+
+	// Capability check on the first pending input (sequential): gate fan-out on
+	// whether the per-channel endpoint responds (2xx), NOT on whether that one
+	// input parsed — a first input with no signal must not skip the rest.
+	b, ok := get(pathOf(pending[0]))
+	if !ok {
+		return probes // endpoint unsupported — leave the rest "unknown", no per-channel storm
+	}
+	if online, known := parseVideoInputStatusOne(b); known {
+		o := online
+		chByNo[pending[0]].Online = &o
+	}
+
+	// Fan out the remaining inputs concurrently (bounded).
+	rest := pending[1:]
+	if len(rest) == 0 {
+		return probes
+	}
+	var (
+		mu  sync.Mutex
+		wg  sync.WaitGroup
+		sem = make(chan struct{}, videoStatusConcurrency)
+	)
+	for _, no := range rest {
+		no := no
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			pctx, cancel := context.WithTimeout(ctx, videoStatusTimeout)
+			body, status, err := cl.GetStatus(pctx, pathOf(no))
+			cancel()
+			p, pok := makeProbe(pathOf(no), body, status, err)
+			online, known := false, false
+			if pok {
+				online, known = parseVideoInputStatusOne(body)
+			}
+			mu.Lock()
+			probes = append(probes, p)
+			if known {
+				o := online
+				chByNo[no].Online = &o // unique no per goroutine; map write guarded by mu
+			}
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+	return probes
+}
+
+// parseVideoInputStatus reads analog-input signal status from the aggregate
+// endpoint. Only inputs reporting a recognizable status field are returned;
+// callers keep the rest "unknown".
+func parseVideoInputStatus(b []byte) map[int]bool {
+	type st struct {
+		ID     string `xml:"id"`
+		Online string `xml:"online"`
+		Signal string `xml:"signalStatus"`     // some firmwares: "normal"/"noVideo"
+		Video  string `xml:"videoInputStatus"` // some firmwares
+	}
+	var doc struct {
+		St []st `xml:"VideoInputChannelStatus"`
+	}
+	out := map[int]bool{}
+	if xml.Unmarshal(b, &doc) != nil {
+		return out
+	}
+	for _, s := range doc.St {
+		if online, known := videoOnline(s.Online, s.Signal, s.Video); known {
+			out[atoi(s.ID)] = online
+		}
+	}
+	return out
+}
+
+// parseVideoInputStatusOne reads the per-channel video-input status object.
+func parseVideoInputStatusOne(b []byte) (online, known bool) {
+	var doc struct {
+		Online string `xml:"online"`
+		Signal string `xml:"signalStatus"`
+		Video  string `xml:"videoInputStatus"`
+	}
+	if xml.Unmarshal(b, &doc) != nil {
+		return false, false
+	}
+	return videoOnline(doc.Online, doc.Signal, doc.Video)
+}
+
+// videoOnline interprets the assorted fields Hikvision firmwares use to report
+// whether an analog input has a live camera signal. known=false means none was
+// recognizable, so the caller leaves the channel "unknown".
+func videoOnline(online, signal, video string) (val, known bool) {
+	if v := strings.TrimSpace(online); v != "" {
+		return strings.EqualFold(v, "true"), true
+	}
+	for _, s := range []string{signal, video} {
+		switch strings.ToLower(strings.TrimSpace(s)) {
+		case "normal", "online", "connected", "connect", "true":
+			return true, true
+		case "novideo", "no video", "videoloss", "video loss", "offline", "disconnect", "disconnected", "false":
+			return false, true
+		}
+	}
+	return false, false
 }
 
 // Streaming channel ids encode channel*100+stream (e.g. 101 = ch1 main). Map the
@@ -404,6 +590,18 @@ func countTag(b []byte, local string) int {
 		}
 	}
 	return n
+}
+
+// bodySample returns a whitespace-collapsed, rune-safe, truncated copy of an ISAPI
+// response body for the Collection-health view (and analog-input schema discovery).
+// Capped so probe logs stay small even for long channel/HDD lists.
+func bodySample(b []byte) string {
+	s := strings.Join(strings.Fields(string(b)), " ") // trims + collapses whitespace runs
+	const max = 280
+	if r := []rune(s); len(r) > max {
+		return strings.TrimSpace(string(r[:max])) + " …"
+	}
+	return s
 }
 
 func atoi(s string) int {
