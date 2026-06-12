@@ -122,22 +122,21 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device, selectedCre
 		return res
 	}
 
-	// Hard overall ceiling when the caller set no deadline — the per-device Collect
-	// button passes the bare request context, so a slow or half-reachable device
-	// (e.g. a recorder accepting TCP but stalling every HTTP request) could otherwise
-	// run the ONVIF + ISAPI phases for many minutes. Scale with the number of creds
-	// tried (each gets ~one ISAPI budget) and cap firmly. Having a deadline also
-	// activates the ONVIF phase's budget-reservation check below. The scan/fleet
-	// paths already pass a bounded context, so this only guards the per-device call.
-	if _, has := ctx.Deadline(); !has {
-		budget := time.Duration(len(cands))*130*time.Second + 20*time.Second
-		if budget > 5*time.Minute {
-			budget = 5 * time.Minute
-		}
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, budget)
-		defer cancel()
+	// Hard overall ceiling so a slow or half-reachable device (e.g. a recorder that
+	// accepts TCP but stalls every HTTP request) can't run the ONVIF + ISAPI phases
+	// for many minutes. Applied UNCONDITIONALLY: context.WithTimeout only ever
+	// tightens, so when the caller already passed a bounded context (the scan/fleet
+	// paths) the shorter deadline wins, and when the per-device Collect button passes
+	// a context with only a long server/middleware deadline this still bounds it.
+	// Scales with the number of creds tried (~one ISAPI budget each), firmly capped.
+	// Having a deadline also activates the ONVIF phase's budget-reservation check.
+	budget := time.Duration(len(cands))*130*time.Second + 20*time.Second
+	if budget > 5*time.Minute {
+		budget = 5 * time.Minute
 	}
+	bctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	ctx = bctx
 
 	doer := &http.Client{
 		Timeout:   15 * time.Second,
