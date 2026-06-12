@@ -55,8 +55,8 @@ SELECT count(*)::bigint AS total, count(camera_device_id)::bigint AS linked
 FROM nvr_channels WHERE nvr_device_id = $1;
 
 -- name: UpsertNVRChannel :one
-INSERT INTO nvr_channels (nvr_device_id, channel_no, camera_name, camera_ip, camera_device_id, status, enabled)
-VALUES ($1,$2,$3,$4,$5,$6,$7)
+INSERT INTO nvr_channels (nvr_device_id, channel_no, camera_name, camera_ip, camera_device_id, status, enabled, recording, resolution)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
 ON CONFLICT (nvr_device_id, channel_no) DO UPDATE SET
     camera_name = EXCLUDED.camera_name,
     camera_ip = EXCLUDED.camera_ip,
@@ -68,6 +68,8 @@ ON CONFLICT (nvr_device_id, channel_no) DO UPDATE SET
     camera_device_id = COALESCE(EXCLUDED.camera_device_id, nvr_channels.camera_device_id),
     status = EXCLUDED.status,
     enabled = EXCLUDED.enabled,
+    recording = EXCLUDED.recording,
+    resolution = EXCLUDED.resolution,
     last_seen_at = now()
 RETURNING *;
 

@@ -1204,6 +1204,8 @@ export interface NVRChannel {
   camera_device_id?: string | null
   status: string
   enabled?: boolean
+  recording?: boolean | null // true/false = recording on/off; null = not reported
+  resolution?: string // analog signal descriptor, e.g. "1080P25"; "" = no signal
   last_seen_at?: string
 }
 

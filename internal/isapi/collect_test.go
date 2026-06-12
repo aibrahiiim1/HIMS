@@ -127,6 +127,49 @@ func TestParseVideoInputStatusOne(t *testing.T) {
 	}
 }
 
+func TestParseVideoInputChannels_SignalFromResDesc(t *testing.T) {
+	// ch1 has a live signal (resDesc set), ch2 is enabled but no signal, ch3 disabled.
+	xml := `<VideoInputChannelList xmlns="http://www.hikvision.com/ver20/XMLSchema">
+	  <VideoInputChannel><id>1</id><name>Reception_Desk</name><videoInputEnabled>true</videoInputEnabled><resDesc>1080P25</resDesc></VideoInputChannel>
+	  <VideoInputChannel><id>2</id><name>Garage</name><videoInputEnabled>true</videoInputEnabled><resDesc></resDesc></VideoInputChannel>
+	  <VideoInputChannel><id>3</id><name>Spare</name><videoInputEnabled>false</videoInputEnabled></VideoInputChannel>
+	</VideoInputChannelList>`
+	ch := parseVideoInputChannels([]byte(xml))
+	if len(ch) != 3 {
+		t.Fatalf("channels = %d", len(ch))
+	}
+	if ch[0].Name != "Reception_Desk" || ch[0].Resolution != "1080P25" || ch[0].Online == nil || !*ch[0].Online {
+		t.Errorf("ch1 = %+v (want online, 1080P25)", ch[0])
+	}
+	if ch[1].Online == nil || *ch[1].Online { // enabled + no resDesc ⇒ offline
+		t.Errorf("ch2 should be offline (no signal), got %+v", ch[1])
+	}
+	if ch[2].Online != nil { // disabled ⇒ unknown
+		t.Errorf("ch3 (disabled) should stay unknown, got %v", *ch[2].Online)
+	}
+}
+
+func TestParseRecordTracks(t *testing.T) {
+	// ch1: main on, sub off ⇒ recording. ch2: both off ⇒ not recording. ch3: main on.
+	xml := `<TrackList xmlns="http://www.hikvision.com/ver20/XMLSchema">
+	  <Track><id>101</id><Channel>101</Channel><Enable>true</Enable></Track>
+	  <Track><id>102</id><Channel>102</Channel><Enable>false</Enable></Track>
+	  <Track><id>201</id><Channel>201</Channel><Enable>false</Enable></Track>
+	  <Track><id>202</id><Channel>202</Channel><Enable>false</Enable></Track>
+	  <Track><id>301</id><Channel>301</Channel><Enable>true</Enable></Track>
+	</TrackList>`
+	rec := parseRecordTracks([]byte(xml))
+	if !rec[1] {
+		t.Errorf("ch1 should be recording")
+	}
+	if rec[2] {
+		t.Errorf("ch2 should not be recording")
+	}
+	if !rec[3] {
+		t.Errorf("ch3 should be recording")
+	}
+}
+
 func TestCollectVideoInputStatus(t *testing.T) {
 	// DVR: aggregate endpoint 404s, so per-channel fills each analog input.
 	// ch2 is already known (merged from a proxy channel) and must not be re-probed.

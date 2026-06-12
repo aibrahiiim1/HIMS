@@ -434,13 +434,17 @@ function ChannelsTab({ channels, chOnline }: { channels: NVRChannel[]; chOnline:
             <span className="muted" style={{ fontSize: 13 }}>{filtered.length} of {channels.length}</span>
           </div>
           <table className="data-table">
-            <thead><tr><th>Ch</th><th>Camera name</th><th>Camera IP</th><th>Linked device</th><th>Status</th></tr></thead>
+            <thead><tr><th>Ch</th><th>Camera name</th><th>Camera IP</th><th>Resolution</th><th>Recording</th><th>Linked device</th><th>Status</th></tr></thead>
             <tbody>
               {rows.map((x: NVRChannel) => (
                 <tr key={x.id}>
                   <td className="cell-name">{x.channel_no}</td>
                   <td>{x.camera_name || '—'}</td>
                   <td className="mono">{x.camera_ip || '—'}</td>
+                  <td className="mono">{x.resolution || <span className="muted">—</span>}</td>
+                  <td>{x.recording == null
+                    ? <span className="muted">—</span>
+                    : <StatusPill status={x.recording ? 'up' : 'unknown'} label={x.recording ? 'Recording' : 'Off'} />}</td>
                   <td>{x.camera_device_id ? <Link className="cell-name" to={`/cctv/${x.camera_device_id}`}>camera device</Link> : <span className="muted">—</span>}</td>
                   <td><StatusPill status={chStatus(x.status)} label={x.status} /></td>
                 </tr>

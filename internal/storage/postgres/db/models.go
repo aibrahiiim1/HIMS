@@ -670,6 +670,8 @@ type NvrChannel struct {
 	Status         string      `json:"status"`
 	LastSeenAt     time.Time   `json:"last_seen_at"`
 	Enabled        bool        `json:"enabled"`
+	Recording      *bool       `json:"recording"`
+	Resolution     string      `json:"resolution"`
 }
 
 type NvrInfo struct {

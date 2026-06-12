@@ -541,6 +541,7 @@ func (s *Server) persistNVR(ctx context.Context, d db.Device, vendor string, nvr
 		_, _ = s.queries.UpsertNVRChannel(ctx, db.UpsertNVRChannelParams{
 			NvrDeviceID: d.ID, ChannelNo: int32(ch.No), CameraName: strPtrOrNil(ch.Name),
 			CameraIp: ipp, CameraDeviceID: camDevID, Status: status, Enabled: ch.Enabled,
+			Recording: ch.Recording, Resolution: strings.TrimSpace(ch.Resolution),
 		})
 	}
 	for _, h := range nvr.Storage {

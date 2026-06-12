@@ -37,11 +37,13 @@ type TimeInfo struct {
 
 // Channel is one camera/input on the recorder.
 type Channel struct {
-	No      int
-	Name    string
-	IP      string
-	Online  *bool // nil = status not reported
-	Enabled bool
+	No         int
+	Name       string
+	IP         string
+	Online     *bool  // nil = status not reported
+	Enabled    bool   // configured/enabled in the recorder
+	Resolution string // analog inputs: resDesc, e.g. "1080P25" ("" = no signal)
+	Recording  *bool  // nil = recording state not reported; from record/tracks
 }
 
 // HDD is one storage device on the recorder.
@@ -175,6 +177,22 @@ func Collect(ctx context.Context, ip, user, pass string, doer Doer, prefer []str
 			}
 		}
 	}
+	// Recording (read-only): the record-tracks list gives a per-channel enabled
+	// flag (which inputs are actually being recorded) plus the overall summary.
+	// Done before the channel copy so per-channel Recording lands in out.Channels.
+	if b, ok := probe("/ISAPI/ContentMgmt/record/tracks"); ok {
+		for no, on := range parseRecordTracks(b) {
+			if ch := chByNo[no]; ch != nil {
+				o := on
+				ch.Recording = &o
+			}
+		}
+		if n := countTag(b, "Track"); n > 0 {
+			out.Recording = fmt.Sprintf("%d recording track(s) configured", n)
+		} else {
+			out.Recording = "no recording tracks configured"
+		}
+	}
 	for _, ch := range chByNo {
 		out.Channels = append(out.Channels, *ch)
 	}
@@ -182,15 +200,6 @@ func Collect(ctx context.Context, ip, user, pass string, doer Doer, prefer []str
 	// Storage / HDDs.
 	if b, ok := probe("/ISAPI/ContentMgmt/Storage/hdd"); ok {
 		out.Storage = parseHDDs(b)
-	}
-
-	// Recording (read-only): the record tracks list. Presence ⇒ recording set up.
-	if b, ok := probe("/ISAPI/ContentMgmt/record/tracks"); ok {
-		if n := countTag(b, "Track"); n > 0 {
-			out.Recording = fmt.Sprintf("%d recording track(s) configured", n)
-		} else {
-			out.Recording = "no recording tracks configured"
-		}
 	}
 
 	// System status (best-effort health; firmware-dependent).
@@ -228,8 +237,10 @@ func parseInputProxyChannels(b []byte) []Channel {
 
 func parseVideoInputChannels(b []byte) []Channel {
 	type ch struct {
-		ID   string `xml:"id"`
-		Name string `xml:"name"`
+		ID      string `xml:"id"`
+		Name    string `xml:"name"`
+		Enabled string `xml:"videoInputEnabled"`
+		ResDesc string `xml:"resDesc"` // analog signal: "1080P25" when a camera is wired, "" otherwise
 	}
 	var doc struct {
 		Ch []ch `xml:"VideoInputChannel"`
@@ -239,7 +250,52 @@ func parseVideoInputChannels(b []byte) []Channel {
 	}
 	out := make([]Channel, 0, len(doc.Ch))
 	for _, c := range doc.Ch {
-		out = append(out, Channel{No: atoi(c.ID), Name: strings.TrimSpace(c.Name), Enabled: true})
+		res := strings.TrimSpace(c.ResDesc)
+		enabled := !strings.EqualFold(strings.TrimSpace(c.Enabled), "false")
+		cc := Channel{No: atoi(c.ID), Name: strings.TrimSpace(c.Name), Enabled: enabled, Resolution: res}
+		// Analog-input signal status straight from the channel list: a connected
+		// camera reports a resolution (resDesc); a BNC with no camera reports none.
+		// These DVRs 403 the per-channel /status endpoint, so this is THE reliable
+		// signal — and it costs no extra request.
+		switch {
+		case res != "" && !strings.Contains(strings.ToLower(res), "no video"):
+			online := true
+			cc.Online = &online
+		case enabled:
+			offline := false // enabled input, no resolution ⇒ no signal
+			cc.Online = &offline
+		}
+		out = append(out, cc)
+	}
+	return out
+}
+
+// parseRecordTracks maps channel number → whether recording is enabled, from the
+// ISAPI record-tracks list. Each channel has main/sub tracks (id/Channel encode
+// channel*100+stream, e.g. 101 = ch1 main); a channel counts as recording if ANY
+// of its tracks is enabled.
+func parseRecordTracks(b []byte) map[int]bool {
+	type tr struct {
+		Channel string `xml:"Channel"`
+		Enable  string `xml:"Enable"`
+	}
+	var doc struct {
+		Tr []tr `xml:"Track"`
+	}
+	out := map[int]bool{}
+	if xml.Unmarshal(b, &doc) != nil {
+		return out
+	}
+	for _, t := range doc.Tr {
+		no := atoi(t.Channel)
+		if no >= 100 {
+			no /= 100 // 101 → ch1
+		}
+		if no == 0 {
+			continue
+		}
+		on := strings.EqualFold(strings.TrimSpace(t.Enable), "true")
+		out[no] = out[no] || on // sticky-true: any enabled track ⇒ recording
 	}
 	return out
 }

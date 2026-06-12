@@ -163,7 +163,7 @@ func (q *Queries) ListLinkedCameraDeviceIDs(ctx context.Context) ([]*uuid.UUID, 
 }
 
 const listNVRChannels = `-- name: ListNVRChannels :many
-SELECT id, nvr_device_id, channel_no, camera_name, camera_ip, camera_device_id, status, last_seen_at, enabled FROM nvr_channels WHERE nvr_device_id = $1 ORDER BY channel_no
+SELECT id, nvr_device_id, channel_no, camera_name, camera_ip, camera_device_id, status, last_seen_at, enabled, recording, resolution FROM nvr_channels WHERE nvr_device_id = $1 ORDER BY channel_no
 `
 
 func (q *Queries) ListNVRChannels(ctx context.Context, nvrDeviceID uuid.UUID) ([]NvrChannel, error) {
@@ -185,6 +185,8 @@ func (q *Queries) ListNVRChannels(ctx context.Context, nvrDeviceID uuid.UUID) ([
 			&i.Status,
 			&i.LastSeenAt,
 			&i.Enabled,
+			&i.Recording,
+			&i.Resolution,
 		); err != nil {
 			return nil, err
 		}
@@ -444,8 +446,8 @@ func (q *Queries) UpsertCameraInfo(ctx context.Context, arg UpsertCameraInfoPara
 }
 
 const upsertNVRChannel = `-- name: UpsertNVRChannel :one
-INSERT INTO nvr_channels (nvr_device_id, channel_no, camera_name, camera_ip, camera_device_id, status, enabled)
-VALUES ($1,$2,$3,$4,$5,$6,$7)
+INSERT INTO nvr_channels (nvr_device_id, channel_no, camera_name, camera_ip, camera_device_id, status, enabled, recording, resolution)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
 ON CONFLICT (nvr_device_id, channel_no) DO UPDATE SET
     camera_name = EXCLUDED.camera_name,
     camera_ip = EXCLUDED.camera_ip,
@@ -457,8 +459,10 @@ ON CONFLICT (nvr_device_id, channel_no) DO UPDATE SET
     camera_device_id = COALESCE(EXCLUDED.camera_device_id, nvr_channels.camera_device_id),
     status = EXCLUDED.status,
     enabled = EXCLUDED.enabled,
+    recording = EXCLUDED.recording,
+    resolution = EXCLUDED.resolution,
     last_seen_at = now()
-RETURNING id, nvr_device_id, channel_no, camera_name, camera_ip, camera_device_id, status, last_seen_at, enabled
+RETURNING id, nvr_device_id, channel_no, camera_name, camera_ip, camera_device_id, status, last_seen_at, enabled, recording, resolution
 `
 
 type UpsertNVRChannelParams struct {
@@ -469,6 +473,8 @@ type UpsertNVRChannelParams struct {
 	CameraDeviceID *uuid.UUID  `json:"camera_device_id"`
 	Status         string      `json:"status"`
 	Enabled        bool        `json:"enabled"`
+	Recording      *bool       `json:"recording"`
+	Resolution     string      `json:"resolution"`
 }
 
 func (q *Queries) UpsertNVRChannel(ctx context.Context, arg UpsertNVRChannelParams) (NvrChannel, error) {
@@ -480,6 +486,8 @@ func (q *Queries) UpsertNVRChannel(ctx context.Context, arg UpsertNVRChannelPara
 		arg.CameraDeviceID,
 		arg.Status,
 		arg.Enabled,
+		arg.Recording,
+		arg.Resolution,
 	)
 	var i NvrChannel
 	err := row.Scan(
@@ -492,6 +500,8 @@ func (q *Queries) UpsertNVRChannel(ctx context.Context, arg UpsertNVRChannelPara
 		&i.Status,
 		&i.LastSeenAt,
 		&i.Enabled,
+		&i.Recording,
+		&i.Resolution,
 	)
 	return i, err
 }
