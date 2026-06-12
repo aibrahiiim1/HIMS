@@ -4,7 +4,6 @@ import { useParams, Link } from 'react-router-dom'
 import { Camera, Video, Film, HardDrive, Disc, Network, Activity, Wrench, Cpu, Globe, ShieldCheck, RefreshCw } from 'lucide-react'
 import { api, type CameraInfo, type NVRChannel, type NVRDetail, type Device, type DeviceWebAccess, type CredTestResult } from '../api'
 import { DeviceHeader } from '../components/DeviceHeader'
-import { CctvCollect } from '../components/CctvCollect'
 import { Panel, Kpi, DefList, EmptyState, StatusPill } from '../components/ui'
 
 const chStatus = (s: string) => (s === 'online' ? 'up' : s === 'offline' ? 'down' : 'unknown')
@@ -15,7 +14,7 @@ function fmtMB(mb?: number): string {
   return gb >= 1024 ? `${(gb / 1024).toFixed(2)} TB` : `${gb.toFixed(1)} GB`
 }
 
-type Tab = 'overview' | 'channels' | 'storage' | 'recording' | 'network' | 'health' | 'ops'
+type Tab = 'overview' | 'channels' | 'storage' | 'recording' | 'network' | 'health' | 'ops' | 'access'
 
 // Camera / NVR detail. For a recorder (category nvr) this is a full multi-tab NVR
 // console — identity, channels/cameras, storage/HDD, recording, streams, collection
@@ -25,8 +24,8 @@ export function CctvDetail() {
   const { id } = useParams<{ id: string }>()
   const [tab, setTab] = useState<Tab>('overview')
 
-  const devices = useQuery({ queryKey: ['devices', 'all'], queryFn: () => api.get<Device[]>('/devices?category=all') })
-  const dev = (devices.data ?? []).find((d) => d.id === id)
+  const devQ = useQuery({ queryKey: ['device', id], queryFn: () => api.get<Device>(`/devices/${id}`) })
+  const dev = devQ.data
   const cam = useQuery({ queryKey: ['camera', id], queryFn: () => api.get<CameraInfo>(`/devices/${id}/camera`) })
   const nvr = useQuery({ queryKey: ['nvr', id], queryFn: () => api.get<NVRDetail>(`/devices/${id}/nvr`) })
 
@@ -61,39 +60,47 @@ export function CctvDetail() {
           <Kpi label="Firmware" value={c?.firmware || '—'} icon={Cpu} />
           <Kpi label="Management" value={mgmtLabel} icon={ShieldCheck} tone={mgmt === 'managed' ? 'ok' : mgmt ? 'warn' : 'default'} />
         </div>
-        {collected ? (
-          <div className="grid-2">
-            <Panel title="Identity" icon={Camera}>
-              <DefList items={[
-                { label: 'Device name', value: c?.device_name || '—' },
-                { label: 'Vendor', value: c?.manufacturer || dev?.vendor || '—' },
-                { label: 'Model', value: c?.model || dev?.model || '—' },
-                { label: 'Firmware', value: c?.firmware || '—' },
-                { label: 'Serial', value: c?.serial ? <span className="mono">{c.serial}</span> : '—' },
-                { label: 'MAC address', value: c?.mac_address ? <span className="mono">{c.mac_address}</span> : '—' },
-                { label: 'Resolution', value: c?.resolution || '—' },
-              ]} />
-            </Panel>
-            <Panel title="Network & Streams" icon={Network}>
-              <DefList items={[
-                { label: 'IP address', value: (c?.ip_address || ip) ? <span className="mono">{c?.ip_address || ip}</span> : '—' },
-                { label: 'Subnet mask', value: c?.subnet_mask ? <span className="mono">{c.subnet_mask}</span> : '—' },
-                { label: 'Gateway', value: c?.gateway ? <span className="mono">{c.gateway}</span> : '—' },
-                { label: 'DNS', value: c?.dns_server ? <span className="mono">{c.dns_server}</span> : '—' },
-                { label: 'NTP server', value: c?.ntp_server ? <span className="mono">{c.ntp_server}</span> : '—' },
-                { label: 'Time zone', value: c?.time_zone || '—' },
-                { label: 'RTSP stream', value: c?.rtsp_url ? <span className="mono">{c.rtsp_url}</span> : '—' },
-                { label: 'ONVIF endpoint', value: c?.onvif_url ? <span className="mono">{c.onvif_url}</span> : '—' },
-              ]} />
-            </Panel>
-          </div>
+        <div className="seg" role="tablist" style={{ margin: '4px 0 14px' }}>
+          {([['overview', 'Overview', Camera], ['network', 'Network & Streams', Network], ['access', 'Web / API Access', Globe]] as [Tab, string, typeof Camera][]).map(([k, lbl]) => (
+            <button key={k} className={tab === k ? 'active' : ''} onClick={() => setTab(k)}>{lbl}</button>
+          ))}
+        </div>
+
+        {tab === 'overview' && (collected ? (
+          <Panel title="Identity" icon={Camera}>
+            <DefList items={[
+              { label: 'Device name', value: c?.device_name || '—' },
+              { label: 'Vendor', value: c?.manufacturer || dev?.vendor || '—' },
+              { label: 'Model', value: c?.model || dev?.model || '—' },
+              { label: 'Firmware', value: c?.firmware || '—' },
+              { label: 'Serial', value: c?.serial ? <span className="mono">{c.serial}</span> : '—' },
+              { label: 'MAC address', value: c?.mac_address ? <span className="mono">{c.mac_address}</span> : '—' },
+              { label: 'Resolution', value: c?.resolution || '—' },
+            ]} />
+          </Panel>
         ) : (
           <Panel title="Device Information" icon={Camera}>
             <EmptyState icon={Camera} title="No detail collected yet"
               message="This camera's web credential isn't bound yet. Assign its ONVIF/HTTP credential to the site subnet (Locations) and re-scan, or use Re-collect above once a credential is bound — identity then populates from ONVIF/ISAPI." />
           </Panel>
+        ))}
+
+        {tab === 'network' && (
+          <Panel title="Network & Streams" icon={Network}>
+            <DefList items={[
+              { label: 'IP address', value: (c?.ip_address || ip) ? <span className="mono">{c?.ip_address || ip}</span> : '—' },
+              { label: 'Subnet mask', value: c?.subnet_mask ? <span className="mono">{c.subnet_mask}</span> : '—' },
+              { label: 'Gateway', value: c?.gateway ? <span className="mono">{c.gateway}</span> : '—' },
+              { label: 'DNS', value: c?.dns_server ? <span className="mono">{c.dns_server}</span> : '—' },
+              { label: 'NTP server', value: c?.ntp_server ? <span className="mono">{c.ntp_server}</span> : '—' },
+              { label: 'Time zone', value: c?.time_zone || '—' },
+              { label: 'RTSP stream', value: c?.rtsp_url ? <span className="mono">{c.rtsp_url}</span> : '—' },
+              { label: 'ONVIF endpoint', value: c?.onvif_url ? <span className="mono">{c.onvif_url}</span> : '—' },
+            ]} />
+          </Panel>
         )}
-        <WebAccessPanel deviceId={id!} />
+
+        {tab === 'access' && <WebAccessPanel deviceId={id!} />}
       </div>
     )
   }
@@ -231,9 +238,9 @@ export function CctvDetail() {
       {tab === 'ops' && (
         <Panel title="Operations" icon={Wrench}>
           <p className="muted" style={{ fontSize: 13, marginBottom: 12 }}>
-            Pick the NVR's <strong>web admin</strong> login credential(s) to try — the ONVIF integration user is separate and is rejected by ISAPI. HIMS tries each selected credential and binds the first that authenticates. Selecting more than 3 of the same type warns first, since repeated wrong logins can trigger a Hikvision IP lockout.
+            Collection uses the recorder's <strong>bound web credential</strong>. To onboard a new recorder, assign its admin login to the site subnet (Locations → Subnet credentials) and re-scan — HIMS binds the first credential that authenticates. Use Re-collect to re-pull channels / storage with the already-bound credential.
           </p>
-          <CctvCollect deviceId={id!} boundCredId={dev?.cctv_credential_id ?? dev?.credential_id} generalCredId={dev?.credential_id} label="Collect NVR data" />
+          <ReCollect deviceId={id!} />
         </Panel>
       )}
 

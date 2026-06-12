@@ -61,7 +61,7 @@ export function DeviceHeader({ deviceId, icon: Icon = HardDrive, showCredential 
 }) {
   const qc = useQueryClient()
   const nav = useNavigate()
-  const devices = useQuery({ queryKey: ['devices', 'all'], queryFn: () => api.get<Device[]>('/devices?category=all') })
+  const deviceQ = useQuery({ queryKey: ['device', deviceId], queryFn: () => api.get<Device>(`/devices/${deviceId}`) })
   const checksQ = useQuery({ queryKey: ['dev-checks', deviceId], queryFn: () => api.get<MonitoringCheck[]>(`/devices/${deviceId}/monitoring/checks`) })
   const locs = useQuery({ queryKey: ['locations-all'], queryFn: () => api.get<Location[]>('/locations/all') })
   const locPath = useMemo(() => locationPaths(locs.data ?? []), [locs.data])
@@ -73,6 +73,7 @@ export function DeviceHeader({ deviceId, icon: Icon = HardDrive, showCredential 
     setDeleting(true); setDeleteErr(null)
     try {
       await api.del(`/devices/${deviceId}`)
+      qc.invalidateQueries({ queryKey: ['device', deviceId] })
       qc.invalidateQueries({ queryKey: ['devices'] })
       nav('/inventory')
     } catch (e) {
@@ -85,7 +86,7 @@ export function DeviceHeader({ deviceId, icon: Icon = HardDrive, showCredential 
   const [editing, setEditing] = useState(false)
   const [scanMsg, setScanMsg] = useState<string | null>(null)
 
-  const d = (devices.data ?? []).find((x) => x.id === deviceId)
+  const d = deviceQ.data
   const checks = checksQ.data ?? []
   const { score } = deviceHealth(checks)
 
@@ -99,6 +100,7 @@ export function DeviceHeader({ deviceId, icon: Icon = HardDrive, showCredential 
       const res = await api.post<{ target_port: number; source: string }>(`/devices/${deviceId}/repair-reachability`, {})
       setRepairMsg(`Reachability check set to port ${res.target_port} (${PORT_SOURCE_LABEL[res.source] ?? res.source}).`)
       qc.invalidateQueries({ queryKey: ['dev-checks', deviceId] })
+      qc.invalidateQueries({ queryKey: ['device', deviceId] })
       qc.invalidateQueries({ queryKey: ['devices'] })
     } catch (e) {
       setRepairMsg(`Repair failed: ${(e as Error).message}`)
@@ -113,6 +115,7 @@ export function DeviceHeader({ deviceId, icon: Icon = HardDrive, showCredential 
   function onScanMsg(m: string) {
     setScanMsg(m)
     setTimeout(() => {
+      qc.invalidateQueries({ queryKey: ['device', deviceId] })
       qc.invalidateQueries({ queryKey: ['devices'] })
       qc.invalidateQueries({ queryKey: ['dev-checks', deviceId] })
     }, 6000)
@@ -122,7 +125,7 @@ export function DeviceHeader({ deviceId, icon: Icon = HardDrive, showCredential 
     return (
       <div className="panel"><div className="panel-body">
         <div className="dev-cell"><span className="dev-avatar" style={{ background: 'var(--neutral)' }}><Icon size={18} /></span>
-          <div className="dev-meta"><span className="cell-name">{devices.isLoading ? 'Loading device…' : 'Device'}</span><small>{deviceId}</small></div>
+          <div className="dev-meta"><span className="cell-name">{deviceQ.isLoading ? 'Loading device…' : 'Device'}</span><small>{deviceId}</small></div>
         </div>
       </div></div>
     )
@@ -213,7 +216,7 @@ export function DeviceHeader({ deviceId, icon: Icon = HardDrive, showCredential 
         )}
         {showCredential && !d.is_virtual && <div className="device-hero-cred"><CredentialBindSelect deviceId={deviceId} align="end" /></div>}
       </div>
-      {editing && <EditDevice device={d} onClose={() => setEditing(false)} onSaved={() => qc.invalidateQueries({ queryKey: ['devices', 'all'] })} />}
+      {editing && <EditDevice device={d} onClose={() => setEditing(false)} onSaved={() => qc.invalidateQueries({ queryKey: ['device', deviceId] })} />}
       {confirmingDelete && (
         <div role="dialog" aria-modal="true" onClick={() => !deleting && setConfirmingDelete(false)}
           style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>

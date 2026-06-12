@@ -205,6 +205,7 @@ func (s *Server) routes() {
 		r.Put("/devices/virtual/{id}", s.updateVirtualDevice)
 		r.Post("/devices/bulk-delete", s.bulkDeleteDevices)
 		r.Post("/devices/bulk-assign", s.bulkAssignDevices)
+		r.Get("/devices/{id}", s.getDevice)
 		r.Patch("/devices/{id}", s.updateDevice)
 		r.Delete("/devices/{id}", s.deleteDevice)
 		r.Get("/devices/{id}/classification", s.getClassification)
@@ -591,6 +592,36 @@ func (s *Server) listDevices(w http.ResponseWriter, r *http.Request) {
 		enriched = filtered
 	}
 	writeJSON(w, http.StatusOK, enriched)
+}
+
+// getDevice returns ONE enriched device (same shape as a listDevices row) so a
+// detail page fetches a single device instead of the entire inventory.
+func (s *Server) getDevice(w http.ResponseWriter, r *http.Request) {
+	ctx, id, ok := pathDevice(w, r)
+	if !ok {
+		return
+	}
+	d, err := s.queries.GetDevice(ctx, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	rows := s.scopeDevices(ctx, []db.Device{d})
+	if len(rows) == 0 {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	maps, merr := s.buildStatusMaps(ctx)
+	if merr != nil {
+		writeErr(w, merr)
+		return
+	}
+	enriched := maps.enrich(rows)
+	if len(enriched) == 0 {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, enriched[0])
 }
 
 // scopeDevices filters a device list to the requester's site scope (global
