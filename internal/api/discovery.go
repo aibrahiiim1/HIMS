@@ -539,7 +539,18 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 		hcfg := cfg
 		hcfg.OnEvent = s.pipelineEventEmitter(jobID, ip) // live per-stage events for this host
 		r := discovery.Run(hctx, ip, locID, hcfg)
-		id, err := applier.Apply(hctx, r, locID)
+		// Enrollment must NOT run under the per-host PROBE budget (hctx). A host that
+		// spends its whole budget probing (e.g. an SNMP-silent, web-only host the
+		// credential sweep can't authenticate) is still classified from the cheap
+		// banners + open ports, and Apply enrolls every alive host (category "unknown"
+		// at worst) so it surfaces as an UNMANAGED device. Writing that under the now-
+		// expired hctx fails with "context deadline exceeded" — the host then vanishes
+		// into a device-less "discovery" result instead of appearing in inventory.
+		// Persist on a fresh budget from the job context so a discovered host is never
+		// lost just because its probe ran long.
+		actx, acancel := context.WithTimeout(ctx, 30*time.Second)
+		id, err := applier.Apply(actx, r, locID)
+		acancel()
 		// Post-onboarding follow-ups for an enrolled host (best-effort).
 		enrichment := ""
 		var profRes *scanProfileResult
