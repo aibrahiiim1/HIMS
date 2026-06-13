@@ -613,7 +613,25 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 					}
 					return false
 				}(dev.Category)
-				if s.cipher() != nil && (boundOS || legacyWSMan) && !specialized {
+				// A Windows host that did NOT bind a WinRM/SSH credential this run —
+				// because WinRM is disabled/closed (connection refused) — is still worth a
+				// collection attempt: runOSCollection tries WinRM, then FALLS BACK to the
+				// site Relay Agent / WMI-DCOM, which works where WinRM is off. Gate on a
+				// real Windows management surface (SMB 445 / RPC 135 / WinRM 5985-6 open)
+				// so this only fires on actual Windows hosts, not every alive IP. This is
+				// what lets the legacy-WSMan + WinRM-disabled boxes route to WMI instead of
+				// silently staying unmanaged. Failures stay honestly categorized
+				// (winrm_disabled / wmi_firewall_blocked / agent_missing), never auth_failed.
+				winHost := dev.OsFamily == domain.OSFamilyWindows || dev.Category == string(domain.CatEndpoint)
+				winMgmtPort := false
+				for _, p := range r.OpenPorts {
+					if p == 445 || p == 135 || p == 5985 || p == 5986 {
+						winMgmtPort = true
+						break
+					}
+				}
+				windowsManageable := winHost && winMgmtPort
+				if s.cipher() != nil && (boundOS || legacyWSMan || windowsManageable) && !specialized {
 					s.publishScanEvent(jobID, ip, id, "collection_started", "", "started", "deep OS inventory")
 					cctx, ccancel := context.WithTimeout(ctx, 2*time.Minute)
 					oc := s.runOSCollection(cctx, dev)
