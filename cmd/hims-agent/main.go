@@ -246,7 +246,21 @@ func collectWMI(ctx context.Context, j job) (*osinv.Report, string, error) {
 	script := `$ErrorActionPreference='Stop'
 $u=$env:HIMS_J_USER; $p=ConvertTo-SecureString $env:HIMS_J_PASS -AsPlainText -Force
 $c=New-Object System.Management.Automation.PSCredential($u,$p); $t=$env:HIMS_J_TARGET
-$g={param($cls) Get-WmiObject -ComputerName $t -Credential $c -Class $cls -ErrorAction Stop}
+# Primary: WMI/DCOM (Get-WmiObject over RPC/135). Fallback: when DCOM is dead
+# ("RPC server unavailable") but WinRM (5985) is up, collect the SAME CIM classes
+# over a WSMan CIM session — different transport, identical property names — so a
+# host with WMI/DCOM blocked but WinRM open still inventories. CIM classes match
+# Win32_* property names, so the rest of the script is unchanged.
+$sess=$null
+$probe=$null
+try { $probe=Get-WmiObject -ComputerName $t -Credential $c -Class Win32_OperatingSystem -ErrorAction Stop } catch { $sess='cim' }
+if($sess -eq 'cim'){
+  $opt=New-CimSessionOption -Protocol Wsman
+  $sess=New-CimSession -ComputerName $t -Credential $c -SessionOption $opt -OperationTimeoutSec 60 -ErrorAction Stop
+  $g={param($cls) Get-CimInstance -CimSession $sess -ClassName $cls -ErrorAction Stop}
+} else {
+  $g={param($cls) Get-WmiObject -ComputerName $t -Credential $c -Class $cls -ErrorAction Stop}
+}
 $os=&$g Win32_OperatingSystem; $cs=&$g Win32_ComputerSystem; $bios=&$g Win32_BIOS; $cpu=@(&$g Win32_Processor)
 $cores=($cpu|Measure-Object NumberOfCores -Sum).Sum; if(-not $cores){$cores=($cpu|Measure-Object NumberOfLogicalProcessors -Sum).Sum}
 $disks=@(&$g Win32_LogicalDisk|?{$_.DriveType -eq 3}|%{@{name=$_.DeviceID;filesystem=$_.FileSystem;total_bytes=[int64]$_.Size;free_bytes=[int64]$_.FreeSpace;size_bytes=[int64]$_.Size}})
