@@ -768,6 +768,7 @@ type OsInventory struct {
 	LastCriticalEvent   *string    `json:"last_critical_event"`
 	CreatedAt           time.Time  `json:"created_at"`
 	UpdatedAt           time.Time  `json:"updated_at"`
+	SoftwareNote        string     `json:"software_note"`
 }
 
 type OsNic struct {

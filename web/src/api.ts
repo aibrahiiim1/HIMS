@@ -1832,6 +1832,9 @@ export interface OSInventory {
   ram_total_bytes?: number | null; ram_slots?: number | null; swap_total_bytes?: number | null
   events_critical_24h?: number | null; events_error_24h?: number | null; events_warning_24h?: number | null
   last_critical_event?: string | null
+  // Honest installed-software collection status: which method succeeded, or the
+  // exact blocker when software is empty (remote_registry_disabled, access_denied, …).
+  software_note?: string | null
 }
 export interface OSDisk { name: string; model?: string | null; serial?: string | null; filesystem?: string | null; size_bytes?: number | null; total_bytes?: number | null; free_bytes?: number | null; health?: string | null }
 export interface OSNic { name: string; mac?: string | null; ip_addresses?: string | null; gateway?: string | null; dns_servers?: string | null; dhcp_enabled?: boolean | null; link_speed_mbps?: number | null }

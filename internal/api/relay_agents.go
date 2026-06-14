@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -369,6 +370,16 @@ func (s *Server) agentJobResult(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The request body is fully read; detach the persist + job-completion work from
+	// the request context. A relay agent collecting a slow legacy host can drop the
+	// result connection right after we persist the inventory — if these writes ran
+	// on r.Context() that cancellation would commit the inventory but leave the job
+	// stuck "dispatched" forever, blocking CountActiveDeviceAgentJobs (no future
+	// re-collection). A short detached context keeps inventory-persisted and
+	// job-completed atomic from the agent's perspective.
+	pctx, pcancel := context.WithTimeout(context.WithoutCancel(r.Context()), 30*time.Second)
+	defer pcancel()
+
 	status := "failed"
 	if req.Success {
 		status = "done"
@@ -376,12 +387,12 @@ func (s *Server) agentJobResult(w http.ResponseWriter, r *http.Request) {
 		if job.Kind == "collect_os" && job.DeviceID != nil && len(req.Report) > 0 {
 			var rep osinv.Report
 			if jerr := json.Unmarshal(req.Report, &rep); jerr == nil {
-				if perr := osinv.Persist(r.Context(), s.queries, *job.DeviceID, rep, time.Now().UTC()); perr == nil {
-					_ = s.queries.UpdateDeviceMonitoringStatus(r.Context(), db.UpdateDeviceMonitoringStatusParams{ID: *job.DeviceID, Status: "up"})
+				if perr := osinv.Persist(pctx, s.queries, *job.DeviceID, rep, time.Now().UTC()); perr == nil {
+					_ = s.queries.UpdateDeviceMonitoringStatus(pctx, db.UpdateDeviceMonitoringStatusParams{ID: *job.DeviceID, Status: "up"})
 					if job.CredentialID != nil {
-						_ = s.queries.SetDeviceCredential(r.Context(), db.SetDeviceCredentialParams{ID: *job.DeviceID, CredentialID: job.CredentialID})
+						_ = s.queries.SetDeviceCredential(pctx, db.SetDeviceCredentialParams{ID: *job.DeviceID, CredentialID: job.CredentialID})
 					}
-					s.reclassifyFromCaption(r.Context(), db.Device{ID: *job.DeviceID}, rep.OS.Caption)
+					s.reclassifyFromCaption(pctx, db.Device{ID: *job.DeviceID}, rep.OS.Caption)
 				} else {
 					status, req.Error = "failed", "agent collected but HIMS failed to persist: "+perr.Error()
 				}
@@ -401,13 +412,13 @@ func (s *Server) agentJobResult(w http.ResponseWriter, r *http.Request) {
 				cat = "error"
 			}
 		}
-		s.persistScanCredAttempts(r.Context(), db.Device{ID: *job.DeviceID}, []discovery.CredAttempt{{
+		s.persistScanCredAttempts(pctx, db.Device{ID: *job.DeviceID}, []discovery.CredAttempt{{
 			CredentialID: *job.CredentialID, Kind: domain.CredentialKind(job.Protocol),
 			Protocol: job.Protocol, Success: status == "done", Category: cat,
 			Detail: "via relay agent " + a.Name,
 		}}, "default")
 	}
-	_ = s.queries.CompleteAgentJob(r.Context(), db.CompleteAgentJobParams{
+	_ = s.queries.CompleteAgentJob(pctx, db.CompleteAgentJobParams{
 		ID: jobID, Status: status, Result: nilIfEmpty(req.Report), Category: req.Category, Error: req.Error,
 	})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "status": status})

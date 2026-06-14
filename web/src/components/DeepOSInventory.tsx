@@ -150,7 +150,7 @@ export function DeepOSInventory({ deviceId, alwaysShow, isVirtual }: { deviceId:
           <PagedSection title="Installed software" items={b.software}
             head={<tr><th>Name</th><th>Version</th><th>Publisher</th></tr>}
             match={(sw, q) => (sw.name || '').toLowerCase().includes(q) || (sw.publisher || '').toLowerCase().includes(q)}
-            emptyNote={inv ? `Not reported via ${inv.collection_method} collection — some hosts don't expose the installed-software registry over WMI/WinRM (e.g. legacy WSMan). Re-collect after enabling remote registry, or collect over direct WinRM.` : undefined}
+            emptyNote={inv?.software_note ? `Software not collected — ${inv.software_note}` : inv ? `Not reported via ${inv.collection_method} collection — some hosts don't expose the installed-software registry over WMI/WinRM (e.g. legacy WSMan). Re-collect after enabling remote registry, or collect over direct WinRM.` : undefined}
             row={(sw, i) => <tr key={i}><td>{sw.name}</td><td>{sw.version || '—'}</td><td className="muted" style={{ fontSize: 12 }}>{sw.publisher || ''}</td></tr>} />
         </>
       )}
