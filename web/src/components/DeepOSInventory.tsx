@@ -144,11 +144,13 @@ export function DeepOSInventory({ deviceId, alwaysShow, isVirtual }: { deviceId:
           <PagedSection title="Top processes" items={b.processes}
             head={<tr><th>Process</th><th>PID</th><th>Memory</th><th>CPU%</th></tr>}
             match={(p, q) => p.name.toLowerCase().includes(q)}
+            emptyNote={inv ? `Not reported via ${inv.collection_method} collection on the last run.` : undefined}
             row={(p) => <tr key={p.pid}><td>{p.name}</td><td>{p.pid}</td><td>{fmtBytes(p.mem_bytes)}</td><td>{p.cpu_pct ?? '—'}</td></tr>} />
 
           <PagedSection title="Installed software" items={b.software}
             head={<tr><th>Name</th><th>Version</th><th>Publisher</th></tr>}
             match={(sw, q) => (sw.name || '').toLowerCase().includes(q) || (sw.publisher || '').toLowerCase().includes(q)}
+            emptyNote={inv ? `Not reported via ${inv.collection_method} collection — some hosts don't expose the installed-software registry over WMI/WinRM (e.g. legacy WSMan). Re-collect after enabling remote registry, or collect over direct WinRM.` : undefined}
             row={(sw, i) => <tr key={i}><td>{sw.name}</td><td>{sw.version || '—'}</td><td className="muted" style={{ fontSize: 12 }}>{sw.publisher || ''}</td></tr>} />
         </>
       )}
@@ -168,13 +170,14 @@ function Section({ title, empty, children }: { title: string; empty: boolean; ch
 // PagedSection renders a large collection (services/processes/software) with a
 // filter box + client-side pagination so the DOM stays small and the page
 // doesn't become an endless scroll. Collapsed by default when empty.
-function PagedSection<T>({ title, items, head, row, match, pageSize = 10 }: {
+function PagedSection<T>({ title, items, head, row, match, pageSize = 10, emptyNote }: {
   title: string
   items: T[]
   head: React.ReactNode
   row: (it: T, i: number) => React.ReactNode
   match?: (it: T, q: string) => boolean
   pageSize?: number
+  emptyNote?: string
 }) {
   const [filter, setFilter] = useState('')
   const { slice, total, page, pages, setPage } = usePaged(items, { pageSize, filter, match })
@@ -182,7 +185,7 @@ function PagedSection<T>({ title, items, head, row, match, pageSize = 10 }: {
     <details style={{ marginTop: 12 }} open={items.length > 0}>
       <summary style={{ cursor: 'pointer', fontWeight: 600 }}>{title} ({items.length})</summary>
       <div style={{ marginTop: 8 }}>
-        {items.length === 0 ? <span className="muted">Not collected yet.</span> : (
+        {items.length === 0 ? <span className="muted">{emptyNote || 'Not collected yet.'}</span> : (
           <>
             {match && (
               <input

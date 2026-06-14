@@ -214,7 +214,10 @@ func (a *agent) runJob(j job) {
 
 // collect runs one device collection locally and returns an osinv.Report.
 func collect(j job) (*osinv.Report, string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	// 4 min: the WMI/CIM identity+services+disks+nics pass is quick, but the
+	// installed-software registry walk (StdRegProv EnumKey + per-value GetStringValue
+	// across the Uninstall keys) is many small round-trips and dominates the time.
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 	switch j.Protocol {
 	case "winrm":
@@ -266,10 +269,41 @@ $cores=($cpu|Measure-Object NumberOfCores -Sum).Sum; if(-not $cores){$cores=($cp
 $disks=@(&$g Win32_LogicalDisk|?{$_.DriveType -eq 3}|%{@{name=$_.DeviceID;filesystem=$_.FileSystem;total_bytes=[int64]$_.Size;free_bytes=[int64]$_.FreeSpace;size_bytes=[int64]$_.Size}})
 $nics=@(&$g Win32_NetworkAdapterConfiguration|?{$_.IPEnabled}|%{@{name=$_.Description;mac=$_.MACAddress;ip_addresses=(@($_.IPAddress)-join',');gateway=(@($_.DefaultIPGateway)-join',');dns_servers=(@($_.DNSServerSearchOrder)-join',');dhcp_enabled=[bool]$_.DHCPEnabled}})
 $svc=@(&$g Win32_Service|%{@{name=$_.Name;display_name=$_.DisplayName;status=$_.State;start_type=$_.StartMode;account=$_.StartName}})
+# Top processes by working set. Win32_Process works over BOTH transports (WMI/DCOM
+# and the WSMan CIM session), unlike Get-Process which is local-only — so this
+# populates for agent-collected hosts the same as the direct-WinRM path does.
+$procs=@(); try { $procs=@(&$g Win32_Process | Sort-Object WorkingSetSize -Descending | Select-Object -First 50 | %{@{name=$_.Name;pid=[int]$_.ProcessId;mem_bytes=[int64]$_.WorkingSetSize}}) } catch {}
+# Installed software from the HKLM Uninstall registry via StdRegProv (EnumKey +
+# GetStringValue). Win32_Product is deliberately NOT used — it is slow and triggers
+# MSI self-repair. Method invocation differs per transport: Invoke-CimMethod on the
+# WSMan session vs Invoke-WmiMethod over DCOM with creds. Wrapped so a registry
+# permission error leaves software empty without failing the whole collection.
+$sw=@()
+try {
+  if($useCim){
+    # WSMan path: the host speaks WinRM, so read the Uninstall registry with native
+    # PS remoting (Get-ItemProperty runs locally on the target) — more reliable than
+    # StdRegProv method-invocation over WSMan on legacy stacks.
+    $items=Invoke-Command -ComputerName $t -Credential $c -ScriptBlock {
+      Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*','HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
+      Where-Object{$_.DisplayName} | ForEach-Object{[pscustomobject]@{n=[string]$_.DisplayName;v=[string]$_.DisplayVersion;p=[string]$_.Publisher;d=[string]$_.InstallDate}} } -ErrorAction Stop
+    $sw=@($items|%{@{name=$_.n;version=$_.v;publisher=$_.p;install_date=$_.d}})
+  } else {
+    # DCOM path: no WinRM, so read the registry remotely via StdRegProv over WMI.
+    $HKLM=[uint32]2147483650
+    $ek={param($k) (Invoke-WmiMethod -ComputerName $t -Credential $c -Namespace 'root\default' -Class StdRegProv -Name EnumKey -ArgumentList $HKLM,$k).sNames}
+    $gv={param($k,$v) (Invoke-WmiMethod -ComputerName $t -Credential $c -Namespace 'root\default' -Class StdRegProv -Name GetStringValue -ArgumentList $HKLM,$k,$v).sValue}
+    foreach($base in @('SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall','SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall')){
+      $subs=&$ek $base
+      if($subs){ foreach($s in $subs){ $kp="$base\$s"; $dn=&$gv $kp 'DisplayName'
+        if($dn){ $sw+=@{name=[string]$dn;version=[string](&$gv $kp 'DisplayVersion');publisher=[string](&$gv $kp 'Publisher');install_date=[string](&$gv $kp 'InstallDate')} } } }
+    }
+  }
+} catch {}
 @{ method='wmi'; identity=@{hostname=$os.CSName;fqdn=("{0}.{1}" -f $cs.Name,$cs.Domain).TrimEnd('.');domain=$cs.Domain;workgroup=$cs.Workgroup;logged_on_user=$cs.UserName};
    os=@{caption=$os.Caption;version=$os.Version;build="$($os.BuildNumber)";arch=$os.OSArchitecture;install_date="$($os.InstallDate)";last_boot="$($os.LastBootUpTime)"};
    hardware=@{manufacturer=$cs.Manufacturer;model=$cs.Model;serial=$bios.SerialNumber;bios_version=(@($bios.SMBIOSBIOSVersion)-join' ');cpu_model=$cpu[0].Name;cpu_sockets=$cpu.Count;cpu_cores=[int]$cores;ram_total_bytes=[int64]$cs.TotalPhysicalMemory};
-   disks=$disks; nics=$nics; services=$svc; software=@(); roles=@(); events=$null } | ConvertTo-Json -Depth 8 -Compress`
+   disks=$disks; nics=$nics; services=$svc; software=$sw; processes=$procs; roles=@(); events=$null } | ConvertTo-Json -Depth 8 -Compress`
 	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
 	// Strip any inherited PSModulePath so Windows PowerShell 5.1 uses its own
 	// default module locations. A PSModulePath pointing at PowerShell 7 modules
