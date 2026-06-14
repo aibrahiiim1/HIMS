@@ -240,6 +240,7 @@ func (s *Server) routes() {
 		r.Get("/devices/{id}/camera", s.deviceCamera)
 		r.Get("/devices/{id}/nvr-channels", s.deviceNVRChannels)
 		r.Get("/devices/{id}/nvr", s.deviceNVR)
+		r.Get("/devices/{id}/recorders", s.cctvDeviceRecorders) // NVR/DVR(s) recording this camera (managed-via-recorder)
 		r.Get("/devices/{id}/web-access", s.deviceWebAccess)
 		r.Put("/devices/{id}/web-access", s.setDeviceWebAccess)
 		r.Get("/devices/{id}/wlan", s.deviceWLAN)

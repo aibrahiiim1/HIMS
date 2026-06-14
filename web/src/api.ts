@@ -553,6 +553,26 @@ export interface CCTVSummary {
   devices_total: number
   channels: number
   channels_linked: number
+  // Management breakdown: managed_total = managed_direct + managed_via_recorder.
+  // "direct" = device has its own proven ONVIF/ISAPI/HTTP credential; "via_recorder"
+  // = a camera that is an NVR/DVR channel (managed through the recorder, no own login).
+  managed_total: number
+  managed_direct: number
+  managed_via_recorder: number
+  unmanaged: number
+  auth_failed: number
+  no_credential: number
+  other_unmanaged: number
+  recorders_managed: number
+}
+
+// GET /devices/{id}/recorders — the NVR/DVR(s) recording a given camera.
+export interface CameraRecorder {
+  nvr_device_id: string
+  nvr_name: string
+  nvr_ip: string
+  channel_no: number
+  status: string
 }
 
 // One device's outcome in a fleet-wide CCTV collection.

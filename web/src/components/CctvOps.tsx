@@ -66,6 +66,27 @@ export function CctvOps() {
         <Stat label="Camera channels" value={s?.channels} sub={s ? `${s.channels_linked} linked to a device` : undefined} />
         <Stat label="CCTV devices" value={s?.devices_total} sub="channels excluded" />
       </div>
+
+      {/* Management breakdown — explains why "managed" ≠ "has a credential":
+          managed = direct (own credential) + via-recorder (NVR/DVR channel). */}
+      <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--border, #2a3640)' }}>
+        <div className="muted" style={{ fontSize: 12, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.4 }}>
+          Management
+        </div>
+        <div className="row" style={{ flexWrap: 'wrap', gap: 18, fontSize: 14 }}>
+          <Stat label="Managed (total)" value={s?.managed_total}
+            sub={s ? `${s.managed_direct} direct + ${s.managed_via_recorder} via recorder` : undefined} />
+          <Stat label="Direct credential" value={s?.managed_direct} sub="own ONVIF/ISAPI/HTTP login" />
+          <Stat label="Via NVR/DVR recorder" value={s?.managed_via_recorder} sub="camera = a recorder channel" />
+          <Stat label="Unmanaged" value={s?.unmanaged}
+            sub={s ? `${s.auth_failed} auth failed · ${s.no_credential} no credential` : undefined} />
+          <Stat label="Recorders managed" value={s?.recorders_managed} sub="NVRs/DVRs with own login" />
+        </div>
+        <p className="muted" style={{ marginTop: 8, fontSize: 12 }}>
+          “Managed” counts both kinds. A camera that is a channel on an NVR/DVR is managed <em>via the recorder</em> (its feed/recording come through it) and needs no individual web login — so it has no direct credential by design, and is never flagged as a credential failure.
+        </p>
+      </div>
+
       {relinkMsg && <p className="muted" style={{ marginTop: 8, fontSize: 12, color: 'var(--ok)' }}>{relinkMsg}</p>}
 
       {run && (running || run.done > 0) && (

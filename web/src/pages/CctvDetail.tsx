@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams, Link } from 'react-router-dom'
 import { Camera, Video, Film, HardDrive, Disc, Network, Activity, Wrench, Cpu, Globe, ShieldCheck, RefreshCw } from 'lucide-react'
-import { api, type CameraInfo, type NVRChannel, type NVRDetail, type Device, type DeviceWebAccess, type CredTestResult } from '../api'
+import { api, type CameraInfo, type NVRChannel, type NVRDetail, type Device, type DeviceWebAccess, type CredTestResult, type CameraRecorder } from '../api'
 import { DeviceHeader } from '../components/DeviceHeader'
 import { Panel, Kpi, DefList, EmptyState, StatusPill } from '../components/ui'
 
@@ -28,6 +28,10 @@ export function CctvDetail() {
   const dev = devQ.data
   const cam = useQuery({ queryKey: ['camera', id], queryFn: () => api.get<CameraInfo>(`/devices/${id}/camera`) })
   const nvr = useQuery({ queryKey: ['nvr', id], queryFn: () => api.get<NVRDetail>(`/devices/${id}/nvr`) })
+  // Recorder(s) that record this camera + the working web-access method — used to
+  // show whether the camera is managed VIA a recorder or DIRECTLY by its own login.
+  const recorders = useQuery({ queryKey: ['recorders', id], queryFn: () => api.get<CameraRecorder[]>(`/devices/${id}/recorders`) })
+  const webAccess = useQuery({ queryKey: ['webaccess', id], queryFn: () => api.get<DeviceWebAccess>(`/devices/${id}/web-access`) })
 
   const c = cam.data
   const info = nvr.data?.info ?? null
@@ -44,7 +48,11 @@ export function CctvDetail() {
   // ---- camera (non-recorder): organized identity + network layout -----------
   if (!isNVR) {
     const mgmt = dev?.management
-    const mgmtLabel = mgmt === 'managed' ? 'Managed' : mgmt ? mgmt.replace(/_/g, ' ') : '—'
+    const viaRecorder = (dev?.managed_by ?? []).includes('nvr')
+    const recs = recorders.data ?? []
+    const wa = webAccess.data
+    const mgmtLabel = mgmt === 'managed' ? (viaRecorder ? 'Managed via recorder' : 'Managed (direct)') : mgmt ? mgmt.replace(/_/g, ' ') : '—'
+    const recList = recs.map((r) => `${r.nvr_name || r.nvr_ip || '—'} · ch ${r.channel_no}${r.status ? ` (${r.status})` : ''}`).join('; ')
     const collected = !!(c && c.device_id)
     return (
       <div>
@@ -65,6 +73,32 @@ export function CctvDetail() {
             <button key={k} className={tab === k ? 'active' : ''} onClick={() => setTab(k)}>{lbl}</button>
           ))}
         </div>
+
+        {tab === 'overview' && (
+          <Panel title="Management" icon={ShieldCheck}>
+            {mgmt === 'managed' && viaRecorder ? (
+              <DefList items={[
+                { label: 'Managed', value: 'Via NVR/DVR recorder' },
+                { label: 'Recorder', value: recList || '—' },
+                { label: 'Direct credential', value: 'Not required — feed & recording come through the recorder' },
+              ]} />
+            ) : mgmt === 'managed' ? (
+              <DefList items={[
+                { label: 'Managed', value: 'Directly (own credential)' },
+                { label: 'Protocol', value: (wa?.last_proto || (dev?.managed_by ?? []).join(', ') || '—').toUpperCase() },
+                { label: 'Credential', value: wa?.last_credential || '—' },
+                { label: 'Endpoint', value: wa?.last_ok ? <span className="mono">{wa.last_ok}</span> : '—' },
+                ...(recList ? [{ label: 'Also a recorder channel', value: recList }] : []),
+              ]} />
+            ) : (
+              <DefList items={[
+                { label: 'Status', value: mgmtLabel },
+                { label: 'Recorder channel', value: recList || 'Not a channel on any known recorder' },
+                { label: 'Direct credential', value: mgmt === 'credential_failed' ? 'Auth failed — every tried web login was rejected; add the correct web credential and re-collect' : 'None bound yet' },
+              ]} />
+            )}
+          </Panel>
+        )}
 
         {tab === 'overview' && (collected ? (
           <Panel title="Identity" icon={Camera}>

@@ -133,6 +133,47 @@ func (s *Server) cctvSummary(w http.ResponseWriter, r *http.Request) {
 	cams := count(string(domain.CatCamera))
 	channels, _ := s.queries.CountNVRChannels(ctx)
 	linked, _ := s.queries.CountLinkedNVRChannels(ctx)
+
+	// Management breakdown. "Managed" splits into two operationally-distinct kinds
+	// so the summary is never contradictory (e.g. "313 managed" but only "278 have
+	// a credential"): a device managed by its OWN proven credential (direct), vs a
+	// camera that is an NVR/DVR channel and is managed VIA the recorder (no own web
+	// login needed — its feed/recording come through the recorder). The remainder
+	// is broken out by gap (auth_failed / no_credential / other) so the operator
+	// sees exactly what's left. Computed via the same deriveManagement rules the
+	// rest of HIMS uses, so the numbers match the inventory filters.
+	var allCCTV []db.Device
+	for _, cat := range []string{string(domain.CatNVR), string(domain.CatDVR), string(domain.CatCamera)} {
+		if ds, err := s.queries.ListDevicesByCategory(ctx, cat); err == nil {
+			allCCTV = append(allCCTV, ds...)
+		}
+	}
+	var direct, viaRecorder, authFailed, noCred, otherUnmanaged, recordersManaged int
+	if maps, err := s.buildStatusMaps(ctx); err == nil {
+		for _, d := range allCCTV {
+			state, managedBy := maps.deriveManagement(d)
+			if state == MgmtManaged {
+				if managedViaRecorder(managedBy) {
+					viaRecorder++
+				} else {
+					direct++
+					if d.Category == string(domain.CatNVR) || d.Category == string(domain.CatDVR) {
+						recordersManaged++
+					}
+				}
+				continue
+			}
+			switch state {
+			case MgmtCredentialFailed:
+				authFailed++
+			case MgmtNeedsCredential:
+				noCred++
+			default:
+				otherUnmanaged++
+			}
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"nvrs":            nvrs,
 		"dvrs":            dvrs,
@@ -141,7 +182,47 @@ func (s *Server) cctvSummary(w http.ResponseWriter, r *http.Request) {
 		"devices_total":   nvrs + dvrs + cams, // NVRs + DVRs + standalone cameras (channels excluded)
 		"channels":        channels,           // camera channels inside recorders (not devices)
 		"channels_linked": linked,             // channels matched to a standalone camera device
+		// Management breakdown — managed_total = managed_direct + managed_via_recorder.
+		"managed_total":        direct + viaRecorder,
+		"managed_direct":       direct,       // own proven ONVIF/ISAPI/HTTP credential
+		"managed_via_recorder": viaRecorder,  // camera is an NVR/DVR channel (managed through the recorder)
+		"unmanaged":            authFailed + noCred + otherUnmanaged,
+		"auth_failed":          authFailed, // reachable but every tried credential rejected
+		"no_credential":        noCred,      // no credential available to try
+		"other_unmanaged":      otherUnmanaged,
+		"recorders_managed":    recordersManaged, // NVRs/DVRs managed by their own credential
 	})
+}
+
+// cctvDeviceRecorders handles GET /devices/{id}/recorders — the NVR/DVR(s) that
+// record this camera, each with the channel number + online status. Powers the
+// "Managed via Recorder" panel on a camera's detail page (a camera that is an
+// NVR/DVR channel is managed through the recorder, not its own web login). Empty
+// array = not recorded by any known recorder.
+func (s *Server) cctvDeviceRecorders(w http.ResponseWriter, r *http.Request) {
+	ctx, id, ok := pathDevice(w, r)
+	if !ok {
+		return
+	}
+	cid := id
+	rows, err := s.queries.FindNVRsForCamera(ctx, &cid)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+// managedViaRecorder reports whether a device's proven management is solely the
+// "managed via NVR/DVR recorder channel" path (managedBy == ["nvr"]), as opposed
+// to a direct working credential of its own.
+func managedViaRecorder(managedBy []string) bool {
+	for _, p := range managedBy {
+		if p == "nvr" {
+			return true
+		}
+	}
+	return false
 }
 
 // relinkCCTVChannels handles POST /cctv/relink-channels — link every NVR/DVR
