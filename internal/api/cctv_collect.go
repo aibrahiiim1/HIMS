@@ -173,6 +173,12 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device, selectedCre
 
 	var attempts []discovery.CredAttempt
 	lastReason, lastDetail := "auth_failed", "ONVIF authentication rejected"
+	// If ONVIF authenticates a device that turns out to be a recorder (NVR/DVR),
+	// we keep its identity but still run the ISAPI walk below for the channel/HDD
+	// inventory (ONVIF doesn't expose it). onvifResult is the fallback returned if
+	// that ISAPI pass can't be reached.
+	var onvifOK bool
+	var onvifResult cctvResult
 	for _, cd := range cands {
 		if d.WebPrefProto == "isapi" || d.Category == string(domain.CatNVR) || d.Category == string(domain.CatDVR) {
 			// Operator forced ISAPI, OR the device is an already-classified recorder:
@@ -238,13 +244,25 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device, selectedCre
 		s.recordWebSuccess(ctx, d.ID, "onvif", okBase, &cid)                                                          // real source = ONVIF (actual port)
 		_ = s.queries.UpdateDeviceMonitoringStatus(ctx, db.UpdateDeviceMonitoringStatusParams{ID: d.ID, Status: "up"})
 
-		res = cctvResult{Status: "collected", CredentialUsed: cd.name, Category: string(cat),
+		onvifRes := cctvResult{Status: "collected", CredentialUsed: cd.name, Category: string(cat),
 			Detail: "collected via ONVIF using credential " + cd.name}
+		if cat == domain.CatNVR || cat == domain.CatDVR {
+			// Recorder: ONVIF gave us identity (already persisted + credential bound),
+			// but channels/HDDs/recording come ONLY from the ISAPI walk. Don't return —
+			// fall through to the ISAPI loop below to collect the full inventory. If
+			// ISAPI can't be reached, onvifResult is returned as the fallback so the
+			// device still lands managed with its ONVIF identity.
+			onvifOK, onvifResult = true, onvifRes
+			break
+		}
+		// Plain camera: ONVIF is the complete result — there are no channels to walk.
+		res = onvifRes
 		s.persistScanCredAttempts(ctx, d, attempts, source)
 		return res
 	}
 
-	// ONVIF unavailable (e.g. disabled, or no plain-HTTP/:80) — fall back to
+	// ONVIF unavailable (e.g. disabled, or no plain-HTTP/:80), OR a recorder whose
+	// channel/HDD inventory we still need — fall back to
 	// Hikvision ISAPI over HTTPS. It yields the definitive deviceType (NVR/DVR vs
 	// IPCamera) + identity AND, for recorders, the full inventory (channels, HDDs,
 	// recording/health). Bound-credential-only (above) avoids the lockout.
@@ -315,6 +333,13 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device, selectedCre
 	}
 
 	s.persistScanCredAttempts(ctx, d, attempts, source)
+	if onvifOK {
+		// Recorder identity was collected over ONVIF but the ISAPI channel/HDD walk
+		// couldn't be reached this run — return the identity success (device stays
+		// managed) rather than a hard failure; channels can fill in on a later run.
+		onvifResult.Detail += "; channel/HDD inventory unavailable (ISAPI not reachable this run)"
+		return onvifResult
+	}
 	res.Reason, res.Detail = lastReason, lastDetail
 	return res
 }
