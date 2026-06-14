@@ -116,7 +116,11 @@ func (s *Server) startScan(w http.ResponseWriter, r *http.Request) {
 		_ = s.queries.SetDiscoveryJobMetadata(r.Context(), db.SetDiscoveryJobMetadataParams{ID: job.ID, Metadata: spec})
 	}
 
-	go s.runScanJob(job.ID, hosts, locID, concurrency, extra, snmpTO, portTO)
+	// An explicit per-scan credential selection (specific creds or groups chosen
+	// in the dialog) overrides the standing subnet-scoped set — only those are
+	// tried. An empty selection ("all stored, auto") leaves subnet scope in force.
+	explicitCreds := len(req.CredentialIDs) > 0 || len(req.CredentialGroupIDs) > 0
+	go s.runScanJob(job.ID, hosts, locID, concurrency, extra, explicitCreds, snmpTO, portTO)
 	s.audit(r, "discovery", "discovery.scan", "discovery_job", job.ID.String(), "Launched discovery scan ("+scopeLabel+")", map[string]any{"hosts": len(hosts), "mode": req.Mode})
 	writeJSON(w, http.StatusAccepted, job)
 }
@@ -460,7 +464,7 @@ func (s *Server) cctvWebCredsForScan(ctx context.Context, ip netip.Addr, locID *
 
 // runScanJob is the background scan worker. It owns its own context (the HTTP
 // request's is long gone) and records per-host outcomes + a final job status.
-func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUID, concurrency int, extraGroups []credresolver.ScopedGroup, snmpTO, portTO time.Duration) {
+func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUID, concurrency int, extraGroups []credresolver.ScopedGroup, explicitCreds bool, snmpTO, portTO time.Duration) {
 	// Overall job budget scales with the host count: a flat 30m can't cover a large
 	// multi-subnet scan whose deep collection is slow (camera ONVIF/ISAPI walks),
 	// which truncated the tail of a 764-host two-subnet scan ("context deadline
@@ -478,7 +482,7 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 
 	cfg := discovery.PipelineConfig{
 		Registry: s.reg, Fetcher: s.fetcher, Decrypt: s.scanDecrypt,
-		ExtraGroups: extraGroups,
+		ExtraGroups: extraGroups, ExplicitCreds: explicitCreds,
 		SNMPTimeout: snmpTO, PortTimeout: portTO,
 		// Vendor-fingerprint library (operator ∪ built-in) — overrides generic
 		// driver categories from product evidence (e.g. ExtremeCloud IQ Controller
@@ -802,11 +806,22 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 						// — never the global scan web creds. This is the CCTV anti-spray
 						// / lockout-safety path (mirrors the resolver exclusivity used for
 						// SNMP/SSH/WinRM). Empty fall-through keeps current behaviour.
-						webCreds, scopedLabel := s.cctvWebCredsForScan(ctx, ip, locID, scanWebCreds)
+						var webCreds []uuid.UUID
+						var scopedLabel string
 						scopeNote, cctvSource := "", "default"
-						if scopedLabel != "" {
-							scopeNote = " [subnet-scoped: " + scopedLabel + "]"
-							cctvSource = "subnet"
+						if explicitCreds {
+							// Explicit operator selection wins over the subnet's assigned
+							// web creds (mirrors the resolver path) — try ONLY the selected
+							// ONVIF/HTTP-Basic credentials. Anti-spray still holds: just the
+							// chosen set, never the global list.
+							webCreds = scanWebCreds
+							scopeNote, cctvSource = " [operator-selected]", "selected"
+						} else {
+							webCreds, scopedLabel = s.cctvWebCredsForScan(ctx, ip, locID, scanWebCreds)
+							if scopedLabel != "" {
+								scopeNote = " [subnet-scoped: " + scopedLabel + "]"
+								cctvSource = "subnet"
+							}
 						}
 						// Already-onboarded CCTV device: it has a durable bound web credential
 						// that works. Re-use ONLY that (bound-credential-only — pass no
@@ -1594,7 +1609,8 @@ func (s *Server) rerunDiscoveryJob(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = s.queries.UpdateDiscoveryJobStatus(ctx, db.UpdateDiscoveryJobStatusParams{ID: job.ID, Status: "running", HostCount: int32(len(hosts)), FoundCount: 0})
 	_ = s.queries.SetDiscoveryJobMetadata(ctx, db.SetDiscoveryJobMetadataParams{ID: job.ID, Metadata: prev.Metadata})
-	go s.runScanJob(job.ID, hosts, prev.LocationID, defConc, extra, snmpTO, portTO)
+	explicitCreds := len(req.CredentialIDs) > 0 || len(req.CredentialGroupIDs) > 0
+	go s.runScanJob(job.ID, hosts, prev.LocationID, defConc, extra, explicitCreds, snmpTO, portTO)
 	writeJSON(w, http.StatusAccepted, job)
 }
 

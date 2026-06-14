@@ -170,6 +170,14 @@ type PipelineConfig struct {
 	// no-per-device-picker discipline holds: the operator picks GROUPS for a
 	// scan, not a credential for a device. Empty = pure scope auto-resolution.
 	ExtraGroups []credresolver.ScopedGroup
+	// ExplicitCreds reports that ExtraGroups represents an EXPLICIT operator
+	// credential selection for this scan (not the implicit "all stored" default).
+	// When set, that selection wins over any standing subnet assignment: it
+	// becomes the EXCLUSIVE candidate set for every host and the subnet-scoped set
+	// is ignored. This mirrors per-device Collect, where an operator-chosen
+	// credential overrides subnet scope. Anti-spray still holds — only the
+	// explicitly chosen credentials are tried, never the whole global list.
+	ExplicitCreds bool
 	// Timeout for each per-host step.
 	PingTimeout time.Duration
 	SNMPTimeout time.Duration
@@ -209,6 +217,24 @@ const explicitTierSpecificity = 100
 // finalizeCredSource stamps the credential-test source ("subnet" | "default")
 // on every attempt that didn't already carry one, so the history can report why
 // each credential was tried (subnet-scoped vs normal resolution).
+// flattenGroups collapses scoped groups into a de-duplicated, order-preserving
+// CredRef slice — used to turn an explicit operator selection (ExtraGroups) into
+// the resolver's Exclusive set.
+func flattenGroups(groups []credresolver.ScopedGroup) []credresolver.CredRef {
+	var out []credresolver.CredRef
+	seen := map[uuid.UUID]bool{}
+	for _, g := range groups {
+		for _, m := range g.Members {
+			if seen[m.ID] {
+				continue
+			}
+			seen[m.ID] = true
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
 func finalizeCredSource(r HostResult, source string) HostResult {
 	for i := range r.CredAttempts {
 		if r.CredAttempts[i].Source == "" {
@@ -270,7 +296,19 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 		r.Error = fmt.Errorf("subnet-scoped credentials: %w", serr)
 	}
 	credSource := "default"
-	if len(exclusive) > 0 {
+	switch {
+	case cfg.ExplicitCreds && len(cfg.ExtraGroups) > 0:
+		// Explicit operator selection wins over any standing subnet assignment:
+		// the selected credentials ARE the exclusive set (only those are tried,
+		// fingerprint-filtered), and the subnet-scoped set is ignored for this
+		// scan. Without this, a subnet that has assigned credentials would
+		// override the operator's per-scan choice — surfacing as "I selected
+		// these creds but the scan applied other ones."
+		exclusive = flattenGroups(cfg.ExtraGroups)
+		scopeLabel = ""
+		credSource = "selected"
+		emit("credential_scope", "", "selected", "operator-selected credentials")
+	case len(exclusive) > 0:
 		r.CredScope = scopeLabel
 		credSource = "subnet"
 		emit("credential_scope", "", "subnet", scopeLabel)
