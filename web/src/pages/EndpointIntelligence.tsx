@@ -1,8 +1,8 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   ChartLine, Cpu, HardDrive, Boxes, Activity, Server, MonitorSmartphone,
-  Network, Wrench, ShieldCheck, AppWindow, Gauge,
+  Network, Wrench, ShieldCheck, AppWindow, Gauge, FileText, Download,
 } from 'lucide-react'
 import { api } from '../api'
 import {
@@ -54,6 +54,7 @@ const TABS = [
   { key: 'os', label: 'OS', icon: Server },
   { key: 'network', label: 'Network', icon: Network },
   { key: 'collection-health', label: 'Collection Health', icon: ShieldCheck },
+  { key: 'report', label: 'Report Builder', icon: FileText },
 ]
 
 export function EndpointIntelligence() {
@@ -106,6 +107,7 @@ export function EndpointIntelligence() {
       {tab === 'os' && <OSTab query={query} />}
       {tab === 'network' && <NetworkTab query={query} />}
       {tab === 'collection-health' && <CollectionHealthTab query={query} />}
+      {tab === 'report' && <ReportBuilderTab />}
     </div>
   )
 }
@@ -560,4 +562,190 @@ function CollectionHealthTab({ query }: { query: string }) {
       </Panel>
     </>
   )
+}
+
+/* ---- 11. Report Builder -------------------------------------------------- */
+
+type Filters = Record<string, string | boolean>
+interface ReportResult { entity: string; columns: { key: string; label: string }[]; rows: Row[]; total: number; truncated: boolean }
+
+const DEVICE_COLUMNS: { key: string; label: string }[] = [
+  { key: 'hostname', label: 'Device' }, { key: 'ip', label: 'IP' }, { key: 'site', label: 'Site' },
+  { key: 'category', label: 'Category' }, { key: 'os', label: 'OS' }, { key: 'os_build', label: 'Build' },
+  { key: 'os_arch', label: 'Arch' }, { key: 'model', label: 'Model' }, { key: 'vendor', label: 'Vendor' },
+  { key: 'serial', label: 'Serial' }, { key: 'cpu', label: 'CPU' }, { key: 'cpu_cores', label: 'Cores' },
+  { key: 'ram_gb', label: 'RAM (GB)' }, { key: 'disk_total_gb', label: 'C: total (GB)' },
+  { key: 'disk_free_gb', label: 'Min free (GB)' }, { key: 'disk_free_pct', label: 'Min free %' },
+  { key: 'software_count', label: 'Software' }, { key: 'process_count', label: 'Processes' },
+  { key: 'service_count', label: 'Services' }, { key: 'nic_count', label: 'NICs' },
+  { key: 'domain', label: 'Domain' }, { key: 'last_collected', label: 'Last collected' },
+  { key: 'collection_method', label: 'Method' }, { key: 'management', label: 'Management' },
+  { key: 'software_note', label: 'Collection note' }, { key: 'health_score', label: 'Health' },
+]
+
+interface Preset { label: string; entity: string; filters: Filters; columns?: string[]; sort?: string; desc?: boolean }
+const PRESETS: Preset[] = [
+  { label: 'Low RAM devices', entity: 'devices', filters: { ram_lt_gb: '8' }, sort: 'ram_gb', columns: ['hostname', 'ip', 'site', 'ram_gb', 'cpu', 'os', 'health_score'] },
+  { label: 'Low disk devices', entity: 'devices', filters: { disk_free_lt_gb: '10' }, sort: 'disk_free_gb', columns: ['hostname', 'ip', 'site', 'disk_free_gb', 'disk_free_pct', 'disk_total_gb', 'os'] },
+  { label: 'Old OS devices', entity: 'devices', filters: { old_os: true }, columns: ['hostname', 'ip', 'site', 'os', 'os_build', 'collection_method'] },
+  { label: 'Missing software inventory', entity: 'devices', filters: { missing_software: true }, columns: ['hostname', 'ip', 'site', 'collection_method', 'software_note'] },
+  { label: 'Missing top processes', entity: 'devices', filters: { missing_processes: true }, columns: ['hostname', 'ip', 'site', 'collection_method', 'software_note'] },
+  { label: 'No recent collection (>7d)', entity: 'devices', filters: { collected_older_than_days: '7' }, sort: 'last_collected', columns: ['hostname', 'ip', 'site', 'last_collected', 'collection_method'] },
+  { label: 'Worst performance candidates', entity: 'devices', filters: {}, sort: 'health_score', columns: ['hostname', 'ip', 'site', 'ram_gb', 'disk_free_gb', 'os', 'cpu', 'health_score'] },
+  { label: 'Hardware inventory', entity: 'devices', filters: { management: 'managed' }, columns: ['hostname', 'ip', 'site', 'vendor', 'model', 'serial', 'cpu', 'cpu_cores', 'ram_gb', 'disk_total_gb', 'os'] },
+  { label: 'Endpoint upgrade report', entity: 'devices', filters: {}, sort: 'health_score', columns: ['hostname', 'ip', 'site', 'ram_gb', 'disk_free_gb', 'cpu', 'cpu_cores', 'os', 'model', 'health_score'] },
+  { label: 'Collection health report', entity: 'devices', filters: {}, columns: ['hostname', 'ip', 'site', 'management', 'collection_method', 'last_collected', 'software_count', 'process_count', 'software_note'] },
+  { label: 'Installed software inventory', entity: 'software', filters: {} },
+  { label: 'Devices with specific software', entity: 'software', filters: { name_contains: '' } },
+  { label: 'Top processes (by memory)', entity: 'processes', filters: {} },
+  { label: 'Stopped automatic services', entity: 'services', filters: { name_contains: '' } },
+]
+
+function ReportBuilderTab() {
+  const [entity, setEntity] = useState('devices')
+  const [filters, setFilters] = useState<Filters>({})
+  const [columns, setColumns] = useState<string[]>(['hostname', 'ip', 'site', 'os', 'ram_gb', 'disk_free_gb', 'software_count', 'last_collected', 'health_score'])
+  const [sort, setSort] = useState('')
+  const [result, setResult] = useState<ReportResult | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [err, setErr] = useState('')
+
+  const setF = (k: string, v: string | boolean) => setFilters((f) => ({ ...f, [k]: v }))
+
+  const applyPreset = (p: Preset) => {
+    setEntity(p.entity)
+    setFilters(p.filters)
+    if (p.columns) setColumns(p.columns)
+    setSort(p.sort ?? '')
+    // Run immediately with the preset's own values (avoid stale state).
+    void run({ entity: p.entity, filters: p.filters, columns: p.columns ?? columns, sort: p.sort ?? '' })
+  }
+
+  async function run(override?: { entity: string; filters: Filters; columns: string[]; sort: string }) {
+    const body = {
+      entity: override?.entity ?? entity,
+      filters: override?.filters ?? filters,
+      columns: override?.columns ?? columns,
+      sort: override?.sort ?? sort,
+      limit: 5000,
+    }
+    setLoading(true); setErr('')
+    try {
+      const r = await api.post<ReportResult>('/endpoint-intelligence/report-builder', body)
+      setResult(r)
+    } catch (e) { setErr(String((e as Error)?.message ?? e)) } finally { setLoading(false) }
+  }
+
+  function exportCSV() {
+    if (!result) return
+    const cols = result.columns
+    const esc = (v: unknown) => { const s = v == null ? '' : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s }
+    const head = cols.map((c) => esc(c.label)).join(',')
+    const lines = result.rows.map((row) => cols.map((c) => esc(row[c.key])).join(','))
+    const csv = [head, ...lines].join('\r\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `endpoint-${result.entity}-report.csv`
+    a.click()
+    URL.revokeObjectURL(a.href)
+  }
+
+  const cols: DataCol<Row>[] = (result?.columns ?? []).map((c) => ({
+    key: c.key, label: c.label, sortVal: (r: Row) => (typeof r[c.key] === 'number' ? (r[c.key] as number) : S(r[c.key])),
+    render: (r: Row) => {
+      const v = r[c.key]
+      if (v == null || v === '') return '—'
+      if (c.key === 'last_collected') return timeAgo(S(v))
+      if (c.key === 'health_score') return <span className="badge" style={{ background: scoreColor(N(v)) }}>{num(v)}</span>
+      if (c.key.endsWith('_bytes')) return gb(v)
+      return S(v)
+    },
+  }))
+
+  const isDevice = entity === 'devices'
+  return (
+    <>
+      <Panel title="Report presets" icon={FileText}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {PRESETS.map((p) => (
+            <button key={p.label} className="btn ghost" onClick={() => applyPreset(p)}>{p.label}</button>
+          ))}
+        </div>
+      </Panel>
+
+      <Panel title="Build a report" icon={FileText} className="mt12"
+        actions={
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button className="btn" onClick={() => run()} disabled={loading}>{loading ? 'Running…' : 'Run report'}</button>
+            <button className="btn ghost" onClick={exportCSV} disabled={!result || result.rows.length === 0}><Download size={14} /> CSV</button>
+          </div>
+        }>
+        <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <label className="ei-threshold"><span className="muted" style={{ fontSize: 12 }}>Entity</span>
+            <select value={entity} onChange={(e) => { setEntity(e.target.value); setResult(null) }}>
+              <option value="devices">Devices</option>
+              <option value="software">Software</option>
+              <option value="processes">Processes</option>
+              <option value="services">Services</option>
+              <option value="disks">Disks</option>
+              <option value="nics">Network interfaces</option>
+            </select>
+          </label>
+          {isDevice ? (
+            <>
+              <Field label="Management"><select value={S(filters.management)} onChange={(e) => setF('management', e.target.value)}><option value="">any</option><option value="managed">managed</option><option value="unmanaged">unmanaged</option></select></Field>
+              <Field label="Category"><input value={S(filters.category)} onChange={(e) => setF('category', e.target.value)} placeholder="endpoint / server" style={{ width: 120 }} /></Field>
+              <Field label="OS contains"><input value={S(filters.os_contains)} onChange={(e) => setF('os_contains', e.target.value)} style={{ width: 120 }} /></Field>
+              <Field label="RAM < (GB)"><input type="number" value={S(filters.ram_lt_gb)} onChange={(e) => setF('ram_lt_gb', e.target.value)} style={{ width: 70 }} /></Field>
+              <Field label="Disk free < (GB)"><input type="number" value={S(filters.disk_free_lt_gb)} onChange={(e) => setF('disk_free_lt_gb', e.target.value)} style={{ width: 70 }} /></Field>
+              <Field label="Collected older than (days)"><input type="number" value={S(filters.collected_older_than_days)} onChange={(e) => setF('collected_older_than_days', e.target.value)} style={{ width: 70 }} /></Field>
+              <Field label="CPU contains"><input value={S(filters.cpu_contains)} onChange={(e) => setF('cpu_contains', e.target.value)} style={{ width: 120 }} /></Field>
+              <Field label="Software installed"><input value={S(filters.software_installed)} onChange={(e) => setF('software_installed', e.target.value)} style={{ width: 140 }} /></Field>
+              <Field label="Software NOT installed"><input value={S(filters.software_not_installed)} onChange={(e) => setF('software_not_installed', e.target.value)} style={{ width: 140 }} /></Field>
+              <Field label="Hostname contains"><input value={S(filters.hostname_contains)} onChange={(e) => setF('hostname_contains', e.target.value)} style={{ width: 120 }} /></Field>
+              <Field label="IP subnet (CIDR)"><input value={S(filters.ip_subnet)} onChange={(e) => setF('ip_subnet', e.target.value)} placeholder="172.21.60.0/24" style={{ width: 130 }} /></Field>
+              <label className="ei-threshold"><input type="checkbox" checked={!!filters.old_os} onChange={(e) => setF('old_os', e.target.checked)} /> <span className="muted" style={{ fontSize: 12 }}>Old OS only</span></label>
+              <label className="ei-threshold"><input type="checkbox" checked={!!filters.serial && filters.serial === 'missing'} onChange={(e) => setF('serial', e.target.checked ? 'missing' : '')} /> <span className="muted" style={{ fontSize: 12 }}>Missing serial</span></label>
+            </>
+          ) : (
+            <>
+              <Field label="Name contains"><input value={S(filters.name_contains)} onChange={(e) => setF('name_contains', e.target.value)} style={{ width: 160 }} /></Field>
+              {entity === 'software' && <Field label="Publisher contains"><input value={S(filters.publisher_contains)} onChange={(e) => setF('publisher_contains', e.target.value)} style={{ width: 140 }} /></Field>}
+              {entity === 'software' && <Field label="Version ="><input value={S(filters.version)} onChange={(e) => setF('version', e.target.value)} style={{ width: 100 }} /></Field>}
+              <Field label="Site contains"><input value={S(filters.site)} onChange={(e) => setF('site', e.target.value)} style={{ width: 120 }} /></Field>
+            </>
+          )}
+        </div>
+
+        {isDevice && (
+          <div style={{ marginTop: 12 }}>
+            <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>Columns</div>
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+              {DEVICE_COLUMNS.map((c) => (
+                <label key={c.key} style={{ display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: 12 }}>
+                  <input type="checkbox" checked={columns.includes(c.key)} onChange={(e) => setColumns((cs) => e.target.checked ? [...cs, c.key] : cs.filter((x) => x !== c.key))} />
+                  {c.label}
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
+      </Panel>
+
+      {err && <Err msg={err} />}
+      {result && (
+        <Panel title={`Result — ${result.total} row${result.total === 1 ? '' : 's'}${result.truncated ? ' (truncated at limit)' : ''}`} icon={FileText} className="mt12"
+          actions={<button className="btn ghost" onClick={exportCSV} disabled={result.rows.length === 0}><Download size={14} /> Export CSV</button>}>
+          <DataTable rows={result.rows} cols={cols} getKey={(r, i) => S(r.device_id) + ':' + i}
+            searchText={(r) => cols.map((c) => S(r[c.key])).join(' ')}
+            emptyTitle="No rows" emptyMessage="No records match the report filters." pageSizeDefault={25} />
+        </Panel>
+      )}
+    </>
+  )
+}
+
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return <label className="ei-threshold"><span className="muted" style={{ fontSize: 12 }}>{label}</span>{children}</label>
 }

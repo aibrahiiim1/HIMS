@@ -207,6 +207,7 @@ func (s *Server) routes() {
 		r.Get("/endpoint-intelligence/os", s.eiOS)
 		r.Get("/endpoint-intelligence/network", s.eiNetwork)
 		r.Get("/endpoint-intelligence/collection-health", s.eiCollectionHealth)
+		r.Post("/endpoint-intelligence/report-builder", s.eiReportBuilder)
 
 		// --- Devices --------------------------------------------------
 		r.Get("/devices", s.listDevices)
