@@ -44,6 +44,11 @@ func New(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool, q: db.New(pool)}
 }
 
+// Pool exposes the underlying connection pool for read-only analytics that are
+// far more practical as raw aggregate SQL than as generated sqlc queries
+// (Endpoint Intelligence dashboards + the dynamic Report Builder).
+func (s *Store) Pool() *pgxpool.Pool { return s.pool }
+
 // mapErr translates pgx errors into domain sentinels.
 func mapErr(resource string, err error) error {
 	if err == nil {

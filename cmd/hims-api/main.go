@@ -161,6 +161,7 @@ func run(ctx context.Context, serviceMode, logPath string) error {
 	}
 
 	srv := api.NewServer(queries, cipher, reg, postgres.New(pool))
+	srv.SetPool(pool) // raw read-only analytics (Endpoint Intelligence + Report Builder)
 	srv.SetRuntime(api.RuntimeInfo{
 		StartedAt:   time.Now(),
 		Version:     version,

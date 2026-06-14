@@ -17,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/coralsearesorts/hims/internal/alerting"
 	"github.com/coralsearesorts/hims/internal/discovery"
@@ -37,6 +38,7 @@ type Server struct {
 	reg        *driver.Registry              // nil disables operator-launched scans
 	fetcher    discovery.CandidateFetcher    // credential scope resolver for scans
 	queries    *db.Queries
+	pool       *pgxpool.Pool  // optional: raw read-only analytics (Endpoint Intelligence + Report Builder); nil => those endpoints 503
 	rt         RuntimeInfo    // process identity captured at startup (no secrets)
 	flow       *flowCollector // nil until StartFlowCollector binds the UDP listener
 	flowAddr   string         // NetFlow collector listen address ("" = disabled)
@@ -83,6 +85,11 @@ func NewServer(queries *db.Queries, cipher *secret.Cipher, reg *driver.Registry,
 	s.routes()
 	return s
 }
+
+// SetPool wires the raw connection pool used by read-only analytics endpoints
+// (Endpoint Intelligence + Report Builder). Optional: when unset those endpoints
+// return 503 and everything else still serves.
+func (s *Server) SetPool(p *pgxpool.Pool) { s.pool = p }
 
 // StartMonitoring runs the scheduled monitoring loop inside the API process so
 // availability/latency time-series are produced continuously without a separate
@@ -188,6 +195,18 @@ func (s *Server) routes() {
 		r.Post("/discovery/jobs/{id}/rerun", s.rerunDiscoveryJob)
 		r.Get("/discovery/jobs/{id}/events", s.listScanEvents)   // persisted history (playback)
 		r.Get("/discovery/jobs/{id}/stream", s.streamScanEvents) // live SSE event stream
+
+		// --- Endpoint Intelligence (read-only analytics over OS inventory) ---
+		r.Get("/endpoint-intelligence/overview", s.eiOverview)
+		r.Get("/endpoint-intelligence/hardware", s.eiHardware)
+		r.Get("/endpoint-intelligence/disks", s.eiDisks)
+		r.Get("/endpoint-intelligence/software", s.eiSoftware)
+		r.Get("/endpoint-intelligence/processes", s.eiProcesses)
+		r.Get("/endpoint-intelligence/processes/devices", s.eiProcessDevices)
+		r.Get("/endpoint-intelligence/services", s.eiServices)
+		r.Get("/endpoint-intelligence/os", s.eiOS)
+		r.Get("/endpoint-intelligence/network", s.eiNetwork)
+		r.Get("/endpoint-intelligence/collection-health", s.eiCollectionHealth)
 
 		// --- Devices --------------------------------------------------
 		r.Get("/devices", s.listDevices)
