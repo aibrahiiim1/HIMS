@@ -390,7 +390,7 @@ FROM ep GROUP BY 1 ORDER BY count DESC`, loc); err != nil {
 	}
 	if out["cpu_cores"], err = eiRows(ctx, p, eiModelCTE+`
 SELECT COALESCE(cpu_cores::text,'unknown') AS label, count(*) AS count
-FROM ep GROUP BY 1 ORDER BY (cpu_cores IS NULL), cpu_cores`, loc); err != nil {
+FROM ep GROUP BY cpu_cores ORDER BY cpu_cores NULLS LAST`, loc); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -486,7 +486,7 @@ ORDER BY c_free ASC LIMIT 25`, loc, t.cFreeBytes, t.diskFreeFrac); err != nil {
 		return
 	}
 	if out["disk_count_distribution"], err = eiRows(ctx, p, eiModelCTE+`
-SELECT disk_count::text AS label, count(*) AS count FROM ep WHERE collected GROUP BY 1 ORDER BY disk_count`, loc); err != nil {
+SELECT disk_count::text AS label, count(*) AS count FROM ep WHERE collected GROUP BY disk_count ORDER BY disk_count`, loc); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -706,7 +706,7 @@ SELECT k.svc AS service, k.display AS display_name,
   count(DISTINCT sv.device_id) FILTER (WHERE sv.status IS NOT NULL AND sv.status NOT IN ('Running','Started','OK')) AS stopped
 FROM (VALUES ('WinRM','Windows Remote Management'),('RemoteRegistry','Remote Registry'),
              ('wuauserv','Windows Update'),('Winmgmt','WMI'),('RpcSs','RPC')) AS k(svc,display)
-LEFT JOIN os_services sv ON lower(sv.name)=lower(k.svc) AND sv.device_id IN (SELECT device_id FROM mgd)
+LEFT JOIN os_services sv ON lower(sv.name)=lower(k.svc) AND sv.device_id::text IN (SELECT device_id FROM mgd)
 GROUP BY k.svc, k.display ORDER BY k.svc`, loc); err != nil {
 		writeErr(w, err)
 		return
@@ -848,7 +848,7 @@ FROM nicx WHERE mac IS NOT NULL AND trim(mac) <> '' GROUP BY 1 HAVING count(DIST
 	}
 	if out["link_speed_distribution"], err = eiRows(ctx, p, `WITH `+nicScope+`
 SELECT COALESCE(link_speed_mbps::text,'unknown') AS label, count(*) AS count
-FROM nicx GROUP BY 1 ORDER BY (link_speed_mbps IS NULL), link_speed_mbps`, loc); err != nil {
+FROM nicx GROUP BY link_speed_mbps ORDER BY link_speed_mbps NULLS LAST`, loc); err != nil {
 		writeErr(w, err)
 		return
 	}
