@@ -28,14 +28,26 @@ GROUP BY s.id;
 -- name: SubnetScopedCredentialsForIP :many
 -- The EXCLUSIVE credential set for the most-specific site subnet that (a) contains
 -- the IP and (b) has assignments. Empty result ⇒ no subnet scoping ⇒ caller falls
--- back to normal resolution. location_id is optional (NULL = match any location).
+-- back to normal resolution.
+--
+-- location_id is a PREFERENCE, NOT a hard filter. The anti-spray/lockout-safety
+-- contract is "any IP inside an assigned subnet is tried with ONLY that subnet's
+-- credentials" — independent of which site the operator happened to select for the
+-- scan. Gating the match on an exact location_id match silently disengaged that
+-- protection whenever the scan carried a location other than the subnet's own
+-- (e.g. a child/parent/sibling node, or a different hotel), falling back to
+-- spraying every stored credential. So we match on the CIDR alone and only use the
+-- scan's location to break ties between overlapping subnets at different sites:
+-- a subnet at the scan's location outranks one elsewhere, then narrower mask wins.
 WITH match AS (
     SELECT s.id, s.name, s.cidr, masklen(s.cidr) AS ml
     FROM subnets s
-    WHERE (sqlc.narg('location_id')::uuid IS NULL OR s.location_id = sqlc.narg('location_id'))
-      AND s.cidr >>= sqlc.arg('ip')::inet
+    WHERE s.cidr >>= sqlc.arg('ip')::inet
       AND EXISTS (SELECT 1 FROM subnet_credentials sc WHERE sc.subnet_id = s.id)
-    ORDER BY masklen(s.cidr) DESC
+    ORDER BY
+      (CASE WHEN sqlc.narg('location_id')::uuid IS NOT NULL
+             AND s.location_id = sqlc.narg('location_id') THEN 0 ELSE 1 END),
+      masklen(s.cidr) DESC
     LIMIT 1
 )
 SELECT c.id, c.kind, m.name AS subnet_name, (host(m.cidr) || '/' || m.ml)::text AS cidr

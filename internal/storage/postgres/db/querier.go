@@ -688,7 +688,17 @@ type Querier interface {
 	SubnetCredentialCounts(ctx context.Context, locationID uuid.UUID) ([]SubnetCredentialCountsRow, error)
 	// The EXCLUSIVE credential set for the most-specific site subnet that (a) contains
 	// the IP and (b) has assignments. Empty result ⇒ no subnet scoping ⇒ caller falls
-	// back to normal resolution. location_id is optional (NULL = match any location).
+	// back to normal resolution.
+	//
+	// location_id is a PREFERENCE, NOT a hard filter. The anti-spray/lockout-safety
+	// contract is "any IP inside an assigned subnet is tried with ONLY that subnet's
+	// credentials" — independent of which site the operator happened to select for the
+	// scan. Gating the match on an exact location_id match silently disengaged that
+	// protection whenever the scan carried a location other than the subnet's own
+	// (e.g. a child/parent/sibling node, or a different hotel), falling back to
+	// spraying every stored credential. So we match on the CIDR alone and only use the
+	// scan's location to break ties between overlapping subnets at different sites:
+	// a subnet at the scan's location outranks one elsewhere, then narrower mask wins.
 	SubnetScopedCredentialsForIP(ctx context.Context, arg SubnetScopedCredentialsForIPParams) ([]SubnetScopedCredentialsForIPRow, error)
 	// Roll up aggregate rows of one kind over a recent window, highest bytes first.
 	TopFlowEntries(ctx context.Context, arg TopFlowEntriesParams) ([]TopFlowEntriesRow, error)
