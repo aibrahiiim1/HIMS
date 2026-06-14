@@ -914,3 +914,9 @@ select.field { cursor: pointer; }
 .dash-section svg { color: var(--brand); }
 .dash-section .dash-section-hint { color: var(--text-muted); font-size: 12px; font-weight: 500; }
 .dash-section::after { content: ''; flex: 1; height: 1px; background: var(--border); margin-left: 4px; }
+
+/* ---- Endpoint Intelligence ------------------------------------------------ */
+.mt12 { margin-top: 12px; }
+.ei-threshold-row { display: flex; gap: 18px; flex-wrap: wrap; align-items: center; }
+.ei-threshold { display: inline-flex; gap: 6px; align-items: center; }
+.ei-threshold input { padding: 4px 6px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); }

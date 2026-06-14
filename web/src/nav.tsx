@@ -81,6 +81,7 @@ export const NAV: NavGroup[] = [
       {
         label: 'Endpoints & Peripherals', icon: MonitorSmartphone,
         children: [
+          { label: 'Endpoint Intelligence', to: '/endpoint-intelligence', icon: ChartLine },
           { label: 'Workstations', to: '/workstations', icon: Laptop },
           { label: 'Printers', to: '/printers', icon: Plug },
           { label: 'UPS', to: '/ups', icon: BatteryCharging },

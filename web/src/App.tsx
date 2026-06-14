@@ -5,6 +5,7 @@ import { api, setUnauthorizedHandler, type AuthMe } from './api'
 import { Login } from './pages/Login'
 import { DeviceList } from './pages/DeviceList'
 import { Dashboard } from './pages/Dashboard'
+import { EndpointIntelligence } from './pages/EndpointIntelligence'
 import { Discovery } from './pages/Discovery'
 import { ScanJobs, ScanResultsRedirect } from './pages/ScanJobs'
 import { ScanJobResults } from './pages/ScanJobResults'
@@ -150,6 +151,7 @@ function Shell({ me, onLogout }: { me?: AuthMe; onLogout: () => void }) {
             <Route path="/monitoring" element={<Monitoring />} />
             <Route path="/alerts" element={<Alerts />} />
             <Route path="/device-intelligence" element={<DeviceIntelligence />} />
+            <Route path="/endpoint-intelligence" element={<EndpointIntelligence />} />
             <Route path="/access-control" element={<AccessControl />} />
             <Route path="/access-control/:tab" element={<AccessControl />} />
             <Route path="/device-templates" element={<DeviceTemplates />} />
