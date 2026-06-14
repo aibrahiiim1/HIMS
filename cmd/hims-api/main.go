@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime/debug"
 	"strconv"
 	"syscall"
@@ -57,6 +58,33 @@ func getenvDefault(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// resolveWebRoot finds the built SPA directory so the API can serve the UI
+// itself (no dev server to keep alive). Order: $HIMS_WEB_ROOT, then locations
+// relative to the executable and CWD. Returns "" if none contain index.html.
+func resolveWebRoot() string {
+	cands := []string{}
+	if v := os.Getenv("HIMS_WEB_ROOT"); v != "" {
+		cands = append(cands, v)
+	}
+	if exe, err := os.Executable(); err == nil {
+		d := filepath.Dir(exe) // e.g. <repo>/bin
+		cands = append(cands, filepath.Join(d, "web", "dist"), filepath.Join(d, "..", "web", "dist"))
+	}
+	cands = append(cands, filepath.Join("web", "dist"))
+	for _, c := range cands {
+		if c == "" {
+			continue
+		}
+		if fi, err := os.Stat(filepath.Join(c, "index.html")); err == nil && !fi.IsDir() {
+			if abs, err := filepath.Abs(c); err == nil {
+				return abs
+			}
+			return c
+		}
+	}
+	return ""
 }
 
 func main() {
@@ -162,6 +190,12 @@ func run(ctx context.Context, serviceMode, logPath string) error {
 
 	srv := api.NewServer(queries, cipher, reg, postgres.New(pool))
 	srv.SetPool(pool) // raw read-only analytics (Endpoint Intelligence + Report Builder)
+	if root := resolveWebRoot(); root != "" {
+		srv.SetWebRoot(root) // serve the built SPA from this persistent process — no dev server needed
+		slog.Info("serving UI", "webRoot", root)
+	} else {
+		slog.Info("UI not served by API (no web/dist found); set HIMS_WEB_ROOT to enable")
+	}
 	srv.SetRuntime(api.RuntimeInfo{
 		StartedAt:   time.Now(),
 		Version:     version,

@@ -9,6 +9,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -39,6 +41,7 @@ type Server struct {
 	fetcher    discovery.CandidateFetcher    // credential scope resolver for scans
 	queries    *db.Queries
 	pool       *pgxpool.Pool  // optional: raw read-only analytics (Endpoint Intelligence + Report Builder); nil => those endpoints 503
+	webRoot    string         // optional: directory of the built SPA (web/dist) served at the root with SPA fallback; "" => UI not served by the API
 	rt         RuntimeInfo    // process identity captured at startup (no secrets)
 	flow       *flowCollector // nil until StartFlowCollector binds the UDP listener
 	flowAddr   string         // NetFlow collector listen address ("" = disabled)
@@ -90,6 +93,12 @@ func NewServer(queries *db.Queries, cipher *secret.Cipher, reg *driver.Registry,
 // (Endpoint Intelligence + Report Builder). Optional: when unset those endpoints
 // return 503 and everything else still serves.
 func (s *Server) SetPool(p *pgxpool.Pool) { s.pool = p }
+
+// SetWebRoot points the API at the built SPA (web/dist) so the persistent API
+// process serves the whole UI itself — no separate dev server to keep alive.
+// Routes are already registered; the SPA handler reads s.webRoot at request time,
+// so this can be called after NewServer. Empty path = UI not served here.
+func (s *Server) SetWebRoot(dir string) { s.webRoot = dir }
 
 // StartMonitoring runs the scheduled monitoring loop inside the API process so
 // availability/latency time-series are produced continuously without a separate
@@ -506,6 +515,45 @@ func (s *Server) routes() {
 		r.Post("/oid-mappings", s.createOIDMapping)
 		r.Delete("/oid-mappings/{id}", s.deleteOIDMapping)
 	})
+
+	// Serve the built SPA from the API itself so the persistent API process is the
+	// single source of the UI — no dev server to keep alive. Any non-/api, non-asset
+	// path falls back to index.html so client-side routes (e.g. /endpoint-intelligence)
+	// load on direct navigation/refresh. Inert when webRoot is unset/missing.
+	r.Get("/*", s.serveSPA)
+}
+
+// serveSPA serves static files from s.webRoot, falling back to index.html for
+// client-side routes. /api/* never reaches here (matched above). Read-time use
+// of s.webRoot lets SetWebRoot be called after route registration.
+func (s *Server) serveSPA(w http.ResponseWriter, r *http.Request) {
+	root := s.webRoot
+	if root == "" {
+		http.NotFound(w, r)
+		return
+	}
+	clean := filepath.Clean(r.URL.Path)
+	if clean == "/" || clean == "." {
+		clean = "/index.html"
+	}
+	// Resolve within root; reject traversal.
+	full := filepath.Join(root, filepath.FromSlash(clean))
+	if rel, err := filepath.Rel(root, full); err != nil || strings.HasPrefix(rel, "..") {
+		http.NotFound(w, r)
+		return
+	}
+	if fi, err := os.Stat(full); err == nil && !fi.IsDir() {
+		http.ServeFile(w, r, full)
+		return
+	}
+	// SPA fallback: unknown path that isn't a real file → index.html.
+	idx := filepath.Join(root, "index.html")
+	if _, err := os.Stat(idx); err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-cache")
+	http.ServeFile(w, r, idx)
 }
 
 // ---- Device handlers --------------------------------------------------------
