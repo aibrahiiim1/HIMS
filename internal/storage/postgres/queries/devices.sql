@@ -40,9 +40,14 @@ RETURNING *;
 -- name: UpdateDiscoveredDevice :one
 -- Reconcile path: refresh a live device's mutable identity fields on
 -- re-discovery (keyed by the caller to the (primary_ip, location) match).
+-- location_id is FILLED when the device has none (a site-scoped scan adopts a
+-- previously site-less device — e.g. first found by an unscoped CIDR scan, later
+-- re-scanned under a site) but never OVERWRITES an operator-set location:
+-- COALESCE keeps any existing value. A NULL fill arg (site-less scan) is a no-op.
 UPDATE devices SET
     hostname = $2, name = $3, vendor = $4, model = $5, serial = $6,
     os_version = $7, category = $8, driver = $9, status = $10,
+    location_id = COALESCE(location_id, sqlc.narg('fill_location')),
     last_discovery_at = now(), updated_at = now()
 WHERE id = $1
 RETURNING *;

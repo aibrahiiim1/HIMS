@@ -732,6 +732,10 @@ type Querier interface {
 	UpdateDeviceTemplate(ctx context.Context, arg UpdateDeviceTemplateParams) (DeviceTemplate, error)
 	// Reconcile path: refresh a live device's mutable identity fields on
 	// re-discovery (keyed by the caller to the (primary_ip, location) match).
+	// location_id is FILLED when the device has none (a site-scoped scan adopts a
+	// previously site-less device — e.g. first found by an unscoped CIDR scan, later
+	// re-scanned under a site) but never OVERWRITES an operator-set location:
+	// COALESCE keeps any existing value. A NULL fill arg (site-less scan) is a no-op.
 	UpdateDiscoveredDevice(ctx context.Context, arg UpdateDiscoveredDeviceParams) (Device, error)
 	UpdateDiscoveryJobStatus(ctx context.Context, arg UpdateDiscoveryJobStatusParams) error
 	UpdateDiscoveryResult(ctx context.Context, arg UpdateDiscoveryResultParams) error

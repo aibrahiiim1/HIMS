@@ -224,6 +224,10 @@ func (a *Applier) reconcile(ctx context.Context, ip netip.Addr, locationID *uuid
 			ID: existing.ID, Hostname: create.Hostname, Name: name, Vendor: vendor,
 			Model: model, Serial: serial, OsVersion: create.OsVersion,
 			Category: category, Driver: create.Driver, Status: create.Status,
+			// Adopt the scan's site when the device has none yet (site-scoped scan of
+			// a device first found by an unscoped CIDR scan). COALESCE in the query
+			// never overwrites an operator-set location; a nil arg is a no-op.
+			FillLocation: locationID,
 		})
 	}
 	if existing, err := a.w.LiveDeviceByIP(ctx, &ip); err == nil {

@@ -1235,26 +1235,32 @@ const updateDiscoveredDevice = `-- name: UpdateDiscoveredDevice :one
 UPDATE devices SET
     hostname = $2, name = $3, vendor = $4, model = $5, serial = $6,
     os_version = $7, category = $8, driver = $9, status = $10,
+    location_id = COALESCE(location_id, $11),
     last_discovery_at = now(), updated_at = now()
 WHERE id = $1
 RETURNING id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason, is_virtual, cctv_credential_id, web_scheme_pref, web_port_pref, web_alt_ports, web_notes, web_last_ok, web_last_ok_at, web_last_proto, web_last_scheme, web_last_port, web_last_credential_id, web_pref_proto
 `
 
 type UpdateDiscoveredDeviceParams struct {
-	ID        uuid.UUID `json:"id"`
-	Hostname  *string   `json:"hostname"`
-	Name      string    `json:"name"`
-	Vendor    *string   `json:"vendor"`
-	Model     *string   `json:"model"`
-	Serial    *string   `json:"serial"`
-	OsVersion *string   `json:"os_version"`
-	Category  string    `json:"category"`
-	Driver    *string   `json:"driver"`
-	Status    string    `json:"status"`
+	ID           uuid.UUID  `json:"id"`
+	Hostname     *string    `json:"hostname"`
+	Name         string     `json:"name"`
+	Vendor       *string    `json:"vendor"`
+	Model        *string    `json:"model"`
+	Serial       *string    `json:"serial"`
+	OsVersion    *string    `json:"os_version"`
+	Category     string     `json:"category"`
+	Driver       *string    `json:"driver"`
+	Status       string     `json:"status"`
+	FillLocation *uuid.UUID `json:"fill_location"`
 }
 
 // Reconcile path: refresh a live device's mutable identity fields on
 // re-discovery (keyed by the caller to the (primary_ip, location) match).
+// location_id is FILLED when the device has none (a site-scoped scan adopts a
+// previously site-less device — e.g. first found by an unscoped CIDR scan, later
+// re-scanned under a site) but never OVERWRITES an operator-set location:
+// COALESCE keeps any existing value. A NULL fill arg (site-less scan) is a no-op.
 func (q *Queries) UpdateDiscoveredDevice(ctx context.Context, arg UpdateDiscoveredDeviceParams) (Device, error) {
 	row := q.db.QueryRow(ctx, updateDiscoveredDevice,
 		arg.ID,
@@ -1267,6 +1273,7 @@ func (q *Queries) UpdateDiscoveredDevice(ctx context.Context, arg UpdateDiscover
 		arg.Category,
 		arg.Driver,
 		arg.Status,
+		arg.FillLocation,
 	)
 	var i Device
 	err := row.Scan(
