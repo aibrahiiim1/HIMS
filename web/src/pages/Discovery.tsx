@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Radar, Boxes, CircleX, Clock, KeyRound } from 'lucide-react'
@@ -13,21 +13,13 @@ import { PageHeader, Kpi, timeAgo } from '../components/ui'
 const btn: React.CSSProperties = { padding: '8px 16px', background: '#1565c0', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 14, fontWeight: 600 }
 const ghost: React.CSSProperties = { padding: '4px 10px', background: 'transparent', color: '#90caf9', border: '1px solid #90caf9', borderRadius: 6, cursor: 'pointer', fontSize: 12 }
 const input: React.CSSProperties = { padding: '8px 10px', border: '1px solid #ccc', borderRadius: 6, fontSize: 13 }
-// readable on the white dropdown panel
-const pickerBtn: React.CSSProperties = { padding: '3px 10px', background: '#f0f4f8', color: '#1565c0', border: '1px solid #90caf9', borderRadius: 6, cursor: 'pointer', fontSize: 12 }
 
 // Scan Jobs / Results are now standalone pages (/discovery/jobs). Discovery
 // Center stays focused on STARTING scans + preflight.
 const TABS = ['Network scan', 'Import', 'Controllers', 'Active Directory'] as const
 type Tab = typeof TABS[number]
 
-type ScanMode = 'single' | 'range' | 'cidr' | 'site_subnets'
-const MODE_LABEL: Record<ScanMode, string> = { single: 'Single IP', range: 'IP Range', cidr: 'Subnet / CIDR', site_subnets: 'By Site' }
-const MODE_PH: Record<ScanMode, string> = {
-  single: '10.20.0.10', range: '172.21.96.1-172.21.96.254  (or 172.21.96.1-254)',
-  cidr: '172.21.96.0/24', site_subnets: '(scans every subnet bound to the selected site)',
-}
-const CATEGORIES = ['unknown', 'switch', 'router', 'firewall', 'access_point', 'wireless_controller', 'server', 'virtual_host', 'virtual_machine', 'storage', 'nvr', 'camera', 'printer', 'ip_phone', 'pbx', 'voice_gateway', 'database', 'directory', 'dns', 'dhcp', 'fingerprint', 'endpoint', 'ups', 'isp_router', 'application']
+const CATEGORIES =['unknown', 'switch', 'router', 'firewall', 'access_point', 'wireless_controller', 'server', 'virtual_host', 'virtual_machine', 'storage', 'nvr', 'camera', 'printer', 'ip_phone', 'pbx', 'voice_gateway', 'database', 'directory', 'dns', 'dhcp', 'fingerprint', 'endpoint', 'ups', 'isp_router', 'application']
 const CTRL_KINDS = ['unifi', 'ruckus', 'omada', 'extreme', 'vsphere', 'hyperv', 'redfish', 'onvif', 'cucm']
 
 // eslint-disable-next-line react-refresh/only-export-components -- shared helper reused by the standalone Scan Jobs pages
@@ -82,19 +74,34 @@ export function ProfileCell({ r, qc, jobID }: { r: DiscoveryResult; qc: ReturnTy
 
   const linkCell: React.CSSProperties = { color: '#90caf9', fontSize: 11, cursor: 'pointer', textDecoration: 'underline' }
 
-  // ---- No matching profile -------------------------------------------------
+  // ---- No matching profile — NOT a blocker. The device is identified; deep
+  //      inventory is optional and runs on stored credentials with one click.
   if (!p.resolved) {
     const vt = profileVendorHint(r.category)
     const params = new URLSearchParams({ create: '1' })
     if (vt) params.set('vendor_type', vt)
     if (r.device_id) params.set('device_id', r.device_id)
     if (r.ip) params.set('target_url', r.ip)
+    // VMware/ESXi deep collection works directly from stored creds (no profile).
+    const isVMware = r.category === 'virtual_host'
+    const collectNow = async () => {
+      if (!r.device_id) return
+      setBusy(true); setMsg('')
+      try {
+        const res = await api.post<{ collected: boolean; detail: string }>(`/devices/${r.device_id}/collect-vsphere`, {})
+        setMsg(res.detail)
+        if (jobID) qc.invalidateQueries({ queryKey: ['discovery-job', jobID] })
+      } catch (e) { setMsg((e as Error).message) } finally { setBusy(false) }
+    }
     return (
       <div>
-        <span className="badge badge-warning">No matching profile</span>
-        <div style={{ marginTop: 4 }}>
-          <Link to={`/vendor-profiles?${params.toString()}`} style={linkCell}>+ Create Vendor Profile</Link>
+        <span className="badge badge-up">Identified</span>
+        <div className="muted" style={{ fontSize: 11, marginTop: 3 }}>Deep inventory is optional.</div>
+        <div style={{ display: 'flex', gap: 10, marginTop: 4, flexWrap: 'wrap' }}>
+          {isVMware && r.device_id && <span style={{ ...linkCell, opacity: busy ? 0.5 : 1 }} onClick={() => !busy && collectNow()}>{busy ? 'Collecting…' : 'Collect now'}</span>}
+          <Link to={`/vendor-profiles?${params.toString()}`} style={linkCell}>Set up deep collection (optional)</Link>
         </div>
+        {msg && <div className="muted" style={{ fontSize: 11, marginTop: 3 }}>{msg}</div>}
       </div>
     )
   }
@@ -196,87 +203,83 @@ export function Discovery() {
 }
 
 // ---------- Network scan ----------
+// One box: type IP / range / CIDR / hostname (mix freely) → Scan & manage. No
+// mode toggle, no credential picker, no required site. The backend auto-detects
+// each target shape (resolveScanHosts) and auto-tries ALL stored credentials
+// when credential_ids is empty (scanCredentialTier). Site is purely optional:
+// pick one to assign found devices to it, or leave the box empty + pick a site
+// to scan every subnet bound to that site.
 function NetworkScan({ locations, locPath, creds, onLaunch, setMsg }: { locations: Location[]; locPath: Record<string, string>; creds: Credential[]; onLaunch: (j: DiscoveryJob) => void; setMsg: (s: string) => void }) {
-  const [mode, setMode] = useState<ScanMode>('cidr')
   const [targets, setTargets] = useState('')
   const [exclude, setExclude] = useState('')
   const [location, setLocation] = useState('')
-  const [credIDs, setCredIDs] = useState<string[]>([])
-  const siteMode = mode === 'site_subnets'
-  const canScan = siteMode ? !!location : !!targets.trim()
-  // Exclude only makes sense for multi-host scopes (range / CIDR / site subnets).
-  const showExclude = mode === 'range' || mode === 'cidr' || siteMode
+  const [showAdv, setShowAdv] = useState(false)
+
+  const hasTargets = !!targets.trim()
+  // No targets typed but a site is selected → scan every subnet bound to that site.
+  const siteScan = !hasTargets && !!location
+  const canScan = hasTargets || siteScan
+  const siteName = location ? (locPath[location] ?? 'site') : ''
 
   const scan = useMutation({
     mutationFn: () => api.post<DiscoveryJob>('/discovery/scan', {
-      mode: siteMode ? 'site_subnets' : 'targets', targets: siteMode ? '' : targets.trim(),
-      location_id: location || null, credential_ids: credIDs, exclude: exclude.trim(),
+      mode: siteScan ? 'site_subnets' : 'targets',
+      targets: siteScan ? '' : targets.trim(),
+      location_id: location || null,
+      credential_ids: [], // always auto-try ALL stored credentials
+      exclude: exclude.trim(),
     }),
-    onSuccess: (j) => { setTargets(''); setExclude(''); onLaunch(j as DiscoveryJob); setMsg('Scan launched — see Jobs.') },
+    onSuccess: (j) => { setTargets(''); setExclude(''); onLaunch(j as DiscoveryJob); setMsg('Scan launched.') },
     onError: (e) => setMsg((e as Error).message),
   })
-  const toggleCred = (id: string) => setCredIDs((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]))
-
-  // Lockout hint: the scan tries each selected ONVIF/HTTP-Basic credential on every
-  // camera/NVR in scope, so picking many of the same kind risks a Hikvision IP
-  // lockout on hosts where none match. Non-blocking — just informs.
-  const webOverLimit = useMemo(() => {
-    const byKind: Record<string, number> = {}
-    for (const id of credIDs) {
-      const c = creds.find((x) => x.id === id)
-      if (c && (c.kind === 'http_basic' || c.kind === 'onvif')) byKind[c.kind] = (byKind[c.kind] || 0) + 1
-    }
-    return Object.entries(byKind).filter(([, n]) => n > 3).map(([k, n]) => `${n} ${k}`)
-  }, [credIDs, creds])
 
   // Preflight: what protocols we're equipped to authenticate with for this scope.
   const preflight = useQuery({
-    queryKey: ['scan-preflight', location, credIDs.join(',')],
+    queryKey: ['scan-preflight', location],
     queryFn: () => {
       const p = new URLSearchParams()
       if (location) p.set('location_id', location)
-      if (credIDs.length) p.set('credential_ids', credIDs.join(','))
       return api.get<ScanPreflight>(`/discovery/scan-preflight?${p.toString()}`)
     },
   })
 
+  const btnLabel = scan.isPending ? 'Scanning…' : siteScan ? `Scan all of ${siteName}` : 'Scan & manage'
+
   return (
     <div className="card">
-      <h3>Network scan</h3>
-      <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
-        {(Object.keys(MODE_LABEL) as ScanMode[]).map((m) => (
-          <button key={m} onClick={() => setMode(m)} style={{ ...ghost, ...(mode === m ? { background: '#1565c0', color: '#fff', borderColor: '#1565c0' } : {}) }}>{MODE_LABEL[m]}</button>
-        ))}
-      </div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-        {!siteMode && <input style={{ ...input, width: 360 }} placeholder={MODE_PH[mode]} value={targets} onChange={(e) => setTargets(e.target.value)} />}
+      <h3>Scan &amp; manage devices</h3>
+      <p className="muted" style={{ fontSize: 13, marginTop: -4, marginBottom: 12 }}>
+        Type one or more IPs, a range, or a subnet — HIMS finds each device, identifies what it is,
+        and manages it automatically using your stored credentials. Nothing else to set up.
+      </p>
+
+      <textarea
+        style={{ ...input, width: '100%', minHeight: 64, fontFamily: 'monospace', fontSize: 13, boxSizing: 'border-box' }}
+        placeholder={'10.20.0.10\n172.21.96.1-172.21.96.254\n150.0.0.0/24\n(mix freely — comma, space, or new line between targets)'}
+        value={targets} onChange={(e) => setTargets(e.target.value)} />
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginTop: 10 }}>
         <select style={{ ...input, width: 280 }} value={location} onChange={(e) => setLocation(e.target.value)}>
-          <option value="">{siteMode ? 'Select a site / hotel…' : 'Site scope (optional)'}</option>
+          <option value="">Assign to site (optional)…</option>
           {locations.map((l) => <option key={l.id} value={l.id}>{locPath[l.id]} ({l.kind})</option>)}
         </select>
-        <button style={btn} disabled={!canScan || scan.isPending} onClick={() => scan.mutate()}>{scan.isPending ? 'Launching…' : 'Start scan'}</button>
+        <button style={btn} disabled={!canScan || scan.isPending} onClick={() => scan.mutate()}>{btnLabel}</button>
+        {creds.length > 0
+          ? <span className="muted" style={{ fontSize: 12 }}>🔑 Automatically tries all {creds.length} stored credential{creds.length === 1 ? '' : 's'}.</span>
+          : <Link to="/credentials" style={{ fontSize: 12 }}>No credentials yet — add some so devices can be managed →</Link>}
       </div>
-      {siteMode && <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>{MODE_PH.site_subnets}</div>}
 
-      {showExclude && (
-        <div style={{ marginTop: 10 }}>
-          <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Exclude IPs (optional)</div>
-          <input style={{ ...input, width: 360 }} placeholder="e.g. 172.21.96.10, 172.21.96.20-25, 172.21.96.0/28" value={exclude} onChange={(e) => setExclude(e.target.value)} />
-          <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>Single IPs, ranges, or CIDRs (comma/space-separated) carved out of the scope above — those hosts are not scanned.</div>
-        </div>
-      )}
+      {siteScan && <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>No targets typed — HIMS will scan every subnet bound to <strong>{siteName}</strong>.</div>}
 
       <div style={{ marginTop: 12 }}>
-        <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Credentials to try</div>
-        <CredentialPicker creds={creds} selected={credIDs} onChange={setCredIDs} toggle={toggleCred} />
-        {webOverLimit.length > 0 && (
-          <div style={{ fontSize: 12, marginTop: 6, color: 'var(--warn, #d97706)' }}>
-            ⚠ {webOverLimit.join(', ')} credentials selected — the scan tries each on every camera/NVR until one works, which can trip a Hikvision IP lockout on hosts where none match.
+        <button style={{ ...ghost, fontSize: 11 }} onClick={() => setShowAdv((v) => !v)}>{showAdv ? '− Advanced options' : '+ Advanced options'}</button>
+        {showAdv && (
+          <div style={{ marginTop: 8 }}>
+            <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Exclude IPs (optional)</div>
+            <input style={{ ...input, width: 360 }} placeholder="e.g. 172.21.96.10, 172.21.96.20-25, 172.21.96.0/28" value={exclude} onChange={(e) => setExclude(e.target.value)} />
+            <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>Single IPs, ranges, or CIDRs (comma/space-separated) carved out of the scope above — those hosts are not scanned.</div>
           </div>
         )}
-        <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
-          🔒 Subnet-scoped credentials apply where configured: an IP inside a site subnet that has assigned credentials (Locations → subnet → set creds) is tried with ONLY those, ignoring the selection above. Subnets with none assigned use this default/global selection.
-        </div>
       </div>
 
       {preflight.data && <ScanPreflightPanel pf={preflight.data} siteSelected={!!location} />}
@@ -297,7 +300,8 @@ function ScanPreflightPanel({ pf, siteSelected }: { pf: ScanPreflight; siteSelec
   )
   return (
     <div style={{ marginTop: 14, padding: 12, borderRadius: 8, background: 'var(--surface-2, #f7f9fc)', border: '1px solid #d6dee8' }}>
-      <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>Scan preflight — credentials available for this scope</div>
+      <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>What HIMS can authenticate with here</div>
+      <div className="muted" style={{ fontSize: 11, marginBottom: 8 }}>All of these are tried automatically — this is just a heads-up of what's covered. You can still scan with gaps; uncovered devices are simply listed as needing that credential.</div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
         {chip('WinRM', c.winrm ?? 0)}
         {chip('WMI/DCOM', c.wmi ?? 0)}
@@ -309,72 +313,18 @@ function ScanPreflightPanel({ pf, siteSelected }: { pf: ScanPreflight; siteSelec
         {chip('VMware profiles', pf.vmware_profiles)}
         {chip('CCTV profiles', pf.cctv_profiles)}
       </div>
-      {pf.warnings.length > 0 && (
+      {(pf.warnings?.length ?? 0) > 0 && (
         <ul style={{ margin: '10px 0 0', paddingLeft: 18 }}>
-          {pf.warnings.map((w, i) => (
-            <li key={i} style={{ fontSize: 12, color: '#8a6d00', marginBottom: 2 }}>⚠ {w}</li>
+          {(pf.warnings ?? []).map((w, i) => (
+            <li key={i} style={{ fontSize: 12, color: 'var(--text-muted, #6b7785)', marginBottom: 2 }}>ℹ {w}</li>
           ))}
         </ul>
       )}
-      {!siteSelected && <div className="muted" style={{ fontSize: 11, marginTop: 8 }}>Select a site to scope VMware/CCTV profile checks to that site.</div>}
+      {!siteSelected && <div className="muted" style={{ fontSize: 11, marginTop: 8 }}>Optional: pick a site above to scope these credential checks to that site.</div>}
     </div>
   )
 }
 
-// CredentialPicker — a compact multi-select dropdown for credentials (scales to
-// many): a summary button opens a searchable, scrollable checkbox panel.
-// Empty selection = auto-try ALL stored credentials.
-function CredentialPicker({ creds, selected, onChange, toggle }: { creds: Credential[]; selected: string[]; onChange: (ids: string[]) => void; toggle: (id: string) => void }) {
-  const [open, setOpen] = useState(false)
-  const [q, setQ] = useState('')
-  const sel = new Set(selected)
-  const shown = creds.filter((c) => !q.trim() || c.name.toLowerCase().includes(q.toLowerCase()) || c.kind.includes(q.toLowerCase()))
-  const summary = selected.length === 0 ? 'All stored credentials (auto)' : `${selected.length} selected`
-
-  if (creds.length === 0) return <span className="muted" style={{ fontSize: 12 }}>No credentials — add them on the Credentials page.</span>
-
-  return (
-    <div style={{ position: 'relative', maxWidth: 460 }}>
-      <button onClick={() => setOpen((v) => !v)} style={{ ...input, width: '100%', textAlign: 'left', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff', color: '#222' }}>
-        <span>{summary}</span><span style={{ opacity: 0.6 }}>{open ? '▲' : '▼'}</span>
-      </button>
-
-      {/* selected chips preview under the button */}
-      {selected.length > 0 && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
-          {selected.map((id) => { const c = creds.find((x) => x.id === id); return (
-            <span key={id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '1px 7px', borderRadius: 10, fontSize: 11, background: '#2e7d32', color: '#fff' }}>
-              {c?.name ?? id}<span onClick={() => toggle(id)} style={{ cursor: 'pointer', fontWeight: 700 }}>×</span>
-            </span>
-          )})}
-          <button onClick={() => onChange([])} style={{ ...ghost, fontSize: 11, padding: '1px 7px' }}>clear all</button>
-        </div>
-      )}
-
-      {open && (
-        <div style={{ position: 'absolute', zIndex: 20, top: '100%', left: 0, right: 0, marginTop: 4, background: '#fff', color: '#222', border: '1px solid #bbb', borderRadius: 8, boxShadow: '0 6px 20px rgba(0,0,0,.25)', padding: 8 }}>
-          <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
-            <input autoFocus style={{ ...input, flex: 1, background: '#fff', color: '#222' }} placeholder="search credentials…" value={q} onChange={(e) => setQ(e.target.value)} />
-            <button style={pickerBtn} onClick={() => onChange(shown.map((c) => c.id))}>all</button>
-            <button style={pickerBtn} onClick={() => onChange([])}>none</button>
-          </div>
-          <div style={{ maxHeight: 220, overflow: 'auto' }}>
-            {shown.length === 0 && <div style={{ fontSize: 12, padding: 4, color: '#888' }}>No match.</div>}
-            {shown.map((c) => (
-              <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 6px', borderRadius: 6, cursor: 'pointer', background: sel.has(c.id) ? '#e3f2fd' : 'transparent' }}>
-                <input type="checkbox" checked={sel.has(c.id)} onChange={() => toggle(c.id)} />
-                <span style={{ flex: 1, color: '#222' }}>{c.name}</span>
-                <span style={{ fontSize: 11, color: '#777' }}>{c.kind}{c.weak ? ' ⚠' : ''}</span>
-              </label>
-            ))}
-          </div>
-          <div style={{ fontSize: 11, marginTop: 6, color: '#777' }}>Leave empty to auto-try all. Selected creds are tried first.</div>
-          <div style={{ textAlign: 'right', marginTop: 4 }}><button style={pickerBtn} onClick={() => setOpen(false)}>Done</button></div>
-        </div>
-      )}
-    </div>
-  )
-}
 
 // ---------- Import (manual + CSV) ----------
 function ImportTab({ locations, locPath, setMsg, qc }: { locations: Location[]; locPath: Record<string, string>; setMsg: (s: string) => void; qc: ReturnType<typeof useQueryClient> }) {
