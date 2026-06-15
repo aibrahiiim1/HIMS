@@ -58,11 +58,19 @@ func (s *Server) runVSphereCollection(ctx context.Context, d db.Device) vsphereR
 		name       string
 		user, pass string
 	}
-	const maxVSphereCands = 6
+	const maxVSphereCands = 8
+	// VMware/ESXi accepts a user:password over its SOAP API; on ESXi the root
+	// account is the SAME credential used for SSH, so ssh-kind creds are valid
+	// vSphere logins too (the operator commonly stores root/<pw> as an "ssh"
+	// credential). Accept vendor_api / http_basic / ssh; the kind only filters
+	// the candidate set, the actual auth is plain user:password either way.
+	vsphereKind := func(k string) bool {
+		return k == string(domain.CredVendorAPI) || k == string(domain.CredHTTPBasic) || k == string(domain.CredSSH)
+	}
 	var cands []cc
 	seen := map[uuid.UUID]bool{}
 	add := func(c db.Credential) {
-		if seen[c.ID] || len(cands) >= maxVSphereCands || (c.Kind != string(domain.CredVendorAPI) && c.Kind != string(domain.CredHTTPBasic)) {
+		if seen[c.ID] || len(cands) >= maxVSphereCands || !vsphereKind(c.Kind) {
 			return
 		}
 		seen[c.ID] = true
