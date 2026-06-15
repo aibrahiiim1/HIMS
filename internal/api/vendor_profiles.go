@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -399,17 +400,29 @@ func (s *Server) runVendorProfileCollection(w http.ResponseWriter, r *http.Reque
 			targetDevice = &did
 		}
 	}
-	if targetDevice == nil {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"collected": false,
-			"detail":    "this profile is site-level — it is used automatically during a scan. Bind it to a device (or retry from a Scan Result) to run an on-demand collection.",
-		})
-		return
-	}
-	dev, err := s.queries.GetDevice(ctx, *targetDevice)
-	if err != nil {
-		writeErr(w, err)
-		return
+	var dev db.Device
+	switch {
+	case targetDevice != nil:
+		dev, err = s.queries.GetDevice(ctx, *targetDevice)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+	default:
+		// No bound device. If the profile targets an IP, resolve (or create) the
+		// device at that IP so an on-demand run "just works" from target + cred —
+		// the operator gave the inputs, the system finds the device. Only a
+		// profile with no IP target (e.g. a hostname or a purely site-level
+		// profile) still needs an explicit binding.
+		rd, ok := s.resolveProfileDevice(ctx, p)
+		if !ok {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"collected": false,
+				"detail":    "this profile has no bound device and its target URL is not an IP address — bind it to a device (or use an IP target). Site-level profiles are also applied automatically during a scan.",
+			})
+			return
+		}
+		dev = rd
 	}
 
 	ok, detail := false, ""
@@ -725,6 +738,54 @@ func vsphereSDKURL(base string) string {
 		base = strings.TrimRight(base, "/") + "/sdk"
 	}
 	return base
+}
+
+// resolveProfileDevice finds (or creates) the device an unbound, IP-targeted
+// vendor profile should collect against, so an on-demand run-collection works
+// from just the profile's target URL + credential. Returns false when the target
+// has no usable IP host (a hostname, or a purely site-level profile) — those
+// still require an explicit device binding.
+func (s *Server) resolveProfileDevice(ctx context.Context, p db.VendorConnectionProfile) (db.Device, bool) {
+	addr, ok := profileTargetIP(p.TargetUrl)
+	if !ok {
+		return db.Device{}, false
+	}
+	if d, err := s.queries.LiveDeviceByIP(ctx, &addr); err == nil {
+		return d, true
+	}
+	// No device at this IP yet — create a minimal placeholder so the collector
+	// has a row to persist onto. It refines category/vendor/class on success.
+	d, err := s.queries.CreateDevice(ctx, db.CreateDeviceParams{
+		PrimaryIp: &addr,
+		Name:      addr.String(),
+		Category:  string(domain.CatUnknown),
+		Status:    "unknown",
+	})
+	if err != nil {
+		return db.Device{}, false
+	}
+	return d, true
+}
+
+// profileTargetIP extracts an IPv4/IPv6 literal from a profile target URL such as
+// "https://150.0.0.13", "150.0.0.13:443", or "150.0.0.13/sdk". Returns false for
+// hostnames or empty targets.
+func profileTargetIP(target string) (netip.Addr, bool) {
+	h := stripScheme(strings.TrimSpace(target))
+	if i := strings.IndexByte(h, '/'); i >= 0 {
+		h = h[:i]
+	}
+	if addr, err := netip.ParseAddr(h); err == nil {
+		return addr, true
+	}
+	// host:port — strip the port (only meaningful for IPv4 / bracketless hosts;
+	// a bare IPv6 literal parses above before reaching here).
+	if host, _, err := net.SplitHostPort(h); err == nil {
+		if addr, perr := netip.ParseAddr(host); perr == nil {
+			return addr, true
+		}
+	}
+	return netip.Addr{}, false
 }
 
 func stripScheme(u string) string {
