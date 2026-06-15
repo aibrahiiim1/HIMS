@@ -82,13 +82,14 @@ export function ProfileCell({ r, qc, jobID }: { r: DiscoveryResult; qc: ReturnTy
     if (vt) params.set('vendor_type', vt)
     if (r.device_id) params.set('device_id', r.device_id)
     if (r.ip) params.set('target_url', r.ip)
-    // VMware/ESXi deep collection works directly from stored creds (no profile).
-    const isVMware = r.category === 'virtual_host'
+    // Deep collection runs directly from stored creds with NO profile, via the
+    // universal /devices/{id}/collect endpoint (kind inferred from the device's
+    // type/vendor — vSphere / ONVIF camera / Redfish BMC / wireless / CUCM).
     const collectNow = async () => {
       if (!r.device_id) return
       setBusy(true); setMsg('')
       try {
-        const res = await api.post<{ collected: boolean; detail: string }>(`/devices/${r.device_id}/collect-vsphere`, {})
+        const res = await api.post<{ collected: boolean; detail: string }>(`/devices/${r.device_id}/collect`, {})
         setMsg(res.detail)
         if (jobID) qc.invalidateQueries({ queryKey: ['discovery-job', jobID] })
       } catch (e) { setMsg((e as Error).message) } finally { setBusy(false) }
@@ -98,8 +99,8 @@ export function ProfileCell({ r, qc, jobID }: { r: DiscoveryResult; qc: ReturnTy
         <span className="badge badge-up">Identified</span>
         <div className="muted" style={{ fontSize: 11, marginTop: 3 }}>Deep inventory is optional.</div>
         <div style={{ display: 'flex', gap: 10, marginTop: 4, flexWrap: 'wrap' }}>
-          {isVMware && r.device_id && <span style={{ ...linkCell, opacity: busy ? 0.5 : 1 }} onClick={() => !busy && collectNow()}>{busy ? 'Collecting…' : 'Collect now'}</span>}
-          <Link to={`/vendor-profiles?${params.toString()}`} style={linkCell}>Set up deep collection (optional)</Link>
+          {r.device_id && <span style={{ ...linkCell, opacity: busy ? 0.5 : 1 }} onClick={() => !busy && collectNow()}>{busy ? 'Collecting…' : 'Collect now'}</span>}
+          <Link to={`/vendor-profiles?${params.toString()}`} style={linkCell}>Set up a profile (optional)</Link>
         </div>
         {msg && <div className="muted" style={{ fontSize: 11, marginTop: 3 }}>{msg}</div>}
       </div>
