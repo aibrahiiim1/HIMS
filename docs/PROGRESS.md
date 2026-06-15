@@ -1088,3 +1088,36 @@ auth_failed appears in coverage (i.e. a device in a scoped subnet whose assigned
 is wrong) — that's the moment the at-a-glance coverage view earns its keep over the
 per-row badges. **Referenced-from:** subnet-scoped credentials feature (this turn);
 related to Management Access Coverage + Data Quality credential issues.
+
+---
+
+## BACKLOG-XCC-REST-PATH-DISCOVERY — Extreme XCC on-prem REST API path discovery
+
+**Status:** deferred / non-blocking (accepted as backlog at the close of the
+Discovery Professionalization Acceptance Pass).
+
+**Context:** the profile-free wireless collect (`collectWirelessAuto`,
+`internal/api/collect_wireless_auto.go`) auto-creates an `extreme_xcc` profile and
+runs `exploreXCC` → `collectXCCProfile` against Extreme XCC on-prem controllers
+(:5825). On `172.21.96.100` the stored credential **authenticates** (the admin GUI
+at `/Admin/` is reachable), but `exploreXCC` finds **no JSON API root** among the
+probed paths — this firmware exposes the REST API at a **non-standard path**. The
+universal collect therefore returns the honest state **`api_unavailable`** (not
+`auth_rejected`).
+
+**Why non-blocking:** the controller is **already managed** and its wireless
+inventory is **already collected via the SSH-CLI source** (`wlan_controller_info`:
+123 APs / 4 SSIDs / 310 clients, `source=extreme_xcc_ssh`). The UI reports the REST
+gap honestly. No data is lost; only the REST collection path is unavailable on this
+firmware.
+
+**Scope when resumed:** extend `internal/extremexcc` API-base discovery
+(`exploreXCC`) to probe the additional REST path(s) this firmware uses (capture the
+firmware/version on `172.21.96.100`, identify its real API base, add it to the
+candidate path ladder), then confirm `collectXCCProfile` returns AP/SSID/client over
+REST. No schema change expected.
+
+**Trigger:** only on explicit operator request (the operator deferred this and asked
+not to chase XCC REST further for now). **Referenced-from:** Discovery
+Professionalization Acceptance Pass — wireless profile-free collection (branch
+`feat/discovery-acceptance-credkind`).
