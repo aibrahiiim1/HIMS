@@ -360,6 +360,12 @@ func (s *Server) vendorProfileTest(ctx context.Context, p db.VendorConnectionPro
 		return true, "CUCM AXL authenticated — " + itoaN(len(phones)) + " phone(s)"
 	case "alcatel":
 		return false, "Alcatel OmniPCX/OmniVista integration not implemented yet — profile saved so the device is tracked with detection + classification + this honest gate; deep collection pending vendor API support"
+	case "redfish", "hyperv", "onvif", "unifi", "omada", "ruckus", "extreme":
+		// These run through the internal/collect orchestrator, which authenticates
+		// by IP using ALL stored credentials at collection time. There is no
+		// separate per-credential test — clicking Run Collection does the real
+		// connect + persist. Report that honestly instead of a false failure.
+		return true, "No separate connection test for this type — click Run Collection; it authenticates with all your stored credentials and saves the inventory."
 	}
 	return false, "unknown vendor_type: " + p.VendorType
 }
@@ -449,6 +455,13 @@ func (s *Server) runVendorProfileCollection(w http.ResponseWriter, r *http.Reque
 		_ = s.queries.SetVendorProfileTest(ctx, db.SetVendorProfileTestParams{ID: id, LastTestOk: &ok, LastTestDetail: detail})
 	case "alcatel":
 		ok, detail = s.collectAlcatelProfile(ctx, p, dev)
+		_ = s.queries.SetVendorProfileTest(ctx, db.SetVendorProfileTestParams{ID: id, LastTestOk: &ok, LastTestDetail: detail})
+	case "redfish", "hyperv", "onvif", "unifi", "omada", "ruckus", "extreme":
+		// Profile types backed directly by the internal/collect orchestrator,
+		// which authenticates by IP using ALL stored credentials and persists —
+		// no profile-specific plumbing needed. Reuses the same core as the
+		// controller-import + device-level Collect.
+		ok, detail = s.collectViaController(ctx, p.VendorType, dev, parseVPConfig(p.Config))
 		_ = s.queries.SetVendorProfileTest(ctx, db.SetVendorProfileTestParams{ID: id, LastTestOk: &ok, LastTestDetail: detail})
 	default:
 		detail = p.VendorType + " deep collection not implemented yet — detection + classification + this gate remain active"

@@ -41,6 +41,8 @@ interface VendorDef {
 }
 const VENDORS: VendorDef[] = [
   { type: 'vmware', label: 'VMware vSphere / ESXi', group: 'Virtualization', urlLabel: 'vCenter / ESXi URL', urlHint: 'https://vcenter.example.com', fields: [], insecure: true },
+  { type: 'hyperv', label: 'Microsoft Hyper-V (WinRM)', group: 'Virtualization', urlLabel: 'Host address', urlHint: '10.0.0.20 or hyperv01.corp.local', fields: [], note: 'Collects Hyper-V host + VMs over WinRM/PowerShell using a stored winrm credential. Needs WinRM enabled on the host (or a site relay agent on that LAN).' },
+  { type: 'redfish', label: 'Server BMC — Redfish (HPE iLO / Dell iDRAC / Supermicro)', group: 'Servers', urlLabel: 'BMC address', urlHint: 'https://10.0.0.30 or 10.0.0.30', fields: [], insecure: true, note: 'Out-of-band server inventory via the Redfish API on the BMC (iLO / iDRAC / generic Redfish). Uses a stored http_basic / vendor_api credential.' },
   { type: 'cctv', label: 'CCTV (Hikvision / Dahua / ONVIF)', group: 'Surveillance', urlLabel: 'Device / NVR address', urlHint: 'https://10.0.0.50 or 10.0.0.50', fields: [], insecure: true },
   { type: 'wireless_unifi', label: 'Ubiquiti UniFi', group: 'Wireless', urlLabel: 'Controller URL', urlHint: 'https://unifi.example.com:8443', fields: [{ key: 'site', label: 'UniFi site', hint: 'default' }], insecure: true },
   { type: 'wireless_omada', label: 'TP-Link Omada', group: 'Wireless', urlLabel: 'Controller URL', urlHint: 'https://omada.example.com:8043', fields: [{ key: 'controller_id', label: 'Controller ID', hint: 'omadac id (from controller URL)' }], insecure: true },
