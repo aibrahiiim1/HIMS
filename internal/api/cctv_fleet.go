@@ -184,11 +184,11 @@ func (s *Server) cctvSummary(w http.ResponseWriter, r *http.Request) {
 		"channels_linked": linked,             // channels matched to a standalone camera device
 		// Management breakdown — managed_total = managed_direct + managed_via_recorder.
 		"managed_total":        direct + viaRecorder,
-		"managed_direct":       direct,       // own proven ONVIF/ISAPI/HTTP credential
-		"managed_via_recorder": viaRecorder,  // camera is an NVR/DVR channel (managed through the recorder)
+		"managed_direct":       direct,      // own proven ONVIF/ISAPI/HTTP credential
+		"managed_via_recorder": viaRecorder, // camera is an NVR/DVR channel (managed through the recorder)
 		"unmanaged":            authFailed + noCred + otherUnmanaged,
 		"auth_failed":          authFailed, // reachable but every tried credential rejected
-		"no_credential":        noCred,      // no credential available to try
+		"no_credential":        noCred,     // no credential available to try
 		"other_unmanaged":      otherUnmanaged,
 		"recorders_managed":    recordersManaged, // NVRs/DVRs managed by their own credential
 	})

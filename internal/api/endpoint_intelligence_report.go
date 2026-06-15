@@ -25,7 +25,7 @@ const eiReportDefaultLimit = 1000
 // placeholders. $1 is always the location filter (text[] or NULL).
 type qb struct{ args []any }
 
-func newQB(loc any) *qb { return &qb{args: []any{loc}} }
+func newQB(loc any) *qb      { return &qb{args: []any{loc}} }
 func (b *qb) p(v any) string { b.args = append(b.args, v); return fmt.Sprintf("$%d", len(b.args)) }
 
 type eiReportReq struct {
@@ -43,32 +43,32 @@ type eiReportReq struct {
 type eiColumn struct{ expr, label string }
 
 var eiDeviceColumns = map[string]eiColumn{
-	"hostname":      {"COALESCE(NULLIF(name,''), hostname)", "Device"},
-	"ip":            {"ip", "IP"},
-	"site":          {"site_name", "Site"},
-	"category":      {"category", "Category"},
-	"os":            {"os_caption", "OS"},
-	"os_build":      {"os_build", "Build"},
-	"os_arch":       {"os_arch", "Arch"},
-	"model":         {"eff_model", "Model"},
-	"vendor":        {"eff_vendor", "Vendor"},
-	"serial":        {"eff_serial", "Serial"},
-	"cpu":           {"cpu_model", "CPU"},
-	"cpu_cores":     {"cpu_cores", "Cores"},
-	"ram_gb":        {"round(ram_total_bytes/1073741824.0, 1)", "RAM (GB)"},
-	"disk_total_gb": {"round(c_total/1073741824.0, 1)", "C: total (GB)"},
-	"disk_free_gb":  {"round(min_free/1073741824.0, 1)", "Min free (GB)"},
-	"disk_free_pct": {"round(min_free_pct*100, 1)", "Min free %"},
-	"software_count": {"sw_count", "Software"},
-	"process_count":  {"proc_count", "Processes"},
-	"service_count":  {"svc_count", "Services"},
-	"nic_count":      {"nic_count", "NICs"},
-	"last_collected": {"collected_at", "Last collected"},
+	"hostname":          {"COALESCE(NULLIF(name,''), hostname)", "Device"},
+	"ip":                {"ip", "IP"},
+	"site":              {"site_name", "Site"},
+	"category":          {"category", "Category"},
+	"os":                {"os_caption", "OS"},
+	"os_build":          {"os_build", "Build"},
+	"os_arch":           {"os_arch", "Arch"},
+	"model":             {"eff_model", "Model"},
+	"vendor":            {"eff_vendor", "Vendor"},
+	"serial":            {"eff_serial", "Serial"},
+	"cpu":               {"cpu_model", "CPU"},
+	"cpu_cores":         {"cpu_cores", "Cores"},
+	"ram_gb":            {"round(ram_total_bytes/1073741824.0, 1)", "RAM (GB)"},
+	"disk_total_gb":     {"round(c_total/1073741824.0, 1)", "C: total (GB)"},
+	"disk_free_gb":      {"round(min_free/1073741824.0, 1)", "Min free (GB)"},
+	"disk_free_pct":     {"round(min_free_pct*100, 1)", "Min free %"},
+	"software_count":    {"sw_count", "Software"},
+	"process_count":     {"proc_count", "Processes"},
+	"service_count":     {"svc_count", "Services"},
+	"nic_count":         {"nic_count", "NICs"},
+	"last_collected":    {"collected_at", "Last collected"},
 	"collection_method": {"COALESCE(collection_method,'not collected')", "Method"},
-	"management":    {"CASE WHEN collected THEN 'managed' ELSE 'unmanaged' END", "Management"},
-	"domain":        {"NULLIF(domain,'')", "Domain"},
-	"software_note": {"NULLIF(software_note,'')", "Collection note"},
-	"health_score":  {eiScoreExpr, "Health"},
+	"management":        {"CASE WHEN collected THEN 'managed' ELSE 'unmanaged' END", "Management"},
+	"domain":            {"NULLIF(domain,'')", "Domain"},
+	"software_note":     {"NULLIF(software_note,'')", "Collection note"},
+	"health_score":      {eiScoreExpr, "Health"},
 }
 
 // eiScoreExpr is the inline health score (same penalties as eiHealthScoreSelect)
