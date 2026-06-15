@@ -1,0 +1,23 @@
+#!/bin/sh
+# Auto-format staged Go files with gofmt so a commit can never trip the CI
+# gofmt gate (ci.yml runs `test -z "$(gofmt -l .)"`). Any staged .go file that
+# isn't gofmt-clean is formatted in place and re-staged, so the commit that
+# lands is already clean. Inert when gofmt isn't on PATH (warns, doesn't block).
+set -e
+
+if ! command -v gofmt >/dev/null 2>&1; then
+  echo "pre-commit: gofmt not found on PATH — skipping Go format check" >&2
+  exit 0
+fi
+
+gofiles=$(git diff --cached --name-only --diff-filter=ACM -- '*.go')
+[ -z "$gofiles" ] && exit 0
+
+unformatted=$(gofmt -l $gofiles)
+[ -z "$unformatted" ] && exit 0
+
+echo "pre-commit: gofmt -w on staged Go files:"
+echo "$unformatted" | sed 's/^/  /'
+gofmt -w $unformatted
+git add $unformatted
+exit 0
