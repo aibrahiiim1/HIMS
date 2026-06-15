@@ -83,6 +83,20 @@ func (s *Server) collectDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// CCTV (camera / NVR / DVR) has a dedicated collector with the ISAPI-over-HTTPS
+	// ladder + subnet-scoped credential handling — far richer than plain ONVIF on
+	// port 80, which fails on recorders that only expose 443/8000+octet.
+	if kind == "onvif" {
+		cr := s.runCCTVCollection(cctx, dev, nil, "manual")
+		if !cr.ok() {
+			writeJSON(w, http.StatusOK, s.collectFailure(ctx, kind, nz(cr.Detail, cr.Reason)))
+			return
+		}
+		s.audit(r, "inventory", "device.collect", "device", id.String(), "Collected CCTV for "+dev.Name, map[string]any{"kind": kind})
+		writeJSON(w, http.StatusOK, map[string]any{"collected": true, "state": "managed_direct", "kind": kind, "detail": nz(cr.Detail, "collected via ONVIF/ISAPI"), "device_id": dev.ID.String()})
+		return
+	}
+
 	opts := collect.ControllerOpts{OmadaCID: req.OmadaCID, CUCMVersion: req.CUCMVersion, ExtremeBase: req.ExtremeBase}
 	res, cerr := collect.Controller(cctx, s.collectDeps(cctx), kind, *dev.PrimaryIp, dev.LocationID, opts)
 	if cerr != nil {
