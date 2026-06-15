@@ -421,6 +421,7 @@ func (s *Server) routes() {
 		r.Get("/credentials/{id}/credential-tests", s.credentialCredentialTests)
 		r.Get("/credentials/{id}/devices", s.credentialDevices)
 		r.Post("/credentials/{id}/apply-to-scope", s.applyCredentialToScope)
+		r.Post("/credentials/{id}/duplicate", s.duplicateCredential) // reuse a secret under a different kind (fix kind mismatch)
 		r.Get("/credential-tests/runs", s.listCredentialTestRuns)
 		r.Get("/credential-tests/runs/{id}/results", s.listCredentialTestRunResults)
 		r.Get("/vendor-profiles", s.listVendorProfiles)
