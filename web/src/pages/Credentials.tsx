@@ -1,8 +1,39 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
+import { KeyRound, ShieldCheck, ListChecks, Boxes, Plus } from 'lucide-react'
 import { api, type Credential, type EncryptionStatus, type Device, type CredTestResponse, type CredTestResult } from '../api'
 import { CredentialRunsPanel, CredentialHistoryPanel } from '../components/CredentialTestHistory'
+import { PageHeader, Panel, Kpi, TabBar, EmptyState, type Tone } from '../components/ui'
+import { DataTable, type DataCol } from '../components/DataTable'
+
+// Credential kinds: stable id → friendly label + a short hint shown in the form
+// so operators know what secret each kind expects (e.g. ESXi/vCenter = root:pass
+// as a vendor_api credential).
+const KIND_META: Record<string, { label: string; hint?: string; tone?: Tone }> = {
+  snmp_v2c:   { label: 'SNMP v2c', hint: 'Community string (e.g. public)' },
+  snmp_v3:    { label: 'SNMP v3', hint: 'USM security name + auth/priv keys' },
+  ssh:        { label: 'SSH', hint: 'username:password' },
+  winrm:      { label: 'WinRM', hint: 'username:password (DOMAIN\\user or user@domain)' },
+  wmi:        { label: 'WMI / DCOM', hint: 'username:password (domain admin for servers)' },
+  http_basic: { label: 'HTTP Basic', hint: 'username:password' },
+  onvif:      { label: 'CCTV (ONVIF)', hint: 'username:password' },
+  vendor_api: { label: 'Vendor API (VMware / REST)', hint: 'username:password — e.g. ESXi/vCenter root:password' },
+  ldap:       { label: 'LDAP / AD', hint: 'bind DN + password, or user@domain:password' },
+}
+const KINDS = Object.keys(KIND_META)
+const kindLabel = (k: string) => KIND_META[k]?.label ?? k
+
+const btn: React.CSSProperties = {
+  padding: '8px 16px', background: 'var(--brand)', color: '#fff', border: 'none',
+  borderRadius: 6, cursor: 'pointer', fontSize: 14, fontWeight: 600,
+}
+const input: React.CSSProperties = {
+  padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, width: '100%',
+  background: 'var(--surface-2)', color: 'var(--text)',
+}
+const ghost: React.CSSProperties = { padding: '4px 10px', background: 'transparent', color: 'var(--brand)', border: '1px solid var(--brand)', borderRadius: 6, cursor: 'pointer', fontSize: 12 }
+const danger: React.CSSProperties = { ...ghost, color: 'var(--crit)', borderColor: 'var(--crit)' }
 
 function EncryptionGate() {
   const q = useQuery({ queryKey: ['enc-status'], queryFn: () => api.get<EncryptionStatus>('/security/encryption/status'), retry: 0 })
@@ -12,148 +43,136 @@ function EncryptionGate() {
       <span>🔒</span>
       <div style={{ flex: 1 }}>
         <div style={{ fontWeight: 700 }}>Credential storage is disabled — no encryption key is configured</div>
-        <div style={{ fontSize: 12, marginTop: 2 }}>Credential creation, updates and credential-based discovery will not work until encryption is configured. Action required: set <code>HIMS_ENCRYPTION_KEY</code> in your deployment environment and restart the API.</div>
+        <div style={{ fontSize: 12, marginTop: 2 }}>Credential creation, updates and credential-based discovery will not work until encryption is configured. Set <code>HIMS_ENCRYPTION_KEY</code> and restart the API.</div>
       </div>
       <Link className="btn btn-sm" to="/security/encryption" style={{ whiteSpace: 'nowrap' }}>Configure Encryption →</Link>
     </div>
   )
 }
 
-const KINDS = ['snmp_v2c', 'snmp_v3', 'ssh', 'winrm', 'wmi', 'http_basic', 'onvif', 'vendor_api', 'ldap']
-
-const btn: React.CSSProperties = {
-  padding: '8px 16px', background: '#1565c0', color: '#fff', border: 'none',
-  borderRadius: 6, cursor: 'pointer', fontSize: 14, fontWeight: 600,
-}
-const input: React.CSSProperties = {
-  padding: '8px 10px', border: '1px solid #ccc', borderRadius: 6, fontSize: 13, width: '100%',
-}
-const cell: React.CSSProperties = { padding: '6px 8px', border: '1px solid #ccc', borderRadius: 6, fontSize: 13 }
-const ghost: React.CSSProperties = { padding: '3px 8px', background: 'transparent', color: '#90caf9', border: '1px solid #90caf9', borderRadius: 6, cursor: 'pointer', fontSize: 12 }
+const TABS = [
+  { key: 'creds', label: 'Credentials', icon: KeyRound },
+  { key: 'test', label: 'Test against devices', icon: ListChecks },
+  { key: 'history', label: 'Test history', icon: ShieldCheck },
+]
 
 export function Credentials() {
   const qc = useQueryClient()
+  const [tab, setTab] = useState('creds')
   const [show, setShow] = useState(false)
-  const [edit, setEdit] = useState<string | null>(null)
-  const [editName, setEditName] = useState('')
-  const [editSecret, setEditSecret] = useState('')
+  const [editCred, setEditCred] = useState<Credential | null>(null)
   const [hist, setHist] = useState<{ id: string; name: string } | null>(null)
   const [usage, setUsage] = useState<{ id: string; name: string } | null>(null)
   const list = useQuery({ queryKey: ['credentials'], queryFn: () => api.get<Credential[]>('/credentials') })
   const refresh = () => qc.invalidateQueries({ queryKey: ['credentials'] })
 
-  const save = useMutation({
-    mutationFn: (id: string) => api.patch(`/credentials/${id}`, { name: editName, secret: editSecret }),
-    onSuccess: () => { setEdit(null); setEditSecret(''); refresh() },
-  })
   const del = useMutation({
     mutationFn: (id: string) => api.del(`/credentials/${id}`),
     onSuccess: refresh,
   })
-  const startEdit = (c: Credential) => { setEdit(c.id); setEditName(c.name); setEditSecret('') }
+
+  const creds = list.data ?? []
+  const kinds = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const c of creds) m.set(c.kind, (m.get(c.kind) ?? 0) + 1)
+    return [...m.entries()].sort((a, b) => b[1] - a[1])
+  }, [creds])
+  const weakCount = creds.filter((c) => c.weak).length
+  const inUse = creds.filter((c) => (c.usage_count ?? 0) > 0).length
+
+  const cols: DataCol<Credential>[] = [
+    { key: 'name', label: 'Name', sortVal: (c) => c.name, render: (c) => <strong>{c.name}</strong> },
+    { key: 'kind', label: 'Kind', sortVal: (c) => c.kind, render: (c) => <span className="badge badge-info">{kindLabel(c.kind)}</span> },
+    { key: 'weak', label: 'Strength', sortVal: (c) => (c.weak ? 0 : 1), render: (c) => (c.weak ? <span className="badge badge-warning">weak</span> : <span className="badge badge-up">ok</span>) },
+    {
+      key: 'usage', label: 'Bound devices', sortVal: (c) => c.usage_count ?? 0,
+      render: (c) => ((c.usage_count ?? 0) > 0
+        ? <button style={ghost} title="Show bound devices" onClick={() => setUsage(usage?.id === c.id ? null : { id: c.id, name: c.name })}>{c.usage_count} device{c.usage_count === 1 ? '' : 's'}</button>
+        : <span className="muted">0</span>),
+    },
+    { key: 'created', label: 'Created', sortVal: (c) => c.created_at ?? '', render: (c) => <span className="muted">{c.created_at?.slice(0, 10) ?? '—'}</span> },
+    {
+      key: 'actions', label: '', render: (c) => (
+        <span style={{ whiteSpace: 'nowrap' }}>
+          <button style={ghost} onClick={() => setHist(hist?.id === c.id ? null : { id: c.id, name: c.name })}>History</button>{' '}
+          <button style={ghost} onClick={() => { setShow(false); setEditCred(c) }}>Edit</button>{' '}
+          <button style={danger} onClick={() => { if (confirm(`Delete credential "${c.name}"? It will be unbound from any devices.`)) del.mutate(c.id) }}>Delete</button>
+        </span>
+      ),
+    },
+  ]
 
   return (
-    <div>
+    <div className="page">
+      <PageHeader
+        title="Credentials"
+        subtitle="Stored secrets used to authenticate and collect from devices. Encrypted at rest (AES-256-GCM) on save; plaintext is never stored, logged, or shown — only metadata appears here."
+        icon={KeyRound}
+        actions={<button style={btn} onClick={() => { setEditCred(null); setShow((v) => !v) }}><Plus size={14} style={{ verticalAlign: -2 }} /> {show ? 'Cancel' : 'New credential'}</button>}
+      />
       <EncryptionGate />
-      <div className="card">
-        <h2>Credentials</h2>
-        <p className="muted" style={{ marginBottom: 10 }}>
-          Secrets are encrypted at rest (AES-256-GCM) the moment they're saved. The plaintext is
-          never stored, logged, or returned — only this metadata (name, kind, weak flag) is ever
-          shown. Credentials are resolved to devices by scope (site → subnet → group) and bound on
-          first successful auth.
-        </p>
-        <button style={btn} onClick={() => setShow((v) => !v)}>{show ? 'Cancel' : '+ New credential'}</button>
+
+      <div className="kpi-grid">
+        <Kpi label="Total credentials" value={creds.length} icon={KeyRound} />
+        <Kpi label="In use" value={inUse} sub="bound to ≥1 device" tone="ok" icon={Boxes} />
+        <Kpi label="Weak" value={weakCount} tone={weakCount ? 'warn' : 'default'} icon={ShieldCheck} />
+        <Kpi label="Distinct kinds" value={kinds.length} sub={kinds.slice(0, 4).map(([k, n]) => `${kindLabel(k)}·${n}`).join('  ')} />
       </div>
 
-      {show && <CreateForm onDone={() => { setShow(false); qc.invalidateQueries({ queryKey: ['credentials'] }) }} />}
-
-      {list.data && list.data.length > 0 && <CredentialTester credentials={list.data} />}
-
-      <div className="card">
-        {list.isLoading && <div className="loading">Loading…</div>}
-        {list.error && <div className="error-msg">{(list.error as Error).message}</div>}
-        {list.data && list.data.length === 0 && <div className="muted">No credentials yet.</div>}
-        {list.data && list.data.length > 0 && (
-          <table>
-            <thead><tr><th>Name</th><th>Kind</th><th>Weak</th><th>Usage</th><th>Created</th><th></th></tr></thead>
-            <tbody>
-              {list.data.map((c) => (
-                edit === c.id ? (
-                  <tr key={c.id} style={{ background: '#1a2733' }}>
-                    <td><input style={cell} value={editName} onChange={(e) => setEditName(e.target.value)} /></td>
-                    <td>{c.kind}</td>
-                    <td colSpan={3}>
-                      <input style={{ ...cell, width: 220 }} type="password" placeholder="new secret (leave blank to keep)" value={editSecret} onChange={(e) => setEditSecret(e.target.value)} autoComplete="new-password" />
-                    </td>
-                    <td style={{ whiteSpace: 'nowrap' }}>
-                      <button style={btn} disabled={!editName || save.isPending} onClick={() => save.mutate(c.id)}>Save</button>{' '}
-                      <button style={ghost} onClick={() => setEdit(null)}>Cancel</button>
-                    </td>
-                  </tr>
-                ) : (
-                  <tr key={c.id}>
-                    <td><strong>{c.name}</strong></td>
-                    <td>{c.kind}</td>
-                    <td>{c.weak ? <span className="badge badge-warning">weak</span> : '—'}</td>
-                    <td>
-                      {c.usage_count && c.usage_count > 0 ? (
-                        <button
-                          style={{ ...ghost, color: '#90caf9', borderColor: '#90caf9' }}
-                          title="Show the devices bound to this credential"
-                          onClick={() => setUsage(usage?.id === c.id ? null : { id: c.id, name: c.name })}
-                        >
-                          {c.usage_count} device{c.usage_count === 1 ? '' : 's'}
-                        </button>
-                      ) : (
-                        <span className="muted">0</span>
-                      )}
-                    </td>
-                    <td>{c.created_at?.slice(0, 10)}</td>
-                    <td style={{ whiteSpace: 'nowrap' }}>
-                      <button style={ghost} onClick={() => setHist(hist?.id === c.id ? null : { id: c.id, name: c.name })}>History</button>{' '}
-                      <button style={ghost} onClick={() => startEdit(c)}>Edit</button>{' '}
-                      <button style={{ ...ghost, color: '#ef9a9a', borderColor: '#ef9a9a' }} onClick={() => { if (confirm(`Delete credential "${c.name}"? It will be unbound from any devices.`)) del.mutate(c.id) }}>Delete</button>
-                    </td>
-                  </tr>
-                )
-              ))}
-            </tbody>
-          </table>
-        )}
-        {(save.error || del.error) && (
-          <div className="error-msg" style={{ marginTop: 8 }}>{((save.error || del.error) as Error).message}</div>
-        )}
+      <div style={{ margin: '12px 0' }}>
+        <TabBar tabs={TABS} active={tab} onChange={setTab} />
       </div>
 
-      {usage && <CredentialUsagePanel credentialId={usage.id} credentialName={usage.name} onClose={() => setUsage(null)} />}
+      {tab === 'creds' && (
+        <>
+          {show && <CreateForm onDone={() => { setShow(false); refresh() }} onCancel={() => setShow(false)} />}
+          {editCred && <EditForm cred={editCred} onDone={() => { setEditCred(null); refresh() }} onCancel={() => setEditCred(null)} />}
 
-      {hist && <CredentialHistoryPanel credentialId={hist.id} credentialName={hist.name} />}
+          <Panel title={`Stored credentials (${creds.length})`} icon={KeyRound} className="mt12">
+            {list.isLoading && <div className="muted">Loading…</div>}
+            {list.error && <div className="badge badge-down">{(list.error as Error).message}</div>}
+            {!list.isLoading && creds.length === 0 && (
+              <EmptyState icon={KeyRound} title="No credentials yet"
+                message="Add SNMP / SSH / WinRM / WMI / HTTP / ONVIF / Vendor-API (VMware) credentials so discovery can authenticate and collect."
+                action={<button style={btn} onClick={() => setShow(true)}>+ New credential</button>} />
+            )}
+            {creds.length > 0 && (
+              <DataTable rows={creds} cols={cols} getKey={(c) => c.id}
+                searchText={(c) => `${c.name} ${c.kind} ${kindLabel(c.kind)}`} searchPlaceholder="Search by name or kind…"
+                filters={[{ key: 'kind', label: 'Kind', options: kinds.map(([k]) => ({ value: k, label: kindLabel(k) })), match: (c, v) => c.kind === v }]}
+                pageSizeDefault={25} emptyTitle="No credentials" emptyMessage="No credentials match the filters." />
+            )}
+            {del.error && <div className="badge badge-down" style={{ marginTop: 8 }}>{(del.error as Error).message}</div>}
+          </Panel>
 
-      <CredentialRunsPanel />
+          {usage && <CredentialUsagePanel credentialId={usage.id} credentialName={usage.name} onClose={() => setUsage(null)} />}
+          {hist && <CredentialHistoryPanel credentialId={hist.id} credentialName={hist.name} />}
+        </>
+      )}
+
+      {tab === 'test' && (creds.length > 0
+        ? <CredentialTester credentials={creds} />
+        : <Panel title="Test against devices" icon={ListChecks}><EmptyState icon={ListChecks} title="No credentials to test" message="Add a credential first, then test it against devices here." /></Panel>)}
+
+      {tab === 'history' && <CredentialRunsPanel />}
     </div>
   )
 }
 
-// CredentialUsagePanel lists every device that uses a credential — opened by
-// clicking its usage count. Each row links to the device, and a badge says
-// whether it's bound as the device's main credential or its CCTV web credential.
+// CredentialUsagePanel lists every device that uses a credential.
 function CredentialUsagePanel({ credentialId, credentialName, onClose }: { credentialId: string; credentialName: string; onClose: () => void }) {
   const q = useQuery({
     queryKey: ['credential-devices', credentialId],
     queryFn: () => api.get<import('../api').CredentialDevice[]>(`/credentials/${credentialId}/devices`),
   })
   return (
-    <div className="card">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <h2 style={{ margin: 0 }}>Devices using “{credentialName}”</h2>
-        <button style={ghost} onClick={onClose}>Close</button>
-      </div>
-      {q.isLoading && <div className="loading">Loading…</div>}
-      {q.error && <div className="error-msg">{(q.error as Error).message}</div>}
-      {q.data && q.data.length === 0 && <div className="muted" style={{ marginTop: 8 }}>No devices are bound to this credential.</div>}
+    <Panel title={`Devices using “${credentialName}”`} icon={Boxes} className="mt12"
+      actions={<button style={ghost} onClick={onClose}>Close</button>}>
+      {q.isLoading && <div className="muted">Loading…</div>}
+      {q.error && <div className="badge badge-down">{(q.error as Error).message}</div>}
+      {q.data && q.data.length === 0 && <div className="muted">No devices are bound to this credential.</div>}
       {q.data && q.data.length > 0 && (
-        <table style={{ marginTop: 8 }}>
+        <table>
           <thead><tr><th>Device</th><th>IP</th><th>Category</th><th>Status</th><th>Bound as</th></tr></thead>
           <tbody>
             {q.data.map((d) => (
@@ -172,15 +191,38 @@ function CredentialUsagePanel({ credentialId, credentialName, onClose }: { crede
           </tbody>
         </table>
       )}
-    </div>
+    </Panel>
   )
 }
 
-function CreateForm({ onDone }: { onDone: () => void }) {
-  const [name, setName] = useState('')
-  const [kind, setKind] = useState('snmp_v2c')
+function EditForm({ cred, onDone, onCancel }: { cred: Credential; onDone: () => void; onCancel: () => void }) {
+  const [name, setName] = useState(cred.name)
   const [secret, setSecret] = useState('')
-  // SNMP v3 (USM) fields — assembled into the secret JSON the server seals.
+  const save = useMutation({
+    mutationFn: () => api.patch(`/credentials/${cred.id}`, { name, secret }),
+    onSuccess: onDone,
+  })
+  return (
+    <Panel title={`Edit “${cred.name}”`} icon={KeyRound} className="mt12">
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(220px,1fr))', gap: 12 }}>
+        <label>Name<input style={input} value={name} onChange={(e) => setName(e.target.value)} /></label>
+        <label>{KIND_META[cred.kind]?.label ?? cred.kind} secret
+          <input style={input} type="password" placeholder="leave blank to keep current" value={secret} onChange={(e) => setSecret(e.target.value)} autoComplete="new-password" />
+        </label>
+      </div>
+      <div style={{ marginTop: 12 }}>
+        <button style={btn} disabled={!name.trim() || save.isPending} onClick={() => save.mutate()}>{save.isPending ? 'Saving…' : 'Save changes'}</button>{' '}
+        <button style={ghost} onClick={onCancel}>Cancel</button>
+        {save.error && <span className="badge badge-down" style={{ marginLeft: 12 }}>{(save.error as Error).message}</span>}
+      </div>
+    </Panel>
+  )
+}
+
+function CreateForm({ onDone, onCancel }: { onDone: () => void; onCancel: () => void }) {
+  const [name, setName] = useState('')
+  const [kind, setKind] = useState('winrm')
+  const [secret, setSecret] = useState('')
   const [secName, setSecName] = useState('')
   const [authProto, setAuthProto] = useState('SHA')
   const [authKey, setAuthKey] = useState('')
@@ -188,65 +230,55 @@ function CreateForm({ onDone }: { onDone: () => void }) {
   const [privKey, setPrivKey] = useState('')
 
   const isV3 = kind === 'snmp_v3'
-  // http/winrm/onvif/vendor creds use "username:password"; surface a hint.
-  const userPass = kind === 'ssh' || kind === 'winrm' || kind === 'wmi' || kind === 'http_basic' || kind === 'onvif' || kind === 'vendor_api'
+  const userPass = ['ssh', 'winrm', 'wmi', 'http_basic', 'onvif', 'vendor_api', 'ldap'].includes(kind)
+  const meta = KIND_META[kind]
 
-  const buildSecret = (): string => {
-    if (isV3) {
-      return JSON.stringify({
-        security_name: secName, auth_protocol: authKey ? authProto : '', auth_key: authKey,
-        priv_protocol: privKey ? privProto : '', priv_key: privKey,
-      })
-    }
-    return secret
-  }
+  const buildSecret = (): string => isV3
+    ? JSON.stringify({ security_name: secName, auth_protocol: authKey ? authProto : '', auth_key: authKey, priv_protocol: privKey ? privProto : '', priv_key: privKey })
+    : secret
   const valid = name && (isV3 ? secName : secret)
   const m = useMutation({
     mutationFn: () => api.post<Credential>('/credentials', { name, kind, secret: buildSecret() }),
     onSuccess: onDone,
   })
+
   return (
-    <div className="card">
-      <h2>New credential</h2>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(200px,1fr))', gap: 10 }}>
-        <label>Name<input style={input} value={name} onChange={(e) => setName(e.target.value)} /></label>
+    <Panel title="New credential" icon={Plus} className="mt12">
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(220px,1fr))', gap: 12 }}>
+        <label>Name<input style={input} value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Domain Admin (dpm)" /></label>
         <label>Kind
           <select style={input} value={kind} onChange={(e) => setKind(e.target.value)}>
-            {KINDS.map((k) => <option key={k} value={k}>{k}</option>)}
+            {KINDS.map((k) => <option key={k} value={k}>{kindLabel(k)}</option>)}
           </select>
         </label>
         {!isV3 && (
           <label>{userPass ? 'username:password' : kind.startsWith('snmp') ? 'Community' : 'Secret'}
-            <input style={input} type={userPass ? 'text' : 'password'} value={secret} onChange={(e) => setSecret(e.target.value)} autoComplete="new-password" />
+            <input style={input} type={userPass ? 'text' : 'password'} value={secret} onChange={(e) => setSecret(e.target.value)} autoComplete="new-password" placeholder={meta?.hint} />
           </label>
         )}
       </div>
+      {meta?.hint && <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>{meta.hint}</p>}
 
       {isV3 && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(170px,1fr))', gap: 10, marginTop: 10 }}>
           <label>Security name<input style={input} value={secName} onChange={(e) => setSecName(e.target.value)} /></label>
           <label>Auth protocol
-            <select style={input} value={authProto} onChange={(e) => setAuthProto(e.target.value)}>
-              {['SHA', 'SHA256', 'SHA512', 'MD5'].map((p) => <option key={p}>{p}</option>)}
-            </select>
+            <select style={input} value={authProto} onChange={(e) => setAuthProto(e.target.value)}>{['SHA', 'SHA256', 'SHA512', 'MD5'].map((p) => <option key={p}>{p}</option>)}</select>
           </label>
           <label>Auth key<input style={input} type="password" value={authKey} onChange={(e) => setAuthKey(e.target.value)} autoComplete="new-password" /></label>
           <label>Priv protocol
-            <select style={input} value={privProto} onChange={(e) => setPrivProto(e.target.value)}>
-              {['AES', 'AES256', 'DES'].map((p) => <option key={p}>{p}</option>)}
-            </select>
+            <select style={input} value={privProto} onChange={(e) => setPrivProto(e.target.value)}>{['AES', 'AES256', 'DES'].map((p) => <option key={p}>{p}</option>)}</select>
           </label>
           <label>Priv key<input style={input} type="password" value={privKey} onChange={(e) => setPrivKey(e.target.value)} autoComplete="new-password" /></label>
         </div>
       )}
 
       <div style={{ marginTop: 12 }}>
-        <button style={btn} disabled={!valid || m.isPending} onClick={() => m.mutate()}>
-          {m.isPending ? 'Encrypting…' : 'Create'}
-        </button>
-        {m.error && <span className="error-msg" style={{ marginLeft: 12 }}>{(m.error as Error).message}</span>}
+        <button style={btn} disabled={!valid || m.isPending} onClick={() => m.mutate()}>{m.isPending ? 'Encrypting…' : 'Create credential'}</button>{' '}
+        <button style={ghost} onClick={onCancel}>Cancel</button>
+        {m.error && <span className="badge badge-down" style={{ marginLeft: 12 }}>{(m.error as Error).message}</span>}
       </div>
-    </div>
+    </Panel>
   )
 }
 
@@ -255,9 +287,6 @@ const CAT_BADGE: Record<string, string> = {
   unsupported: 'badge-unknown', error: 'badge-down',
 }
 
-// CredentialTester runs the universal credential-test matrix: pick credentials +
-// devices, probe every pair, show a secrets-free result grid. Results come from
-// POST /credentials/test (the server decrypts to probe; nothing secret returns).
 function CredentialTester({ credentials }: { credentials: Credential[] }) {
   const devicesQ = useQuery({ queryKey: ['devices', 'all'], queryFn: () => api.get<Device[]>('/devices?category=all') })
   const [credSel, setCredSel] = useState<Set<string>>(new Set())
@@ -273,35 +302,26 @@ function CredentialTester({ credentials }: { credentials: Credential[] }) {
   }, [devicesQ.data, filter])
 
   const toggle = (set: Set<string>, id: string, fn: (s: Set<string>) => void) => {
-    const next = new Set(set)
-    if (next.has(id)) next.delete(id)
-    else next.add(id)
-    fn(next)
+    const next = new Set(set); if (next.has(id)) next.delete(id); else next.add(id); fn(next)
   }
   const pairs = credSel.size * devSel.size
-
   const run = useMutation({
-    mutationFn: () => api.post<CredTestResponse>('/credentials/test', {
-      credential_ids: [...credSel], device_ids: [...devSel], legacy_kex: legacyKex,
-    }),
+    mutationFn: () => api.post<CredTestResponse>('/credentials/test', { credential_ids: [...credSel], device_ids: [...devSel], legacy_kex: legacyKex }),
   })
 
   return (
-    <div className="card">
-      <h2>Test credentials against devices</h2>
-      <p className="muted" style={{ marginBottom: 10 }}>
-        Verify which credentials authenticate to which devices — any combination (one-to-many or
-        many-to-one). The server decrypts each secret only to run the probe; the secret is never
-        returned or logged. SNMP / SSH / HTTP / ONVIF / WinRM are supported.
+    <Panel title="Test credentials against devices" icon={ListChecks} className="mt12">
+      <p className="muted" style={{ marginBottom: 10, fontSize: 13 }}>
+        Verify which credentials authenticate to which devices (any combination). The server decrypts each secret only to run the probe — nothing secret is returned or logged.
       </p>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+      <div className="grid-2">
         <div>
           <div style={{ fontWeight: 600, marginBottom: 6 }}>Credentials ({credSel.size})</div>
-          <div style={{ maxHeight: 220, overflow: 'auto', border: '1px solid #2a3a47', borderRadius: 6, padding: 8 }}>
+          <div style={{ maxHeight: 220, overflow: 'auto', border: '1px solid var(--border)', borderRadius: 6, padding: 8 }}>
             {credentials.map((c) => (
               <label key={c.id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '3px 0', fontSize: 13 }}>
                 <input type="checkbox" checked={credSel.has(c.id)} onChange={() => toggle(credSel, c.id, setCredSel)} />
-                <span>{c.name}</span><span className="muted" style={{ fontSize: 11 }}>{c.kind}</span>
+                <span>{c.name}</span><span className="muted" style={{ fontSize: 11 }}>{kindLabel(c.kind)}</span>
               </label>
             ))}
           </div>
@@ -309,7 +329,7 @@ function CredentialTester({ credentials }: { credentials: Credential[] }) {
         <div>
           <div style={{ fontWeight: 600, marginBottom: 6 }}>Devices ({devSel.size})</div>
           <input style={{ ...input, marginBottom: 6 }} placeholder="filter by name / IP / category…" value={filter} onChange={(e) => setFilter(e.target.value)} />
-          <div style={{ maxHeight: 184, overflow: 'auto', border: '1px solid #2a3a47', borderRadius: 6, padding: 8 }}>
+          <div style={{ maxHeight: 184, overflow: 'auto', border: '1px solid var(--border)', borderRadius: 6, padding: 8 }}>
             {devicesQ.isLoading && <div className="muted">Loading devices…</div>}
             {filtered.map((d) => (
               <label key={d.id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '3px 0', fontSize: 13 }}>
@@ -323,15 +343,12 @@ function CredentialTester({ credentials }: { credentials: Credential[] }) {
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginTop: 12 }}>
-        <button style={btn} disabled={pairs === 0 || pairs > 500 || run.isPending} onClick={() => run.mutate()}>
-          {run.isPending ? 'Testing…' : `Test ${pairs} pair${pairs === 1 ? '' : 's'}`}
-        </button>
+        <button style={btn} disabled={pairs === 0 || pairs > 500 || run.isPending} onClick={() => run.mutate()}>{run.isPending ? 'Testing…' : `Test ${pairs} pair${pairs === 1 ? '' : 's'}`}</button>
         <label style={{ fontSize: 13, display: 'flex', gap: 6, alignItems: 'center' }}>
-          <input type="checkbox" checked={legacyKex} onChange={(e) => setLegacyKex(e.target.checked)} />
-          Legacy SSH KEX (old switches)
+          <input type="checkbox" checked={legacyKex} onChange={(e) => setLegacyKex(e.target.checked)} /> Legacy SSH KEX (old switches)
         </label>
-        {pairs > 500 && <span className="error-msg">Too many pairs ({pairs}); max 500.</span>}
-        {run.error && <span className="error-msg">{(run.error as Error).message}</span>}
+        {pairs > 500 && <span className="badge badge-down">Too many pairs ({pairs}); max 500.</span>}
+        {run.error && <span className="badge badge-down">{(run.error as Error).message}</span>}
       </div>
 
       {run.data && (
@@ -348,7 +365,7 @@ function CredentialTester({ credentials }: { credentials: Credential[] }) {
                 <tr key={i}>
                   <td>{r.device_name}</td>
                   <td className="mono" style={{ fontSize: 12 }}>{r.ip}</td>
-                  <td>{r.credential_name} <span className="muted" style={{ fontSize: 11 }}>{r.kind}</span></td>
+                  <td>{r.credential_name} <span className="muted" style={{ fontSize: 11 }}>{kindLabel(r.kind)}</span></td>
                   <td>{r.protocol || '—'}</td>
                   <td><span className={`badge ${CAT_BADGE[r.category] ?? 'badge-unknown'}`}>{r.category.replace(/_/g, ' ')}</span></td>
                   <td className="muted" style={{ fontSize: 12 }}>{r.detail}</td>
@@ -359,6 +376,6 @@ function CredentialTester({ credentials }: { credentials: Credential[] }) {
           </table>
         </div>
       )}
-    </div>
+    </Panel>
   )
 }
