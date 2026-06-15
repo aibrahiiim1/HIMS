@@ -444,7 +444,17 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 	// Skipped once SNMP already bound a credential (switches).
 	var authedKind domain.CredentialKind
 	if r.BoundCred == nil {
-		for _, cand := range candidates {
+		// Try the host's EXPECTED-protocol credentials before opportunistic ones.
+		// Without this, a Linux/appliance host (expected SSH) could spend its whole
+		// per-host budget on relevant-but-secondary HTTP_basic creds and never reach
+		// the working SSH credential — the exact reason a full-subnet scan failed to
+		// manage a host that a single-IP scan (working cred tried first) managed.
+		// Stable sort preserves the resolver's within-kind ordering.
+		ordered := append(candidates[:0:0], candidates...)
+		sort.SliceStable(ordered, func(i, j int) bool {
+			return plan.Expects(ordered[i].Kind) && !plan.Expects(ordered[j].Kind)
+		})
+		for _, cand := range ordered {
 			if cand.Kind == domain.CredSNMPv2c || cand.Kind == domain.CredSNMPv3 {
 				continue
 			}
