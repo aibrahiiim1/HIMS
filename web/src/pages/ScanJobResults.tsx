@@ -7,7 +7,7 @@ import { api, locationPaths, type Device, type DiscoveryJob, type DiscoveryResul
 import { PageHeader, Panel, Kpi, EmptyState, ProgressBar, timeAgo } from '../components/ui'
 import { ReachabilityBadge, ManagementBadge } from '../components/StatusBadges'
 import { EditDevice } from '../components/EditDevice'
-import { OnboardingActions, CollectedViaCell, outcomeBadge, duration } from './Discovery'
+import { OnboardingActions, CollectedViaCell, CollectNowPanel, outcomeBadge, duration } from './Discovery'
 
 type JobDetail = { job: DiscoveryJob; results: DiscoveryResult[]; counts?: ScanJobCounts }
 
@@ -261,6 +261,7 @@ export function ScanJobResults() {
                           {d && <button className="btn btn-ghost btn-xs" onClick={() => setEditDev(d)} title="Edit / Lock classification"><Pencil size={12} /></button>}{' '}
                           {d && <button className="btn btn-ghost btn-xs" disabled={reclassify.isPending} onClick={() => reclassify.mutate(d.id)} title="Reclassify from evidence">RC</button>}{' '}
                           <button className="btn btn-ghost btn-xs" disabled={rescanIP.isPending} onClick={() => rescanIP.mutate(r.ip)} title="Re-scan this device"><RefreshCw size={12} /></button>
+                          {d && <div style={{ marginTop: 4 }}><CollectNowPanel deviceID={d.id} qc={qc} jobID={job?.id ?? null} /></div>}
                         </td>
                       </tr>
                     )
