@@ -4,11 +4,11 @@ import {
   Boxes, Layers, Network, Flame, Wifi, Cpu, Server, HardDrive, MonitorSmartphone,
   Plug, BatteryCharging, ShieldAlert, Camera, Video, Phone, CircleHelp, Brain, Laptop,
   Map, Route as RouteIcon, Waypoints, ClipboardList, ListChecks, Wrench, Package, DollarSign, Building2,
-  FileChartColumn, FileSearch, ChartLine, Tag, Download,
+  FileChartColumn, FileSearch, ChartLine, Tag, Download, Unplug,
   Users, ShieldCheck, LayoutTemplate, ScanLine, Settings, FileClock, Lock, Activity, MonitorPlay, ClipboardCheck, Send, FileCode, BadgeCheck, DatabaseBackup,
 } from 'lucide-react'
 
-export type BadgeKey = 'alerts' | 'failed_scans' | 'unknown' | 'unmanaged' | 'work_orders'
+export type BadgeKey = 'alerts' | 'failed_scans' | 'unknown' | 'unmanaged' | 'unmapped' | 'work_orders'
 
 export interface NavLeaf {
   label: string
@@ -81,6 +81,7 @@ export const NAV: NavGroup[] = [
       {
         label: 'Endpoints & Peripherals', icon: MonitorSmartphone,
         children: [
+          { label: 'Endpoint Intelligence', to: '/endpoint-intelligence', icon: ChartLine },
           { label: 'Workstations', to: '/workstations', icon: Laptop },
           { label: 'Printers', to: '/printers', icon: Plug },
           { label: 'UPS', to: '/ups', icon: BatteryCharging },
@@ -100,6 +101,7 @@ export const NAV: NavGroup[] = [
       // Conceptual split: classification problems vs access/management problems.
       { label: 'Missing Classification', icon: CircleHelp, to: '/inventory/missing-classification', badge: 'unknown' },
       { label: 'Unmanaged Devices', icon: ShieldAlert, to: '/inventory/unmanaged', badge: 'unmanaged' },
+      { label: 'Unmapped Devices', icon: Unplug, to: '/inventory/unmapped', badge: 'unmapped' },
       { label: 'Device Intelligence', icon: Brain, to: '/device-intelligence' },
     ],
   },

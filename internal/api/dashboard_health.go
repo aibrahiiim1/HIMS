@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
 	"github.com/google/uuid"
 )
 
@@ -191,6 +192,43 @@ func (s *Server) monitoringHealth(r *http.Request) monitoringHealth {
 	return m
 }
 
+// fabricCategories are the topology-capable device classes — switches and
+// routers (incl. ISP routers). Topology coverage, the Unmapped Devices view and
+// its sidebar badge all measure over this set only; endpoints, servers, APs,
+// printers, controllers etc. don't form LLDP/CDP links.
+var fabricCategories = map[string]bool{"switch": true, "router": true, "isp_router": true}
+
+// mappedDeviceIDs returns the set of device IDs that appear in at least one
+// topology link (as the local or remote endpoint). A failed query yields an
+// empty set (everything reads as unmapped) rather than an error — callers treat
+// this as best-effort coverage data.
+func (s *Server) mappedDeviceIDs(ctx context.Context) map[uuid.UUID]struct{} {
+	mapped := map[uuid.UUID]struct{}{}
+	links, err := s.queries.ListAllTopologyLinks(ctx)
+	if err != nil {
+		return mapped
+	}
+	for _, l := range links {
+		mapped[l.LocalDeviceID] = struct{}{}
+		if l.RemoteDeviceID != nil {
+			mapped[*l.RemoteDeviceID] = struct{}{}
+		}
+	}
+	return mapped
+}
+
+// isUnmappedFabric reports whether d is a topology-capable fabric device that is
+// absent from every topology link — the predicate behind the Unmapped Devices
+// view and its sidebar badge. Kept beside topologyHealth so coverage and the
+// drill-down list always agree on what "unmapped" means.
+func isUnmappedFabric(d db.Device, mapped map[uuid.UUID]struct{}) bool {
+	if !fabricCategories[d.Category] {
+		return false
+	}
+	_, ok := mapped[d.ID]
+	return !ok
+}
+
 func (s *Server) topologyHealth(ctx context.Context) topologyHealth {
 	t := topologyHealth{Status: "unknown"}
 	links, err := s.queries.ListAllTopologyLinks(ctx)
@@ -218,12 +256,11 @@ func (s *Server) topologyHealth(ctx context.Context) topologyHealth {
 	// routers (incl. ISP routers). Endpoints, controllers, servers, APs, printers
 	// etc. don't form LLDP/CDP links, so counting them in the denominator would
 	// permanently understate coverage and keep this panel stuck on "warning".
-	fabricCats := map[string]bool{"switch": true, "router": true, "isp_router": true}
 	hasFabric := false
 	if devs, derr := s.queries.ListAllDevices(ctx); derr == nil {
 		totalFabric, mappedFabric := 0, 0
 		for _, dv := range devs {
-			if !fabricCats[dv.Category] {
+			if !fabricCategories[dv.Category] {
 				continue
 			}
 			totalFabric++

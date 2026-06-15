@@ -12,11 +12,12 @@ interface Props {
   title: string
   detailBase: string
   headerExtra?: React.ReactNode // optional action(s) rendered before the delete control
+  preContent?: React.ReactNode // optional content rendered above the KPI grid (e.g. CCTV fleet ops)
 }
 
 const isOffline = (s: string) => ['down', 'offline', 'needs_attention'].includes((s || '').toLowerCase())
 
-export function DeviceList({ category, title, detailBase, headerExtra }: Props) {
+export function DeviceList({ category, title, detailBase, headerExtra, preContent }: Props) {
   const qc = useQueryClient()
   const [msg, setMsg] = useState('')
   const [editDev, setEditDev] = useState<Device | null>(null)
@@ -57,6 +58,7 @@ export function DeviceList({ category, title, detailBase, headerExtra }: Props) 
         }
       />
       {msg && <div className="banner" style={{ marginBottom: 12, fontSize: 13 }}>{msg}</div>}
+      {preContent}
 
       <div className="kpi-grid">
         <Kpi label={title} value={all.length} icon={Boxes} tone="info" />

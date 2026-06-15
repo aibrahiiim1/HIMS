@@ -1,55 +1,177 @@
+import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
-import { Phone, PhoneCall, Server } from 'lucide-react'
+import { Phone, PhoneCall, Server, Hash, Cpu } from 'lucide-react'
 import { api, type DeviceFact, type PhoneExtension } from '../api'
 import { DeviceHeader } from '../components/DeviceHeader'
-import { Panel, Kpi, EmptyState } from '../components/ui'
+import {
+  Panel, Kpi, EmptyState, TabBar, usePaged, Pager, Donut, Legend, BarList, colorFor, timeAgo,
+} from '../components/ui'
 
-// Voice / PBX Intelligence (#17): registered-phone inventory from Cisco CUCM
-// over AXL (listPhone). Bind an AXL application-user (http_basic) credential
-// and collect to populate; reachability is monitored continuously.
+// Voice / PBX Intelligence: the subscriber/phone registry. Cisco CUCM is pulled
+// over AXL (executeSQLQuery → directory number + MAC from the SEP name); Alcatel
+// OmniPCX over the mgr telnet CLI (directory numbers). Tabbed view: searchable
+// directory + breakdowns by model and device pool.
+const SOURCE_LABEL: Record<string, string> = { axl: 'Cisco CUCM (AXL)', omnipcx: 'Alcatel OmniPCX (mgr)' }
+
 export function PbxDetail() {
   const { id } = useParams<{ id: string }>()
+  const [tab, setTab] = useState('directory')
+  const [q, setQ] = useState('')
+
   const phones = useQuery({ queryKey: ['phones', id], queryFn: () => api.get<PhoneExtension[]>(`/devices/${id}/phones`) })
   const facts = useQuery({ queryKey: ['facts', id], queryFn: () => api.get<DeviceFact[]>(`/devices/${id}/facts`) })
 
-  const list = phones.data ?? []
+  const list = useMemo(() => phones.data ?? [], [phones.data])
   const f = new Map((facts.data ?? []).map((x) => [x.key, x.value ?? '']))
-  const registered = f.get('phone_count') ?? (phones.data ? String(list.length) : '—')
-  const pools = new Set(list.map((p) => p.device_pool).filter(Boolean)).size
-  const models = new Set(list.map((p) => p.model).filter(Boolean)).size
+  const withExt = list.filter((p) => (p.extension ?? '').trim() !== '').length
+  const withIP = list.filter((p) => (p.ip_address ?? '').trim() !== '').length
+  const haveReg = list.some((p) => (p.registration ?? '').trim() !== '')
+  const registered = list.filter((p) => (p.registration ?? '').toLowerCase() === 'registered').length
+  const pools = useMemo(() => countBy(list, (p) => p.device_pool), [list])
+  const models = useMemo(() => countBy(list, (p) => p.model), [list])
+  const source = list.find((p) => p.collection_source)?.collection_source ?? ''
+  const lastSeen = list.reduce<string | null>((a, p) => (p.last_seen_at && (!a || p.last_seen_at > a) ? p.last_seen_at : a), null)
+
+  const paged = usePaged(list, {
+    pageSize: 25, filter: q,
+    match: (p, s) =>
+      (p.extension ?? '').toLowerCase().includes(s) || p.name.toLowerCase().includes(s) ||
+      (p.mac_address ?? '').toLowerCase().includes(s) || (p.description ?? '').toLowerCase().includes(s) ||
+      (p.model ?? '').toLowerCase().includes(s) || (p.device_pool ?? '').toLowerCase().includes(s) ||
+      (p.ip_address ?? '').toLowerCase().includes(s) || (p.registration ?? '').toLowerCase().includes(s),
+  })
+
+  const showIP = withIP > 0
+  const tabs = [
+    { key: 'directory', label: 'Directory', icon: PhoneCall, count: list.length },
+    { key: 'models', label: 'By Model', icon: Cpu, count: models.length },
+    { key: 'pools', label: 'By Device Pool', icon: Server, count: pools.length },
+  ]
 
   return (
     <div>
       <DeviceHeader deviceId={id!} icon={Phone} />
 
       <div className="kpi-grid">
-        <Kpi label="Registered Phones" value={registered} icon={PhoneCall} tone="info" />
-        <Kpi label="Device Pools" value={pools || '—'} icon={Server} />
-        <Kpi label="Phone Models" value={models || '—'} icon={Phone} />
+        <Kpi label="Phones / Subscribers" value={list.length || (f.get('phone_count') ?? '—')} icon={PhoneCall} tone="info" />
+        <Kpi label="With Directory No." value={list.length ? `${withExt}` : '—'} sub={list.length ? `${pct(withExt, list.length)}%` : undefined} icon={Hash} />
+        {haveReg && <Kpi label="Registered" value={`${registered}`} sub={`${pct(registered, list.length)}% live`} icon={PhoneCall} tone={registered === list.length ? 'ok' : 'warn'} />}
+        <Kpi label="Device Pools" value={pools.length || '—'} icon={Server} />
+        <Kpi label="Phone Models" value={models.length || '—'} icon={Cpu} />
       </div>
 
-      <Panel title="Phones" icon={PhoneCall} subtitle={list.length ? `${list.length}` : undefined} pad={false}>
-        {phones.data && list.length === 0 && (
+      {list.length > 0 && (
+        <p className="muted" style={{ margin: '2px 2px 12px', fontSize: 12 }}>
+          Collected via <strong>{SOURCE_LABEL[source] ?? source ?? 'voice API'}</strong>
+          {lastSeen ? ` · ${timeAgo(lastSeen)}` : ''} · {withExt} of {list.length} have a directory number
+          {showIP ? ` · ${withIP} with IP` : ''}
+        </p>
+      )}
+
+      {phones.data && list.length === 0 ? (
+        <Panel title="Phones" icon={PhoneCall} pad={false}>
           <EmptyState icon={PhoneCall} title="No phones collected"
-            message="The phone registry is pulled from Cisco CUCM over AXL (listPhone). Bind an AXL application-user (http_basic) credential and collect to populate." />
-        )}
-        {list.length > 0 && (
-          <table className="data-table">
-            <thead><tr><th>Name</th><th>Model</th><th>Description</th><th>Device Pool</th></tr></thead>
-            <tbody>
-              {list.map((p) => (
-                <tr key={p.id}>
-                  <td className="cell-name">{p.name}</td>
-                  <td>{p.model ?? '—'}</td>
-                  <td>{p.description ?? '—'}</td>
-                  <td>{p.device_pool ?? '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </Panel>
+            message="CUCM is pulled over AXL (directory number + MAC); OmniPCX over the mgr telnet CLI. Bind the voice credential and run collection to populate." />
+        </Panel>
+      ) : (
+        <>
+          <TabBar tabs={tabs} active={tab} onChange={setTab} />
+
+          {tab === 'directory' && (
+            <Panel title="Phone Directory" icon={PhoneCall} pad={false}
+              actions={
+                <input className="input input-sm" placeholder="Search ext / name / MAC / pool…" value={q}
+                  onChange={(e) => { setQ(e.target.value); paged.setPage(0) }} style={{ minWidth: 240 }} />
+              }>
+              <table className="data-table">
+                <thead><tr>
+                  <th>Directory No.</th><th>Device / MAC</th><th>Model</th>
+                  <th>Description</th><th>Device Pool</th>{showIP && <th>IP</th>}{haveReg && <th>Status</th>}
+                </tr></thead>
+                <tbody>
+                  {paged.slice.map((p) => (
+                    <tr key={p.id}>
+                      <td className="cell-name">{p.extension || '—'}</td>
+                      <td>
+                        <div>{p.name}</div>
+                        {p.mac_address && <div className="muted" style={{ fontSize: 11, fontFamily: 'var(--mono, monospace)' }}>{p.mac_address}</div>}
+                      </td>
+                      <td>{p.model ?? '—'}</td>
+                      <td>{p.description ?? '—'}</td>
+                      <td>{p.device_pool ?? '—'}</td>
+                      {showIP && <td>{p.ip_address ?? '—'}</td>}
+                      {haveReg && <td><RegBadge s={p.registration} /></td>}
+                    </tr>
+                  ))}
+                  {paged.total === 0 && (
+                    <tr><td colSpan={5 + (showIP ? 1 : 0) + (haveReg ? 1 : 0)} className="muted" style={{ textAlign: 'center', padding: 20 }}>No phones match “{q}”.</td></tr>
+                  )}
+                </tbody>
+              </table>
+              <Pager page={paged.page} pages={paged.pages} total={paged.total} pageSize={paged.pageSize} onPage={paged.setPage} />
+            </Panel>
+          )}
+
+          {tab === 'models' && (
+            <Panel title="Phones by Model" icon={Cpu}>
+              {models.length === 0 ? <EmptyState icon={Cpu} title="No model data" message="Model is reported by CUCM per phone." /> : (
+                <div style={{ display: 'flex', gap: 28, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <Donut data={donutData(models)} centerLabel="phones" centerValue={String(list.length)} />
+                  <div style={{ flex: 1, minWidth: 260 }}>
+                    <Legend data={donutData(models)} total={list.length} />
+                  </div>
+                </div>
+              )}
+            </Panel>
+          )}
+
+          {tab === 'pools' && (
+            <Panel title="Phones by Device Pool" icon={Server}>
+              {pools.length === 0 ? <EmptyState icon={Server} title="No device-pool data" message="Device pool groups phones by site/region in CUCM." /> : (
+                <BarList rows={pools.map((m) => ({ label: m.label, value: m.value }))} />
+              )}
+            </Panel>
+          )}
+        </>
+      )}
     </div>
+  )
+}
+
+function countBy(list: PhoneExtension[], key: (p: PhoneExtension) => string | null | undefined) {
+  const m = new Map<string, number>()
+  for (const p of list) {
+    const k = (key(p) ?? '').trim()
+    if (!k) continue
+    m.set(k, (m.get(k) ?? 0) + 1)
+  }
+  return [...m.entries()].map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value)
+}
+
+function donutData(rows: { label: string; value: number }[]) {
+  return rows.slice(0, 8).map((r) => ({ label: r.label, value: r.value, color: colorFor(r.label) }))
+}
+
+function pct(n: number, total: number) {
+  return total ? Math.round((n / total) * 100) : 0
+}
+
+// RegBadge renders the CUCM RisPort registration status as a colored pill.
+function RegBadge({ s }: { s?: string | null }) {
+  const v = (s ?? '').trim()
+  if (!v) return <span className="muted">—</span>
+  const low = v.toLowerCase()
+  const tone =
+    low === 'registered' ? { bg: 'var(--ok-bg, #e8f5e9)', fg: 'var(--ok, #2e7d32)' }
+      : low === 'partiallyregistered' ? { bg: 'var(--warn-bg, #fff8e1)', fg: 'var(--warn, #b26a00)' }
+        : low === 'unknown' ? { bg: 'var(--muted-bg, #eee)', fg: 'var(--muted, #777)' }
+          : { bg: 'var(--bad-bg, #fdecea)', fg: 'var(--bad, #c62828)' } // UnRegistered / Rejected
+  const label = low === 'partiallyregistered' ? 'Partial' : low === 'unregistered' ? 'Unregistered' : v
+  return (
+    <span style={{
+      display: 'inline-block', padding: '2px 9px', borderRadius: 999, fontSize: 11,
+      fontWeight: 600, background: tone.bg, color: tone.fg,
+    }}>{label}</span>
   )
 }

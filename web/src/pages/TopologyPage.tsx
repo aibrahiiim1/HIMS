@@ -4,15 +4,7 @@ import cytoscape from 'cytoscape'
 import { Network, Cable, RefreshCw, Layers } from 'lucide-react'
 import { api, type TopologyGraph } from '../api'
 import { PageHeader, Panel, Kpi, EmptyState } from '../components/ui'
-
-// Layer → node colour (core/distribution/access/edge/gateway/wireless/host).
-const LAYER_COLOR: Record<string, string> = {
-  core: '#8b5cf6', distribution: '#2563eb', access: '#22c55e',
-  edge: '#ef4444', gateway: '#f59e0b', wireless: '#06b6d4', host: '#64748b',
-}
-const layerColor = (l: string) => LAYER_COLOR[l] ?? '#64748b'
-// Confidence → edge styling.
-const CONF_COLOR: Record<string, string> = { high: '#16a34a', medium: '#f59e0b', low: '#ef4444' }
+import { LAYER_COLOR, layerColor, CONF_COLOR } from '../components/topologyColors'
 
 export function TopologyPage() {
   const qc = useQueryClient()

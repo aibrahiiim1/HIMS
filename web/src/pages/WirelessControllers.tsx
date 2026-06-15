@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Plus } from 'lucide-react'
 import { DeviceList } from './DeviceList'
 import { AddWirelessController } from '../components/AddWirelessController'
+import { AddVirtualButton } from '../components/AddVirtualButton'
 
 // WirelessControllers is the Inventory → Wireless screen: the wireless-controller
 // device list plus the one-step "Add controller" action (REST/XML primary).
@@ -14,9 +15,12 @@ export function WirelessControllers() {
         title="Wireless Controllers"
         detailBase="/wlan"
         headerExtra={
-          <button className="btn btn-primary btn-sm" onClick={() => setAdding(true)}>
-            <Plus size={14} /> Add controller
-          </button>
+          <>
+            <AddVirtualButton type="wireless_controller" label="Controller" />
+            <button className="btn btn-primary btn-sm" onClick={() => setAdding(true)}>
+              <Plus size={14} /> Add controller
+            </button>
+          </>
         }
       />
       {adding && <AddWirelessController onClose={() => setAdding(false)} />}

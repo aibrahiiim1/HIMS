@@ -76,3 +76,34 @@ func TestWorstAndRollup(t *testing.T) {
 		}
 	}
 }
+
+func TestRollupDeviceWithSupplemental(t *testing.T) {
+	cases := []struct {
+		name        string
+		reach, supp []Status
+		want        Status
+	}{
+		{"no checks at all", nil, nil, StatusUnknown},
+		{"reachable, no extras", []Status{StatusUp}, nil, StatusUp},
+		// The headline case: device reachable, an EXTRA check is down → the device
+		// is DEGRADED (warning), never offline. It must not inflate the down count.
+		{"reachable + extra down → warning, not down", []Status{StatusUp}, []Status{StatusDown}, StatusWarning},
+		{"reachable + extra warning → warning", []Status{StatusUp}, []Status{StatusWarning}, StatusWarning},
+		{"reachable + extra up → up", []Status{StatusUp}, []Status{StatusUp}, StatusUp},
+		// Reachability down ALWAYS wins — that's a real offline.
+		{"reachability down → down (offline)", []Status{StatusDown}, []Status{StatusUp}, StatusDown},
+		{"reachability down + extra down → down", []Status{StatusDown}, []Status{StatusDown}, StatusDown},
+		// Multiple reachability checks roll up worst-first.
+		{"two reachability, one down → down", []Status{StatusUp, StatusDown}, nil, StatusDown},
+		// Unknown reachability degrades to warning if an extra is failing.
+		{"unknown reach + extra down → warning", []Status{StatusUnknown}, []Status{StatusDown}, StatusWarning},
+		// Degenerate: only supplemental checks → capped at warning (never down).
+		{"only extras, down → warning (capped)", nil, []Status{StatusDown}, StatusWarning},
+		{"only extras, up → up", nil, []Status{StatusUp}, StatusUp},
+	}
+	for _, c := range cases {
+		if got := RollupDeviceWithSupplemental(c.reach, c.supp); got != c.want {
+			t.Errorf("%s: RollupDeviceWithSupplemental(%v,%v) = %v; want %v", c.name, c.reach, c.supp, got, c.want)
+		}
+	}
+}

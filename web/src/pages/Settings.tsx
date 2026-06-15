@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Settings as SettingsIcon, Radar, Plug, Tags, Palette, Sun, Moon } from 'lucide-react'
-import { api } from '../api'
+import { Settings as SettingsIcon, Radar, Plug, Tags, Palette, Sun, Moon, ShieldAlert, Trash2, Globe } from 'lucide-react'
+import { api, type WebPortCandidate } from '../api'
 import { PageHeader, Panel } from '../components/ui'
+import { useDeleteAllArmed, setDeleteAllArmed } from '../lib/dangerMode'
 
 type Settings = Record<string, number>
-type Section = 'discovery' | 'collection' | 'classification' | 'appearance'
+type Section = 'discovery' | 'collection' | 'web_ports' | 'classification' | 'appearance' | 'danger'
 
 const SNMP_PRESETS = [1000, 3000, 10000]
 
@@ -34,8 +35,10 @@ export function Settings() {
   const SECTIONS: { key: Section; label: string; icon: typeof Radar }[] = [
     { key: 'discovery', label: 'Discovery', icon: Radar },
     { key: 'collection', label: 'Collection & Integrations', icon: Plug },
+    { key: 'web_ports', label: 'Web / HTTP Ports', icon: Globe },
     { key: 'classification', label: 'Classification', icon: Tags },
     { key: 'appearance', label: 'Appearance', icon: Palette },
+    { key: 'danger', label: 'Destructive Actions', icon: ShieldAlert },
   ]
 
   const saveBar = (
@@ -87,6 +90,8 @@ export function Settings() {
             </Panel>
           )}
 
+          {section === 'web_ports' && <WebPortsSection />}
+
           {section === 'classification' && (
             <>
               <LookupList kind="class" title="Device Classes" hint="Values offered in the Inventory Class dropdown (e.g. Core, Access, Production)." />
@@ -95,9 +100,79 @@ export function Settings() {
           )}
 
           {section === 'appearance' && <AppearanceSection />}
+          {section === 'danger' && <DangerZoneSection />}
         </div>
       </div>
     </div>
+  )
+}
+
+// WebPortsSection manages the fleet-wide HTTP/Web candidate ports the scan +
+// HTTP/ISAPI/ONVIF collectors try (in addition to ports a scan discovers open).
+function WebPortsSection() {
+  const qc = useQueryClient()
+  const list = useQuery({ queryKey: ['web-ports'], queryFn: () => api.get<WebPortCandidate[]>('/settings/web-ports') })
+  const refresh = () => qc.invalidateQueries({ queryKey: ['web-ports'] })
+  const [port, setPort] = useState('')
+  const [scheme, setScheme] = useState<'http' | 'https' | 'both'>('http')
+  const [note, setNote] = useState('')
+
+  const create = useMutation({
+    mutationFn: () => api.post('/settings/web-ports', { port: Number(port), scheme, note }),
+    onSuccess: () => { setPort(''); setNote(''); setScheme('http'); refresh() },
+  })
+  const update = useMutation({
+    mutationFn: (c: WebPortCandidate) => api.patch(`/settings/web-ports/${c.id}`, { port: c.port, scheme: c.scheme, enabled: c.enabled, note: c.note }),
+    onSuccess: refresh,
+  })
+  const del = useMutation({ mutationFn: (id: string) => api.del(`/settings/web-ports/${id}`), onSuccess: refresh })
+
+  return (
+    <Panel title="Web / HTTP Candidate Ports" icon={Globe} subtitle="ports the scan + HTTP/ISAPI/ONVIF collectors try for web-managed devices">
+      <p className="muted" style={{ fontSize: 12, marginBottom: 10 }}>
+        Web-managed devices (NVRs/DVRs/cameras, appliances) often expose their web/API on non-standard ports
+        (Hikvision “8000 + host octet” → 8008/8010/8012, or 8081/8082…). Enabled ports here are added to the discovery
+        scan and tried by the collectors. <strong>Ports a scan discovers open on a device are always tried first</strong>,
+        even if disabled here.
+      </p>
+      <div className="row" style={{ gap: 8, marginBottom: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+        <label>Port<input className="field" style={{ width: 100, display: 'block' }} type="number" value={port} onChange={(e) => setPort(e.target.value)} placeholder="8012" /></label>
+        <label>Scheme
+          <select className="field" style={{ display: 'block' }} value={scheme} onChange={(e) => setScheme(e.target.value as 'http' | 'https' | 'both')}>
+            <option value="http">http</option><option value="https">https</option><option value="both">try both</option>
+          </select>
+        </label>
+        <label style={{ flex: 1, minWidth: 180 }}>Note<input className="field" style={{ width: '100%', display: 'block' }} value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Hikvision NVR HTTP port" /></label>
+        <button className="btn btn-primary" disabled={!port || create.isPending} onClick={() => create.mutate()}>{create.isPending ? 'Adding…' : '+ Add port'}</button>
+      </div>
+      {create.error && <div className="error-msg" style={{ marginBottom: 8 }}>{(create.error as Error).message}</div>}
+      {list.isLoading && <div className="loading">Loading…</div>}
+      {list.data && (
+        <table>
+          <thead><tr><th>Port</th><th>Scheme</th><th>Enabled</th><th>Note</th><th></th></tr></thead>
+          <tbody>
+            {list.data.map((c) => (
+              <tr key={c.id}>
+                <td className="mono"><strong>{c.port}</strong></td>
+                <td>
+                  <select className="field" value={c.scheme} onChange={(e) => update.mutate({ ...c, scheme: e.target.value as WebPortCandidate['scheme'] })}>
+                    <option value="http">http</option><option value="https">https</option><option value="both">both</option>
+                  </select>
+                </td>
+                <td>
+                  <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                    <input type="checkbox" checked={c.enabled} onChange={(e) => update.mutate({ ...c, enabled: e.target.checked })} />
+                    {c.enabled ? <span className="badge badge-up">on</span> : <span className="badge badge-unknown">off</span>}
+                  </label>
+                </td>
+                <td><input className="field" style={{ width: '100%' }} defaultValue={c.note} onBlur={(e) => { if (e.target.value !== c.note) update.mutate({ ...c, note: e.target.value }) }} /></td>
+                <td><button className="btn btn-ghost btn-sm" style={{ color: 'var(--crit)' }} onClick={() => { if (confirm(`Delete candidate port ${c.port}?`)) del.mutate(c.id) }}><Trash2 size={14} /></button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </Panel>
   )
 }
 
@@ -110,6 +185,36 @@ function AppearanceSection() {
         <button className={'btn' + (theme === 'light' ? ' btn-primary' : '')} onClick={() => apply('light')}><Sun size={15} /> Light</button>
         <button className={'btn' + (theme === 'dark' ? ' btn-primary' : '')} onClick={() => apply('dark')}><Moon size={15} /> Dark</button>
       </div>
+    </Panel>
+  )
+}
+
+// DangerZoneSection — one browser-wide switch that shows/hides the bulk
+// "Delete all" buttons across the Inventory page and every device-category list.
+// Off by default; the preference is stored on this browser (localStorage) and
+// applied immediately to every open list. Per-row and multi-select delete are
+// never gated by this — only the wipe-the-whole-view button.
+function DangerZoneSection() {
+  const armed = useDeleteAllArmed()
+  return (
+    <Panel title="Destructive Actions" icon={ShieldAlert} subtitle="show or hide the bulk “Delete all” buttons across Inventory and every device list (stored on this browser)">
+      <div className="set-row">
+        <div>
+          <div className="set-label">“Delete all” buttons</div>
+          <div className="muted" style={{ fontSize: 12, maxWidth: 540 }}>
+            When enabled, a red <strong>Delete all (N)</strong> button appears on the Inventory page and every device-category list, wiping the entire current (filtered) view at once. When disabled, those buttons are hidden everywhere. Per-row delete and multi-select delete are unaffected. Wiping the entire unfiltered inventory still requires typing <code>DELETE</code> to confirm.
+          </div>
+        </div>
+        <button className={'btn' + (armed ? ' btn-danger' : '')} onClick={() => setDeleteAllArmed(!armed)}
+          title="Toggle the destructive Delete-all buttons for this browser">
+          {armed ? <><Trash2 size={15} /> Enabled — disable</> : 'Disabled — enable'}
+        </button>
+      </div>
+      {armed && (
+        <p style={{ fontSize: 12, marginTop: 12, color: 'var(--crit)' }}>
+          <ShieldAlert size={13} style={{ verticalAlign: -2 }} /> Delete-all buttons are currently visible on all device lists.
+        </p>
+      )}
     </Panel>
   )
 }

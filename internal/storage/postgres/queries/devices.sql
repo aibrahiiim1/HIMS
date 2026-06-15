@@ -40,9 +40,14 @@ RETURNING *;
 -- name: UpdateDiscoveredDevice :one
 -- Reconcile path: refresh a live device's mutable identity fields on
 -- re-discovery (keyed by the caller to the (primary_ip, location) match).
+-- location_id is FILLED when the device has none (a site-scoped scan adopts a
+-- previously site-less device — e.g. first found by an unscoped CIDR scan, later
+-- re-scanned under a site) but never OVERWRITES an operator-set location:
+-- COALESCE keeps any existing value. A NULL fill arg (site-less scan) is a no-op.
 UPDATE devices SET
     hostname = $2, name = $3, vendor = $4, model = $5, serial = $6,
     os_version = $7, category = $8, driver = $9, status = $10,
+    location_id = COALESCE(location_id, sqlc.narg('fill_location')),
     last_discovery_at = now(), updated_at = now()
 WHERE id = $1
 RETURNING *;
@@ -99,6 +104,28 @@ DELETE FROM devices WHERE id = ANY($1::uuid[]);
 -- name: SetDeviceCredential :exec
 -- Bind-on-success: record the credential that last authenticated.
 UPDATE devices SET credential_id = $2, updated_at = now() WHERE id = $1;
+
+-- name: SetDeviceCCTVCredential :exec
+-- Bind the WEB credential that last authenticated for CCTV (ONVIF/ISAPI)
+-- collection. Kept separate from credential_id so an SNMP discovery/monitor
+-- success can never overwrite the credential CCTV collection depends on.
+UPDATE devices SET cctv_credential_id = $2, updated_at = now() WHERE id = $1;
+
+-- name: SetDeviceWebOverride :exec
+-- Operator-set per-device web-access override: preferred scheme/port, alternate
+-- ports (comma-separated), preferred protocol, and a free-text note. Collectors
+-- try these first.
+UPDATE devices SET web_scheme_pref = $2, web_port_pref = $3, web_alt_ports = $4, web_notes = $5, web_pref_proto = $6, updated_at = now() WHERE id = $1;
+
+-- name: SetDeviceWebSuccess :exec
+-- Record EXACTLY what worked on the last successful web/CCTV collection: the
+-- protocol (isapi/onvif/http/…), scheme, port, base endpoint, and the credential
+-- that authenticated. Drives the accurate "Managed via X" source in the UI and
+-- lets the next collect/scan prefer the known-good endpoint instead of guessing.
+UPDATE devices SET
+    web_last_proto = $2, web_last_scheme = $3, web_last_port = $4,
+    web_last_ok = $5, web_last_credential_id = $6, web_last_ok_at = now(), updated_at = now()
+WHERE id = $1;
 
 -- name: TouchDeviceDiscovery :exec
 UPDATE devices SET last_discovery_at = $2, updated_at = now() WHERE id = $1;
@@ -171,3 +198,19 @@ RETURNING *;
 SELECT * FROM devices
 WHERE os_family = $1 AND deleted_at IS NULL
 ORDER BY category, name;
+
+-- name: MarkDeviceVirtual :exec
+-- Flag (or unflag) a device as a manually-entered virtual placeholder.
+UPDATE devices SET is_virtual = $2, updated_at = now() WHERE id = $1;
+
+-- name: CountVirtualDevices :one
+-- Headline count for the "N devices, M virtual" indicator.
+SELECT COUNT(*)::bigint FROM devices WHERE is_virtual AND deleted_at IS NULL;
+
+-- name: CountDevices :one
+-- Total live devices (for the dashboard total / discovered split).
+SELECT COUNT(*)::bigint FROM devices WHERE deleted_at IS NULL;
+
+-- name: DeleteManualDeviceRoles :exec
+-- Clear operator-entered roles before re-writing them (virtual-device edit).
+DELETE FROM device_roles WHERE device_id = $1 AND source = 'manual';

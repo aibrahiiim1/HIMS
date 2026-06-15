@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
+	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 )
 
 // credentialDTO is the ONLY shape a credential is ever returned in: metadata
@@ -18,6 +20,10 @@ type credentialDTO struct {
 	Weak               bool   `json:"weak"`
 	NeedsSecretReentry bool   `json:"needs_secret_reentry"`
 	CreatedAt          string `json:"created_at"`
+	// UsageCount = distinct (scoped) devices that use this credential as their
+	// bound management credential or their CCTV web credential. The Credentials
+	// UI shows it per credential and links the count to the device list.
+	UsageCount int `json:"usage_count"`
 }
 
 func toCredentialDTO(c db.Credential) credentialDTO {
@@ -32,14 +38,97 @@ func toCredentialDTO(c db.Credential) credentialDTO {
 }
 
 func (s *Server) listCredentials(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.queries.ListCredentials(r.Context())
+	ctx := r.Context()
+	rows, err := s.queries.ListCredentials(ctx)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
+	// Per-credential usage = distinct scoped devices bound to it (primary or CCTV).
+	usage := map[uuid.UUID]int{}
+	if devs, derr := s.queries.ListAllDevices(ctx); derr == nil {
+		usage = credentialUsage(s.scopeDevices(ctx, devs))
+	}
 	out := make([]credentialDTO, len(rows))
 	for i, c := range rows {
-		out[i] = toCredentialDTO(c) // strips blob + key id
+		d := toCredentialDTO(c) // strips blob + key id
+		d.UsageCount = usage[c.ID]
+		out[i] = d
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// credentialUsage tallies, per credential id, the DISTINCT devices that use it as
+// their bound management credential (devices.credential_id) OR their CCTV web
+// credential (devices.cctv_credential_id). A device counts once per credential
+// even if both its bindings point at the same credential.
+func credentialUsage(devs []db.Device) map[uuid.UUID]int {
+	seen := map[uuid.UUID]map[uuid.UUID]bool{}
+	mark := func(cred *uuid.UUID, dev uuid.UUID) {
+		if cred == nil {
+			return
+		}
+		set := seen[*cred]
+		if set == nil {
+			set = map[uuid.UUID]bool{}
+			seen[*cred] = set
+		}
+		set[dev] = true
+	}
+	for _, d := range devs {
+		mark(d.CredentialID, d.ID)
+		mark(d.CctvCredentialID, d.ID)
+	}
+	out := make(map[uuid.UUID]int, len(seen))
+	for c, set := range seen {
+		out[c] = len(set)
+	}
+	return out
+}
+
+// credentialDeviceDTO is the slim per-device shape returned by the credential
+// usage drill-down (GET /credentials/{id}/devices). bound_primary / bound_cctv
+// say HOW the device uses the credential.
+type credentialDeviceDTO struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	PrimaryIP    string `json:"primary_ip"`
+	Category     string `json:"category"`
+	Status       string `json:"status"`
+	BoundPrimary bool   `json:"bound_primary"`
+	BoundCCTV    bool   `json:"bound_cctv"`
+}
+
+// credentialDevices handles GET /credentials/{id}/devices — every (scoped) device
+// that uses this credential as its bound management credential or CCTV web
+// credential. Powers the clickable usage count on the Credentials page.
+func (s *Server) credentialDevices(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid credential id", http.StatusBadRequest)
+		return
+	}
+	devs, err := s.queries.ListAllDevices(ctx)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	out := []credentialDeviceDTO{}
+	for _, d := range s.scopeDevices(ctx, devs) {
+		bp := d.CredentialID != nil && *d.CredentialID == id
+		bc := d.CctvCredentialID != nil && *d.CctvCredentialID == id
+		if !bp && !bc {
+			continue
+		}
+		ip := ""
+		if d.PrimaryIp != nil && d.PrimaryIp.IsValid() {
+			ip = d.PrimaryIp.String()
+		}
+		out = append(out, credentialDeviceDTO{
+			ID: d.ID.String(), Name: d.Name, PrimaryIP: ip,
+			Category: d.Category, Status: d.Status, BoundPrimary: bp, BoundCCTV: bc,
+		})
 	}
 	writeJSON(w, http.StatusOK, out)
 }

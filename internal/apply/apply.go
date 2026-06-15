@@ -45,8 +45,12 @@ type Writer interface {
 	DeleteStaleInterfaces(ctx context.Context, arg db.DeleteStaleInterfacesParams) error
 	UpsertVlan(ctx context.Context, arg db.UpsertVlanParams) (db.Vlan, error)
 	DeleteStaleVlans(ctx context.Context, arg db.DeleteStaleVlansParams) error
+	UpsertPortVlan(ctx context.Context, arg db.UpsertPortVlanParams) error
+	DeleteStalePortVlans(ctx context.Context, arg db.DeleteStalePortVlansParams) error
 	UpsertMAC(ctx context.Context, arg db.UpsertMACParams) error
 	DeleteStaleMACEntries(ctx context.Context, arg db.DeleteStaleMACEntriesParams) error
+	UpsertARP(ctx context.Context, arg db.UpsertARPParams) error
+	DeleteStaleARP(ctx context.Context, arg db.DeleteStaleARPParams) error
 	UpsertNeighbor(ctx context.Context, arg db.UpsertNeighborParams) (db.Neighbor, error)
 	DeleteStaleNeighbors(ctx context.Context, arg db.DeleteStaleNeighborsParams) error
 	UpsertServerStorage(ctx context.Context, arg db.UpsertServerStorageParams) error
@@ -134,9 +138,18 @@ func (a *Applier) Apply(ctx context.Context, res discovery.HostResult, locationI
 		return uuid.Nil, err
 	}
 
-	// Bind the authenticating credential (bind-on-success).
+	// Bind the authenticating credential (bind-on-success) — but NEVER let an SNMP
+	// discovery success overwrite the credential on a camera/NVR/DVR. Those devices
+	// are collected over ONVIF/ISAPI with a WEB credential; clobbering it with the
+	// SNMP community breaks CCTV collection (the drift bug). SNMP identity is still
+	// captured below via applySNMPIdentity, and SNMP monitoring resolves its
+	// community from scope, so nothing is lost by leaving the binding alone.
 	if res.BoundCred != nil {
-		_ = a.w.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: dev.ID, CredentialID: &res.BoundCred.ID})
+		snmpCred := res.BoundCred.Kind == domain.CredSNMPv2c || res.BoundCred.Kind == domain.CredSNMPv3
+		cctvDev := dev.Category == string(domain.CatCamera) || dev.Category == string(domain.CatNVR) || dev.Category == string(domain.CatDVR)
+		if !(cctvDev && snmpCred) {
+			_ = a.w.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: dev.ID, CredentialID: &res.BoundCred.ID})
+		}
 	}
 
 	// Inferred roles (port-based candidates; source = "port").
@@ -211,6 +224,10 @@ func (a *Applier) reconcile(ctx context.Context, ip netip.Addr, locationID *uuid
 			ID: existing.ID, Hostname: create.Hostname, Name: name, Vendor: vendor,
 			Model: model, Serial: serial, OsVersion: create.OsVersion,
 			Category: category, Driver: create.Driver, Status: create.Status,
+			// Adopt the scan's site when the device has none yet (site-scoped scan of
+			// a device first found by an unscoped CIDR scan). COALESCE in the query
+			// never overwrites an operator-set location; a nil arg is a no-op.
+			FillLocation: locationID,
 		})
 	}
 	if existing, err := a.w.LiveDeviceByIP(ctx, &ip); err == nil {
@@ -260,6 +277,20 @@ func (a *Applier) applyFacts(ctx context.Context, devID uuid.UUID, f *driver.Fac
 		_ = a.w.DeleteStaleVlans(ctx, db.DeleteStaleVlansParams{DeviceID: devID, LastSeenAt: poll, CollectionSource: sourceSNMP})
 	}
 
+	// Per-port VLAN membership (Q-BRIDGE egress/untagged bitmaps).
+	if len(f.PortVLANs) > 0 {
+		for _, pv := range f.PortVLANs {
+			if pv.IfIndex <= 0 {
+				continue
+			}
+			_ = a.w.UpsertPortVlan(ctx, db.UpsertPortVlanParams{
+				DeviceID: devID, IfIndex: int32(pv.IfIndex), VlanID: int32(pv.VLANID),
+				Tagged: pv.Tagged, CollectionSource: sourceSNMP, LastSeenAt: poll,
+			})
+		}
+		_ = a.w.DeleteStalePortVlans(ctx, db.DeleteStalePortVlansParams{DeviceID: devID, LastSeenAt: poll, CollectionSource: sourceSNMP})
+	}
+
 	// MAC / FDB.
 	if len(f.MACs) > 0 {
 		for _, m := range f.MACs {
@@ -269,6 +300,22 @@ func (a *Applier) applyFacts(ctx context.Context, devID uuid.UUID, f *driver.Fac
 			})
 		}
 		_ = a.w.DeleteStaleMACEntries(ctx, db.DeleteStaleMACEntriesParams{DeviceID: devID, LastSeenAt: poll, CollectionSource: sourceSNMP})
+	}
+
+	// ARP (ipNetToMedia): IP↔MAC bindings from L3 devices. This is what lets the
+	// Path Finder resolve a wired endpoint's IP → MAC → switch port.
+	if len(f.ARP) > 0 {
+		for _, e := range f.ARP {
+			ip, err := netip.ParseAddr(e.IP)
+			if err != nil || !ip.IsValid() {
+				continue
+			}
+			_ = a.w.UpsertARP(ctx, db.UpsertARPParams{
+				DeviceID: devID, IpAddress: ip, Mac: e.MAC, IfIndex: i32ptr(int32(e.IfIndex)),
+				CollectionSource: sourceSNMP, LastSeenAt: poll,
+			})
+		}
+		_ = a.w.DeleteStaleARP(ctx, db.DeleteStaleARPParams{DeviceID: devID, LastSeenAt: poll, CollectionSource: sourceSNMP})
 	}
 
 	// Neighbors (LLDP/CDP).
@@ -637,6 +684,12 @@ func identity(res discovery.HostResult) (name string, hostname, vendor, model, s
 	}
 	if res.Model != "" {
 		model = strptr(res.Model)
+	}
+	// Canonicalize vendor casing/legal-name forms so the same manufacturer from
+	// different discovery sources doesn't split into duplicate inventory entries.
+	if vendor != nil {
+		v := domain.CanonicalVendor(*vendor)
+		vendor = &v
 	}
 	return
 }

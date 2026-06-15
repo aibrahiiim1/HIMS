@@ -1,17 +1,16 @@
-import { useState } from 'react'
 import { Trash2 } from 'lucide-react'
+import { useDeleteAllArmed } from '../lib/dangerMode'
 
-// Shared, opt-in "Delete all" control. The destructive button is HIDDEN by
-// default behind an on/off switch so it can't be hit by accident; the armed
-// state persists (localStorage) so an operator who turns it on keeps it on for
-// the session/machine. Used by the Inventory page and every category list page.
+// Shared "Delete all" control for the Inventory page and every device-category
+// list. The destructive button is GATED behind a single browser-wide switch in
+// System Settings → Destructive Actions: when that's off this renders nothing,
+// so the button can't be hit by accident; when it's on the button appears on
+// every list at once. (The arm/disarm toggle used to live inline on each page;
+// it now lives in Settings so one switch controls them all.)
 //
 // Confirmation gating lives here so every surface enforces the same guardrail:
 //   - wiping the ENTIRE unfiltered inventory requires typing DELETE
 //   - deleting a scoped/filtered subset (a category, a filter) asks a confirm
-
-const LS_KEY = 'hims.deleteAll.armed'
-
 export function DeleteAllToggle({ ids, fullInventory, scope, onDelete, busy }: {
   ids: string[]            // every id in the current view (all pages), to delete
   fullInventory: boolean   // true only when this is the whole, unfiltered inventory
@@ -19,13 +18,8 @@ export function DeleteAllToggle({ ids, fullInventory, scope, onDelete, busy }: {
   onDelete: (ids: string[]) => void
   busy?: boolean
 }) {
-  const [armed, setArmed] = useState(() => {
-    try { return localStorage.getItem(LS_KEY) === '1' } catch { return false }
-  })
-  const setArmedPersist = (v: boolean) => {
-    setArmed(v)
-    try { localStorage.setItem(LS_KEY, v ? '1' : '0') } catch { /* private mode */ }
-  }
+  const armed = useDeleteAllArmed()
+  if (!armed) return null // hidden unless enabled in Settings → Destructive Actions
 
   const run = () => {
     if (ids.length === 0) return
@@ -39,18 +33,9 @@ export function DeleteAllToggle({ ids, fullInventory, scope, onDelete, busy }: {
   }
 
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-      <label title="Show or hide the destructive Delete-all button"
-        style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, color: 'var(--text-muted)', cursor: 'pointer', userSelect: 'none' }}>
-        <input type="checkbox" checked={armed} onChange={(e) => setArmedPersist(e.target.checked)} />
-        Delete-all
-      </label>
-      {armed && (
-        <button className="btn btn-danger btn-sm" disabled={ids.length === 0 || busy} onClick={run}
-          title={`Delete every device in this view (${ids.length}), not just the visible page`}>
-          <Trash2 size={14} /> Delete all{ids.length > 0 ? ` (${ids.length})` : ''}
-        </button>
-      )}
-    </span>
+    <button className="btn btn-danger btn-sm" disabled={ids.length === 0 || busy} onClick={run}
+      title={`Delete every device in this view (${ids.length}), not just the visible page`}>
+      <Trash2 size={14} /> Delete all{ids.length > 0 ? ` (${ids.length})` : ''}
+    </button>
   )
 }

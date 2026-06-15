@@ -22,11 +22,18 @@ type Querier interface {
 	// A part not tracked in stock (free-text): just record it, no decrement.
 	AddFreeWorkOrderPart(ctx context.Context, arg AddFreeWorkOrderPartParams) (WorkOrderPart, error)
 	AddRolePermission(ctx context.Context, arg AddRolePermissionParams) error
+	AddSubnetCredential(ctx context.Context, arg AddSubnetCredentialParams) error
 	AddUserRole(ctx context.Context, arg AddUserRoleParams) error
 	AddWorkOrderEvent(ctx context.Context, arg AddWorkOrderEventParams) (WorkOrderEvent, error)
 	// Absolute set of on-hand quantity (a stock count / receiving correction).
 	// The CHECK (quantity >= 0) constraint rejects negative results.
 	AdjustSparePartStock(ctx context.Context, arg AdjustSparePartStockParams) (SparePart, error)
+	// Alert volume + responsiveness over the window. MTTA/MTTR are NULL until alerts
+	// with acknowledged/resolved timestamps exist (honest empty state). $1 = window.
+	AlertAnalyticsSummary(ctx context.Context, dollar_1 string) (AlertAnalyticsSummaryRow, error)
+	// Alerts opened per time bucket, split by severity, for the alert-rate trend.
+	// $1 = granularity, $2 = window.
+	AlertOpenedSeries(ctx context.Context, arg AlertOpenedSeriesParams) ([]AlertOpenedSeriesRow, error)
 	// Distinct filter values (+counts) for the audit filter UI, in one round-trip.
 	AuditFacets(ctx context.Context) ([]AuditFacetsRow, error)
 	BindCredentialGroup(ctx context.Context, arg BindCredentialGroupParams) (CredentialBinding, error)
@@ -38,6 +45,7 @@ type Querier interface {
 	// metadata, assignments and group memberships. Flag for re-entry.
 	ClearAllCredentialSecrets(ctx context.Context) error
 	ClearReentryFlag(ctx context.Context, id uuid.UUID) error
+	ClearSubnetCredentials(ctx context.Context, subnetID uuid.UUID) error
 	CompleteAgentJob(ctx context.Context, arg CompleteAgentJobParams) error
 	// ---- Work-order parts (stock consumption) ---------------------------------
 	// Atomic: decrement stock AND record the consumption in ONE statement. The
@@ -52,6 +60,8 @@ type Querier interface {
 	// Overview KPIs: total versions, distinct devices backed up, and changes today.
 	CountConfigBackupStats(ctx context.Context) (CountConfigBackupStatsRow, error)
 	CountCredentialsNeedingReentry(ctx context.Context) (int64, error)
+	// Total live devices (for the dashboard total / discovered split).
+	CountDevices(ctx context.Context) (int64, error)
 	CountDevicesNeedingAttention(ctx context.Context) (int64, error)
 	// ===== Credential secret accounting / recovery =============================
 	CountEncryptedCredentials(ctx context.Context) (int64, error)
@@ -59,8 +69,14 @@ type Querier interface {
 	CountExpiringSystems(ctx context.Context) (int64, error)
 	// Failed jobs for one agent (for the agent detail page + Data Quality count).
 	CountFailedAgentJobs(ctx context.Context, agentID uuid.UUID) (int64, error)
+	// Channels whose camera IP matched an already-discovered standalone camera device.
+	CountLinkedNVRChannels(ctx context.Context) (int64, error)
 	CountMibPacksBySource(ctx context.Context) ([]CountMibPacksBySourceRow, error)
 	CountMibWalkRows(ctx context.Context, deviceID uuid.UUID) (int64, error)
+	// Total camera channels collected across all recorders (CCTV summary). Channels
+	// are NOT inventory devices, so this is reported separately and never folded into
+	// the device count.
+	CountNVRChannels(ctx context.Context) (int64, error)
 	CountOpenAlerts(ctx context.Context) (int64, error)
 	CountOpenWorkOrders(ctx context.Context) (int64, error)
 	CountSSHCliBySource(ctx context.Context, deviceID uuid.UUID) ([]CountSSHCliBySourceRow, error)
@@ -70,6 +86,8 @@ type Querier interface {
 	// How many profiles still reference a credential (for orphan-credential cleanup on
 	// profile delete).
 	CountVendorProfilesUsingCredential(ctx context.Context, credentialID *uuid.UUID) (int64, error)
+	// Headline count for the "N devices, M virtual" indicator.
+	CountVirtualDevices(ctx context.Context) (int64, error)
 	CreateAgentJob(ctx context.Context, arg CreateAgentJobParams) (AgentJob, error)
 	// ---- Alert rules ----------------------------------------------------------
 	CreateAlertRule(ctx context.Context, arg CreateAlertRuleParams) (AlertRule, error)
@@ -109,6 +127,7 @@ type Querier interface {
 	// Vendor connection profile CRUD + resolution. No secrets are stored here; the
 	// credential reference points at the encrypted credentials table.
 	CreateVendorProfile(ctx context.Context, arg CreateVendorProfileParams) (VendorConnectionProfile, error)
+	CreateWebPortCandidate(ctx context.Context, arg CreateWebPortCandidateParams) (WebPortCandidate, error)
 	CreateWorkOrder(ctx context.Context, arg CreateWorkOrderParams) (WorkOrder, error)
 	// Whether a group is already bound to a location (guards duplicate binds).
 	CredentialGroupLocationBound(ctx context.Context, arg CredentialGroupLocationBoundParams) (bool, error)
@@ -133,6 +152,8 @@ type Querier interface {
 	DeleteLocation(ctx context.Context, id uuid.UUID) error
 	DeleteLookup(ctx context.Context, id uuid.UUID) error
 	DeleteMaintenanceWindow(ctx context.Context, id uuid.UUID) error
+	// Clear operator-entered roles before re-writing them (virtual-device edit).
+	DeleteManualDeviceRoles(ctx context.Context, deviceID uuid.UUID) error
 	DeleteMibPack(ctx context.Context, id uuid.UUID) error
 	DeleteMibPackTable(ctx context.Context, id uuid.UUID) error
 	DeleteMibWalkRows(ctx context.Context, arg DeleteMibWalkRowsParams) error
@@ -179,10 +200,15 @@ type Querier interface {
 	DeleteUserSessions(ctx context.Context, userID uuid.UUID) error
 	DeleteVendorFingerprint(ctx context.Context, id uuid.UUID) error
 	DeleteVendorProfile(ctx context.Context, id uuid.UUID) error
+	DeleteWebPortCandidate(ctx context.Context, id uuid.UUID) error
 	// Replace an event set for a source (collectors re-publish the current window).
 	DeleteWirelessEventsForSource(ctx context.Context, arg DeleteWirelessEventsForSourceParams) error
 	DeviceCountByCategory(ctx context.Context) ([]DeviceCountByCategoryRow, error)
 	DeviceCountByStatus(ctx context.Context) ([]DeviceCountByStatusRow, error)
+	// Per-device availability over the window: sample/up counts (for uptime %),
+	// latency, and flap count (status transitions). Ordered worst-first so the UI can
+	// show "worst performers" and a flapping list. $1 = window (e.g. '24 hours').
+	DeviceUptimeRanking(ctx context.Context, dollar_1 string) ([]DeviceUptimeRankingRow, error)
 	// Mark open, unacknowledged, not-yet-escalated alerts as escalated once they
 	// have aged past their rule's escalate_after_minutes (0 = never).
 	EscalateStaleAlerts(ctx context.Context) ([]EscalateStaleAlertsRow, error)
@@ -193,11 +219,52 @@ type Querier interface {
 	// same repair/license).
 	ExpensesByCategory(ctx context.Context) ([]ExpensesByCategoryRow, error)
 	ExpensesByLocation(ctx context.Context) ([]ExpensesByLocationRow, error)
+	// Reconcile orphaned scans: a scan runs as an in-process goroutine, so any job
+	// still 'running'/'pending' after a restart (or that hangs past a max duration)
+	// has no live worker and must be failed. $1 = cutoff (started/created before
+	// this), $2 = error message. Returns the number of jobs reconciled.
+	FailStaleScanJobs(ctx context.Context, arg FailStaleScanJobsParams) (int64, error)
 	// First step of the IP→MAC→port→path search.
 	FindMACByIP(ctx context.Context, ipAddress netip.Addr) ([]FindMACByIPRow, error)
 	// Topology search: which switch + port + VLAN carries a MAC?
 	FindMACOnSwitches(ctx context.Context, mac string) ([]FindMACOnSwitchesRow, error)
+	// Path Finder: which NVR/DVR(s) record this camera device, with the channel +
+	// recording status, so a camera's path shows the recorder it feeds.
+	FindNVRsForCamera(ctx context.Context, cameraDeviceID *uuid.UUID) ([]FindNVRsForCameraRow, error)
+	// Path Finder: which phone(s) carry this IP, the directory number, registration
+	// status + the CM node (registrar), and the owning PBX device (CUCM cluster).
+	FindPhoneByIP(ctx context.Context, ipAddress *string) ([]FindPhoneByIPRow, error)
+	// Path Finder: resolve a MAC to the IP phone that carries it (CUCM SEP<mac>),
+	// with directory number, registration + registrar. Compares the MAC ignoring
+	// separators/case so 00:23:eb:.. , 0023eb.. and 00-23-.. all match.
+	FindPhoneByMAC(ctx context.Context, translate string) ([]FindPhoneByMACRow, error)
+	// Path Finder: exact-match a search term (MAC / IP / hostname) to an associated
+	// wireless client that has a known AP, so the traced path can START at the access
+	// point the client is connected to. Exact (not substring) match avoids tracing an
+	// unrelated client. Only rows with a known ap_name qualify (we need an AP to start
+	// at; without one the normal FDB path still applies).
+	FindWirelessClient(ctx context.Context, lower string) ([]FindWirelessClientRow, error)
+	// Analytics aggregations powering the enterprise dashboards (Dashboard, NOC
+	// Wallboard, Health Overview). All grounded in real collected data:
+	// monitoring_samples (reachability time-series) and alerts. Bucket granularity
+	// and window are passed as text params so one query serves 24h/7d/30d.
+	//
+	// Percentages are intentionally NOT computed in SQL (kept as raw up/total int
+	// counts) so the result types stay clean float8/bigint; the handler derives %.
+	// Latency / MTTA / MTTR are nullable: avg() over no rows is NULL, which must
+	// read as "no data" (not a fake 0) — hence bare aggregates, no ::float8 cast.
+	// Fleet-wide reachability over time: one row per time bucket with up/down/warning
+	// sample counts and latency stats. $1 = date_trunc granularity ('hour'|'day'),
+	// $2 = window (e.g. '24 hours', '7 days'). Powers the availability trend chart.
+	FleetAvailabilitySeries(ctx context.Context, arg FleetAvailabilitySeriesParams) ([]FleetAvailabilitySeriesRow, error)
+	// Single-row rollup over the same window: sample counts (for uptime %), distinct
+	// devices, and latency stats. Used for the headline availability KPI / SLA figure.
+	FleetAvailabilitySummary(ctx context.Context, dollar_1 string) (FleetAvailabilitySummaryRow, error)
 	FlowOverview(ctx context.Context, at time.Time) (FlowOverviewRow, error)
+	// Path Finder: the AP a wireless client is associated to (scoped to its
+	// controller), to read the AP's MAC/IP and resolve its wired uplink switch via the
+	// FDB.
+	GetAccessPointByName(ctx context.Context, arg GetAccessPointByNameParams) (GetAccessPointByNameRow, error)
 	GetAgentJob(ctx context.Context, id uuid.UUID) (AgentJob, error)
 	GetAlert(ctx context.Context, id uuid.UUID) (Alert, error)
 	GetBMCInfo(ctx context.Context, deviceID uuid.UUID) (BmcInfo, error)
@@ -218,6 +285,7 @@ type Querier interface {
 	GetLocation(ctx context.Context, id uuid.UUID) (Location, error)
 	GetMibPack(ctx context.Context, id uuid.UUID) (MibPack, error)
 	GetMonitoringCheck(ctx context.Context, id uuid.UUID) (MonitoringCheck, error)
+	GetNVRInfo(ctx context.Context, deviceID uuid.UUID) (NvrInfo, error)
 	GetNotificationChannel(ctx context.Context, id uuid.UUID) (NotificationChannel, error)
 	// Deep OS Inventory queries. The 1:1 summary is upserted per device; the 1:N
 	// collections follow the prune-on-poll pattern (Upsert all rows with last_seen_at
@@ -263,6 +331,13 @@ type Querier interface {
 	InsertNotificationLog(ctx context.Context, arg InsertNotificationLogParams) (NotificationLog, error)
 	InsertWirelessEvent(ctx context.Context, arg InsertWirelessEventParams) error
 	LastSuccessfulBackup(ctx context.Context) (BackupRun, error)
+	// The most recent ONVIF/ISAPI credential-test outcome for a device — the CCTV
+	// fleet skip-guard reads this to avoid re-attempting a device that recently
+	// auth-failed (which would accumulate failed logins toward a Hikvision IP
+	// lockout). When two attempts share a timestamp (ONVIF + ISAPI in one batch) the
+	// auth_failed row wins the tie, so a transport failure on one protocol never
+	// masks an auth rejection on the other. No rows ⇒ never tested ⇒ safe to attempt.
+	LatestCCTVCredTest(ctx context.Context, deviceID uuid.UUID) (LatestCCTVCredTestRow, error)
 	// The most recent result per (device, credential-kind). This is the read model
 	// behind Management Access Coverage's test-result source, the unmanaged reasons
 	// (failed / not-tested / stale), and the Inventory access filters. One row per
@@ -326,6 +401,12 @@ type Querier interface {
 	// Full recent test history for one device (Device Detail → Credential Health).
 	ListDeviceCredentialTests(ctx context.Context, arg ListDeviceCredentialTestsParams) ([]CredentialTestResult, error)
 	ListDeviceFacts(ctx context.Context, deviceID uuid.UUID) ([]DeviceFact, error)
+	// All topology links touching a device from EITHER endpoint, with both ends
+	// enriched (name/ip/vendor/category) and an `inbound` flag set when the device
+	// is the link's remote side. The handler normalizes this so the per-device
+	// Topology tab always shows the OTHER device — including links that point AT it
+	// (e.g. a MAC/FDB-derived cross-vendor uplink stored from the neighbour's side).
+	ListDeviceLinksBidirectional(ctx context.Context, localDeviceID uuid.UUID) ([]ListDeviceLinksBidirectionalRow, error)
 	ListDeviceRoles(ctx context.Context, deviceID uuid.UUID) ([]DeviceRole, error)
 	// ===== Device templates ====================================================
 	ListDeviceTemplates(ctx context.Context) ([]DeviceTemplate, error)
@@ -347,6 +428,11 @@ type Querier interface {
 	// The evaluator's input: every enabled check joined to its device so rules
 	// can filter by category and alerts can carry a readable device name.
 	ListEnabledChecksWithDevice(ctx context.Context) ([]ListEnabledChecksWithDeviceRow, error)
+	ListEnabledWebPortCandidates(ctx context.Context) ([]WebPortCandidate, error)
+	// Every interface MAC belonging to a topology-capable fabric device (switch /
+	// router / ISP router). Used to map an observed FDB MAC back to the device that
+	// owns it, for vendor-neutral L2 link inference (FDB-based topology).
+	ListFabricInterfaceMACs(ctx context.Context) ([]ListFabricInterfaceMACsRow, error)
 	ListHAMembers(ctx context.Context, deviceID uuid.UUID) ([]FirewallHaMember, error)
 	ListInterfaces(ctx context.Context, deviceID uuid.UUID) ([]Interface, error)
 	// Per-device scan dispositions across recent jobs (newest first). Powers the
@@ -355,6 +441,10 @@ type Querier interface {
 	// long-lived deployment cannot blow up the query.
 	ListKnownDeviceScanDispositions(ctx context.Context) ([]ListKnownDeviceScanDispositionsRow, error)
 	ListLicenses(ctx context.Context, deviceID uuid.UUID) ([]FirewallLicense, error)
+	// Camera device_ids that are an NVR/DVR channel (recorded by a recorder). These
+	// are managed VIA the recorder even when they expose no directly-authenticable
+	// web/ONVIF interface (RTSP-only feeds) — so they must not show credential_failed.
+	ListLinkedCameraDeviceIDs(ctx context.Context) ([]*uuid.UUID, error)
 	// Full flat list for building the location tree client-side.
 	ListLocations(ctx context.Context) ([]Location, error)
 	ListLookups(ctx context.Context, kind string) ([]Lookup, error)
@@ -371,11 +461,15 @@ type Querier interface {
 	ListMibPackTables(ctx context.Context, packID uuid.UUID) ([]MibPackTable, error)
 	ListMibPacks(ctx context.Context) ([]MibPack, error)
 	ListMibWalkRows(ctx context.Context, arg ListMibWalkRowsParams) ([]MibWalkRow, error)
-	ListMonitoringChecks(ctx context.Context) ([]MonitoringCheck, error)
+	// Global checks list (Health Overview). Joined to the device so the UI can
+	// identify each check by device name / IP (not just a bare port), and ordered
+	// by device then reachability-first so a device's checks group together.
+	ListMonitoringChecks(ctx context.Context) ([]ListMonitoringChecksRow, error)
 	ListMonitoringChecksByDevice(ctx context.Context, deviceID uuid.UUID) ([]MonitoringCheck, error)
 	ListMonitoringSamplesByCheck(ctx context.Context, arg ListMonitoringSamplesByCheckParams) ([]MonitoringSample, error)
 	ListMonitoringSamplesByDevice(ctx context.Context, arg ListMonitoringSamplesByDeviceParams) ([]MonitoringSample, error)
 	ListNVRChannels(ctx context.Context, nvrDeviceID uuid.UUID) ([]NvrChannel, error)
+	ListNVRStorage(ctx context.Context, nvrDeviceID uuid.UUID) ([]NvrStorage, error)
 	ListNeighbors(ctx context.Context, deviceID uuid.UUID) ([]Neighbor, error)
 	// Alerts worth notifying about: still open or escalated, opened recently.
 	ListNotifiableAlerts(ctx context.Context) ([]ListNotifiableAlertsRow, error)
@@ -418,6 +512,8 @@ type Querier interface {
 	ListServerStorage(ctx context.Context, deviceID uuid.UUID) ([]ServerStorage, error)
 	ListSettings(ctx context.Context) ([]ListSettingsRow, error)
 	ListSpareParts(ctx context.Context) ([]SparePart, error)
+	// Credentials assigned to a subnet (for the editor + indicators).
+	ListSubnetCredentials(ctx context.Context, subnetID uuid.UUID) ([]ListSubnetCredentialsRow, error)
 	ListSubnets(ctx context.Context) ([]Subnet, error)
 	ListSubnetsByLocation(ctx context.Context, locationID uuid.UUID) ([]Subnet, error)
 	ListSystems(ctx context.Context) ([]System, error)
@@ -433,6 +529,7 @@ type Querier interface {
 	ListVendorProfiles(ctx context.Context) ([]VendorConnectionProfile, error)
 	ListVlans(ctx context.Context, deviceID uuid.UUID) ([]Vlan, error)
 	ListVpnTunnels(ctx context.Context, deviceID uuid.UUID) ([]FirewallVpnTunnel, error)
+	ListWebPortCandidates(ctx context.Context) ([]WebPortCandidate, error)
 	ListWirelessClients(ctx context.Context, controllerDeviceID uuid.UUID) ([]WirelessClient, error)
 	ListWirelessEvents(ctx context.Context, arg ListWirelessEventsParams) ([]WirelessEvent, error)
 	ListWirelessRadios(ctx context.Context, controllerDeviceID uuid.UUID) ([]WirelessRadioStatus, error)
@@ -454,10 +551,21 @@ type Querier interface {
 	LiveDeviceByIPAndLocation(ctx context.Context, arg LiveDeviceByIPAndLocationParams) (Device, error)
 	MACCountByPort(ctx context.Context, deviceID uuid.UUID) ([]MACCountByPortRow, error)
 	MarkAgentJobDispatched(ctx context.Context, id uuid.UUID) error
+	// Flag (or unflag) a device as a manually-entered virtual placeholder.
+	MarkDeviceVirtual(ctx context.Context, arg MarkDeviceVirtualParams) error
 	// Freshness of the most recent LLDP/CDP neighbor observation (topology age).
 	MaxNeighborSeenAt(ctx context.Context) (time.Time, error)
-	// Live fleet rollup: how many checks sit in each status bucket.
+	// Fleet health rollup, DEVICE-based: how many MONITORED devices sit in each
+	// reachability bucket. We count devices (not checks) and map the device's
+	// rolled-up status onto the up/down/warning/unknown vocabulary, so the KPI
+	// counts match the inventory reachability filter exactly (a click lands on the
+	// same devices). A failing SUPPLEMENTAL check surfaces here as "warning" (the
+	// rollup degrades the device to warning, never down) — it lowers the health
+	// score and is clickable, but never inflates the "down"/offline bucket. A device
+	// is "monitored" when it has at least one enabled check.
 	MonitoringStatusOverview(ctx context.Context) ([]MonitoringStatusOverviewRow, error)
+	// Path Finder: per-NVR channel totals (and how many are linked to a camera device).
+	NVRChannelStats(ctx context.Context, nvrDeviceID uuid.UUID) (NVRChannelStatsRow, error)
 	// ---- Alerts ---------------------------------------------------------------
 	// Atomic open: ON CONFLICT against idx_alerts_one_open means a second open
 	// for the same (rule, check) is a no-op. RETURNING yields a row ONLY on a
@@ -468,6 +576,16 @@ type Querier interface {
 	PermissionsForRole(ctx context.Context, roleID uuid.UUID) ([]Permission, error)
 	// All permission codes a user holds via any of their roles.
 	PermissionsForUser(ctx context.Context, userID uuid.UUID) ([]string, error)
+	// Link every NVR/DVR channel to the live device at its camera_ip, so a channel
+	// and the standalone camera device cross-reference regardless of the order they
+	// were discovered/collected. The per-channel link is computed once at NVR-collect
+	// time (persistNVR via LiveDeviceByIP), so a camera discovered AFTER its NVR was
+	// collected — or one whose apply raced the NVR collect — would otherwise stay
+	// unlinked forever. Idempotent + set-based: exact primary_ip match, never links a
+	// channel to its own NVR, picks the most-recently-updated device when an IP
+	// recurs. Device deletes clear links via the FK (ON DELETE SET NULL), so this
+	// only ADDS/repoints. Returns the number of channels (re)linked.
+	ReconcileNVRChannelLinks(ctx context.Context) (int64, error)
 	// Persist the rollup the engine computed (status + failure counter) onto the
 	// check after a poll. History rows go to monitoring_samples separately.
 	RecordMonitoringResult(ctx context.Context, arg RecordMonitoringResultParams) (MonitoringCheck, error)
@@ -482,6 +600,11 @@ type Querier interface {
 	// pure resolver (internal/credresolver) can order them.
 	//   specificity 2 = subnet binding, 1 = location binding.
 	ResolveCandidatesForIP(ctx context.Context, arg ResolveCandidatesForIPParams) ([]ResolveCandidatesForIPRow, error)
+	// Path Finder fallback for when the ARP table is empty/sparse: resolve an IP to a
+	// MAC (and an identity) from the wireless-client roster and the AP inventory, so a
+	// wireless endpoint's IP still traces to its switch port via the FDB. Clients are
+	// preferred over APs ($1 = IP as text).
+	ResolveIPToMAC(ctx context.Context, ip string) ([]ResolveIPToMACRow, error)
 	// Auto-resolve: any un-resolved alert whose check has recovered to 'up'.
 	ResolveRecoveredAlerts(ctx context.Context) ([]ResolveRecoveredAlertsRow, error)
 	// The newest enabled, recently-online agent assigned to a location — used to
@@ -494,20 +617,51 @@ type Querier interface {
 	// Fleet-wide role rollup: how many devices hold each role (the CMDB role cut).
 	RoleSummary(ctx context.Context) ([]RoleSummaryRow, error)
 	RolesForUser(ctx context.Context, userID uuid.UUID) ([]Role, error)
+	// Global-search: access points by name / MAC / IP / serial / model. Returns the
+	// owning controller so an AP MAC or IP found anywhere resolves to a device.
+	SearchAccessPoints(ctx context.Context, dollar_1 *string) ([]SearchAccessPointsRow, error)
+	// Global-search: ARP table (IP↔MAC) by IP or MAC — which L3 device resolved an IP.
+	SearchArpEntries(ctx context.Context, dollar_1 *string) ([]SearchArpEntriesRow, error)
 	SearchByHostname(ctx context.Context, hostname *string) ([]SearchByHostnameRow, error)
 	// Primary search entry point for the IP → MAC → port path resolution.
 	SearchByIP(ctx context.Context, primaryIp *netip.Addr) (SearchByIPRow, error)
 	// Finds the switch(es) that have this MAC in their FDB, then joins the
 	// interface for port + VLAN detail.
 	SearchByMAC(ctx context.Context, mac string) ([]SearchByMACRow, error)
+	// Global-search: learned MAC addresses (bridge FDB) by MAC — which switch + port
+	// a MAC was seen on, anywhere in the fabric.
+	SearchFdbMacs(ctx context.Context, dollar_1 *string) ([]SearchFdbMacsRow, error)
 	SearchMibObjects(ctx context.Context, name string) ([]MibObject, error)
+	// Global-search: NVR/DVR camera channels by channel name / camera IP / channel
+	// number / recorder (NVR) name. Returns the owning recorder so a channel found
+	// anywhere links back to the NVR detail page, plus any linked standalone camera
+	// device. Channels are recorder-owned rows, not separate inventory devices.
+	SearchNVRChannels(ctx context.Context, dollar_1 *string) ([]SearchNVRChannelsRow, error)
+	// Global search: IP phones / PBX subscribers by extension / SEP name / MAC / IP.
+	// Deduped across the CUCM pub/sub pair (the same phone appears under each node).
+	SearchPhones(ctx context.Context, dollar_1 *string) ([]SearchPhonesRow, error)
+	// Global-search: associated wireless clients by MAC / IP / hostname / SSID / AP.
+	SearchWirelessClients(ctx context.Context, dollar_1 *string) ([]SearchWirelessClientsRow, error)
 	SetAlertRuleEnabled(ctx context.Context, arg SetAlertRuleEnabledParams) (AlertRule, error)
 	SetAlertWorkOrder(ctx context.Context, arg SetAlertWorkOrderParams) error
 	// Operator manual override: lock (true) freezes auto-classification for this
 	// device; unlock (false) lets the next discovery re-classify it.
 	SetClassificationLock(ctx context.Context, arg SetClassificationLockParams) (Device, error)
+	// Bind the WEB credential that last authenticated for CCTV (ONVIF/ISAPI)
+	// collection. Kept separate from credential_id so an SNMP discovery/monitor
+	// success can never overwrite the credential CCTV collection depends on.
+	SetDeviceCCTVCredential(ctx context.Context, arg SetDeviceCCTVCredentialParams) error
 	// Bind-on-success: record the credential that last authenticated.
 	SetDeviceCredential(ctx context.Context, arg SetDeviceCredentialParams) error
+	// Operator-set per-device web-access override: preferred scheme/port, alternate
+	// ports (comma-separated), preferred protocol, and a free-text note. Collectors
+	// try these first.
+	SetDeviceWebOverride(ctx context.Context, arg SetDeviceWebOverrideParams) error
+	// Record EXACTLY what worked on the last successful web/CCTV collection: the
+	// protocol (isapi/onvif/http/…), scheme, port, base endpoint, and the credential
+	// that authenticated. Drives the accurate "Managed via X" source in the UI and
+	// lets the next collect/scan prefer the known-good endpoint instead of guessing.
+	SetDeviceWebSuccess(ctx context.Context, arg SetDeviceWebSuccessParams) error
 	// Stores the scan spec (mode/targets/creds) so the job can be re-run as-is.
 	SetDiscoveryJobMetadata(ctx context.Context, arg SetDiscoveryJobMetadataParams) error
 	SetMibPackCollected(ctx context.Context, arg SetMibPackCollectedParams) error
@@ -515,6 +669,9 @@ type Querier interface {
 	SetMibPackParseMeta(ctx context.Context, arg SetMibPackParseMetaParams) error
 	SetMibPackTested(ctx context.Context, arg SetMibPackTestedParams) error
 	SetMonitoringCheckEnabled(ctx context.Context, arg SetMonitoringCheckEnabledParams) (MonitoringCheck, error)
+	// Mark a check as reachability (drives device status) or supplemental (extra,
+	// informational only). Used when an operator adds a check beyond the default.
+	SetMonitoringCheckRole(ctx context.Context, arg SetMonitoringCheckRoleParams) error
 	SetNotificationChannelEnabled(ctx context.Context, arg SetNotificationChannelEnabledParams) (NotificationChannel, error)
 	SetRelayAgentEnabled(ctx context.Context, arg SetRelayAgentEnabledParams) error
 	SetRelayAgentLocation(ctx context.Context, arg SetRelayAgentLocationParams) error
@@ -527,6 +684,22 @@ type Querier interface {
 	SetUserRolesClear(ctx context.Context, userID uuid.UUID) error
 	SetVendorProfileCollection(ctx context.Context, arg SetVendorProfileCollectionParams) error
 	SetVendorProfileTest(ctx context.Context, arg SetVendorProfileTestParams) error
+	// Per-subnet assignment count + distinct kinds for a location (UI row badges).
+	SubnetCredentialCounts(ctx context.Context, locationID uuid.UUID) ([]SubnetCredentialCountsRow, error)
+	// The EXCLUSIVE credential set for the most-specific site subnet that (a) contains
+	// the IP and (b) has assignments. Empty result ⇒ no subnet scoping ⇒ caller falls
+	// back to normal resolution.
+	//
+	// location_id is a PREFERENCE, NOT a hard filter. The anti-spray/lockout-safety
+	// contract is "any IP inside an assigned subnet is tried with ONLY that subnet's
+	// credentials" — independent of which site the operator happened to select for the
+	// scan. Gating the match on an exact location_id match silently disengaged that
+	// protection whenever the scan carried a location other than the subnet's own
+	// (e.g. a child/parent/sibling node, or a different hotel), falling back to
+	// spraying every stored credential. So we match on the CIDR alone and only use the
+	// scan's location to break ties between overlapping subnets at different sites:
+	// a subnet at the scan's location outranks one elsewhere, then narrower mask wins.
+	SubnetScopedCredentialsForIP(ctx context.Context, arg SubnetScopedCredentialsForIPParams) ([]SubnetScopedCredentialsForIPRow, error)
 	// Roll up aggregate rows of one kind over a recent window, highest bytes first.
 	TopFlowEntries(ctx context.Context, arg TopFlowEntriesParams) ([]TopFlowEntriesRow, error)
 	TotalExpenses(ctx context.Context) (float64, error)
@@ -559,6 +732,10 @@ type Querier interface {
 	UpdateDeviceTemplate(ctx context.Context, arg UpdateDeviceTemplateParams) (DeviceTemplate, error)
 	// Reconcile path: refresh a live device's mutable identity fields on
 	// re-discovery (keyed by the caller to the (primary_ip, location) match).
+	// location_id is FILLED when the device has none (a site-scoped scan adopts a
+	// previously site-less device — e.g. first found by an unscoped CIDR scan, later
+	// re-scanned under a site) but never OVERWRITES an operator-set location:
+	// COALESCE keeps any existing value. A NULL fill arg (site-less scan) is a no-op.
 	UpdateDiscoveredDevice(ctx context.Context, arg UpdateDiscoveredDeviceParams) (Device, error)
 	UpdateDiscoveryJobStatus(ctx context.Context, arg UpdateDiscoveryJobStatusParams) error
 	UpdateDiscoveryResult(ctx context.Context, arg UpdateDiscoveryResultParams) error
@@ -570,12 +747,16 @@ type Querier interface {
 	UpdateUser(ctx context.Context, arg UpdateUserParams) (User, error)
 	UpdateVendorFingerprint(ctx context.Context, arg UpdateVendorFingerprintParams) (VendorFingerprint, error)
 	UpdateVendorProfile(ctx context.Context, arg UpdateVendorProfileParams) (VendorConnectionProfile, error)
+	UpdateWebPortCandidate(ctx context.Context, arg UpdateWebPortCandidateParams) (WebPortCandidate, error)
 	UpdateWorkOrder(ctx context.Context, arg UpdateWorkOrderParams) (WorkOrder, error)
 	// ---- ARP entries ---------------------------------------------------------
 	UpsertARP(ctx context.Context, arg UpsertARPParams) error
 	UpsertAccessPoint(ctx context.Context, arg UpsertAccessPointParams) (AccessPoint, error)
 	UpsertBMCInfo(ctx context.Context, arg UpsertBMCInfoParams) error
 	UpsertBMCSensor(ctx context.Context, arg UpsertBMCSensorParams) error
+	// Enriched read-only camera facts from ISAPI (NIC + time + firmware/serial).
+	// COALESCE keeps an existing value when a re-collect doesn't re-resolve a field.
+	UpsertCameraEnrichment(ctx context.Context, arg UpsertCameraEnrichmentParams) error
 	UpsertCameraInfo(ctx context.Context, arg UpsertCameraInfoParams) (CameraInfo, error)
 	UpsertDeviceFact(ctx context.Context, arg UpsertDeviceFactParams) error
 	UpsertDeviceLifecycle(ctx context.Context, arg UpsertDeviceLifecycleParams) (DeviceLifecycle, error)
@@ -594,6 +775,8 @@ type Querier interface {
 	// updates the schedule knobs without resetting the live status counters.
 	UpsertMonitoringCheck(ctx context.Context, arg UpsertMonitoringCheckParams) (MonitoringCheck, error)
 	UpsertNVRChannel(ctx context.Context, arg UpsertNVRChannelParams) (NvrChannel, error)
+	UpsertNVRInfo(ctx context.Context, arg UpsertNVRInfoParams) (NvrInfo, error)
+	UpsertNVRStorage(ctx context.Context, arg UpsertNVRStorageParams) (NvrStorage, error)
 	// ---- Neighbors (LLDP/CDP) -----------------------------------------------
 	UpsertNeighbor(ctx context.Context, arg UpsertNeighborParams) (Neighbor, error)
 	UpsertOSDisk(ctx context.Context, arg UpsertOSDiskParams) error

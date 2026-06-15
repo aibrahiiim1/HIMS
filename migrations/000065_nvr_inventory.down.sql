@@ -1,0 +1,3 @@
+ALTER TABLE nvr_channels DROP COLUMN IF EXISTS enabled;
+DROP TABLE IF EXISTS nvr_storage;
+DROP TABLE IF EXISTS nvr_info;

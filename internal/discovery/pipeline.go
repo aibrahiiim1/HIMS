@@ -12,7 +12,6 @@ package discovery
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
@@ -33,6 +32,7 @@ import (
 	"github.com/coralsearesorts/hims/internal/driver"
 	"github.com/coralsearesorts/hims/internal/driver/swsnmp"
 	"github.com/coralsearesorts/hims/internal/fingerprint"
+	"github.com/coralsearesorts/hims/internal/isapi"
 	"github.com/coralsearesorts/hims/internal/snmp"
 )
 
@@ -47,6 +47,11 @@ type CredAttempt struct {
 	Category     string // credtest category: success|auth_failed|unreachable|...
 	Detail       string // non-secret reason
 	Relevant     bool   // protocol is the expected/relevant one for this candidate
+	// Source attributes WHY this credential was tried, for the credential-test
+	// history: "subnet" (the IP's site subnet has assigned credentials, so only
+	// those were tried), or "default" (normal global/scope resolution). Manual
+	// per-device collects record "manual" outside the pipeline.
+	Source string
 }
 
 func hasPortN(ports []int, p int) bool {
@@ -67,7 +72,7 @@ func fingerprintFromPorts(ports []int) credresolver.Fingerprint {
 		SNMP:  true,
 		SSH:   hasPortN(ports, 22),
 		WinRM: hasPortN(ports, 5985) || hasPortN(ports, 5986),
-		HTTP:  hasPortN(ports, 80) || hasPortN(ports, 443) || hasPortN(ports, 8000) || hasPortN(ports, 8080) || hasPortN(ports, 8443),
+		HTTP:  anyWebPort(ports),
 		LDAP:  hasPortN(ports, 389) || hasPortN(ports, 636),
 	}
 }
@@ -81,7 +86,7 @@ func portAllowsProto(ports []int, kind domain.CredentialKind) bool {
 	case domain.CredWinRM:
 		return hasPortN(ports, 5985) || hasPortN(ports, 5986)
 	case domain.CredONVIF, domain.CredHTTPBasic, domain.CredVendorAPI:
-		return hasPortN(ports, 80) || hasPortN(ports, 443) || hasPortN(ports, 8000) || hasPortN(ports, 8080) || hasPortN(ports, 8443)
+		return anyWebPort(ports)
 	}
 	return false
 }
@@ -114,6 +119,10 @@ type HostResult struct {
 	BoundCred *credresolver.CredRef
 	// CredAttempts is every authentication attempt made this run (for history).
 	CredAttempts []CredAttempt
+	// CredScope, when non-empty, is the human label of the site subnet whose
+	// assigned credentials were the EXCLUSIVE set tried for this IP (e.g.
+	// "CCTV Cameras 172.21.210.0/24"). Empty ⇒ normal/global resolution was used.
+	CredScope string
 	// Plan is the expected-protocol decision made before credential testing.
 	Plan  ProtocolPlan
 	Facts *driver.Facts
@@ -127,6 +136,10 @@ type HostResult struct {
 // CandidateFetcher abstracts the DB call that assembles credentials for an IP.
 type CandidateFetcher interface {
 	CredentialCandidates(ctx context.Context, ip netip.Addr, locationID *uuid.UUID) ([]credresolver.ScopedGroup, error)
+	// SubnetScopedCredentials returns the EXCLUSIVE credential set for the IP's
+	// site subnet (when that subnet has assignments) plus a human label for
+	// reporting. Empty slice ⇒ no subnet scoping ⇒ normal resolution applies.
+	SubnetScopedCredentials(ctx context.Context, ip netip.Addr, locationID *uuid.UUID) ([]credresolver.CredRef, string, error)
 }
 
 // DecryptedCred is a credential with its secret already decrypted (by the
@@ -157,6 +170,14 @@ type PipelineConfig struct {
 	// no-per-device-picker discipline holds: the operator picks GROUPS for a
 	// scan, not a credential for a device. Empty = pure scope auto-resolution.
 	ExtraGroups []credresolver.ScopedGroup
+	// ExplicitCreds reports that ExtraGroups represents an EXPLICIT operator
+	// credential selection for this scan (not the implicit "all stored" default).
+	// When set, that selection wins over any standing subnet assignment: it
+	// becomes the EXCLUSIVE candidate set for every host and the subnet-scoped set
+	// is ignored. This mirrors per-device Collect, where an operator-chosen
+	// credential overrides subnet scope. Anti-spray still holds — only the
+	// explicitly chosen credentials are tried, never the whole global list.
+	ExplicitCreds bool
 	// Timeout for each per-host step.
 	PingTimeout time.Duration
 	SNMPTimeout time.Duration
@@ -193,6 +214,36 @@ const explicitTierSpecificity = 100
 // Run runs the pipeline for a single IP and returns its result.
 // All steps are attempted; errors within optional steps (e.g. deep collect)
 // are recorded in result.Error but do not abort the pipeline.
+// finalizeCredSource stamps the credential-test source ("subnet" | "default")
+// on every attempt that didn't already carry one, so the history can report why
+// each credential was tried (subnet-scoped vs normal resolution).
+// flattenGroups collapses scoped groups into a de-duplicated, order-preserving
+// CredRef slice — used to turn an explicit operator selection (ExtraGroups) into
+// the resolver's Exclusive set.
+func flattenGroups(groups []credresolver.ScopedGroup) []credresolver.CredRef {
+	var out []credresolver.CredRef
+	seen := map[uuid.UUID]bool{}
+	for _, g := range groups {
+		for _, m := range g.Members {
+			if seen[m.ID] {
+				continue
+			}
+			seen[m.ID] = true
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+func finalizeCredSource(r HostResult, source string) HostResult {
+	for i := range r.CredAttempts {
+		if r.CredAttempts[i].Source == "" {
+			r.CredAttempts[i].Source = source
+		}
+	}
+	return r
+}
+
 func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg PipelineConfig) HostResult { //nolint:gocritic
 	r := HostResult{IP: ip}
 	emit := func(stage, proto, status, msg string) {
@@ -208,13 +259,22 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 	// keys on (DNS/DC/DB). This breadth lets the scan DETECT non-SNMP hosts
 	// (Windows workstations, Linux, cameras) that the old switch-centric list
 	// missed entirely.
-	ports := []int{22, 23, 53, 80, 88, 135, 161, 389, 443, 445, 554, 636, 1433, 1521, 3389, 5432, 5985, 5986, 8000, 8080, 8443, 9100}
+	ports := []int{22, 23, 53, 80, 88, 135, 161, 389, 443, 445, 554, 636, 1433, 1521, 3389, 5432, 5985, 5986, 8000, 8008, 8010, 8080, 8443, 9100}
+	// Hikvision/CCTV convention: a recorder/camera's web/ISAPI port is commonly
+	// 8000 + the host's last octet (.2 -> 8002, .15 -> 8015). Probe it per-host so
+	// these recorders are discovered automatically — the operator never has to
+	// hand-add each port to the web-port settings.
+	if u := ip.Unmap(); u.Is4() {
+		if octet := int(u.As4()[3]); octet >= 1 && octet <= 255 {
+			ports = append(ports, 8000+octet)
+		}
+	}
 	for _, p := range cfg.ExtraPorts { // targeted-retry: a missed known device's last-known open ports
 		if p > 0 && p < 65536 {
 			ports = append(ports, p)
 		}
 	}
-	r.OpenPorts = scanPorts(ctx, ip, ports, cfg.PortTimeout)
+	r.OpenPorts = scanPorts(ctx, ip, dedupInts(ports), cfg.PortTimeout)
 	r.Probe = driver.Probe{IP: ip, OpenTCPPorts: r.OpenPorts}
 	if len(r.OpenPorts) > 0 {
 		emit("tcp_port_found", "", "found", intsCSV(r.OpenPorts))
@@ -227,8 +287,34 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 		r.Error = fmt.Errorf("fetch credentials: %w", ferr)
 	}
 	groups = append(groups, cfg.ExtraGroups...)
+	// Subnet-scoped credentials: if this IP's site subnet has assigned
+	// credentials, they become the EXCLUSIVE set — the resolver discards every
+	// global/scope/operator group above. This is the anti-spray / lockout-safety
+	// lever (a CCTV subnet is never sprayed with Windows/switch credentials).
+	exclusive, scopeLabel, serr := cfg.Fetcher.SubnetScopedCredentials(ctx, ip, locationID)
+	if serr != nil && r.Error == nil {
+		r.Error = fmt.Errorf("subnet-scoped credentials: %w", serr)
+	}
+	credSource := "default"
+	switch {
+	case cfg.ExplicitCreds && len(cfg.ExtraGroups) > 0:
+		// Explicit operator selection wins over any standing subnet assignment:
+		// the selected credentials ARE the exclusive set (only those are tried,
+		// fingerprint-filtered), and the subnet-scoped set is ignored for this
+		// scan. Without this, a subnet that has assigned credentials would
+		// override the operator's per-scan choice — surfacing as "I selected
+		// these creds but the scan applied other ones."
+		exclusive = flattenGroups(cfg.ExtraGroups)
+		scopeLabel = ""
+		credSource = "selected"
+		emit("credential_scope", "", "selected", "operator-selected credentials")
+	case len(exclusive) > 0:
+		r.CredScope = scopeLabel
+		credSource = "subnet"
+		emit("credential_scope", "", "subnet", scopeLabel)
+	}
 	candidates := credresolver.Resolve(credresolver.Input{
-		Fingerprint: fingerprintFromPorts(r.OpenPorts), Groups: groups,
+		Fingerprint: fingerprintFromPorts(r.OpenPorts), Groups: groups, Exclusive: exclusive,
 	})
 
 	// Step 2b: Cheap unauthenticated banners (HTTP Server/title/body + SSH ident)
@@ -373,7 +459,7 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 				continue
 			}
 			emit(string(cand.Kind)+"_attempt_started", string(cand.Kind), "started", "")
-			out := credtest.Test(ctx, string(cand.Kind), dec.Community, ip.String(), credtest.Options{})
+			out := credtest.Test(ctx, string(cand.Kind), dec.Community, ip.String(), credtest.Options{WebPorts: webPortsOf(r.OpenPorts)})
 			r.CredAttempts = append(r.CredAttempts, CredAttempt{
 				CredentialID: cand.ID, Kind: cand.Kind, Protocol: out.Protocol,
 				Success: out.OK(), Category: out.Category, Detail: out.Detail, Relevant: true,
@@ -398,7 +484,7 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 		if authCli != nil {
 			_ = authCli.Close()
 		}
-		return r
+		return finalizeCredSource(r, credSource)
 	}
 
 	// Step 5: Driver classification (now informed by the real-credential probe).
@@ -443,6 +529,16 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 		}
 	}
 
+	// Camera-by-port-shape: the protocol plan inferred camera/recorder purely from
+	// the Hikvision "8000 + host octet" web/ISAPI port (no other service, often a
+	// generic banner). When nothing else set a category, adopt that hint so the
+	// orchestrator routes the host to ONVIF/ISAPI onboarding (with subnet-scoped
+	// web creds) instead of leaving it unknown + SNMP-only. ISAPI deviceInfo then
+	// confirms camera vs nvr/dvr at high confidence on a successful collect.
+	if (r.Match.Category == "" || r.Match.Category == domain.CatUnknown) && r.Plan.Candidate == "camera" {
+		r.Match = driver.Match{Category: domain.CatCamera, Confidence: 40}
+	}
+
 	// Step 5c: Vendor-fingerprint override. The fingerprint library (operator-defined
 	// ∪ built-in) is matched against the SNMP/HTTP/SSH evidence. Match() ranks exact
 	// sysObjectID > sysDescr/sysName regex > generic prefix, so a PRODUCT fingerprint
@@ -469,7 +565,7 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 		}
 		_ = authCli.Close()
 	}
-	return r
+	return finalizeCredSource(r, credSource)
 }
 
 // applyFingerprints runs the fingerprint library against the host's evidence and,
@@ -581,63 +677,85 @@ func scanPorts(ctx context.Context, ip netip.Addr, ports []int, timeout time.Dur
 
 var titleRe = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
 
-// httpPort reports whether any common web port is open.
+// httpPort reports whether any web/management port is open (incl. the Hikvision
+// 8000+octet range), gating whether a banner grab runs at all.
 func httpPort(ports []int) bool {
-	for _, p := range []int{443, 80, 8443, 8080, 8000} {
-		if hasPort(ports, p) {
-			return true
-		}
-	}
-	return false
+	return anyWebPort(ports)
 }
 
-// httpBanner does a single GET against the first open web port and returns the
-// Server header, the page <title>, and a lowercased body snippet (≤4KB). It is
-// best-effort: any error yields empty strings. TLS is insecure (mgmt-LAN
-// self-signed certs are normal).
+// httpBanner GETs the open web port(s) and returns the Server header, the page
+// <title>, and a lowercased body snippet. It probes up to 3 open web ports in
+// priority order (443, 8443, 80, 8080, 8000) and MERGES their bodies/titles, so a
+// classification marker on a secondary port is still seen — e.g. Cisco CUCM serves
+// its "Cisco Unified CM Console" page on 8443 while 443 is also open. TLS uses the
+// legacy-permissive client (full cipher set, TLS1.0+) because voice/appliance web
+// stacks (CUCM 8443, OmniPCX) won't negotiate with Go's modern defaults — a plain
+// client gets "tls: handshake failure" and the banner is lost. Best-effort: errors
+// on any single port are skipped.
 func httpBanner(ctx context.Context, ip netip.Addr, ports []int, timeout time.Duration) (server, title, body string) {
 	if timeout <= 0 {
 		timeout = 2 * time.Second
 	} else if timeout > 3*time.Second {
 		timeout = 3 * time.Second // keep the scan snappy regardless of SNMP timeout
 	}
-	scheme, port := "https", 443
-	switch {
-	case hasPort(ports, 443):
-		scheme, port = "https", 443
-	case hasPort(ports, 8443):
-		scheme, port = "https", 8443
-	case hasPort(ports, 80):
-		scheme, port = "http", 80
-	case hasPort(ports, 8080):
-		scheme, port = "http", 8080
-	case hasPort(ports, 8000):
-		scheme, port = "http", 8000
+	client := isapi.PermissiveClient(timeout) // legacy ciphers for CUCM/OmniPCX/appliance TLS
+	client.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse // don't chase redirects off-host
 	}
-	client := &http.Client{
-		Timeout:   timeout,
-		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}, //nolint:gosec
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse // don't chase redirects off-host
-		},
+	type cand struct {
+		scheme string
+		port   int
 	}
-	url := fmt.Sprintf("%s://%s:%d/", scheme, ip, port)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return "", "", ""
+	var cands []cand
+	for _, c := range []cand{{"https", 443}, {"https", 8443}, {"http", 80}, {"http", 8080}, {"http", 8000}} {
+		if hasPort(ports, c.port) {
+			cands = append(cands, c)
+		}
 	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", "", ""
+	// Hikvision-style 8000+octet ports (e.g. 8011) — probe over http so a camera/
+	// recorder that exposes ONLY that port still yields a banner for classification.
+	for _, p := range ports {
+		if p >= 8001 && p <= 8255 && p != 8080 && !hasPort([]int{443, 8443, 80, 8080, 8000}, p) {
+			dup := false
+			for _, c := range cands {
+				if c.port == p {
+					dup = true
+					break
+				}
+			}
+			if !dup {
+				cands = append(cands, cand{"http", p})
+			}
+		}
 	}
-	defer resp.Body.Close()
-	server = resp.Header.Get("Server")
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	low := strings.ToLower(string(raw))
-	if m := titleRe.FindStringSubmatch(string(raw)); len(m) > 1 {
-		title = strings.TrimSpace(m[1])
+	var bodySb strings.Builder
+	for tried, c := range cands {
+		if tried >= 3 { // cap probes to keep the scan snappy
+			break
+		}
+		url := fmt.Sprintf("%s://%s:%d/", c.scheme, ip, c.port)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			continue
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		_ = resp.Body.Close()
+		if server == "" {
+			server = resp.Header.Get("Server")
+		}
+		if title == "" {
+			if m := titleRe.FindStringSubmatch(string(raw)); len(m) > 1 {
+				title = strings.TrimSpace(m[1])
+			}
+		}
+		bodySb.WriteString(strings.ToLower(string(raw)))
+		bodySb.WriteByte('\n')
 	}
-	return server, title, low
+	return server, title, bodySb.String()
 }
 
 func hasPort(ports []int, port int) bool {
@@ -647,6 +765,77 @@ func hasPort(ports []int, port int) bool {
 		}
 	}
 	return false
+}
+
+// isWebPort reports whether a TCP port is an HTTP/management web surface worth a
+// banner grab + an HTTP/ONVIF/ISAPI credential. Beyond the standard web ports it
+// recognises the Hikvision-style "8000 + host octet" CCTV/ISAPI convention
+// (e.g. .11 -> 8011, .130 -> 8130): many recorders/cameras expose ONLY that port,
+// and without recognising it they were read as "no web surface" -> mis-classified
+// unknown (SNMP-expected) with their ONVIF/HTTP-Basic credentials filtered out by
+// the resolver's fingerprint, even when the subnet was scoped to CCTV creds.
+func isWebPort(p int) bool {
+	switch p {
+	case 80, 443, 8080, 8443:
+		return true
+	}
+	return p >= 8000 && p <= 8255
+}
+
+// anyWebPort reports whether any open port is a web/management surface.
+func anyWebPort(ports []int) bool {
+	for _, p := range ports {
+		if isWebPort(p) {
+			return true
+		}
+	}
+	return false
+}
+
+// dedupInts returns ports with duplicates removed, preserving first-seen order
+// (so a configured/derived port that duplicates a base port isn't probed — or
+// reported open — twice).
+func dedupInts(ports []int) []int {
+	seen := make(map[int]bool, len(ports))
+	out := ports[:0:0]
+	for _, p := range ports {
+		if seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	return out
+}
+
+// webPortsOf returns the open ports that are web/management surfaces, so the
+// http_basic credential test probes the device's actual web port (e.g. 8015 on a
+// Hikvision NVR) instead of only :80/:443.
+func webPortsOf(ports []int) []int {
+	var out []int
+	for _, p := range ports {
+		if isWebPort(p) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// cctvWebPortPattern reports the Hikvision CCTV signature: every open port is in
+// the 8000+octet range (8001-8255) and none is the common 8080 web-app port. A
+// camera/recorder that exposes ONLY its 8000+octet web/ISAPI port matches; a plain
+// 8080 or 8000 web app does not. Used as a camera classification signal so such a
+// device is onboarded over ONVIF/ISAPI rather than dropped into the SNMP bucket.
+func cctvWebPortPattern(ports []int) bool {
+	if len(ports) == 0 {
+		return false
+	}
+	for _, p := range ports {
+		if p < 8001 || p > 8255 || p == 8080 {
+			return false
+		}
+	}
+	return true
 }
 
 // ScopeRange is a sequence of IPs to scan; the engine generates them from a

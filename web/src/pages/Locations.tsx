@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { api, type Location, type Subnet } from '../api'
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
+import { api, type Credential, type Location, type Subnet, type SubnetCredCount, type SubnetCredential } from '../api'
 
 const KINDS = ['group', 'hotel', 'building', 'floor', 'area', 'room', 'rack', 'office']
 // Suggested child kind for a given parent kind (operator can override).
@@ -17,6 +17,51 @@ const input: React.CSSProperties = { padding: '5px 8px', border: '1px solid #ccc
 const btn: React.CSSProperties = { padding: '4px 10px', background: '#1565c0', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600 }
 const ghost: React.CSSProperties = { padding: '3px 8px', background: 'transparent', color: '#90caf9', border: '1px solid #90caf9', borderRadius: 6, cursor: 'pointer', fontSize: 11 }
 
+// SubnetCredEditor — the per-subnet credential multi-select. Optional + clearable:
+// with credentials assigned, scans of IPs in this subnet try ONLY these (no global
+// spray / lockout risk); cleared ⇒ the subnet reverts to default credential
+// resolution. Fetches the subnet's current set on open; saves the whole set via PUT.
+function SubnetCredEditor({ subnetId, cidr, allCreds, onClose, onSaved }: {
+  subnetId: string; cidr: string; allCreds: Credential[]; onClose: () => void; onSaved: () => void
+}) {
+  const current = useQuery({ queryKey: ['subnet-creds', subnetId], queryFn: () => api.get<SubnetCredential[]>(`/subnets/${subnetId}/credentials`) })
+  const [sel, setSel] = useState<Set<string> | null>(null)
+  const selected = sel ?? new Set((current.data ?? []).map((c) => c.id))
+  const toggle = (id: string) => { const n = new Set(selected); if (n.has(id)) n.delete(id); else n.add(id); setSel(n) }
+  const save = useMutation({
+    mutationFn: () => api.put(`/subnets/${subnetId}/credentials`, { credential_ids: [...selected] }),
+    onSuccess: () => { onSaved(); onClose() },
+  })
+  return (
+    <div style={{ margin: '4px 0 8px 24px', padding: 10, border: '1px solid #455a64', borderRadius: 8, maxWidth: 560 }}>
+      <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>
+        Credentials for <span style={{ fontFamily: 'monospace' }}>{cidr}</span>
+        <span className="muted" style={{ fontWeight: 400 }}> — scans of this subnet try only the checked credentials. Leave none checked to use the global/default behavior.</span>
+      </div>
+      {current.isLoading && <div className="loading">Loading…</div>}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 3, maxHeight: 220, overflowY: 'auto' }}>
+        {(allCreds ?? []).map((c) => (
+          <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, cursor: 'pointer' }}>
+            <input type="checkbox" checked={selected.has(c.id)} onChange={() => toggle(c.id)} />
+            <span>{c.name}</span>
+            <span style={{ background: '#37474f', color: '#b0bec5', fontSize: 10, padding: '0 6px', borderRadius: 8 }}>{c.kind}</span>
+            {c.weak && <span style={{ color: '#ffb74d', fontSize: 10 }}>weak</span>}
+          </label>
+        ))}
+        {(allCreds ?? []).length === 0 && <div className="muted" style={{ fontSize: 12 }}>No credentials defined yet — add some on the Credentials page first.</div>}
+      </div>
+      <div style={{ display: 'flex', gap: 6, marginTop: 8, alignItems: 'center' }}>
+        <button style={editorBtn} disabled={save.isPending} onClick={() => save.mutate()}>Save ({selected.size})</button>
+        <button style={editorGhost} onClick={() => setSel(new Set())}>Clear all</button>
+        <button style={editorGhost} onClick={onClose}>Cancel</button>
+        {save.error && <span className="error-msg" style={{ fontSize: 12 }}>{(save.error as Error).message}</span>}
+      </div>
+    </div>
+  )
+}
+const editorBtn: React.CSSProperties = { padding: '4px 12px', background: '#1565c0', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600 }
+const editorGhost: React.CSSProperties = { padding: '3px 10px', background: 'transparent', color: '#90caf9', border: '1px solid #90caf9', borderRadius: 6, cursor: 'pointer', fontSize: 11 }
+
 export function Locations() {
   const qc = useQueryClient()
   const { data, isLoading, error } = useQuery({ queryKey: ['locations-all'], queryFn: () => api.get<Location[]>('/locations/all') })
@@ -24,7 +69,9 @@ export function Locations() {
   const refresh = () => { qc.invalidateQueries({ queryKey: ['locations-all'] }); qc.invalidateQueries({ queryKey: ['subnets-all'] }) }
   const subnetsOf = useMemo(() => {
     const m: Record<string, Subnet[]> = {}
-    for (const s of subnets.data ?? []) (m[s.location_id] ??= []).push(s)
+    for (const s of subnets.data ?? []) {
+      ;(m[s.location_id] ??= []).push(s)
+    }
     return m
   }, [subnets.data])
 
@@ -35,6 +82,25 @@ export function Locations() {
     onSuccess: () => { setSubCidr(''); setSubParent(null); refresh() },
   })
   const delSubnet = useMutation({ mutationFn: (id: string) => api.del(`/subnets/${id}`), onSuccess: refresh })
+
+  // --- Subnet-scoped credentials ---
+  const creds = useQuery({ queryKey: ['credentials'], queryFn: () => api.get<Credential[]>('/credentials') })
+  // Per-subnet credential count + kinds (one query per location that has subnets),
+  // so each subnet row can badge its scope without opening the editor.
+  const locIdsWithSubnets = useMemo(() => Object.keys(subnetsOf), [subnetsOf])
+  const countQueries = useQueries({
+    queries: locIdsWithSubnets.map((locId) => ({
+      queryKey: ['subnet-cred-counts', locId],
+      queryFn: () => api.get<SubnetCredCount[]>(`/locations/${locId}/subnet-credential-counts`),
+    })),
+  })
+  const countBySubnet = useMemo(() => {
+    const m: Record<string, SubnetCredCount> = {}
+    for (const q of countQueries) for (const c of (q.data ?? [])) m[c.subnet_id] = c
+    return m
+  }, [countQueries])
+  const refreshCounts = (locId: string) => qc.invalidateQueries({ queryKey: ['subnet-cred-counts', locId] })
+  const [credEditSubnet, setCredEditSubnet] = useState<string | null>(null)
 
   const [addParent, setAddParent] = useState<string | 'root' | null>(null)
   const [addKind, setAddKind] = useState('group')
@@ -103,13 +169,38 @@ export function Locations() {
         </div>
         {/* Subnets attached to this node — feed By-Site scan + credential scope */}
         {(subnetsOf[loc.id] ?? []).length > 0 && (
-          <div style={{ marginLeft: 24, display: 'flex', flexWrap: 'wrap', gap: 6, padding: '2px 0' }}>
-            {(subnetsOf[loc.id] ?? []).map((s) => (
-              <span key={s.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '1px 8px', border: '1px solid #2e7d32', borderRadius: 10, fontSize: 11, fontFamily: 'monospace' }}>
-                🌐 {s.cidr}
-                <button onClick={() => delSubnet.mutate(s.id)} title="remove subnet" style={{ background: 'none', border: 'none', color: '#ef9a9a', cursor: 'pointer', fontSize: 13, lineHeight: 1 }}>×</button>
-              </span>
-            ))}
+          <div style={{ marginLeft: 24, display: 'flex', flexDirection: 'column', gap: 4, padding: '2px 0' }}>
+            {(subnetsOf[loc.id] ?? []).map((s) => {
+              const cc = countBySubnet[s.id]
+              const scoped = (cc?.count ?? 0) > 0
+              return (
+                <div key={s.id} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '1px 8px', border: '1px solid #2e7d32', borderRadius: 10, fontSize: 11, fontFamily: 'monospace' }}>
+                    🌐 {s.cidr}
+                    <button onClick={() => delSubnet.mutate(s.id)} title="remove subnet" style={{ background: 'none', border: 'none', color: '#ef9a9a', cursor: 'pointer', fontSize: 13, lineHeight: 1 }}>×</button>
+                  </span>
+                  {scoped ? (
+                    <span title={`Scans of this subnet try ONLY these ${cc!.count} credential(s)`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '1px 8px', background: '#1b3a4b', border: '1px solid #4fc3f7', borderRadius: 10, fontSize: 10, color: '#9fdcff' }}>
+                      🔒 {cc!.count} scoped{cc!.kinds.length > 0 ? ` · ${cc!.kinds.join(', ')}` : ''}
+                    </span>
+                  ) : (
+                    <span title="No subnet credentials assigned — scans use the global/default credential set" style={{ padding: '1px 8px', background: '#3a2f1b', border: '1px solid #ffb74d', borderRadius: 10, fontSize: 10, color: '#ffd699' }}>
+                      ⚠ uses global creds
+                    </span>
+                  )}
+                  <button style={ghost} onClick={() => setCredEditSubnet(credEditSubnet === s.id ? null : s.id)}>{scoped ? 'edit creds' : 'set creds'}</button>
+                  {credEditSubnet === s.id && (
+                    <div style={{ flexBasis: '100%' }}>
+                      <SubnetCredEditor
+                        subnetId={s.id} cidr={s.cidr} allCreds={creds.data ?? []}
+                        onClose={() => setCredEditSubnet(null)}
+                        onSaved={() => refreshCounts(loc.id)}
+                      />
+                    </div>
+                  )}
+                </div>
+              )
+            })}
           </div>
         )}
         {subParent === loc.id && (

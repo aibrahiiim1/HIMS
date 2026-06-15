@@ -41,6 +41,9 @@ type scanReq struct {
 	CredentialIDs      []string `json:"credential_ids"`
 	CredentialGroupIDs []string `json:"credential_group_ids"`
 	Concurrency        int      `json:"concurrency"`
+	// Exclude carves IPs out of the resolved scope (single IP / range / CIDR /
+	// comma-or-space-separated mix) — e.g. scan a /24 but skip a few hosts.
+	Exclude string `json:"exclude"`
 }
 
 // startScan launches a background subnet scan and returns the job immediately
@@ -108,11 +111,16 @@ func (s *Server) startScan(w http.ResponseWriter, r *http.Request) {
 	if spec, err := json.Marshal(rerunSpec{
 		Mode: req.Mode, Targets: req.Targets, CIDR: req.CIDR,
 		CredentialIDs: req.CredentialIDs, CredentialGroupIDs: req.CredentialGroupIDs,
+		Exclude: req.Exclude,
 	}); err == nil {
 		_ = s.queries.SetDiscoveryJobMetadata(r.Context(), db.SetDiscoveryJobMetadataParams{ID: job.ID, Metadata: spec})
 	}
 
-	go s.runScanJob(job.ID, hosts, locID, concurrency, extra, snmpTO, portTO)
+	// An explicit per-scan credential selection (specific creds or groups chosen
+	// in the dialog) overrides the standing subnet-scoped set — only those are
+	// tried. An empty selection ("all stored, auto") leaves subnet scope in force.
+	explicitCreds := len(req.CredentialIDs) > 0 || len(req.CredentialGroupIDs) > 0
+	go s.runScanJob(job.ID, hosts, locID, concurrency, extra, explicitCreds, snmpTO, portTO)
 	s.audit(r, "discovery", "discovery.scan", "discovery_job", job.ID.String(), "Launched discovery scan ("+scopeLabel+")", map[string]any{"hosts": len(hosts), "mode": req.Mode})
 	writeJSON(w, http.StatusAccepted, job)
 }
@@ -295,12 +303,16 @@ type rerunSpec struct {
 	CIDR               string   `json:"cidr"`
 	CredentialIDs      []string `json:"credential_ids"`
 	CredentialGroupIDs []string `json:"credential_group_ids"`
+	Exclude            string   `json:"exclude,omitempty"`
 }
 
 // resolveScanHosts expands the request's input mode into a host list. It
 // returns a scope label (a CIDR string when the scope is a single prefix, for
 // the job record; otherwise a free-text summary).
 func (s *Server) resolveScanHosts(ctx context.Context, req scanReq, locID *uuid.UUID) ([]netip.Addr, string, error) {
+	var hosts []netip.Addr
+	var label string
+
 	if req.Mode == "site_subnets" {
 		if locID == nil {
 			return nil, "", errBadRequest("site_subnets mode requires location_id")
@@ -312,32 +324,49 @@ func (s *Server) resolveScanHosts(ctx context.Context, req scanReq, locID *uuid.
 		if len(subnets) == 0 {
 			return nil, "", errBadRequest("no subnets configured for this site")
 		}
-		var all []netip.Addr
 		for _, sn := range subnets {
-			hosts, err := discovery.ExpandCIDR(sn.Cidr, scanMaxHosts)
+			h, err := discovery.ExpandCIDR(sn.Cidr, scanMaxHosts)
 			if err != nil {
 				return nil, "", err
 			}
-			all = append(all, hosts...)
-			if len(all) > scanMaxHosts {
+			hosts = append(hosts, h...)
+			if len(hosts) > scanMaxHosts {
 				return nil, "", errBadRequest("site subnets expand beyond the scan cap; scan a subset")
 			}
 		}
-		return all, "site_subnets", nil
+		label = "site_subnets"
+	} else {
+		spec := req.Targets
+		if spec == "" {
+			spec = req.CIDR // legacy single-CIDR field
+		}
+		if spec == "" {
+			return nil, "", errBadRequest("provide targets (IP / range / CIDR) or location_id with mode=site_subnets")
+		}
+		h, err := discovery.ParseTargets(spec, scanMaxHosts)
+		if err != nil {
+			return nil, "", err
+		}
+		hosts, label = h, spec
 	}
 
-	spec := req.Targets
-	if spec == "" {
-		spec = req.CIDR // legacy single-CIDR field
+	// Carve out operator-excluded IPs/ranges/CIDRs from the resolved scope — so a
+	// /24 or site-subnet scan can skip a few specific hosts the operator names.
+	if strings.TrimSpace(req.Exclude) != "" {
+		filtered, removed, err := discovery.FilterExcluded(hosts, req.Exclude, scanMaxHosts)
+		if err != nil {
+			return nil, "", errBadRequest(err.Error())
+		}
+		hosts = filtered
+		if removed > 0 {
+			label = fmt.Sprintf("%s (excluded %d)", label, removed)
+		}
+		if len(hosts) == 0 {
+			return nil, "", errBadRequest("every target was excluded — nothing left to scan")
+		}
 	}
-	if spec == "" {
-		return nil, "", errBadRequest("provide targets (IP / range / CIDR) or location_id with mode=site_subnets")
-	}
-	hosts, err := discovery.ParseTargets(spec, scanMaxHosts)
-	if err != nil {
-		return nil, "", err
-	}
-	return hosts, spec, nil
+
+	return hosts, label, nil
 }
 
 // explicitGroups loads the operator-selected credential groups' members into
@@ -409,22 +438,78 @@ func (s *Server) scanCredentialTier(ctx context.Context, credIDStrs, groupIDStrs
 	return out, nil
 }
 
+// cctvWebCredsForScan returns the web (ONVIF/HTTP-Basic) credentials to try for a
+// camera during a scan, honouring subnet scope. If the IP's site subnet has
+// assigned credentials, ONLY its web creds are returned (and a human label of the
+// subnet) — even an empty set, so the global scan web creds are NOT sprayed at a
+// scoped CCTV subnet. With no subnet scope, the scan's selected web creds (the
+// fallback) are returned and the label is empty.
+func (s *Server) cctvWebCredsForScan(ctx context.Context, ip netip.Addr, locID *uuid.UUID, fallback []uuid.UUID) ([]uuid.UUID, string) {
+	scoped, err := s.queries.SubnetScopedCredentialsForIP(ctx, db.SubnetScopedCredentialsForIPParams{LocationID: locID, Ip: ip})
+	if err != nil || len(scoped) == 0 {
+		return fallback, ""
+	}
+	var web []uuid.UUID
+	for _, c := range scoped {
+		if c.Kind == string(domain.CredONVIF) || c.Kind == string(domain.CredHTTPBasic) {
+			web = append(web, c.ID)
+		}
+	}
+	label := scoped[0].Cidr
+	if scoped[0].SubnetName != nil && *scoped[0].SubnetName != "" {
+		label = *scoped[0].SubnetName + " " + scoped[0].Cidr
+	}
+	return web, label
+}
+
 // runScanJob is the background scan worker. It owns its own context (the HTTP
 // request's is long gone) and records per-host outcomes + a final job status.
-func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUID, concurrency int, extraGroups []credresolver.ScopedGroup, snmpTO, portTO time.Duration) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUID, concurrency int, extraGroups []credresolver.ScopedGroup, explicitCreds bool, snmpTO, portTO time.Duration) {
+	// Overall job budget scales with the host count: a flat 30m can't cover a large
+	// multi-subnet scan whose deep collection is slow (camera ONVIF/ISAPI walks),
+	// which truncated the tail of a 764-host two-subnet scan ("context deadline
+	// exceeded" with the last /24 left unprocessed). Budget ~10s/host on a 45m floor,
+	// capped at 4h so a hung run can't linger indefinitely.
+	deadline := 45 * time.Minute
+	if perHost := time.Duration(len(hosts)) * 10 * time.Second; perHost > deadline {
+		deadline = perHost
+	}
+	if deadline > 4*time.Hour {
+		deadline = 4 * time.Hour
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), deadline)
 	defer cancel()
 
 	cfg := discovery.PipelineConfig{
 		Registry: s.reg, Fetcher: s.fetcher, Decrypt: s.scanDecrypt,
-		ExtraGroups: extraGroups,
+		ExtraGroups: extraGroups, ExplicitCreds: explicitCreds,
 		SNMPTimeout: snmpTO, PortTimeout: portTO,
 		// Vendor-fingerprint library (operator ∪ built-in) — overrides generic
 		// driver categories from product evidence (e.g. ExtremeCloud IQ Controller
 		// → wireless_controller, not "Extreme switch"). Loaded once per job.
 		Fingerprints: s.scanFingerprintLibrary(ctx),
+		// Operator-configured HTTP/Web candidate ports (Settings → Web Ports) are
+		// added to the scan's TCP port set so a device's custom web port (8008/8012/
+		// 8081…) is discovered open and stored, then preferred by the collectors.
+		ExtraPorts: s.enabledWebPorts(ctx),
 	}
 	applier := apply.New(s.queries)
+
+	// Web credentials selected for this scan (ONVIF / HTTP-Basic). CCTV collection
+	// tries EACH of these in turn on a camera/NVR/DVR — first success binds — so
+	// selecting several http_basic credentials actually tries all of them, not just
+	// one. (Mirrors how SNMP tries every selected community.) Empty ⇒ CCTV falls
+	// back to the device's bound/CCTV credential.
+	var scanWebCreds []uuid.UUID
+	seenWebCred := map[uuid.UUID]bool{}
+	for _, g := range extraGroups {
+		for _, m := range g.Members {
+			if (m.Kind == domain.CredONVIF || m.Kind == domain.CredHTTPBasic) && !seenWebCred[m.ID] {
+				seenWebCred[m.ID] = true
+				scanWebCreds = append(scanWebCreds, m.ID)
+			}
+		}
+	}
 
 	// --- Known-Device Retry: load the devices already in inventory for the IPs in
 	// this scan's scope. A known device that the main sweep misses (transient
@@ -448,12 +533,28 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 
 	res := scan.Scope(ctx, hosts, concurrency, func(ctx context.Context, ip netip.Addr) (uuid.UUID, error) {
 		defer s.bumpScanned(jobID) // advance the 0→100% progress counter (once per host)
-		hctx, hcancel := context.WithTimeout(ctx, 45*time.Second)
+		// Per-host budget: the whole pipeline (TCP port scan → credential resolution
+		// → SNMP classify → deep collect) must finish within this, else the host is
+		// recorded "context deadline exceeded" and left in discovery (not enrolled).
+		// 60s (raised from 45s) gives slow/large SNMP walks and multi-credential
+		// hosts room to enroll; the outer job budget still caps the whole run.
+		hctx, hcancel := context.WithTimeout(ctx, 60*time.Second)
 		defer hcancel()
 		hcfg := cfg
 		hcfg.OnEvent = s.pipelineEventEmitter(jobID, ip) // live per-stage events for this host
 		r := discovery.Run(hctx, ip, locID, hcfg)
-		id, err := applier.Apply(hctx, r, locID)
+		// Enrollment must NOT run under the per-host PROBE budget (hctx). A host that
+		// spends its whole budget probing (e.g. an SNMP-silent, web-only host the
+		// credential sweep can't authenticate) is still classified from the cheap
+		// banners + open ports, and Apply enrolls every alive host (category "unknown"
+		// at worst) so it surfaces as an UNMANAGED device. Writing that under the now-
+		// expired hctx fails with "context deadline exceeded" — the host then vanishes
+		// into a device-less "discovery" result instead of appearing in inventory.
+		// Persist on a fresh budget from the job context so a discovered host is never
+		// lost just because its probe ran long.
+		actx, acancel := context.WithTimeout(ctx, 30*time.Second)
+		id, err := applier.Apply(actx, r, locID)
+		acancel()
 		// Post-onboarding follow-ups for an enrolled host (best-effort).
 		enrichment := ""
 		var profRes *scanProfileResult
@@ -480,7 +581,8 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 				}
 				// Persist every credential auth attempt (success + failure + reason)
 				// to credential-test history → feeds Coverage / Data Quality.
-				s.persistScanCredAttempts(ctx, dev, r.CredAttempts)
+				// Pipeline attempts already carry their own Source ("subnet"/"default").
+				s.persistScanCredAttempts(ctx, dev, r.CredAttempts, "")
 				// Point this host's reachability check at a port it actually answered
 				// on (or SNMP), so a freshly-discovered/up host is never marked
 				// "offline" for a category-default port it doesn't serve.
@@ -510,12 +612,30 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 				specialized := func(cat string) bool {
 					switch domain.DeviceCategory(cat) {
 					case domain.CatVirtualHost, domain.CatWirelessController, domain.CatAccessPoint,
-						domain.CatPBX, domain.CatVoiceGateway, domain.CatCamera, domain.CatNVR:
+						domain.CatPBX, domain.CatVoiceGateway, domain.CatCamera, domain.CatNVR, domain.CatDVR:
 						return true
 					}
 					return false
 				}(dev.Category)
-				if s.cipher() != nil && (boundOS || legacyWSMan) && !specialized {
+				// A Windows host that did NOT bind a WinRM/SSH credential this run —
+				// because WinRM is disabled/closed (connection refused) — is still worth a
+				// collection attempt: runOSCollection tries WinRM, then FALLS BACK to the
+				// site Relay Agent / WMI-DCOM, which works where WinRM is off. Gate on a
+				// real Windows management surface (SMB 445 / RPC 135 / WinRM 5985-6 open)
+				// so this only fires on actual Windows hosts, not every alive IP. This is
+				// what lets the legacy-WSMan + WinRM-disabled boxes route to WMI instead of
+				// silently staying unmanaged. Failures stay honestly categorized
+				// (winrm_disabled / wmi_firewall_blocked / agent_missing), never auth_failed.
+				winHost := dev.OsFamily == domain.OSFamilyWindows || dev.Category == string(domain.CatEndpoint)
+				winMgmtPort := false
+				for _, p := range r.OpenPorts {
+					if p == 445 || p == 135 || p == 5985 || p == 5986 {
+						winMgmtPort = true
+						break
+					}
+				}
+				windowsManageable := winHost && winMgmtPort
+				if s.cipher() != nil && (boundOS || legacyWSMan || windowsManageable) && !specialized {
 					s.publishScanEvent(jobID, ip, id, "collection_started", "", "started", "deep OS inventory")
 					cctx, ccancel := context.WithTimeout(ctx, 2*time.Minute)
 					oc := s.runOSCollection(cctx, dev)
@@ -661,7 +781,7 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 						profRes = &scanProfileResult{Resolved: false}
 						enrichment = "Voice/PBX — add a Vendor Connection Profile (Discovery → Vendor Profiles) to onboard"
 					}
-				} else if cat := dev.Category; (cat == string(domain.CatCamera) || cat == string(domain.CatNVR)) && s.cipher() != nil {
+				} else if cat := dev.Category; (cat == string(domain.CatCamera) || cat == string(domain.CatNVR) || cat == string(domain.CatDVR)) && s.cipher() != nil {
 					// Camera/NVR/DVR candidate. PREFER a matching CCTV Vendor Connection
 					// Profile (device > site > global) so we authenticate to the
 					// configured target with the linked ONVIF/HTTP credential; fall back
@@ -680,15 +800,54 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 						}
 					} else {
 						profRes = &scanProfileResult{Resolved: false}
-						cctx, ccancel := context.WithTimeout(ctx, 90*time.Second)
-						cv := s.runCCTVCollection(cctx, dev)
+						cctx, ccancel := context.WithTimeout(ctx, 120*time.Second) // room for ONVIF phase + reserved ISAPI fallback
+						// Subnet-scoped credentials: if this camera's site subnet has
+						// assigned credentials, use ONLY its web (ONVIF/HTTP-Basic) creds
+						// — never the global scan web creds. This is the CCTV anti-spray
+						// / lockout-safety path (mirrors the resolver exclusivity used for
+						// SNMP/SSH/WinRM). Empty fall-through keeps current behaviour.
+						var webCreds []uuid.UUID
+						var scopedLabel string
+						scopeNote, cctvSource := "", "default"
+						if explicitCreds {
+							// Explicit operator selection wins over the subnet's assigned
+							// web creds (mirrors the resolver path) — try ONLY the selected
+							// ONVIF/HTTP-Basic credentials. Anti-spray still holds: just the
+							// chosen set, never the global list.
+							webCreds = scanWebCreds
+							scopeNote, cctvSource = " [operator-selected]", "selected"
+						} else {
+							webCreds, scopedLabel = s.cctvWebCredsForScan(ctx, ip, locID, scanWebCreds)
+							if scopedLabel != "" {
+								scopeNote = " [subnet-scoped: " + scopedLabel + "]"
+								cctvSource = "subnet"
+							}
+						}
+						// Already-onboarded CCTV device: it has a durable bound web credential
+						// that works. Re-use ONLY that (bound-credential-only — pass no
+						// selection) instead of re-spraying the subnet's full web-credential set
+						// at it every scan; each wrong digest on a Hikvision recorder costs a
+						// ~15s throttle and risks an IP lockout. New/unbound devices still try
+						// the subnet set for first-time onboarding.
+						if dev.CctvCredentialID != nil {
+							webCreds = nil
+							scopeNote, cctvSource = " [bound credential]", "bound"
+						}
+						// Try each selected web credential (first success binds). Pass the
+						// LIVE discovered open ports so the device's actual web port is tried
+						// first (probe_data isn't persisted until after this runs).
+						cv := s.runCCTVCollection(cctx, dev, webCreds, cctvSource, r.OpenPorts...)
 						ccancel()
 						if cv.ok() {
-							enrichment = "ONVIF facts collected (" + cv.Category + ")"
+							enrichment = "CCTV collected (" + cv.Category + ") via " + cv.CredentialUsed + scopeNote
 						} else if cv.Reason == "no_credential" {
-							enrichment = "CCTV candidate — no profile configured; add a CCTV / ONVIF Vendor Connection Profile"
+							if scopedLabel != "" {
+								enrichment = "CCTV candidate — subnet " + scopedLabel + " has no ONVIF/HTTP-Basic credential assigned (assign one under Locations → Subnet)"
+							} else {
+								enrichment = "CCTV candidate — select an ONVIF/HTTP-Basic credential in the scan (or add a CCTV Vendor Connection Profile)"
+							}
 						} else {
-							enrichment = "ONVIF collection incomplete: " + cv.Reason
+							enrichment = "CCTV collection incomplete: " + cv.Reason + scopeNote
 						}
 					}
 				}
@@ -751,6 +910,11 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 			}
 		}
 	}
+	// Link any NVR/DVR channels to the camera devices at their IPs. The per-channel
+	// link is computed once at NVR-collect time, so a camera discovered in THIS scan
+	// that an NVR referenced earlier (or one whose apply raced an NVR collect) would
+	// otherwise stay unlinked. Fleet-wide, idempotent, best-effort.
+	_, _ = s.queries.ReconcileNVRChannelLinks(context.Background())
 	_ = s.queries.UpdateDiscoveryJobStatus(context.Background(), db.UpdateDiscoveryJobStatusParams{
 		// scanned_count = host_count so a finished job reads exactly 100% even if a
 		// per-host increment was missed.
@@ -813,7 +977,7 @@ func (s *Server) retryMissedKnown(ctx context.Context, jobID uuid.UUID, locID *u
 				id, aerr := applier.Apply(actx, rr, locID)
 				if aerr == nil && id != uuid.Nil {
 					if d2, e := s.queries.GetDevice(actx, id); e == nil {
-						s.persistScanCredAttempts(actx, d2, rr.CredAttempts)
+						s.persistScanCredAttempts(actx, d2, rr.CredAttempts, "")
 						s.seedReachabilityCheck(actx, d2, rr.OpenPorts, rr.Probe.SNMPSysDescr != "")
 					}
 				}
@@ -855,6 +1019,8 @@ type scanCredAttemptDTO struct {
 	Detail   string `json:"detail"`
 	Success  bool   `json:"success"`
 	Relevant bool   `json:"relevant"`
+	// Source: why this credential was tried — "subnet" (subnet-scoped) | "default".
+	Source string `json:"source,omitempty"`
 }
 
 type scanDetail struct {
@@ -880,6 +1046,10 @@ type scanDetail struct {
 	// classification was preserved this run even though the fresh probe pointed
 	// elsewhere (transient SNMP failure or an operator lock). Empty in the normal case.
 	ClassNote string `json:"class_note,omitempty"`
+	// CredScope, when set, names the site subnet whose assigned credentials were the
+	// EXCLUSIVE set tried for this host (subnet-scoped credentials). Empty ⇒ normal
+	// global/scope resolution was used.
+	CredScope string `json:"cred_scope,omitempty"`
 }
 
 // scanSSHSummary is the per-result SSH CLI collection rollup shown in Job Results.
@@ -1173,7 +1343,7 @@ func (s *Server) recordResult(ctx context.Context, jobID uuid.UUID, ip netip.Add
 	attempts := make([]scanCredAttemptDTO, 0, len(r.CredAttempts))
 	for _, a := range r.CredAttempts {
 		attempts = append(attempts, scanCredAttemptDTO{
-			Kind: string(a.Kind), Protocol: a.Protocol, Category: a.Category, Detail: a.Detail, Success: a.Success, Relevant: a.Relevant,
+			Kind: string(a.Kind), Protocol: a.Protocol, Category: a.Category, Detail: a.Detail, Success: a.Success, Relevant: a.Relevant, Source: a.Source,
 		})
 	}
 
@@ -1186,6 +1356,7 @@ func (s *Server) recordResult(ctx context.Context, jobID uuid.UUID, ip netip.Add
 		Enrichment: enrichment, Profile: profRes,
 		NextAction:   scanNextActionWithPlan(category, bound, boundKind, profRes, r.Plan, attempts),
 		CollectedVia: collectedVia, AgentName: agentName, SSH: sshSum, ClassNote: classNote,
+		CredScope: r.CredScope,
 	}
 	// Sharpen the next action for agent-routed Windows hosts.
 	switch collectedVia {
@@ -1304,13 +1475,71 @@ func (s *Server) scanDecrypt(ctx context.Context, id uuid.UUID) (discovery.Decry
 	return dc, nil
 }
 
+// scanJobDTO is a discovery job with its scan scope decoded from metadata. The
+// raw metadata JSONB marshals as base64, and scope_cidr is empty for target-mode
+// scans, so the list view couldn't say WHAT was scanned — this exposes the
+// targets/mode + a human "scope" label the UI shows in place of the blank cell.
+type scanJobDTO struct {
+	ID           uuid.UUID  `json:"id"`
+	LocationID   *uuid.UUID `json:"location_id"`
+	ScopeCidr    *string    `json:"scope_cidr"`
+	Status       string     `json:"status"`
+	StartedAt    *time.Time `json:"started_at"`
+	FinishedAt   *time.Time `json:"finished_at"`
+	CreatedAt    time.Time  `json:"created_at"`
+	HostCount    int32      `json:"host_count"`
+	FoundCount   int32      `json:"found_count"`
+	ScannedCount int32      `json:"scanned_count"`
+	Error        *string    `json:"error"`
+	Mode         string     `json:"mode"`
+	Targets      string     `json:"targets"`
+	Scope        string     `json:"scope"`
+}
+
+// scanScopeLabel renders a human-readable "what was scanned" string from the
+// job's saved scan spec + scope, used in the Scan Jobs list.
+func scanScopeLabel(j db.DiscoveryJob, spec rerunSpec) string {
+	switch {
+	case spec.Targets != "":
+		return spec.Targets
+	case j.ScopeCidr != nil:
+		return j.ScopeCidr.String()
+	case spec.CIDR != "":
+		return spec.CIDR
+	case spec.Mode == "site_subnets":
+		return "site subnets"
+	default:
+		return "import / manual"
+	}
+}
+
 func (s *Server) listDiscoveryJobs(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.queries.ListDiscoveryJobs(r.Context())
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, rows)
+	out := make([]scanJobDTO, 0, len(rows))
+	for _, j := range rows {
+		d := scanJobDTO{
+			ID: j.ID, LocationID: j.LocationID, Status: j.Status,
+			StartedAt: j.StartedAt, FinishedAt: j.FinishedAt, CreatedAt: j.CreatedAt,
+			HostCount: j.HostCount, FoundCount: j.FoundCount, ScannedCount: j.ScannedCount, Error: j.Error,
+		}
+		if j.ScopeCidr != nil {
+			sc := j.ScopeCidr.String()
+			d.ScopeCidr = &sc
+		}
+		var spec rerunSpec
+		if len(j.Metadata) > 0 {
+			_ = json.Unmarshal(j.Metadata, &spec)
+		}
+		d.Mode = spec.Mode
+		d.Targets = spec.Targets
+		d.Scope = scanScopeLabel(j, spec)
+		out = append(out, d)
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // deleteDiscoveryJob removes a job + its results.
@@ -1348,7 +1577,7 @@ func (s *Server) rerunDiscoveryJob(w http.ResponseWriter, r *http.Request) {
 	if len(prev.Metadata) > 0 {
 		var spec rerunSpec
 		if json.Unmarshal(prev.Metadata, &spec) == nil {
-			req = scanReq{Mode: spec.Mode, Targets: spec.Targets, CIDR: spec.CIDR, CredentialIDs: spec.CredentialIDs, CredentialGroupIDs: spec.CredentialGroupIDs}
+			req = scanReq{Mode: spec.Mode, Targets: spec.Targets, CIDR: spec.CIDR, CredentialIDs: spec.CredentialIDs, CredentialGroupIDs: spec.CredentialGroupIDs, Exclude: spec.Exclude}
 		}
 	}
 	if req.Targets == "" && req.CIDR == "" && req.Mode != "site_subnets" {
@@ -1380,7 +1609,8 @@ func (s *Server) rerunDiscoveryJob(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = s.queries.UpdateDiscoveryJobStatus(ctx, db.UpdateDiscoveryJobStatusParams{ID: job.ID, Status: "running", HostCount: int32(len(hosts)), FoundCount: 0})
 	_ = s.queries.SetDiscoveryJobMetadata(ctx, db.SetDiscoveryJobMetadataParams{ID: job.ID, Metadata: prev.Metadata})
-	go s.runScanJob(job.ID, hosts, prev.LocationID, defConc, extra, snmpTO, portTO)
+	explicitCreds := len(req.CredentialIDs) > 0 || len(req.CredentialGroupIDs) > 0
+	go s.runScanJob(job.ID, hosts, prev.LocationID, defConc, extra, explicitCreds, snmpTO, portTO)
 	writeJSON(w, http.StatusAccepted, job)
 }
 

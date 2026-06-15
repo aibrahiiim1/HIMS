@@ -162,6 +162,16 @@ type CameraInfo struct {
 	RtspUrl      *string   `json:"rtsp_url"`
 	OnvifUrl     *string   `json:"onvif_url"`
 	LastSeenAt   time.Time `json:"last_seen_at"`
+	DeviceName   *string   `json:"device_name"`
+	Firmware     *string   `json:"firmware"`
+	Serial       *string   `json:"serial"`
+	MacAddress   *string   `json:"mac_address"`
+	IpAddress    *string   `json:"ip_address"`
+	SubnetMask   *string   `json:"subnet_mask"`
+	Gateway      *string   `json:"gateway"`
+	DnsServer    *string   `json:"dns_server"`
+	NtpServer    *string   `json:"ntp_server"`
+	TimeZone     *string   `json:"time_zone"`
 }
 
 type ConfigBackup struct {
@@ -229,6 +239,7 @@ type CredentialTestResult struct {
 	TestedAt       time.Time  `json:"tested_at"`
 	Actor          string     `json:"actor"`
 	Relevant       bool       `json:"relevant"`
+	Source         string     `json:"source"`
 }
 
 type CredentialTestRun struct {
@@ -273,6 +284,20 @@ type Device struct {
 	Criticality                string      `json:"criticality"`
 	MonitoringEnabled          bool        `json:"monitoring_enabled"`
 	ManualClassificationReason string      `json:"manual_classification_reason"`
+	// Operator-entered placeholder device (not auto-discovered/probed); its inventory data is manual.
+	IsVirtual           bool       `json:"is_virtual"`
+	CctvCredentialID    *uuid.UUID `json:"cctv_credential_id"`
+	WebSchemePref       string     `json:"web_scheme_pref"`
+	WebPortPref         *int32     `json:"web_port_pref"`
+	WebAltPorts         string     `json:"web_alt_ports"`
+	WebNotes            string     `json:"web_notes"`
+	WebLastOk           string     `json:"web_last_ok"`
+	WebLastOkAt         *time.Time `json:"web_last_ok_at"`
+	WebLastProto        string     `json:"web_last_proto"`
+	WebLastScheme       string     `json:"web_last_scheme"`
+	WebLastPort         *int32     `json:"web_last_port"`
+	WebLastCredentialID *uuid.UUID `json:"web_last_credential_id"`
+	WebPrefProto        string     `json:"web_pref_proto"`
 }
 
 type DeviceFact struct {
@@ -583,6 +608,7 @@ type MonitoringCheck struct {
 	ConsecutiveFailures int32      `json:"consecutive_failures"`
 	CreatedAt           time.Time  `json:"created_at"`
 	UpdatedAt           time.Time  `json:"updated_at"`
+	Role                string     `json:"role"`
 }
 
 type MonitoringSample struct {
@@ -643,6 +669,37 @@ type NvrChannel struct {
 	CameraDeviceID *uuid.UUID  `json:"camera_device_id"`
 	Status         string      `json:"status"`
 	LastSeenAt     time.Time   `json:"last_seen_at"`
+	Enabled        bool        `json:"enabled"`
+	Recording      *bool       `json:"recording"`
+	Resolution     string      `json:"resolution"`
+}
+
+type NvrInfo struct {
+	DeviceID     uuid.UUID `json:"device_id"`
+	Manufacturer *string   `json:"manufacturer"`
+	Model        *string   `json:"model"`
+	Serial       *string   `json:"serial"`
+	Firmware     *string   `json:"firmware"`
+	DeviceType   *string   `json:"device_type"`
+	ChannelCount int32     `json:"channel_count"`
+	HddCount     int32     `json:"hdd_count"`
+	Recording    string    `json:"recording"`
+	Health       string    `json:"health"`
+	Source       string    `json:"source"`
+	CollectedAt  time.Time `json:"collected_at"`
+}
+
+type NvrStorage struct {
+	ID          uuid.UUID `json:"id"`
+	NvrDeviceID uuid.UUID `json:"nvr_device_id"`
+	HddID       int32     `json:"hdd_id"`
+	Name        *string   `json:"name"`
+	Status      string    `json:"status"`
+	CapacityMb  int64     `json:"capacity_mb"`
+	FreeMb      int64     `json:"free_mb"`
+	Property    string    `json:"property"`
+	Source      string    `json:"source"`
+	LastSeenAt  time.Time `json:"last_seen_at"`
 }
 
 type OidMapping struct {
@@ -711,6 +768,7 @@ type OsInventory struct {
 	LastCriticalEvent   *string    `json:"last_critical_event"`
 	CreatedAt           time.Time  `json:"created_at"`
 	UpdatedAt           time.Time  `json:"updated_at"`
+	SoftwareNote        string     `json:"software_note"`
 }
 
 type OsNic struct {
@@ -786,6 +844,11 @@ type PbxPhone struct {
 	DevicePool       *string   `json:"device_pool"`
 	CollectionSource string    `json:"collection_source"`
 	LastSeenAt       time.Time `json:"last_seen_at"`
+	Extension        *string   `json:"extension"`
+	MacAddress       *string   `json:"mac_address"`
+	IpAddress        *string   `json:"ip_address"`
+	Registration     *string   `json:"registration"`
+	Registrar        *string   `json:"registrar"`
 }
 
 type Permission struct {
@@ -938,6 +1001,12 @@ type Subnet struct {
 	UpdatedAt  time.Time    `json:"updated_at"`
 }
 
+type SubnetCredential struct {
+	SubnetID     uuid.UUID `json:"subnet_id"`
+	CredentialID uuid.UUID `json:"credential_id"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
 type System struct {
 	ID            uuid.UUID  `json:"id"`
 	Name          string     `json:"name"`
@@ -1046,6 +1115,15 @@ type Vlan struct {
 	Name             *string   `json:"name"`
 	CollectionSource string    `json:"collection_source"`
 	LastSeenAt       time.Time `json:"last_seen_at"`
+}
+
+type WebPortCandidate struct {
+	ID        uuid.UUID `json:"id"`
+	Port      int32     `json:"port"`
+	Scheme    string    `json:"scheme"`
+	Enabled   bool      `json:"enabled"`
+	Note      string    `json:"note"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type WirelessClient struct {

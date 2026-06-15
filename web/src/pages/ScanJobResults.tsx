@@ -215,7 +215,7 @@ export function ScanJobResults() {
               <table className="data-table">
                 <thead><tr>
                   <th>IP</th><th>Name</th><th>Reach</th><th>Mgmt</th><th>Category</th><th>Vendor / Model</th>
-                  <th>Expected</th><th>Opportunistic</th><th>Skipped</th><th>Cred attempts</th><th>Bound</th><th>Collected via</th><th>Next action</th><th></th>
+                  <th>Expected</th><th>Opportunistic</th><th title="Protocols intentionally not tried for this device type — e.g. SNMP/SSH/WinRM are not applicable to a camera. This is by design, not a failure: it keeps scans fast and avoids needless auth_failed noise / lockouts.">Not applicable</th><th>Cred attempts</th><th>Bound</th><th>Collected via</th><th>Next action</th><th></th>
                 </tr></thead>
                 <tbody>
                   {filtered.map((r) => {
@@ -237,7 +237,7 @@ export function ScanJobResults() {
                         <td>{d?.vendor || '—'}{d?.model ? ` / ${d.model}` : ''}</td>
                         <td style={{ fontSize: 11 }}>{(p.expected_protocols ?? []).join(', ').toUpperCase() || '—'}</td>
                         <td style={{ fontSize: 11 }}>{(p.opportunistic_protocols ?? []).join(', ').toUpperCase() || '—'}</td>
-                        <td className="muted" style={{ fontSize: 11 }}>{(p.skipped_protocols ?? []).join(', ') || '—'}</td>
+                        <td className="muted" style={{ fontSize: 11 }} title="Not applicable to this device type — intentionally not tried (by design, not a failure).">{(p.skipped_protocols ?? []).join(', ') || '—'}</td>
                         <td style={{ fontSize: 11 }}>{(p.cred_attempts ?? []).length === 0 ? <span className="muted">none</span> : (p.cred_attempts ?? []).map((a, i) => (
                           <div key={i}><span className={`badge badge-${a.success ? 'up' : a.category === 'auth_failed' ? 'down' : 'unknown'}`}>{a.kind}</span> <span className="muted">{a.success ? 'ok' : a.category}</span></div>
                         ))}</td>

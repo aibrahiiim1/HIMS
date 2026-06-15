@@ -5,6 +5,7 @@ import { api, setUnauthorizedHandler, type AuthMe } from './api'
 import { Login } from './pages/Login'
 import { DeviceList } from './pages/DeviceList'
 import { Dashboard } from './pages/Dashboard'
+import { EndpointIntelligence } from './pages/EndpointIntelligence'
 import { Discovery } from './pages/Discovery'
 import { ScanJobs, ScanResultsRedirect } from './pages/ScanJobs'
 import { ScanJobResults } from './pages/ScanJobResults'
@@ -14,6 +15,7 @@ import { EndpointDetail } from './pages/EndpointDetail'
 import { FirewallDetail } from './pages/FirewallDetail'
 import { VirtualHostDetail } from './pages/VirtualHostDetail'
 import { CctvDetail } from './pages/CctvDetail'
+import { Cameras } from './pages/Cameras'
 import { PrinterDetail } from './pages/PrinterDetail'
 import { UPSDetail } from './pages/UPSDetail'
 import { PbxDetail } from './pages/PbxDetail'
@@ -35,8 +37,12 @@ import { AgentDetail } from './pages/AgentDetail'
 import { Mibs } from './pages/Mibs'
 import { Settings } from './pages/Settings'
 import { Inventory } from './pages/Inventory'
+import { VirtualDeviceForm } from './pages/VirtualDeviceForm'
+import { AddVirtualButton } from './components/AddVirtualButton'
+import { CctvOps } from './components/CctvOps'
 import { MissingClassification } from './pages/MissingClassification'
 import { UnmanagedDevices } from './pages/UnmanagedDevices'
+import { UnmappedDevices } from './pages/UnmappedDevices'
 import { Locations } from './pages/Locations'
 import { Reports } from './pages/Reports'
 import { DeviceIntelligence } from './pages/DeviceIntelligence'
@@ -112,24 +118,26 @@ function Shell({ me, onLogout }: { me?: AuthMe; onLogout: () => void }) {
             <Route path="/discovery/jobs/:jobId/results" element={<ScanJobResults />} />
             <Route path="/discovery/jobs/:jobId/live" element={<LiveDiscovery />} />
             <Route path="/discovery/results" element={<ScanResultsRedirect />} />
-            <Route path="/" element={<DeviceList category="switch" title="Switches" detailBase="/devices" />} />
-            <Route path="/servers" element={<DeviceList category="server" title="Servers" detailBase="/servers" />} />
-            <Route path="/firewalls" element={<DeviceList category="firewall" title="Firewalls" detailBase="/firewalls" />} />
+            <Route path="/" element={<DeviceList category="switch" title="Switches" detailBase="/devices" headerExtra={<AddVirtualButton type="switch" label="Switch" />} />} />
+            <Route path="/servers" element={<DeviceList category="server" title="Servers" detailBase="/servers" headerExtra={<AddVirtualButton type="server" label="Server" />} />} />
+            <Route path="/firewalls" element={<DeviceList category="firewall" title="Firewalls" detailBase="/firewalls" headerExtra={<AddVirtualButton type="firewall" label="Firewall" />} />} />
+            <Route path="/devices/virtual/new" element={<VirtualDeviceForm />} />
+            <Route path="/devices/virtual/:id/edit" element={<VirtualDeviceForm />} />
             <Route path="/devices/:id" element={<DeviceDetailDispatch />} />
             <Route path="/servers/:id" element={<ServerDetail />} />
             <Route path="/virtual-hosts" element={<DeviceList category="virtual_host" title="Virtual Hosts" detailBase="/virtual-hosts" />} />
             <Route path="/virtual-hosts/:id" element={<VirtualHostDetail />} />
             <Route path="/firewalls/:id" element={<FirewallDetail />} />
-            <Route path="/cameras" element={<DeviceList category="camera" title="Cameras" detailBase="/cctv" />} />
-            <Route path="/nvrs" element={<DeviceList category="nvr" title="NVR / DVR" detailBase="/cctv" />} />
+            <Route path="/cameras" element={<Cameras />} />
+            <Route path="/nvrs" element={<DeviceList category="nvr,dvr" title="NVR / DVR" detailBase="/cctv" headerExtra={<AddVirtualButton type="nvr" label="NVR" />} preContent={<CctvOps />} />} />
             <Route path="/cctv/:id" element={<CctvDetail />} />
             <Route path="/wlan" element={<WirelessControllers />} />
             <Route path="/wlan/:id" element={<WirelessDetail />} />
-            <Route path="/workstations" element={<DeviceList category="endpoint" title="Workstations" detailBase="/workstations" />} />
+            <Route path="/workstations" element={<DeviceList category="endpoint" title="Workstations" detailBase="/workstations" headerExtra={<AddVirtualButton type="endpoint" label="Workstation" />} />} />
             <Route path="/workstations/:id" element={<EndpointDetail />} />
-            <Route path="/printers" element={<DeviceList category="printer" title="Printers" detailBase="/printers" />} />
+            <Route path="/printers" element={<DeviceList category="printer" title="Printers" detailBase="/printers" headerExtra={<AddVirtualButton type="printer" label="Printer" />} />} />
             <Route path="/printers/:id" element={<PrinterDetail />} />
-            <Route path="/ups" element={<DeviceList category="ups" title="UPS Units" detailBase="/ups" />} />
+            <Route path="/ups" element={<DeviceList category="ups" title="UPS Units" detailBase="/ups" headerExtra={<AddVirtualButton type="ups" label="UPS" />} />} />
             <Route path="/ups/:id" element={<UPSDetail />} />
             <Route path="/pbx" element={<DeviceList category="pbx" title="Call Managers / PBX" detailBase="/pbx" />} />
             <Route path="/pbx/:id" element={<PbxDetail />} />
@@ -137,11 +145,13 @@ function Shell({ me, onLogout }: { me?: AuthMe; onLogout: () => void }) {
                 Unmanaged (can't access it). /unknown kept as a redirect for old links. */}
             <Route path="/inventory/missing-classification" element={<MissingClassification />} />
             <Route path="/inventory/unmanaged" element={<UnmanagedDevices />} />
+            <Route path="/inventory/unmapped" element={<UnmappedDevices />} />
             <Route path="/unknown" element={<Navigate to="/inventory/missing-classification" replace />} />
             <Route path="/topology" element={<TopologyPage />} />
             <Route path="/monitoring" element={<Monitoring />} />
             <Route path="/alerts" element={<Alerts />} />
             <Route path="/device-intelligence" element={<DeviceIntelligence />} />
+            <Route path="/endpoint-intelligence" element={<EndpointIntelligence />} />
             <Route path="/access-control" element={<AccessControl />} />
             <Route path="/access-control/:tab" element={<AccessControl />} />
             <Route path="/device-templates" element={<DeviceTemplates />} />

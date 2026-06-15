@@ -291,7 +291,7 @@ func (s *Server) wmiDiagnose(w http.ResponseWriter, r *http.Request) {
 // reasons) to credential-test history — so the scan's auth outcomes show up in
 // Credential Test History, Data Quality, and Management Access Coverage exactly
 // like a manual test. Best-effort.
-func (s *Server) persistScanCredAttempts(ctx context.Context, dev db.Device, attempts []discovery.CredAttempt) {
+func (s *Server) persistScanCredAttempts(ctx context.Context, dev db.Device, attempts []discovery.CredAttempt, batchSource string) {
 	if len(attempts) == 0 {
 		return
 	}
@@ -318,10 +318,17 @@ func (s *Server) persistScanCredAttempts(ctx context.Context, dev db.Device, att
 			names[a.CredentialID] = name
 		}
 		cid := a.CredentialID
+		src := a.Source
+		if src == "" {
+			src = batchSource
+		}
+		if src == "" {
+			src = "default"
+		}
 		_ = s.queries.InsertCredentialTestResult(ctx, db.InsertCredentialTestResultParams{
 			RunID: run.ID, DeviceID: dev.ID, CredentialID: &cid, CredentialName: name,
 			Kind: string(a.Kind), Protocol: a.Protocol, Category: a.Category, Success: a.Success,
-			Detail: a.Detail, LatencyMs: 0, Actor: "discovery-scan", Relevant: a.Relevant,
+			Detail: a.Detail, LatencyMs: 0, Actor: "discovery-scan", Relevant: a.Relevant, Source: src,
 		})
 	}
 }
@@ -348,7 +355,7 @@ func (s *Server) persistCredentialTest(ctx context.Context, actor string, result
 		_ = s.queries.InsertCredentialTestResult(ctx, db.InsertCredentialTestResultParams{
 			RunID: run.ID, DeviceID: devID, CredentialID: credPtr, CredentialName: res.CredentialName,
 			Kind: res.Kind, Protocol: res.Protocol, Category: res.Category, Success: res.Success,
-			Detail: res.Detail, LatencyMs: res.LatencyMS, Actor: actor, Relevant: true,
+			Detail: res.Detail, LatencyMs: res.LatencyMS, Actor: actor, Relevant: true, Source: "manual",
 		})
 	}
 	return run.ID.String()

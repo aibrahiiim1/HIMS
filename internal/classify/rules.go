@@ -17,26 +17,33 @@ func ev(source, signal, category, osFamily, subtype string, conf int) domain.Cla
 }
 
 // ISAPIDeviceInfo classifies a Hikvision (and OEM-compatible) device from its
-// /ISAPI/System/deviceInfo <deviceType> + <model>. This is the definitive NVR
-// vs camera signal: deviceType "DVR"/"NVR" is a recorder, "IPCamera"/"IPDome" a
-// camera. Model code is a corroborating signal (…NI…/…NVR… = recorder).
+// /ISAPI/System/deviceInfo <deviceType> + <model>. This is the definitive
+// recorder-vs-camera signal: deviceType "NVR" → nvr, "DVR" → dvr (distinct in
+// CCTV Phase 2 so the fleet summary counts them separately), "IPCamera"/"IPDome"
+// → camera. Model code is a corroborating signal (…NI…/…NVR… = NVR; …HGHI/HQHI…
+// or an explicit DVR token = DVR). deviceType beats model when both are present.
 func ISAPIDeviceInfo(deviceType, model string) []domain.ClassificationEvidence {
 	dt := strings.ToLower(strings.TrimSpace(deviceType))
 	m := strings.ToUpper(strings.TrimSpace(model))
 	var out []domain.ClassificationEvidence
 	switch {
-	case strings.Contains(dt, "nvr") || strings.Contains(dt, "dvr"):
+	case strings.Contains(dt, "nvr"):
 		out = append(out, ev(domain.EvidenceSourceISAPI, "deviceType="+deviceType, string(domain.CatNVR), domain.OSFamilyEmbedded, "nvr", 90))
+	case strings.Contains(dt, "dvr") || strings.Contains(dt, "hybrid"):
+		out = append(out, ev(domain.EvidenceSourceISAPI, "deviceType="+deviceType, string(domain.CatDVR), domain.OSFamilyEmbedded, "dvr", 90))
 	case strings.Contains(dt, "ipcamera") || strings.Contains(dt, "ipdome") || strings.Contains(dt, "ipc") || strings.Contains(dt, "camera"):
 		out = append(out, ev(domain.EvidenceSourceISAPI, "deviceType="+deviceType, string(domain.CatCamera), domain.OSFamilyEmbedded, "ip_camera", 88))
 	case dt != "":
 		// Some other Hikvision appliance — still embedded, category uncertain.
 		out = append(out, ev(domain.EvidenceSourceISAPI, "deviceType="+deviceType, "", domain.OSFamilyEmbedded, "", 40))
 	}
-	// Model-code corroboration (Hikvision DS-7xxxN[I]/...NVR = recorder; DS-2CD = camera).
+	// Model-code corroboration. DVR is the more specific token, so check it first
+	// (a DS-7xxxHGHI DVR also matches the DS-7 NVR prefix otherwise).
 	if m != "" {
 		switch {
-		case strings.Contains(m, "NVR") || strings.Contains(m, "DVR") || strings.HasPrefix(m, "DS-7") || strings.HasPrefix(m, "DS-8") || strings.HasPrefix(m, "DS-9"):
+		case strings.Contains(m, "DVR") || strings.Contains(m, "HGHI") || strings.Contains(m, "HQHI") || strings.Contains(m, "HUHI"):
+			out = append(out, ev(domain.EvidenceSourceISAPI, "model="+model, string(domain.CatDVR), domain.OSFamilyEmbedded, "dvr", 70))
+		case strings.Contains(m, "NVR") || strings.HasPrefix(m, "DS-7") || strings.HasPrefix(m, "DS-8") || strings.HasPrefix(m, "DS-9"):
 			out = append(out, ev(domain.EvidenceSourceISAPI, "model="+model, string(domain.CatNVR), domain.OSFamilyEmbedded, "nvr", 70))
 		case strings.HasPrefix(m, "DS-2CD") || strings.HasPrefix(m, "DS-2DE"):
 			out = append(out, ev(domain.EvidenceSourceISAPI, "model="+model, string(domain.CatCamera), domain.OSFamilyEmbedded, "ip_camera", 65))
@@ -109,13 +116,21 @@ func WebVendorMarkers(server, title, body string) []domain.ClassificationEvidenc
 	switch {
 	case strings.Contains(s, "vmware") || strings.Contains(s, "esxi") || strings.Contains(s, "vsphere") || strings.Contains(s, "id_eesx"):
 		return []domain.ClassificationEvidence{ev(domain.EvidenceSourceHTTP, "VMware/ESXi web marker", string(domain.CatVirtualHost), "", "esxi", 55)}
-	case strings.Contains(s, "unifi") || strings.Contains(s, "aruba") || strings.Contains(s, "ruckus") ||
+	// Voice/PBX FIRST — must beat the wireless check below, because "Cisco Unified"
+	// contains the substring "unifi" and would otherwise false-match UniFi.
+	case strings.Contains(s, "cisco unified") || strings.Contains(s, "cucm") || strings.Contains(s, "callmanager") || strings.Contains(s, "unified cm"):
+		return []domain.ClassificationEvidence{ev(domain.EvidenceSourceHTTP, "Cisco CUCM web marker", string(domain.CatPBX), "", "cucm", 60)}
+	// Alcatel-Lucent Enterprise OmniSwitch is a LAN SWITCH (not a PBX). Match it
+	// specifically BEFORE the OmniPCX/OmniVista voice markers.
+	case strings.Contains(s, "omniswitch"):
+		return []domain.ClassificationEvidence{ev(domain.EvidenceSourceHTTP, "Alcatel OmniSwitch web marker", string(domain.CatSwitch), domain.OSFamilyNetwork, "alcatel_omniswitch", 60)}
+	case strings.Contains(s, "omnipcx") || strings.Contains(s, "omnivista"):
+		return []domain.ClassificationEvidence{ev(domain.EvidenceSourceHTTP, "Alcatel OmniPCX/OmniVista voice web marker", string(domain.CatPBX), "", "alcatel_voice", 50)}
+	// Wireless controllers. "unifi" is guarded against "unified" (Cisco Unified) —
+	// already handled above, but the guard keeps any other "unified…" string out.
+	case (strings.Contains(s, "unifi") && !strings.Contains(s, "unified")) || strings.Contains(s, "aruba") || strings.Contains(s, "ruckus") ||
 		strings.Contains(s, "extremecloud") || strings.Contains(s, "wireless controller") || strings.Contains(s, "omada"):
 		return []domain.ClassificationEvidence{ev(domain.EvidenceSourceHTTP, "wireless-controller web marker", string(domain.CatWirelessController), domain.OSFamilyNetwork, "", 55)}
-	case strings.Contains(s, "cisco unified") || strings.Contains(s, "cucm") || strings.Contains(s, "callmanager"):
-		return []domain.ClassificationEvidence{ev(domain.EvidenceSourceHTTP, "Cisco CUCM web marker", string(domain.CatPBX), "", "cucm", 55)}
-	case strings.Contains(s, "omnivista") || strings.Contains(s, "omnipcx") || strings.Contains(s, "alcatel"):
-		return []domain.ClassificationEvidence{ev(domain.EvidenceSourceHTTP, "Alcatel OmniPCX/OmniVista web marker", string(domain.CatPBX), "", "alcatel", 50)}
 	}
 	return nil
 }

@@ -14,6 +14,7 @@ INSERT INTO os_inventory (
     manufacturer, model, serial, asset_tag, bios_version, bios_date,
     cpu_model, cpu_sockets, cpu_cores, ram_total_bytes, ram_slots, swap_total_bytes,
     events_critical_24h, events_error_24h, events_warning_24h, last_critical_event,
+    software_note,
     updated_at
 ) VALUES (
     $1, $2, now(),
@@ -23,6 +24,7 @@ INSERT INTO os_inventory (
     $20, $21, $22, $23, $24, $25,
     $26, $27, $28, $29, $30, $31,
     $32, $33, $34, $35,
+    $36,
     now()
 )
 ON CONFLICT (device_id) DO UPDATE SET
@@ -42,6 +44,7 @@ ON CONFLICT (device_id) DO UPDATE SET
     swap_total_bytes = EXCLUDED.swap_total_bytes,
     events_critical_24h = EXCLUDED.events_critical_24h, events_error_24h = EXCLUDED.events_error_24h,
     events_warning_24h = EXCLUDED.events_warning_24h, last_critical_event = EXCLUDED.last_critical_event,
+    software_note = EXCLUDED.software_note,
     updated_at = now()
 RETURNING *;
 

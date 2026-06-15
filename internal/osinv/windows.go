@@ -95,6 +95,13 @@ func CollectWindows(ctx context.Context, r Runner) (Report, error) {
 	}
 	if out, err := r.Run(ctx, winSoftwarePS); err == nil {
 		rep.Software, _ = jsonArray[Software]([]byte(out))
+		if len(rep.Software) > 0 {
+			rep.SoftwareNote = "collected via winrm_registry"
+		} else {
+			rep.SoftwareNote = "registry_access_denied"
+		}
+	} else {
+		rep.SoftwareNote = "winrm_registry_failed: " + err.Error()
 	}
 	if out, err := r.Run(ctx, winEventsPS); err == nil {
 		var ev EventSummary

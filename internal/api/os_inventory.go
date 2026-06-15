@@ -116,6 +116,7 @@ func categorizeCollectErr(method, errStr string) (reason, detail string) {
 	switch {
 	case strings.Contains(e, "unable to authenticate") || strings.Contains(e, "permission denied") ||
 		strings.Contains(e, "unauthorized") || strings.Contains(e, "access is denied") ||
+		strings.Contains(e, "authentication") || // ISAPI surfaces "authentication rejected"
 		strings.Contains(e, "401") || strings.Contains(e, "403") || strings.Contains(e, "logon"):
 		return "auth_failed", "authentication rejected — check the bound credential"
 	case strings.Contains(e, "refused") || strings.Contains(e, "actively refused") || strings.Contains(e, "reset"):
@@ -126,6 +127,8 @@ func categorizeCollectErr(method, errStr string) (reason, detail string) {
 			return "connection_refused", "vSphere connection refused — check the vCenter/ESXi URL and that 443 is open"
 		case "onvif":
 			return "connection_refused", "ONVIF/HTTP connection refused — check the device address and that the HTTP port is open"
+		case "isapi":
+			return "connection_refused", "ISAPI connection refused — check the device address and that its HTTP/HTTPS port is open"
 		}
 		return "ssh_unreachable", "SSH connection refused on 22 — enable sshd / open the port"
 	case strings.Contains(e, "timeout") || strings.Contains(e, "deadline") || strings.Contains(e, "i/o timeout"):
@@ -136,12 +139,24 @@ func categorizeCollectErr(method, errStr string) (reason, detail string) {
 			return "vsphere_timeout", "vSphere timed out (host slow, firewalled, or 443 filtered)"
 		case "onvif":
 			return "onvif_timeout", "ONVIF timed out (host slow, firewalled, or HTTP port filtered)"
+		case "isapi":
+			return "isapi_timeout", "ISAPI timed out (host slow, firewalled, or HTTP/HTTPS port filtered)"
 		}
 		return "ssh_timeout", "SSH timed out (host slow, firewalled, or 22 filtered)"
 	case strings.Contains(e, "no route") || strings.Contains(e, "no such host") || strings.Contains(e, "unreachable"):
 		return "unreachable", "host unreachable from the collector"
+	case strings.Contains(e, "locked") || strings.Contains(e, "lockout") || strings.Contains(e, "too many") || (strings.Contains(e, "account") && strings.Contains(e, "lock")):
+		// Hikvision (and others) return an explicit lock message after repeated
+		// wrong logins. Surface it distinctly so the operator stops, not sprays.
+		return "lockout_suspected", "device reports the account is locked — wait for the lockout window before retrying"
+	case strings.Contains(e, "certificate") || strings.Contains(e, "x509") || strings.Contains(e, "tls:") || strings.Contains(e, "remote error: tls"):
+		return "tls_error", "TLS/certificate negotiation failed — legacy/self-signed cert or wrong scheme"
 	case strings.Contains(e, "kex") || strings.Contains(e, "handshake"):
 		return "handshake_failed", "SSH/TLS handshake failed (legacy algorithms?)"
+	case strings.Contains(e, "not exposed") || strings.Contains(e, "no endpoint answered") || strings.Contains(e, "404") || strings.Contains(e, "501"):
+		return "not_exposed", "the management endpoint is not exposed on the tried ports — check the device's web/API port"
+	case strings.Contains(e, "not a deviceinfo") || strings.Contains(e, "unsupported") || strings.Contains(e, "parse"):
+		return "unsupported_firmware", "the device answered but not with a recognised response — firmware may be unsupported or the wrong protocol"
 	default:
 		return "collection_error", strings.TrimSpace(errStr)
 	}
@@ -428,13 +443,13 @@ func (s *Server) tryWMIFallback(ctx context.Context, d db.Device, ip string, can
 	}
 	if reachable, cat, det := osinv.WMIProbeReachable(ctx, ip, 4*time.Second); !reachable {
 		// record a non-secret wmi attempt so history/coverage/DQ reflect it
-		s.persistScanCredAttempts(ctx, d, []discovery.CredAttempt{{Kind: domain.CredWMI, Protocol: "wmi", Success: false, Category: cat, Detail: det}})
+		s.persistScanCredAttempts(ctx, d, []discovery.CredAttempt{{Kind: domain.CredWMI, Protocol: "wmi", Success: false, Category: cat, Detail: det}}, "default")
 		return false, cat, det
 	}
 	for _, cd := range cands {
 		rep, err := osinv.CollectViaWMICollector(ctx, url, token, ip, cd.user, cd.pass, 120*time.Second)
 		cat, det := osinv.ClassifyWMIError(err)
-		s.persistScanCredAttempts(ctx, d, []discovery.CredAttempt{{CredentialID: cd.id, Kind: domain.CredWMI, Protocol: "wmi", Success: err == nil, Category: cat, Detail: det}})
+		s.persistScanCredAttempts(ctx, d, []discovery.CredAttempt{{CredentialID: cd.id, Kind: domain.CredWMI, Protocol: "wmi", Success: err == nil, Category: cat, Detail: det}}, "default")
 		if err != nil {
 			reason, detail = cat, det
 			continue

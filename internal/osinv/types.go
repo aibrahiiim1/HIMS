@@ -31,6 +31,11 @@ type Report struct {
 	Processes []Process     `json:"processes"`
 	Software  []Software    `json:"software"`
 	Events    *EventSummary `json:"events,omitempty"`
+	// SoftwareNote is the honest per-host software-collection status: empty when
+	// software was collected normally, else which method succeeded ("collected via
+	// remote_registry") or the exact blocker ("remote_registry_disabled", etc.).
+	// Surfaced in the device's Software section instead of a silent empty list.
+	SoftwareNote string `json:"software_note,omitempty"`
 }
 
 type Identity struct {

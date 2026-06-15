@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Radar, Boxes, CircleX, Clock, KeyRound } from 'lucide-react'
@@ -199,20 +199,35 @@ export function Discovery() {
 function NetworkScan({ locations, locPath, creds, onLaunch, setMsg }: { locations: Location[]; locPath: Record<string, string>; creds: Credential[]; onLaunch: (j: DiscoveryJob) => void; setMsg: (s: string) => void }) {
   const [mode, setMode] = useState<ScanMode>('cidr')
   const [targets, setTargets] = useState('')
+  const [exclude, setExclude] = useState('')
   const [location, setLocation] = useState('')
   const [credIDs, setCredIDs] = useState<string[]>([])
   const siteMode = mode === 'site_subnets'
   const canScan = siteMode ? !!location : !!targets.trim()
+  // Exclude only makes sense for multi-host scopes (range / CIDR / site subnets).
+  const showExclude = mode === 'range' || mode === 'cidr' || siteMode
 
   const scan = useMutation({
     mutationFn: () => api.post<DiscoveryJob>('/discovery/scan', {
       mode: siteMode ? 'site_subnets' : 'targets', targets: siteMode ? '' : targets.trim(),
-      location_id: location || null, credential_ids: credIDs,
+      location_id: location || null, credential_ids: credIDs, exclude: exclude.trim(),
     }),
-    onSuccess: (j) => { setTargets(''); onLaunch(j as DiscoveryJob); setMsg('Scan launched — see Jobs.') },
+    onSuccess: (j) => { setTargets(''); setExclude(''); onLaunch(j as DiscoveryJob); setMsg('Scan launched — see Jobs.') },
     onError: (e) => setMsg((e as Error).message),
   })
   const toggleCred = (id: string) => setCredIDs((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]))
+
+  // Lockout hint: the scan tries each selected ONVIF/HTTP-Basic credential on every
+  // camera/NVR in scope, so picking many of the same kind risks a Hikvision IP
+  // lockout on hosts where none match. Non-blocking — just informs.
+  const webOverLimit = useMemo(() => {
+    const byKind: Record<string, number> = {}
+    for (const id of credIDs) {
+      const c = creds.find((x) => x.id === id)
+      if (c && (c.kind === 'http_basic' || c.kind === 'onvif')) byKind[c.kind] = (byKind[c.kind] || 0) + 1
+    }
+    return Object.entries(byKind).filter(([, n]) => n > 3).map(([k, n]) => `${n} ${k}`)
+  }, [credIDs, creds])
 
   // Preflight: what protocols we're equipped to authenticate with for this scope.
   const preflight = useQuery({
@@ -243,9 +258,25 @@ function NetworkScan({ locations, locPath, creds, onLaunch, setMsg }: { location
       </div>
       {siteMode && <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>{MODE_PH.site_subnets}</div>}
 
+      {showExclude && (
+        <div style={{ marginTop: 10 }}>
+          <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Exclude IPs (optional)</div>
+          <input style={{ ...input, width: 360 }} placeholder="e.g. 172.21.96.10, 172.21.96.20-25, 172.21.96.0/28" value={exclude} onChange={(e) => setExclude(e.target.value)} />
+          <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>Single IPs, ranges, or CIDRs (comma/space-separated) carved out of the scope above — those hosts are not scanned.</div>
+        </div>
+      )}
+
       <div style={{ marginTop: 12 }}>
         <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Credentials to try</div>
         <CredentialPicker creds={creds} selected={credIDs} onChange={setCredIDs} toggle={toggleCred} />
+        {webOverLimit.length > 0 && (
+          <div style={{ fontSize: 12, marginTop: 6, color: 'var(--warn, #d97706)' }}>
+            ⚠ {webOverLimit.join(', ')} credentials selected — the scan tries each on every camera/NVR until one works, which can trip a Hikvision IP lockout on hosts where none match.
+          </div>
+        )}
+        <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+          🔒 Subnet-scoped credentials apply where configured: an IP inside a site subnet that has assigned credentials (Locations → subnet → set creds) is tried with ONLY those, ignoring the selection above. Subnets with none assigned use this default/global selection.
+        </div>
       </div>
 
       {preflight.data && <ScanPreflightPanel pf={preflight.data} siteSelected={!!location} />}

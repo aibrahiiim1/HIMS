@@ -154,10 +154,10 @@ func (s *Server) runVSphereCollection(ctx context.Context, d db.Device) vsphereR
 			Hosts: len(inv.Hosts), VMs: len(inv.VMs), Datastores: len(inv.Datastores),
 			Detail: "collected via vSphere using credential " + cd.name,
 		}
-		s.persistScanCredAttempts(ctx, d, attempts)
+		s.persistScanCredAttempts(ctx, d, attempts, "default")
 		return res
 	}
-	s.persistScanCredAttempts(ctx, d, attempts)
+	s.persistScanCredAttempts(ctx, d, attempts, "default")
 	res.Reason, res.Detail = lastReason, lastDetail
 	return res
 }
@@ -194,7 +194,7 @@ func (s *Server) collectVSphereProfile(ctx context.Context, p db.VendorConnectio
 	s.persistScanCredAttempts(ctx, d, []discovery.CredAttempt{{
 		CredentialID: credID, Kind: kind, Protocol: "vmware",
 		Success: err == nil, Category: category, Detail: detail,
-	}})
+	}}, "default")
 	if err != nil {
 		out.Detail = "vSphere login failed: " + detail
 		return out

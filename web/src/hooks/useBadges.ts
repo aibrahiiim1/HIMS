@@ -11,7 +11,7 @@ interface DashboardData {
 // Device-derived badge counts, computed server-side so the sidebar never has to
 // download the full device list. missing_classification matches the Missing
 // Classification page; unmanaged matches the Unmanaged Devices page (proven-only).
-interface BadgeCountsData { missing_classification?: number; unmanaged?: number }
+interface BadgeCountsData { missing_classification?: number; unmanaged?: number; unmapped?: number }
 
 export type BadgeCounts = Partial<Record<BadgeKey, number>>
 
@@ -55,6 +55,7 @@ export function useBadges(): BadgeCounts {
     work_orders: headline.open_work_orders,
     unknown: counts.data?.missing_classification || undefined,
     unmanaged: counts.data?.unmanaged || undefined,
+    unmapped: counts.data?.unmapped || undefined,
     failed_scans: failed || undefined,
   }
 }

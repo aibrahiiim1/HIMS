@@ -6,6 +6,30 @@ import (
 	"github.com/coralsearesorts/hims/internal/domain"
 )
 
+// Web vendor markers must map each voice/switch family to the RIGHT category —
+// in particular Alcatel OmniSwitch is a LAN switch, NOT a PBX.
+func TestWebVendorMarkers_VoiceVsSwitch(t *testing.T) {
+	cases := []struct {
+		name, server, title, body, wantCat string
+	}{
+		{"cucm", "", "Cisco Unified CM Administration", "", string(domain.CatPBX)},
+		{"omniswitch", "", "OmniSwitch 6900", "Alcatel-Lucent Enterprise", string(domain.CatSwitch)},
+		{"omnipcx", "", "Alcatel OmniPCX Enterprise", "", string(domain.CatPBX)},
+		// Real banners captured from the live systems (120.0.200.10:8443 / 150.0.0.131:80)
+		// — these are the exact titles a scan now sees, so discovery auto-classifies
+		// them as pbx without a manual lock.
+		{"cucm-8443-real", "", "Cisco Unified CM Console", "", string(domain.CatPBX)},
+		{"cucm-body-only", "", "", "<html>cisco unified communications manager</html>", string(domain.CatPBX)},
+		{"omnipcx-real", "Apache", "OmniPCX for Enterprise", "", string(domain.CatPBX)},
+	}
+	for _, c := range cases {
+		got := WebVendorMarkers(c.server, c.title, c.body)
+		if len(got) == 0 || got[0].Category != c.wantCat {
+			t.Errorf("%s: WebVendorMarkers → %+v, want category %s", c.name, got, c.wantCat)
+		}
+	}
+}
+
 func TestFromEvidence_Empty(t *testing.T) {
 	r := FromEvidence(nil)
 	if r.Category != string(domain.CatUnknown) || r.Confidence != 0 {
@@ -30,10 +54,19 @@ func TestISAPI_NVRvsCamera(t *testing.T) {
 	if cam.Category != string(domain.CatCamera) {
 		t.Errorf("deviceType=IPCamera → %q, want camera", cam.Category)
 	}
-	// A DVR is also a recorder, not a camera.
+	// A DVR is a recorder too, but CCTV Phase 2 classifies it DISTINCTLY from an
+	// NVR (separate fleet-summary count), so deviceType=DVR → dvr.
 	dvr := FromEvidence(ISAPIDeviceInfo("DVR", ""))
-	if dvr.Category != string(domain.CatNVR) {
-		t.Errorf("deviceType=DVR → %q, want nvr", dvr.Category)
+	if dvr.Category != string(domain.CatDVR) {
+		t.Errorf("deviceType=DVR → %q, want dvr", dvr.Category)
+	}
+	if dvr.Subtype != "dvr" {
+		t.Errorf("DVR subtype = %q, want dvr", dvr.Subtype)
+	}
+	// A DVR model code (…HGHI…) corroborates dvr even without deviceType.
+	dvrModel := FromEvidence(ISAPIDeviceInfo("", "DS-7216HGHI-K1"))
+	if dvrModel.Category != string(domain.CatDVR) {
+		t.Errorf("model=DS-7216HGHI-K1 → %q, want dvr", dvrModel.Category)
 	}
 }
 

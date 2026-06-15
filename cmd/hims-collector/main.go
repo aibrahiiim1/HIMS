@@ -517,6 +517,10 @@ func (emptyFetcher) CredentialCandidates(_ context.Context, _ netip.Addr, _ *uui
 	return nil, nil
 }
 
+func (emptyFetcher) SubnetScopedCredentials(_ context.Context, _ netip.Addr, _ *uuid.UUID) ([]credresolver.CredRef, string, error) {
+	return nil, "", nil
+}
+
 func noDecrypt(context.Context, uuid.UUID) (discovery.DecryptedCred, error) {
 	return discovery.DecryptedCred{}, fmt.Errorf("no decrypt in one-shot mode")
 }

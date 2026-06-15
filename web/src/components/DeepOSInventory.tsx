@@ -29,7 +29,7 @@ function fmtUptime(s?: number | null): string {
 // Server detail page). This lets the generic device page surface deep inventory
 // for Windows workstations / Linux hosts that don't route through ServerDetail,
 // while staying hidden for switches/cameras/etc.
-export function DeepOSInventory({ deviceId, alwaysShow }: { deviceId: string; alwaysShow?: boolean }) {
+export function DeepOSInventory({ deviceId, alwaysShow, isVirtual }: { deviceId: string; alwaysShow?: boolean; isVirtual?: boolean }) {
   const qc = useQueryClient()
   const q = useQuery({ queryKey: ['os-inventory', deviceId], queryFn: () => api.get<OSInventoryBundle>(`/devices/${deviceId}/os-inventory`) })
   // Shared with ClassificationCard's query key — react-query dedupes the fetch.
@@ -54,7 +54,8 @@ export function DeepOSInventory({ deviceId, alwaysShow }: { deviceId: string; al
     return null // not an OS host and nothing collected → hide entirely
   }
 
-  const collectBtn = canCollect ? (
+  // Virtual (manually-modeled) devices are never probed — no Collect OS button.
+  const collectBtn = canCollect && !isVirtual ? (
     <button className="btn btn-sm" disabled={collect.isPending} onClick={() => collect.mutate()}>
       <RefreshCw size={13} /> {collect.isPending ? 'Collecting…' : inv ? 'Re-collect' : 'Collect OS'}
     </button>
@@ -75,10 +76,17 @@ export function DeepOSInventory({ deviceId, alwaysShow }: { deviceId: string; al
       {q.isLoading && <div className="loading">Loading…</div>}
 
       {b && !inv && (
-        <p className="muted" style={{ marginTop: 10 }}>
-          Not collected yet. Bind a working credential (WinRM for Windows, SSH for Linux) and click
-          <strong> Collect OS</strong> to gather OS, hardware, disks, network, services, processes and software.
-        </p>
+        isVirtual ? (
+          <p className="muted" style={{ marginTop: 10 }}>
+            Manually modeled virtual device — OS, hardware, disks, network and software are maintained manually.
+            Use <strong>Edit virtual device</strong> in the header to update them.
+          </p>
+        ) : (
+          <p className="muted" style={{ marginTop: 10 }}>
+            Not collected yet. Bind a working credential (WinRM for Windows, SSH for Linux) and click
+            <strong> Collect OS</strong> to gather OS, hardware, disks, network, services, processes and software.
+          </p>
+        )
       )}
 
       {b && inv && (
@@ -136,11 +144,13 @@ export function DeepOSInventory({ deviceId, alwaysShow }: { deviceId: string; al
           <PagedSection title="Top processes" items={b.processes}
             head={<tr><th>Process</th><th>PID</th><th>Memory</th><th>CPU%</th></tr>}
             match={(p, q) => p.name.toLowerCase().includes(q)}
+            emptyNote={inv ? `Not reported via ${inv.collection_method} collection on the last run.` : undefined}
             row={(p) => <tr key={p.pid}><td>{p.name}</td><td>{p.pid}</td><td>{fmtBytes(p.mem_bytes)}</td><td>{p.cpu_pct ?? '—'}</td></tr>} />
 
           <PagedSection title="Installed software" items={b.software}
             head={<tr><th>Name</th><th>Version</th><th>Publisher</th></tr>}
             match={(sw, q) => (sw.name || '').toLowerCase().includes(q) || (sw.publisher || '').toLowerCase().includes(q)}
+            emptyNote={inv?.software_note ? `Software not collected — ${inv.software_note}` : inv ? `Not reported via ${inv.collection_method} collection — some hosts don't expose the installed-software registry over WMI/WinRM (e.g. legacy WSMan). Re-collect after enabling remote registry, or collect over direct WinRM.` : undefined}
             row={(sw, i) => <tr key={i}><td>{sw.name}</td><td>{sw.version || '—'}</td><td className="muted" style={{ fontSize: 12 }}>{sw.publisher || ''}</td></tr>} />
         </>
       )}
@@ -160,13 +170,14 @@ function Section({ title, empty, children }: { title: string; empty: boolean; ch
 // PagedSection renders a large collection (services/processes/software) with a
 // filter box + client-side pagination so the DOM stays small and the page
 // doesn't become an endless scroll. Collapsed by default when empty.
-function PagedSection<T>({ title, items, head, row, match, pageSize = 10 }: {
+function PagedSection<T>({ title, items, head, row, match, pageSize = 10, emptyNote }: {
   title: string
   items: T[]
   head: React.ReactNode
   row: (it: T, i: number) => React.ReactNode
   match?: (it: T, q: string) => boolean
   pageSize?: number
+  emptyNote?: string
 }) {
   const [filter, setFilter] = useState('')
   const { slice, total, page, pages, setPage } = usePaged(items, { pageSize, filter, match })
@@ -174,7 +185,7 @@ function PagedSection<T>({ title, items, head, row, match, pageSize = 10 }: {
     <details style={{ marginTop: 12 }} open={items.length > 0}>
       <summary style={{ cursor: 'pointer', fontWeight: 600 }}>{title} ({items.length})</summary>
       <div style={{ marginTop: 8 }}>
-        {items.length === 0 ? <span className="muted">Not collected yet.</span> : (
+        {items.length === 0 ? <span className="muted">{emptyNote || 'Not collected yet.'}</span> : (
           <>
             {match && (
               <input

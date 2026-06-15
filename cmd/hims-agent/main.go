@@ -214,7 +214,10 @@ func (a *agent) runJob(j job) {
 
 // collect runs one device collection locally and returns an osinv.Report.
 func collect(j job) (*osinv.Report, string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	// 4 min: the WMI/CIM identity+services+disks+nics pass is quick, but the
+	// installed-software registry walk (StdRegProv EnumKey + per-value GetStringValue
+	// across the Uninstall keys) is many small round-trips and dominates the time.
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 	switch j.Protocol {
 	case "winrm":
@@ -246,16 +249,118 @@ func collectWMI(ctx context.Context, j job) (*osinv.Report, string, error) {
 	script := `$ErrorActionPreference='Stop'
 $u=$env:HIMS_J_USER; $p=ConvertTo-SecureString $env:HIMS_J_PASS -AsPlainText -Force
 $c=New-Object System.Management.Automation.PSCredential($u,$p); $t=$env:HIMS_J_TARGET
-$g={param($cls) Get-WmiObject -ComputerName $t -Credential $c -Class $cls -ErrorAction Stop}
+# Primary: WMI/DCOM (Get-WmiObject over RPC/135). Fallback: when DCOM is dead
+# ("RPC server unavailable") but WinRM (5985) is up, collect the SAME CIM classes
+# over a WSMan CIM session — different transport, identical property names — so a
+# host with WMI/DCOM blocked but WinRM open still inventories. CIM classes match
+# Win32_* property names, so the rest of the script is unchanged.
+$sess=$null
+$probe=$null
+$useCim=$false
+try { $probe=Get-WmiObject -ComputerName $t -Credential $c -Class Win32_OperatingSystem -ErrorAction Stop } catch { $sess='cim' }
+if($sess -eq 'cim'){
+  $opt=New-CimSessionOption -Protocol Wsman
+  $sess=New-CimSession -ComputerName $t -Credential $c -SessionOption $opt -OperationTimeoutSec 60 -ErrorAction Stop
+  $g={param($cls) Get-CimInstance -CimSession $sess -ClassName $cls -ErrorAction Stop}
+  $useCim=$true
+} else {
+  $g={param($cls) Get-WmiObject -ComputerName $t -Credential $c -Class $cls -ErrorAction Stop}
+}
 $os=&$g Win32_OperatingSystem; $cs=&$g Win32_ComputerSystem; $bios=&$g Win32_BIOS; $cpu=@(&$g Win32_Processor)
 $cores=($cpu|Measure-Object NumberOfCores -Sum).Sum; if(-not $cores){$cores=($cpu|Measure-Object NumberOfLogicalProcessors -Sum).Sum}
 $disks=@(&$g Win32_LogicalDisk|?{$_.DriveType -eq 3}|%{@{name=$_.DeviceID;filesystem=$_.FileSystem;total_bytes=[int64]$_.Size;free_bytes=[int64]$_.FreeSpace;size_bytes=[int64]$_.Size}})
 $nics=@(&$g Win32_NetworkAdapterConfiguration|?{$_.IPEnabled}|%{@{name=$_.Description;mac=$_.MACAddress;ip_addresses=(@($_.IPAddress)-join',');gateway=(@($_.DefaultIPGateway)-join',');dns_servers=(@($_.DNSServerSearchOrder)-join',');dhcp_enabled=[bool]$_.DHCPEnabled}})
 $svc=@(&$g Win32_Service|%{@{name=$_.Name;display_name=$_.DisplayName;status=$_.State;start_type=$_.StartMode;account=$_.StartName}})
+# Top processes by working set. Win32_Process works over BOTH transports (WMI/DCOM
+# and the WSMan CIM session), unlike Get-Process which is local-only — so this
+# populates for agent-collected hosts the same as the direct-WinRM path does.
+$procs=@(); try { $procs=@(&$g Win32_Process | Sort-Object WorkingSetSize -Descending | Select-Object -First 50 | %{@{name=$_.Name;pid=[int]$_.ProcessId;mem_bytes=[int64]$_.WorkingSetSize}}) } catch {}
+# Installed software from the HKLM Uninstall registry. Win32_Product is deliberately
+# NOT used — it is slow and triggers MSI self-repair. A fallback chain is walked and
+# the method that worked (or the precise blocker) is recorded in $swnote, surfaced in
+# the device's Software section instead of a silent empty list:
+#   1/2. In-band per transport — Invoke-Command Get-ItemProperty over WinRM (CIM/WSMan
+#        hosts), or StdRegProv via Invoke-WmiMethod over DCOM (WMI hosts).
+#   3.   Remote Registry over SMB — when the in-band read yields nothing, authenticate
+#        an SMB session and read the Uninstall hive over the winreg pipe. If the
+#        RemoteRegistry service is stopped/disabled it is temporarily enabled+started
+#        and then restored to its prior state (never left changed silently).
+$sw=@()
+$swnote=''
+try {
+  if($useCim){
+    # WSMan path: the host speaks WinRM, so read the Uninstall registry with native
+    # PS remoting (Get-ItemProperty runs locally on the target) — more reliable than
+    # StdRegProv method-invocation over WSMan on legacy stacks.
+    $items=Invoke-Command -ComputerName $t -Credential $c -ScriptBlock {
+      Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*','HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
+      Where-Object{$_.DisplayName} | ForEach-Object{[pscustomobject]@{n=[string]$_.DisplayName;v=[string]$_.DisplayVersion;p=[string]$_.Publisher;d=[string]$_.InstallDate}} } -ErrorAction Stop
+    $sw=@($items|%{@{name=$_.n;version=$_.v;publisher=$_.p;install_date=$_.d}})
+    if($sw.Count -gt 0){$swnote='collected via winrm_invoke'}
+  } else {
+    # DCOM path: no WinRM, so read the registry remotely via StdRegProv over WMI.
+    $HKLM=[uint32]2147483650
+    $ek={param($k) (Invoke-WmiMethod -ComputerName $t -Credential $c -Namespace 'root\default' -Class StdRegProv -Name EnumKey -ArgumentList $HKLM,$k).sNames}
+    $gv={param($k,$v) (Invoke-WmiMethod -ComputerName $t -Credential $c -Namespace 'root\default' -Class StdRegProv -Name GetStringValue -ArgumentList $HKLM,$k,$v).sValue}
+    foreach($base in @('SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall','SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall')){
+      $subs=&$ek $base
+      if($subs){ foreach($s in $subs){ $kp="$base\$s"; $dn=&$gv $kp 'DisplayName'
+        if($dn){ $sw+=@{name=[string]$dn;version=[string](&$gv $kp 'DisplayVersion');publisher=[string](&$gv $kp 'Publisher');install_date=[string](&$gv $kp 'InstallDate')} } } }
+    }
+    if($sw.Count -gt 0){$swnote='collected via wmi_stdregprov'}
+  }
+} catch { $swnote=('inband_failed: '+$_.Exception.Message) }
+# Remote Registry over SMB fallback when the in-band method returned no software.
+if($sw.Count -eq 0){
+  $rrStarted=$false; $rrWasDisabled=$false; $mapped=$false
+  try {
+    New-SmbMapping -RemotePath ("\\"+$t+"\IPC$") -UserName $u -Password $env:HIMS_J_PASS -ErrorAction Stop | Out-Null
+    $mapped=$true
+    $qc=(& sc.exe ("\\"+$t) qc RemoteRegistry) 2>&1 | Out-String
+    if($qc -match 'FAILED 1060' -or $qc -match 'does not exist'){ throw 'remote_registry_absent' }
+    if($qc -match 'START_TYPE\s*:\s*4'){ $rrWasDisabled=$true }
+    $qs=(& sc.exe ("\\"+$t) query RemoteRegistry) 2>&1 | Out-String
+    if($qs -notmatch 'STATE\s*:\s*4'){
+      if($rrWasDisabled){ (& sc.exe ("\\"+$t) config RemoteRegistry start= demand) | Out-Null }
+      (& sc.exe ("\\"+$t) start RemoteRegistry) | Out-Null
+      $rrStarted=$true
+      Start-Sleep -Milliseconds 1500
+      $qs2=(& sc.exe ("\\"+$t) query RemoteRegistry) 2>&1 | Out-String
+      if($qs2 -notmatch 'STATE\s*:\s*4'){ throw 'service_start_failed' }
+    }
+    $rk=[Microsoft.Win32.RegistryKey]::OpenRemoteBaseKey('LocalMachine',$t)
+    foreach($bp in @('SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall','SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall')){
+      $uk=$rk.OpenSubKey($bp)
+      if($uk){ foreach($sn in $uk.GetSubKeyNames()){ $k2=$uk.OpenSubKey($sn)
+        if($k2){ $dn=$k2.GetValue('DisplayName')
+          if($dn){ $sw+=@{name=[string]$dn;version=[string]$k2.GetValue('DisplayVersion');publisher=[string]$k2.GetValue('Publisher');install_date=[string]$k2.GetValue('InstallDate')} }
+          $k2.Close() } }
+        $uk.Close() }
+    }
+    $rk.Close()
+    $restored=''
+    if($rrStarted){ (& sc.exe ("\\"+$t) stop RemoteRegistry) | Out-Null; $restored=' (RemoteRegistry temporarily started, then stopped'
+      if($rrWasDisabled){ (& sc.exe ("\\"+$t) config RemoteRegistry start= disabled) | Out-Null; $restored+=' and re-disabled' }
+      $restored+=')' }
+    if($sw.Count -gt 0){ $swnote=('collected via remote_registry'+$restored) }
+    else { $swnote='registry_access_denied' }
+  } catch {
+    $m=[string]$_; if($_.Exception){ $m=$_.Exception.Message }
+    try { if($rrStarted){ (& sc.exe ("\\"+$t) stop RemoteRegistry) | Out-Null; if($rrWasDisabled){ (& sc.exe ("\\"+$t) config RemoteRegistry start= disabled) | Out-Null } } } catch {}
+    if($m -match 'remote_registry_absent'){ $swnote='remote_registry_disabled' }
+    elseif($m -match 'service_start_failed'){ $swnote='service_start_failed' }
+    elseif($m -match 'Access is denied|denied|1219|1326'){ $swnote=('access_denied: '+$m) }
+    elseif($m -match '53|54|64|unreachable|RPC|network path'){ $swnote=('rpc_unreachable: '+$m) }
+    else { $swnote=('remote_registry_failed: '+$m) }
+  } finally {
+    if($mapped){ try { Remove-SmbMapping -RemotePath ("\\"+$t+"\IPC$") -Force -ErrorAction SilentlyContinue | Out-Null } catch {} }
+  }
+}
+if($swnote -eq '' -and $sw.Count -eq 0){ $swnote='no_software_method_succeeded' }
 @{ method='wmi'; identity=@{hostname=$os.CSName;fqdn=("{0}.{1}" -f $cs.Name,$cs.Domain).TrimEnd('.');domain=$cs.Domain;workgroup=$cs.Workgroup;logged_on_user=$cs.UserName};
    os=@{caption=$os.Caption;version=$os.Version;build="$($os.BuildNumber)";arch=$os.OSArchitecture;install_date="$($os.InstallDate)";last_boot="$($os.LastBootUpTime)"};
    hardware=@{manufacturer=$cs.Manufacturer;model=$cs.Model;serial=$bios.SerialNumber;bios_version=(@($bios.SMBIOSBIOSVersion)-join' ');cpu_model=$cpu[0].Name;cpu_sockets=$cpu.Count;cpu_cores=[int]$cores;ram_total_bytes=[int64]$cs.TotalPhysicalMemory};
-   disks=$disks; nics=$nics; services=$svc; software=@(); roles=@(); events=$null } | ConvertTo-Json -Depth 8 -Compress`
+   disks=$disks; nics=$nics; services=$svc; software=$sw; processes=$procs; roles=@(); events=$null; software_note=$swnote } | ConvertTo-Json -Depth 8 -Compress`
 	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
 	// Strip any inherited PSModulePath so Windows PowerShell 5.1 uses its own
 	// default module locations. A PSModulePath pointing at PowerShell 7 modules

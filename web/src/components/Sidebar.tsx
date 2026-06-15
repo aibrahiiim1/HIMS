@@ -9,6 +9,7 @@ const BADGE_TONE: Record<BadgeKey, string> = {
   failed_scans: 'tone-warn',
   unknown: 'tone-neutral',
   unmanaged: 'tone-warn',
+  unmapped: 'tone-warn',
   work_orders: 'tone-info',
 }
 

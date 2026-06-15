@@ -168,6 +168,7 @@ func buildOSInventoryParams(deviceID uuid.UUID, rep Report) db.UpsertOSInventory
 		CpuModel: ptr(rep.Hardware.CPUModel), CpuSockets: ptr32(rep.Hardware.CPUSockets),
 		CpuCores: ptr32(rep.Hardware.CPUCores), RamTotalBytes: ptr64(rep.Hardware.RAMTotalBytes),
 		RamSlots: ptr32(rep.Hardware.RAMSlots), SwapTotalBytes: ptr64(rep.Hardware.SwapTotalBytes),
+		SoftwareNote: rep.SoftwareNote,
 	}
 	if rep.Events != nil {
 		p.EventsCritical24h = ptr32(rep.Events.Critical24h)

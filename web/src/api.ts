@@ -149,6 +149,7 @@ export interface Device {
   status: string
   driver?: string | null
   credential_id?: string | null // bound credential (null = none); see PUT /devices/{id}/credential
+  cctv_credential_id?: string | null // CCTV (ONVIF/ISAPI) web credential, kept separate so SNMP can't overwrite it
   location_id?: string | null
   last_discovery_at?: string | null
   vlan?: string | null
@@ -169,6 +170,98 @@ export interface Device {
   classification_locked?: boolean // manual identity lock — scans won't overwrite
   manual_classification_reason?: string
   confidence_score?: number | null
+  is_virtual?: boolean // operator-entered placeholder (not auto-discovered/probed)
+}
+
+// Virtual device create/import payloads — operator-entered placeholders for gear
+// HIMS can't integrate with. The full config is stored in the same tables a real
+// collection fills, so the device renders everywhere with a "virtual" badge.
+export interface VirtualPort {
+  if_index: number
+  name?: string
+  alias?: string
+  up?: boolean
+  admin_down?: boolean
+  speed_mbps?: number
+  vlan?: number
+  trunk_vlans?: number[]
+  role?: string // access | trunk | uplink | unknown
+  mac?: string
+}
+export interface VirtualVlan { id: number; name?: string }
+export interface VirtualNeighbor {
+  local_port?: string
+  local_if_index?: number
+  remote_name?: string
+  remote_port?: string
+  remote_mgmt_ip?: string
+  protocol?: string // lldp | cdp | manual
+}
+export interface VirtualMac { mac: string; vlan?: number; if_index?: number }
+export interface VirtualNic { name?: string; mac?: string; ip?: string; gateway?: string; dns?: string; zone?: string; speed_mbps?: number }
+export interface VirtualDisk { name?: string; model?: string; filesystem?: string; total_bytes?: number; used_bytes?: number; free_bytes?: number }
+export interface VirtualSoftware { name?: string; version?: string; publisher?: string }
+export interface VirtualVpn { name?: string; p1_name?: string; remote_gw?: string; status?: string }
+export interface VirtualHA { serial?: string; hostname?: string; sync_status?: string }
+export interface VirtualLicense { contract?: string; expiry?: string }
+export interface VirtualFirewall { ha_mode?: string; ha_group_name?: string; session_count?: number }
+export interface VirtualWlan { vendor?: string; version?: string; controller_name?: string; model?: string; serial?: string }
+export interface VirtualAP { name?: string; mac?: string; model?: string; ip?: string; status?: string; serial?: string; band?: string; site?: string }
+export interface VirtualSSID { name?: string; security?: string; band?: string; vlan?: string; status?: string }
+export interface VirtualClient { mac?: string; ip?: string; hostname?: string; ap_name?: string; ssid?: string; band?: string }
+export interface VirtualUPS { manufacturer?: string; model?: string; battery_status?: string; charge_pct?: number; runtime_min?: number; load_pct?: number }
+
+export interface VirtualDeviceReq {
+  name: string
+  category: string
+  vendor?: string
+  model?: string
+  serial?: string
+  os_version?: string
+  hostname?: string
+  primary_ip?: string
+  location_id?: string | null
+  vlan?: string
+  class?: string
+  status?: string // up | down | warning | unknown
+  site?: string
+  notes?: string
+  criticality?: string
+  // switch / generic L2
+  ports?: VirtualPort[]
+  vlans?: VirtualVlan[]
+  neighbors?: VirtualNeighbor[]
+  macs?: VirtualMac[]
+  // server / workstation
+  nics?: VirtualNic[]
+  disks?: VirtualDisk[]
+  roles?: string[]
+  software?: VirtualSoftware[]
+  // firewall
+  firewall?: VirtualFirewall
+  vpn_tunnels?: VirtualVpn[]
+  ha_members?: VirtualHA[]
+  licenses?: VirtualLicense[]
+  // wireless controller
+  wlan?: VirtualWlan
+  aps?: VirtualAP[]
+  ssids?: VirtualSSID[]
+  clients?: VirtualClient[]
+  // ups
+  ups?: VirtualUPS
+  // scalar specs / notes (cpu, ram, capacity, …)
+  facts?: Record<string, string>
+}
+
+// Multi-device Excel import report (per-row errors + counts).
+export interface VirtualImportError { sheet: string; row: number; field?: string; message: string }
+export interface VirtualImportReport {
+  created: number
+  updated: number
+  skipped: number
+  failed: number
+  devices?: string[]
+  errors?: VirtualImportError[]
 }
 
 // Fleet rollup (GET /devices/status-summary) — Online and Managed kept separate.
@@ -191,6 +284,7 @@ export const REACH_BADGE: Record<string, { label: string; cls: string }> = {
 export const MGMT_BADGE: Record<string, { label: string; cls: string }> = {
   managed: { label: 'Managed', cls: 'badge-up' },
   partially_managed: { label: 'Partially managed', cls: 'badge-warning' },
+  virtual: { label: 'Manual', cls: 'badge-virtual' },
   unmanaged: { label: 'Unmanaged', cls: 'badge-unknown' },
   needs_credential: { label: 'Needs credential', cls: 'badge-warning' },
   credential_failed: { label: 'Credential failed', cls: 'badge-down' },
@@ -280,8 +374,8 @@ export interface Neighbor {
 }
 
 export interface TopologyLink {
-  local_device_id: string
-  local_device_name: string
+  local_device_id?: string
+  local_device_name?: string
   local_ip?: string | null
   local_if_index?: number | null
   local_if_name?: string | null
@@ -289,7 +383,14 @@ export interface TopologyLink {
   remote_device_name?: string | null
   remote_ip?: string | null
   remote_sys_name?: string | null
+  remote_vendor?: string | null
+  remote_category?: string | null
+  remote_port?: string | null
+  // inbound=true: link was derived from the neighbour's side (e.g. a MAC/FDB
+  // cross-vendor uplink); this device's own local port is unknown.
+  inbound?: boolean
   link_source: string
+  last_seen_at?: string
 }
 
 export interface TopologyGraphNode {
@@ -319,10 +420,19 @@ export interface SwitchPortEntry {
   switch_ip?: string | null
   if_index?: number | null
   if_name?: string | null
+  if_alias?: string | null // port description (e.g. "ROOM_4105_AP")
   vlan_id: number
+  // Authoritative per-port VLAN membership (from the switch's port-VLAN table).
+  untagged_vlan?: number | null // native/access VLAN
+  untagged_vlan_name?: string | null
+  tagged_vlans?: number[] | null // trunked VLANs
+  vlan_configured?: boolean // FDB VLAN is a real 802.1Q VLAN configured on the switch
+  vlan_suspect?: boolean // switch HAS VLANs but this FDB VLAN isn't one (FdbId artifact)
+  vlan_name?: string | null // configured VLAN name when known
   port_role?: string | null
   source?: string | null
   last_seen_at?: string | null
+  mac_count?: number | null // MACs learned on this port (low = true edge attachment)
 }
 
 export interface SearchResult {
@@ -339,8 +449,48 @@ export interface SearchResult {
   arp_last_seen?: string | null
   confidence: string
   confidence_reasons: string[]
+  // Set only when the searched endpoint is a Wi-Fi client: the path then starts at
+  // the AP the client is associated to (client → AP → controller → wired uplink).
+  wireless?: WirelessTrace | null
+  // Set when the searched device is a camera or NVR: the recorder(s) a camera feeds
+  // or an NVR's channel totals.
+  cctv?: CctvTrace | null
+  // Set when the searched IP belongs to an IP phone: directory number + registrar.
+  voice?: VoiceTrace | null
 }
 
+// One NVR/DVR that records a camera.
+export interface CctvRecorder {
+  nvr_device_id: string
+  nvr_name: string
+  nvr_ip?: string
+  channel_no: number
+  status?: string
+}
+
+// A CCTV device's recording relationship — a camera's recorder(s), or an NVR's channels.
+export interface CctvTrace {
+  is_nvr?: boolean
+  channel_total?: number
+  channel_linked?: number
+  recorded_by?: CctvRecorder[]
+}
+
+// An IP phone found at the searched IP — directory number + where it registers.
+export interface VoiceTrace {
+  extension?: string
+  device_name?: string
+  model?: string
+  description?: string
+  registration?: string
+  registrar?: string
+  pbx_device_id?: string | null
+  pbx_name?: string
+}
+
+// PathStep.role values:
+//   wireless_client | ap | wireless_controller | endpoint | access | uplink |
+//   distribution | core | gateway | firewall
 export interface PathStep {
   hop: number
   role: string
@@ -352,6 +502,107 @@ export interface PathStep {
   vlan_id?: number | null
   port_role?: string | null
   source?: string | null
+}
+
+// A searched endpoint's wireless association (client → AP → controller).
+export interface WirelessTrace {
+  client_mac?: string
+  client_ip?: string | null
+  hostname?: string | null
+  ssid?: string | null
+  band?: string | null
+  rssi?: number | null
+  ap_name?: string
+  ap_mac?: string | null
+  ap_ip?: string | null
+  controller_device_id?: string | null
+  controller_name?: string | null
+}
+
+// Unified global-search hit — a MAC/IP/name observed anywhere (access point,
+// wireless client, bridge FDB, ARP table) linked back to the device that owns it.
+export interface EntityHit {
+  kind: 'access_point' | 'wireless_client' | 'nvr_channel' | 'phone' | 'fdb' | 'arp'
+  title: string
+  subtitle: string
+  ip?: string
+  mac?: string
+  device_id?: string
+  device_name?: string
+  device_category?: string
+}
+
+export interface SearchEntities {
+  query: string
+  total: number
+  access_points: EntityHit[]
+  wireless_clients: EntityHit[]
+  nvr_channels: EntityHit[]
+  phones: EntityHit[]
+  fdb: EntityHit[]
+  arp: EntityHit[]
+}
+
+// CCTV inventory breakdown (GET /cctv/summary): NVRs vs DVRs vs standalone
+// cameras (devices), with camera channels reported separately (not devices).
+export interface CCTVSummary {
+  nvrs: number
+  dvrs: number
+  cameras: number
+  recorders: number
+  devices_total: number
+  channels: number
+  channels_linked: number
+  // Management breakdown: managed_total = managed_direct + managed_via_recorder.
+  // "direct" = device has its own proven ONVIF/ISAPI/HTTP credential; "via_recorder"
+  // = a camera that is an NVR/DVR channel (managed through the recorder, no own login).
+  managed_total: number
+  managed_direct: number
+  managed_via_recorder: number
+  unmanaged: number
+  auth_failed: number
+  no_credential: number
+  other_unmanaged: number
+  recorders_managed: number
+}
+
+// GET /devices/{id}/recorders — the NVR/DVR(s) recording a given camera.
+export interface CameraRecorder {
+  nvr_device_id: string
+  nvr_name: string
+  nvr_ip: string
+  channel_no: number
+  status: string
+}
+
+// One device's outcome in a fleet-wide CCTV collection.
+export interface CCTVFleetItem {
+  device_id: string
+  name: string
+  ip: string
+  was_category: string
+  now_category: string
+  status: 'collected' | 'failed'
+  outcome: 'collected' | 'auth' | 'lockout' | 'unsupported' | 'unreachable' | 'no_credential' | 'skipped' | 'error' | string
+  detail: string
+  channels: number
+  storage: number
+}
+
+export interface CCTVFleetRun {
+  running: boolean
+  started_at: string
+  finished_at?: string
+  total: number
+  done: number
+  collected: number
+  failed: number
+  skipped: number
+  nvrs: number
+  dvrs: number
+  cameras: number
+  channels: number
+  items: CCTVFleetItem[]
 }
 
 export interface ServerStorage {
@@ -539,6 +790,12 @@ export interface PhoneExtension {
   model?: string | null
   description?: string | null
   device_pool?: string | null
+  extension?: string | null
+  mac_address?: string | null
+  ip_address?: string | null
+  registration?: string | null
+  collection_source?: string | null
+  last_seen_at?: string | null
 }
 
 export interface BMCInfo {
@@ -575,6 +832,10 @@ export interface DiscoveryJob {
   scanned_count?: number // hosts processed so far (drives the 0→100% scan progress bar)
   error?: string | null
   created_at: string
+  // What was scanned, decoded from the job's saved scan spec (metadata):
+  mode?: string // 'targets' | 'site_subnets' | ''
+  targets?: string // raw target list (IP / range / CIDR / mixed) for target-mode scans
+  scope?: string // human-readable scope label (targets || scope_cidr || 'site subnets' || 'import / manual')
 }
 
 export interface ScanCredAttempt { kind: string; protocol: string; category: string; detail: string; success: boolean; relevant?: boolean }
@@ -941,6 +1202,17 @@ export interface CameraInfo {
   resolution?: string | null
   rtsp_url?: string | null
   onvif_url?: string | null
+  // enrichment (ISAPI): NIC + firmware/serial + time
+  device_name?: string | null
+  firmware?: string | null
+  serial?: string | null
+  mac_address?: string | null
+  ip_address?: string | null
+  subnet_mask?: string | null
+  gateway?: string | null
+  dns_server?: string | null
+  ntp_server?: string | null
+  time_zone?: string | null
 }
 
 export interface NVRChannel {
@@ -949,7 +1221,49 @@ export interface NVRChannel {
   channel_no: number
   camera_name?: string | null
   camera_ip?: string | null
+  camera_device_id?: string | null
   status: string
+  enabled?: boolean
+  recording?: boolean | null // true/false = recording on/off; null = not reported
+  resolution?: string // analog signal descriptor, e.g. "1080P25"; "" = no signal
+  last_seen_at?: string
+}
+
+// Recorder identity (nvr_info) — model/serial/firmware/deviceType + counts +
+// recording/health summaries (empty string = not exposed by the device firmware).
+export interface NVRInfo {
+  device_id: string
+  manufacturer?: string | null
+  model?: string | null
+  serial?: string | null
+  firmware?: string | null
+  device_type?: string | null
+  channel_count: number
+  hdd_count: number
+  recording: string
+  health: string
+  source: string
+  collected_at?: string
+}
+
+export interface NVRStorage {
+  id: string
+  nvr_device_id: string
+  hdd_id: number
+  name?: string | null
+  status: string
+  capacity_mb: number
+  free_mb: number
+  property: string
+  source: string
+  last_seen_at?: string
+}
+
+// GET /devices/{id}/nvr aggregate.
+export interface NVRDetail {
+  info?: NVRInfo | null
+  channels: NVRChannel[]
+  storage: NVRStorage[]
 }
 
 export interface VirtualMachine {
@@ -973,6 +1287,55 @@ export interface Credential {
   kind: string
   weak: boolean
   created_at: string
+  usage_count?: number // distinct devices bound to this credential (primary or CCTV)
+}
+
+// One device that uses a credential, from GET /credentials/{id}/devices.
+export interface CredentialDevice {
+  id: string
+  name: string
+  primary_ip: string
+  category: string
+  status: string
+  bound_primary: boolean // bound as the device's main management credential
+  bound_cctv: boolean    // bound as the device's CCTV web credential
+}
+
+// Fleet-wide HTTP/Web candidate port (Settings → Web Ports). Used by the scan +
+// HTTP/ISAPI/ONVIF collectors so custom web ports (8008/8012/8081…) are tried.
+export interface WebPortCandidate {
+  id: string
+  port: number
+  scheme: 'http' | 'https' | 'both'
+  enabled: boolean
+  note: string
+}
+
+// One open port classified for a device (GET /devices/{id}/web-access).
+export interface DiscoveredPort {
+  port: number
+  scheme: string // http / https / "" for non-web
+  kind: string   // RTSP / HTTPS / ISAPI-capable / ONVIF / web UI / unknown open TCP
+  web: boolean   // is an HTTP/ISAPI candidate
+}
+
+// Device web-access view + override + last-success record.
+export interface DeviceWebAccess {
+  discovered: DiscoveredPort[]
+  candidates: string[]   // ordered base URLs the collector tries first
+  // override
+  scheme: string         // '', http, https
+  port: number | null    // preferred port
+  alt_ports: string      // alternates (CSV)
+  notes: string
+  pref_proto: string     // '', isapi, onvif, http
+  // last successful collection — exactly what worked
+  last_proto: string     // isapi | onvif | http | …
+  last_scheme: string    // http | https
+  last_port: number | null
+  last_ok: string        // last successful base URL
+  last_ok_at: string     // RFC3339 or ""
+  last_credential: string // credential name that authenticated
 }
 
 // Vendor Connection Profile — operator-configured integration endpoint
@@ -1102,6 +1465,15 @@ export interface MonitoringCheck {
   last_status: string
   last_latency_ms?: number | null
   consecutive_failures: number
+  // 'reachability' = drives the device's online/offline status + inventory
+  // counts; 'supplemental' = an extra port/metric check (polled + shown, but
+  // never flips the device offline).
+  role?: string
+  // Present on the global checks list (GET /monitoring/checks), which joins the
+  // device so each check is identified by name/IP, not just a bare port.
+  device_name?: string
+  device_ip?: string | null
+  device_category?: string
 }
 
 export interface MonitoringSample {
@@ -1421,6 +1793,21 @@ export interface Subnet {
   vlan_id?: number | null
 }
 
+// A credential assigned to a subnet (subnet-scoped credentials). When a subnet
+// has any, scans of IPs inside it try ONLY these — never the global set.
+export interface SubnetCredential {
+  id: string
+  name: string
+  kind: string
+}
+
+// Per-subnet credential-assignment summary for the Locations page row badges.
+export interface SubnetCredCount {
+  subnet_id: string
+  count: number
+  kinds: string[]
+}
+
 // Bulk OS collection (Data Quality action). Per-device, actionable on failure.
 export interface OSCollectResult {
   device_id: string; name: string; ip: string
@@ -1445,6 +1832,9 @@ export interface OSInventory {
   ram_total_bytes?: number | null; ram_slots?: number | null; swap_total_bytes?: number | null
   events_critical_24h?: number | null; events_error_24h?: number | null; events_warning_24h?: number | null
   last_critical_event?: string | null
+  // Honest installed-software collection status: which method succeeded, or the
+  // exact blocker when software is empty (remote_registry_disabled, access_denied, …).
+  software_note?: string | null
 }
 export interface OSDisk { name: string; model?: string | null; serial?: string | null; filesystem?: string | null; size_bytes?: number | null; total_bytes?: number | null; free_bytes?: number | null; health?: string | null }
 export interface OSNic { name: string; mac?: string | null; ip_addresses?: string | null; gateway?: string | null; dns_servers?: string | null; dhcp_enabled?: boolean | null; link_speed_mbps?: number | null }
@@ -1483,6 +1873,7 @@ export interface CredTestResult {
   success: boolean
   detail: string
   latency_ms: number
+  tested_at?: string // present on the per-device history endpoint
 }
 export interface CredTestResponse {
   results: CredTestResult[]
@@ -1743,4 +2134,68 @@ export interface AgentJob {
   category?: string
   error?: string
   created_at: string
+}
+
+// ---- Analytics (historical trend/time-series) ----------------------------
+export interface AvailabilityPoint {
+  ts: string
+  total: number
+  up: number
+  down: number
+  warning: number
+  uptime_pct: number
+  avg_latency_ms: number | null
+  p95_latency_ms: number | null
+}
+export interface AvailabilitySummary {
+  samples: number
+  up: number
+  down: number
+  warning: number
+  devices: number
+  uptime_pct: number
+  avg_latency_ms: number | null
+  p95_latency_ms: number | null
+}
+export interface AvailabilityAnalytics {
+  window: string
+  bucket: string
+  summary: AvailabilitySummary
+  series: AvailabilityPoint[]
+}
+export interface DeviceUptime {
+  device_id: string
+  name: string
+  primary_ip: string | null
+  category: string
+  samples: number
+  up: number
+  uptime_pct: number
+  avg_latency_ms: number | null
+  max_latency_ms: number | null
+  flaps: number
+}
+export interface AlertAnalytics {
+  window: string
+  bucket: string
+  opened: number
+  resolved: number
+  open_now: number
+  open_critical: number
+  mtta_seconds: number | null
+  mttr_seconds: number | null
+  series: { ts: string; opened: number; critical: number; warning: number }[]
+}
+// Per-site rollup from GET /sites/overview.
+export interface SiteRollup {
+  site_id: string
+  site_name: string
+  kind: string
+  devices: number
+  up: number
+  down: number
+  warning: number
+  unknown: number
+  open_alerts: number
+  by_category: Record<string, number>
 }

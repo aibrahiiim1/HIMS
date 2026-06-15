@@ -1,69 +1,499 @@
-import { useQuery } from '@tanstack/react-query'
-import { useParams } from 'react-router-dom'
-import { Camera, Video, Film } from 'lucide-react'
-import { api, type CameraInfo, type NVRChannel } from '../api'
+import { useMemo, useState } from 'react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useParams, Link } from 'react-router-dom'
+import { Camera, Video, Film, HardDrive, Disc, Network, Activity, Wrench, Cpu, Globe, ShieldCheck, RefreshCw } from 'lucide-react'
+import { api, type CameraInfo, type NVRChannel, type NVRDetail, type Device, type DeviceWebAccess, type CredTestResult, type CameraRecorder } from '../api'
 import { DeviceHeader } from '../components/DeviceHeader'
 import { Panel, Kpi, DefList, EmptyState, StatusPill } from '../components/ui'
 
 const chStatus = (s: string) => (s === 'online' ? 'up' : s === 'offline' ? 'down' : 'unknown')
 
-// Camera / NVR Intelligence (#16): device info + (for recorders) channel map.
-// Deep fields (model/resolution/streams/channels) come from the ONVIF / vendor
-// transport; reachability (RTSP 554 / HTTP) is monitored continuously.
+function fmtMB(mb?: number): string {
+  if (!mb || mb <= 0) return '—'
+  const gb = mb / 1024
+  return gb >= 1024 ? `${(gb / 1024).toFixed(2)} TB` : `${gb.toFixed(1)} GB`
+}
+
+type Tab = 'overview' | 'channels' | 'storage' | 'recording' | 'network' | 'health' | 'ops' | 'access'
+
+// Camera / NVR detail. For a recorder (category nvr) this is a full multi-tab NVR
+// console — identity, channels/cameras, storage/HDD, recording, streams, collection
+// health and operations — populated read-only from Hikvision ISAPI. A plain camera
+// keeps the compact single-view layout.
 export function CctvDetail() {
   const { id } = useParams<{ id: string }>()
+  const [tab, setTab] = useState<Tab>('overview')
+
+  const devQ = useQuery({ queryKey: ['device', id], queryFn: () => api.get<Device>(`/devices/${id}`) })
+  const dev = devQ.data
   const cam = useQuery({ queryKey: ['camera', id], queryFn: () => api.get<CameraInfo>(`/devices/${id}/camera`) })
-  const channels = useQuery({ queryKey: ['nvr-channels', id], queryFn: () => api.get<NVRChannel[]>(`/devices/${id}/nvr-channels`) })
+  const nvr = useQuery({ queryKey: ['nvr', id], queryFn: () => api.get<NVRDetail>(`/devices/${id}/nvr`) })
+  // Recorder(s) that record this camera + the working web-access method — used to
+  // show whether the camera is managed VIA a recorder or DIRECTLY by its own login.
+  const recorders = useQuery({ queryKey: ['recorders', id], queryFn: () => api.get<CameraRecorder[]>(`/devices/${id}/recorders`) })
+  const webAccess = useQuery({ queryKey: ['webaccess', id], queryFn: () => api.get<DeviceWebAccess>(`/devices/${id}/web-access`) })
 
   const c = cam.data
-  const hasCam = !!(c && c.device_id)
-  const ch = channels.data ?? []
-  const chOnline = ch.filter((x) => x.status === 'online').length
+  const info = nvr.data?.info ?? null
+  const channels = nvr.data?.channels ?? []
+  const storage = nvr.data?.storage ?? []
+  const isNVR = useMemo(() => {
+    const dt = (info?.device_type ?? '').toLowerCase()
+    return dev?.category === 'nvr' || dev?.category === 'dvr' || dt.includes('nvr') || dt.includes('dvr') || channels.length > 0 || storage.length > 0
+  }, [dev?.category, info?.device_type, channels.length, storage.length])
+
+  const chOnline = channels.filter((x) => x.status === 'online').length
+  const ip = dev?.primary_ip || ''
+
+  // ---- camera (non-recorder): organized identity + network layout -----------
+  if (!isNVR) {
+    const mgmt = dev?.management
+    const viaRecorder = (dev?.managed_by ?? []).includes('nvr')
+    const recs = recorders.data ?? []
+    const wa = webAccess.data
+    const mgmtLabel = mgmt === 'managed' ? (viaRecorder ? 'Managed via recorder' : 'Managed (direct)') : mgmt ? mgmt.replace(/_/g, ' ') : '—'
+    const recList = recs.map((r) => `${r.nvr_name || r.nvr_ip || '—'} · ch ${r.channel_no}${r.status ? ` (${r.status})` : ''}`).join('; ')
+    const collected = !!(c && c.device_id)
+    return (
+      <div>
+        <DeviceHeader deviceId={id!} icon={Camera} />
+        <div className="row-between" style={{ margin: '0 0 12px' }}>
+          <span className="muted" style={{ fontSize: 13 }}>Identity &amp; network collected read-only via ONVIF / ISAPI. Reachability is monitored separately.</span>
+          <ReCollect deviceId={id!} />
+        </div>
+        <div className="kpi-grid kpi-5">
+          <Kpi label="Vendor" value={c?.manufacturer || dev?.vendor || '—'} icon={Camera} tone="info" />
+          <Kpi label="Model" value={c?.model || dev?.model || '—'} icon={Video} />
+          <Kpi label="Resolution" value={c?.resolution || '—'} icon={Film} />
+          <Kpi label="Firmware" value={c?.firmware || '—'} icon={Cpu} />
+          <Kpi label="Management" value={mgmtLabel} icon={ShieldCheck} tone={mgmt === 'managed' ? 'ok' : mgmt ? 'warn' : 'default'} />
+        </div>
+        <div className="seg" role="tablist" style={{ margin: '4px 0 14px' }}>
+          {([['overview', 'Overview', Camera], ['network', 'Network & Streams', Network], ['access', 'Web / API Access', Globe]] as [Tab, string, typeof Camera][]).map(([k, lbl]) => (
+            <button key={k} className={tab === k ? 'active' : ''} onClick={() => setTab(k)}>{lbl}</button>
+          ))}
+        </div>
+
+        {tab === 'overview' && (
+          <Panel title="Management" icon={ShieldCheck}>
+            {mgmt === 'managed' && viaRecorder ? (
+              <DefList items={[
+                { label: 'Managed', value: 'Via NVR/DVR recorder' },
+                { label: 'Recorder', value: recList || '—' },
+                { label: 'Direct credential', value: 'Not required — feed & recording come through the recorder' },
+              ]} />
+            ) : mgmt === 'managed' ? (
+              <DefList items={[
+                { label: 'Managed', value: 'Directly (own credential)' },
+                { label: 'Protocol', value: (wa?.last_proto || (dev?.managed_by ?? []).join(', ') || '—').toUpperCase() },
+                { label: 'Credential', value: wa?.last_credential || '—' },
+                { label: 'Endpoint', value: wa?.last_ok ? <span className="mono">{wa.last_ok}</span> : '—' },
+                ...(recList ? [{ label: 'Also a recorder channel', value: recList }] : []),
+              ]} />
+            ) : (
+              <DefList items={[
+                { label: 'Status', value: mgmtLabel },
+                { label: 'Recorder channel', value: recList || 'Not a channel on any known recorder' },
+                { label: 'Direct credential', value: mgmt === 'credential_failed' ? 'Auth failed — every tried web login was rejected; add the correct web credential and re-collect' : 'None bound yet' },
+              ]} />
+            )}
+          </Panel>
+        )}
+
+        {tab === 'overview' && (collected ? (
+          <Panel title="Identity" icon={Camera}>
+            <DefList items={[
+              { label: 'Device name', value: c?.device_name || '—' },
+              { label: 'Vendor', value: c?.manufacturer || dev?.vendor || '—' },
+              { label: 'Model', value: c?.model || dev?.model || '—' },
+              { label: 'Firmware', value: c?.firmware || '—' },
+              { label: 'Serial', value: c?.serial ? <span className="mono">{c.serial}</span> : '—' },
+              { label: 'MAC address', value: c?.mac_address ? <span className="mono">{c.mac_address}</span> : '—' },
+              { label: 'Resolution', value: c?.resolution || '—' },
+            ]} />
+          </Panel>
+        ) : (
+          <Panel title="Device Information" icon={Camera}>
+            <EmptyState icon={Camera} title="No detail collected yet"
+              message="This camera's web credential isn't bound yet. Assign its ONVIF/HTTP credential to the site subnet (Locations) and re-scan, or use Re-collect above once a credential is bound — identity then populates from ONVIF/ISAPI." />
+          </Panel>
+        ))}
+
+        {tab === 'network' && (
+          <Panel title="Network & Streams" icon={Network}>
+            <DefList items={[
+              { label: 'IP address', value: (c?.ip_address || ip) ? <span className="mono">{c?.ip_address || ip}</span> : '—' },
+              { label: 'Subnet mask', value: c?.subnet_mask ? <span className="mono">{c.subnet_mask}</span> : '—' },
+              { label: 'Gateway', value: c?.gateway ? <span className="mono">{c.gateway}</span> : '—' },
+              { label: 'DNS', value: c?.dns_server ? <span className="mono">{c.dns_server}</span> : '—' },
+              { label: 'NTP server', value: c?.ntp_server ? <span className="mono">{c.ntp_server}</span> : '—' },
+              { label: 'Time zone', value: c?.time_zone || '—' },
+              { label: 'RTSP stream', value: c?.rtsp_url ? <span className="mono">{c.rtsp_url}</span> : '—' },
+              { label: 'ONVIF endpoint', value: c?.onvif_url ? <span className="mono">{c.onvif_url}</span> : '—' },
+            ]} />
+          </Panel>
+        )}
+
+        {tab === 'access' && <WebAccessPanel deviceId={id!} />}
+      </div>
+    )
+  }
+
+  // ---- NVR/DVR: full multi-tab console --------------------------------------
+  const tabs: { key: Tab; label: string; icon: typeof Camera }[] = [
+    { key: 'overview', label: 'Overview', icon: Activity },
+    { key: 'channels', label: `Channels / Cameras${channels.length ? ` (${channels.length})` : ''}`, icon: Video },
+    { key: 'storage', label: `Storage / HDD${storage.length ? ` (${storage.length})` : ''}`, icon: HardDrive },
+    { key: 'recording', label: 'Recording', icon: Disc },
+    { key: 'network', label: 'Network / Streams', icon: Network },
+    { key: 'health', label: 'Collection health', icon: Cpu },
+    { key: 'ops', label: 'Operations', icon: Wrench },
+  ]
+  const notExposed = (v?: string | null) => !v ? <span className="muted">not exposed by device</span> : v
 
   return (
     <div>
-      <DeviceHeader deviceId={id!} icon={Camera} />
+      <DeviceHeader deviceId={id!} icon={Video} />
 
       <div className="kpi-grid">
-        <Kpi label="Manufacturer" value={c?.manufacturer || '—'} icon={Camera} tone="info" />
-        <Kpi label="Model" value={c?.model || '—'} icon={Video} />
-        <Kpi label="Resolution" value={c?.resolution || '—'} icon={Film} />
-        <Kpi label="Channels" value={ch.length || '—'} icon={Video} sub={ch.length ? `${chOnline} online` : undefined} />
+        <Kpi label="Type" value={(info?.device_type || 'NVR').toUpperCase()} icon={Video} tone="info" />
+        <Kpi label="Model" value={info?.model || c?.model || '—'} icon={Cpu} />
+        <Kpi label="Channels" value={channels.length || info?.channel_count || '—'} icon={Video} sub={channels.length ? `${chOnline} online` : undefined} />
+        <Kpi label="HDDs" value={storage.length || info?.hdd_count || '—'} icon={HardDrive} />
       </div>
 
-      <Panel title="Device Information" icon={Camera}>
-        {hasCam ? (
-          <DefList items={[
-            { label: 'Manufacturer', value: c?.manufacturer || '—' },
-            { label: 'Model', value: c?.model || '—' },
-            { label: 'Resolution', value: c?.resolution || '—' },
-            { label: 'RTSP stream', value: c?.rtsp_url ? <span className="mono">{c.rtsp_url}</span> : '—' },
-            { label: 'ONVIF endpoint', value: c?.onvif_url ? <span className="mono">{c.onvif_url}</span> : '—' },
-          ]} />
-        ) : (
-          <EmptyState icon={Camera} title="No ONVIF detail collected yet"
-            message="Manufacturer / model / resolution / stream URLs populate from the ONVIF transport (bind an ONVIF or http_basic credential and collect). Reachability is already monitored." />
-        )}
-      </Panel>
+      <div className="seg" role="tablist" style={{ margin: '4px 0 14px' }}>
+        {tabs.map((t) => (
+          <button key={t.key} className={tab === t.key ? 'active' : ''} onClick={() => setTab(t.key)}>{t.label}</button>
+        ))}
+      </div>
 
-      <Panel title="Channels" icon={Video} subtitle={ch.length ? `${chOnline}/${ch.length} online` : undefined} pad={false}>
-        {channels.data && ch.length === 0 && <EmptyState icon={Video} title="No channels" message="Single camera, or the NVR channel map awaits ONVIF/vendor collection." />}
-        {ch.length > 0 && (
+      {tab === 'overview' && (
+        <Panel title="Recorder Identity" icon={Video}>
+          {info || c?.model ? (
+            <DefList items={[
+              { label: 'Vendor', value: info?.manufacturer || c?.manufacturer || '—' },
+              { label: 'Model', value: info?.model || c?.model || '—' },
+              { label: 'Device type', value: (info?.device_type || 'NVR').toUpperCase() },
+              { label: 'Serial number', value: info?.serial ? <span className="mono">{info.serial}</span> : '—' },
+              { label: 'Firmware', value: info?.firmware || '—' },
+              { label: 'Channels', value: String(channels.length || info?.channel_count || 0) },
+              { label: 'HDDs', value: String(storage.length || info?.hdd_count || 0) },
+              { label: 'Recording', value: notExposed(info?.recording) },
+              { label: 'Health', value: notExposed(info?.health) },
+            ]} />
+          ) : (
+            <EmptyState icon={Video} title="No NVR data collected yet"
+              message="Bind this NVR's web credential (the device admin login — the ONVIF user does not work for ISAPI) and click Collect on the Operations tab." />
+          )}
+        </Panel>
+      )}
+
+      {tab === 'channels' && <ChannelsTab channels={channels} chOnline={chOnline} />}
+
+      {tab === 'storage' && (
+        <Panel title="Storage / HDD" icon={HardDrive} pad={false}>
+          {storage.length === 0 ? (
+            <EmptyState icon={HardDrive} title="No storage reported" message="Run Collect — HDDs populate from ISAPI /ContentMgmt/Storage/hdd. A recorder with no HDD data will report empty." />
+          ) : (
+            <table className="data-table">
+              <thead><tr><th>HDD</th><th>Name</th><th>Status</th><th>Capacity</th><th>Free</th><th>Used</th><th>Mode</th></tr></thead>
+              <tbody>
+                {storage.map((h) => {
+                  const used = h.capacity_mb > 0 ? Math.round(((h.capacity_mb - h.free_mb) / h.capacity_mb) * 100) : 0
+                  return (
+                    <tr key={h.id}>
+                      <td className="cell-name">{h.hdd_id}</td>
+                      <td>{h.name || '—'}</td>
+                      <td><StatusPill status={h.status === 'ok' ? 'up' : h.status === 'error' ? 'down' : 'unknown'} label={h.status} /></td>
+                      <td>{fmtMB(h.capacity_mb)}</td>
+                      <td>{fmtMB(h.free_mb)}</td>
+                      <td>{h.capacity_mb > 0 ? `${used}%` : '—'}</td>
+                      <td>{h.property || '—'}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          )}
+        </Panel>
+      )}
+
+      {tab === 'recording' && (
+        <Panel title="Recording status" icon={Disc}>
+          <DefList items={[
+            { label: 'Recording', value: notExposed(info?.recording) },
+            { label: 'HDDs available', value: String(storage.length) },
+            { label: 'Writable HDDs', value: String(storage.filter((h) => h.property.toUpperCase().includes('RW') || h.property === '').length) },
+          ]} />
+          {!info?.recording && <p className="muted" style={{ marginTop: 10, fontSize: 13 }}>Recording detail is read from ISAPI /ContentMgmt/record/tracks; if the firmware does not expose it, it is shown as “not exposed by device” rather than a failure.</p>}
+        </Panel>
+      )}
+
+      {tab === 'network' && (
+        <Panel title="Network / Streams" icon={Network}>
+          <DefList items={[
+            { label: 'Management IP', value: ip ? <span className="mono">{ip}</span> : '—' },
+            { label: 'ONVIF endpoint', value: c?.onvif_url ? <span className="mono">{c.onvif_url}</span> : '—' },
+            { label: 'RTSP (main) URL pattern', value: ip ? <span className="mono">{`rtsp://${ip}:554/Streaming/Channels/<ch>01`}</span> : '—' },
+          ]} />
+          {channels.length > 0 && (
+            <table className="data-table" style={{ marginTop: 12 }}>
+              <thead><tr><th>Ch</th><th>Camera</th><th>RTSP main stream</th></tr></thead>
+              <tbody>
+                {channels.map((x) => (
+                  <tr key={x.id}>
+                    <td className="cell-name">{x.channel_no}</td>
+                    <td>{x.camera_name || '—'}</td>
+                    <td className="mono">{ip ? `rtsp://${ip}:554/Streaming/Channels/${x.channel_no}01` : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Panel>
+      )}
+
+      {tab === 'health' && (
+        <Panel title="Collection health" icon={Cpu}>
+          <DefList items={[
+            { label: 'Source', value: info?.source || 'isapi' },
+            { label: 'Identity', value: info?.model ? <StatusPill status="up" label="collected" /> : <StatusPill status="unknown" label="pending" /> },
+            { label: 'Channels', value: channels.length ? <StatusPill status="up" label={`${channels.length} collected`} /> : <StatusPill status="unknown" label="none / not exposed" /> },
+            { label: 'Storage', value: storage.length ? <StatusPill status="up" label={`${storage.length} collected`} /> : <StatusPill status="unknown" label="none / not exposed" /> },
+            { label: 'Last collected', value: info?.collected_at ? new Date(info.collected_at).toLocaleString() : '—' },
+          ]} />
+          <p className="muted" style={{ marginTop: 10, fontSize: 13 }}>
+            ISAPI is tried over HTTPS/HTTP with the credential(s) you select on the Operations tab. Unsupported endpoints are reported as “not exposed by device”, not as a generic failure.
+          </p>
+        </Panel>
+      )}
+
+      {tab === 'ops' && (
+        <Panel title="Operations" icon={Wrench}>
+          <p className="muted" style={{ fontSize: 13, marginBottom: 12 }}>
+            Collection uses the recorder's <strong>bound web credential</strong>. To onboard a new recorder, assign its admin login to the site subnet (Locations → Subnet credentials) and re-scan — HIMS binds the first credential that authenticates. Use Re-collect to re-pull channels / storage with the already-bound credential.
+          </p>
+          <ReCollect deviceId={id!} />
+        </Panel>
+      )}
+
+      {tab === 'ops' && <WebAccessPanel deviceId={id!} />}
+    </div>
+  )
+}
+
+// ReCollect is a single-click re-collection using the device's already-bound web
+// credential — no credential picker (the bound credential, set by scan/onboarding,
+// is reused). For first-time onboarding of an unbound device, assign the credential
+// to the site subnet and re-scan instead.
+function ReCollect({ deviceId }: { deviceId: string }) {
+  const qc = useQueryClient()
+  const [msg, setMsg] = useState('')
+  const m = useMutation({
+    mutationFn: () => api.post<{ collected?: boolean; category?: string; reason?: string }>(`/devices/${deviceId}/collect-cctv`, { credential_ids: [] }),
+    onSuccess: (r) => {
+      setMsg(r?.collected ? `Collected (${r.category || 'cctv'})` : r?.reason === 'no_credential' ? 'No credential bound — assign one via the subnet + re-scan' : `No new data${r?.reason ? ': ' + r.reason : ''}`)
+      qc.invalidateQueries({ queryKey: ['camera', deviceId] })
+      qc.invalidateQueries({ queryKey: ['nvr', deviceId] })
+      qc.invalidateQueries({ queryKey: ['web-access', deviceId] })
+      qc.invalidateQueries({ queryKey: ['devices'] })
+    },
+    onError: (e) => setMsg((e as Error).message),
+  })
+  return (
+    <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
+      {msg && <span className="muted" style={{ fontSize: 12 }}>{msg}</span>}
+      <button className="btn btn-ghost btn-sm" disabled={m.isPending} onClick={() => m.mutate()} title="Re-collect using the bound credential">
+        <RefreshCw size={13} /> {m.isPending ? 'Collecting…' : 'Re-collect'}
+      </button>
+    </span>
+  )
+}
+
+// WebAccessPanel shows the device's discovered web ports (classified), the ordered
+// endpoints the collector will try, the last successful endpoint, and a per-device
+// override (preferred scheme/port + alternates + notes) for devices on custom web
+// ports. Discovered ports are always tried before any guessed ladder.
+function WebAccessPanel({ deviceId }: { deviceId: string }) {
+  const q = useQuery({ queryKey: ['web-access', deviceId], queryFn: () => api.get<DeviceWebAccess>(`/devices/${deviceId}/web-access`) })
+  if (q.isLoading || !q.data) {
+    return <Panel title="Web / API Access" icon={Globe}><div className="loading">Loading…</div></Panel>
+  }
+  return <WebAccessForm deviceId={deviceId} data={q.data} />
+}
+
+function WebAccessForm({ deviceId, data: d }: { deviceId: string; data: DeviceWebAccess }) {
+  const qc = useQueryClient()
+  // Initialised once from the loaded data (state initialisers run on mount only);
+  // the read-only sections below render from the `d` prop, which refreshes on save.
+  const [scheme, setScheme] = useState(d.scheme)
+  const [port, setPort] = useState(d.port != null ? String(d.port) : '')
+  const [alt, setAlt] = useState(d.alt_ports)
+  const [notes, setNotes] = useState(d.notes)
+  const [prefProto, setPrefProto] = useState(d.pref_proto)
+  const save = useMutation({
+    mutationFn: () => api.put<DeviceWebAccess>(`/devices/${deviceId}/web-access`, {
+      scheme, port: port ? Number(port) : null, alt_ports: alt, notes, pref_proto: prefProto,
+    }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['web-access', deviceId] }),
+  })
+  // Recent failed collection attempts (categorised) for this device.
+  const fails = useQuery({
+    queryKey: ['cred-tests', deviceId],
+    queryFn: () => api.get<CredTestResult[]>(`/devices/${deviceId}/credential-tests?limit=20`),
+  })
+  const recentFails = (fails.data ?? []).filter((r) => !r.success).slice(0, 8)
+  return (
+    <Panel title="Web / API Access" icon={Globe} subtitle="discovered ports, the endpoints HIMS tries, and per-device overrides">
+      {(
+        <>
+          <div style={{ marginBottom: 14, padding: 10, border: '1px solid var(--border, #2a3a47)', borderRadius: 8 }}>
+            <div className="row" style={{ gap: 10, alignItems: 'center', marginBottom: 6 }}>
+              <span className="muted" style={{ fontSize: 12 }}>Last successful source</span>
+              {d.last_proto
+                ? <span className="badge badge-up" style={{ textTransform: 'uppercase' }}>{d.last_proto}</span>
+                : <span className="muted">— never collected</span>}
+            </div>
+            {d.last_ok && (
+              <div className="row" style={{ gap: 18, flexWrap: 'wrap', fontSize: 13 }}>
+                <span>Endpoint <span className="mono">{d.last_ok}</span></span>
+                <span>Scheme <strong>{d.last_scheme || '—'}</strong></span>
+                <span>Port <strong>{d.last_port ?? '—'}</strong></span>
+                <span>Credential <strong>{d.last_credential || '—'}</strong></span>
+                {d.last_ok_at && <span className="muted">{d.last_ok_at.slice(0, 19).replace('T', ' ')}</span>}
+              </div>
+            )}
+          </div>
+
+          <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>Discovered ports</div>
+          {d.discovered.length === 0 ? <div className="muted" style={{ fontSize: 12, marginBottom: 12 }}>No open ports recorded — run a scan.</div> : (
+            <table style={{ marginBottom: 14 }}>
+              <thead><tr><th>Port</th><th>Looks like</th><th>Scheme</th><th>Web candidate</th></tr></thead>
+              <tbody>
+                {d.discovered.map((p) => (
+                  <tr key={p.port}>
+                    <td className="mono"><strong>{p.port}</strong></td>
+                    <td>{p.kind}</td>
+                    <td className="mono">{p.scheme || '—'}</td>
+                    <td>{p.web ? <span className="badge badge-up">yes</span> : <span className="muted">—</span>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+
+          <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>Endpoints tried (in order)</div>
+          <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>The collector tries these before any default ladder — discovered/override/configured first.</div>
+          <ol style={{ margin: '0 0 14px 18px', fontSize: 13 }}>
+            {d.candidates.length === 0 ? <li className="muted">none — falls back to the default scheme/port ladder</li> : d.candidates.map((c, i) => <li key={i} className="mono">{c}</li>)}
+          </ol>
+
+          <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>Per-device override</div>
+          <div className="row" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <label>Preferred protocol
+              <select className="field" style={{ display: 'block' }} value={prefProto} onChange={(e) => setPrefProto(e.target.value)}>
+                <option value="">(auto)</option><option value="isapi">ISAPI</option><option value="onvif">ONVIF</option><option value="http">HTTP</option>
+              </select>
+            </label>
+            <label>Preferred scheme
+              <select className="field" style={{ display: 'block' }} value={scheme} onChange={(e) => setScheme(e.target.value)}>
+                <option value="">(auto)</option><option value="http">http</option><option value="https">https</option>
+              </select>
+            </label>
+            <label>Preferred port<input className="field" style={{ width: 110, display: 'block' }} type="number" value={port} onChange={(e) => setPort(e.target.value)} placeholder="8010" /></label>
+            <label style={{ minWidth: 150 }}>Alternate ports<input className="field" style={{ width: '100%', display: 'block' }} value={alt} onChange={(e) => setAlt(e.target.value)} placeholder="8000, 8008" /></label>
+            <label style={{ flex: 1, minWidth: 160 }}>Notes<input className="field" style={{ width: '100%', display: 'block' }} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. uses 8010" /></label>
+            <button className="btn btn-primary" disabled={save.isPending} onClick={() => save.mutate()}>{save.isPending ? 'Saving…' : 'Save'}</button>
+            {save.isSuccess && <span className="badge badge-up">saved</span>}
+          </div>
+          {save.error && <div className="error-msg" style={{ marginTop: 8 }}>{(save.error as Error).message}</div>}
+
+          {recentFails.length > 0 && (
+            <div style={{ marginTop: 16 }}>
+              <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>Recent failed attempts</div>
+              <table>
+                <thead><tr><th>When</th><th>Protocol</th><th>Credential</th><th>Reason</th><th>Detail</th></tr></thead>
+                <tbody>
+                  {recentFails.map((r, i) => (
+                    <tr key={i}>
+                      <td className="muted" style={{ fontSize: 12 }}>{r.tested_at?.slice(0, 19).replace('T', ' ')}</td>
+                      <td>{r.protocol || r.kind}</td>
+                      <td>{r.credential_name}</td>
+                      <td><span className="badge badge-warning">{r.category.replace(/_/g, ' ')}</span></td>
+                      <td className="muted" style={{ fontSize: 12, maxWidth: 360 }}>{r.detail}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
+    </Panel>
+  )
+}
+
+// ChannelsTab renders the recorder's camera channels with a live filter (by name /
+// IP / channel number / status) and pagination, so a recorder with many channels
+// stays usable. A channel whose camera IP matched an already-discovered camera
+// device links to that device.
+function ChannelsTab({ channels, chOnline }: { channels: NVRChannel[]; chOnline: number }) {
+  const [q, setQ] = useState('')
+  const [page, setPage] = useState(0)
+  const PAGE = 25
+  const filtered = useMemo(() => {
+    const t = q.trim().toLowerCase()
+    if (!t) return channels
+    return channels.filter((x) =>
+      (x.camera_name || '').toLowerCase().includes(t) ||
+      (x.camera_ip || '').toLowerCase().includes(t) ||
+      String(x.channel_no).includes(t) ||
+      (x.status || '').toLowerCase().includes(t))
+  }, [channels, q])
+  const pages = Math.max(1, Math.ceil(filtered.length / PAGE))
+  const cur = Math.min(page, pages - 1)
+  const rows = filtered.slice(cur * PAGE, cur * PAGE + PAGE)
+
+  return (
+    <Panel title="Channels / Cameras" icon={Video} subtitle={channels.length ? `${chOnline}/${channels.length} online` : undefined} pad={false}>
+      {channels.length === 0 ? (
+        <EmptyState icon={Video} title="No channels collected" message="Run Collect — channels populate from ISAPI /ContentMgmt/InputProxy/channels. If the recorder exposes none, it will report empty." />
+      ) : (
+        <>
+          <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', gap: 10, flexWrap: 'wrap' }}>
+            <input placeholder="Search name / IP / channel / status…" value={q}
+              onChange={(e) => { setQ(e.target.value); setPage(0) }}
+              style={{ padding: '6px 10px', border: '1px solid #2a3a47', borderRadius: 6, fontSize: 13, width: 320, maxWidth: '100%' }} />
+            <span className="muted" style={{ fontSize: 13 }}>{filtered.length} of {channels.length}</span>
+          </div>
           <table className="data-table">
-            <thead><tr><th>Channel</th><th>Camera</th><th>IP</th><th>Status</th></tr></thead>
+            <thead><tr><th>Ch</th><th>Camera name</th><th>Camera IP</th><th>Resolution</th><th>Recording</th><th>Linked device</th><th>Status</th></tr></thead>
             <tbody>
-              {ch.map((x) => (
+              {rows.map((x: NVRChannel) => (
                 <tr key={x.id}>
                   <td className="cell-name">{x.channel_no}</td>
-                  <td>{x.camera_name ?? '—'}</td>
-                  <td className="mono">{x.camera_ip ?? '—'}</td>
+                  <td>{x.camera_name || '—'}</td>
+                  <td className="mono">{x.camera_ip || '—'}</td>
+                  <td className="mono">{x.resolution || <span className="muted">—</span>}</td>
+                  <td>{x.recording == null
+                    ? <span className="muted">—</span>
+                    : <StatusPill status={x.recording ? 'up' : 'unknown'} label={x.recording ? 'Recording' : 'Off'} />}</td>
+                  <td>{x.camera_device_id ? <Link className="cell-name" to={`/cctv/${x.camera_device_id}`}>camera device</Link> : <span className="muted">—</span>}</td>
                   <td><StatusPill status={chStatus(x.status)} label={x.status} /></td>
                 </tr>
               ))}
             </tbody>
           </table>
-        )}
-      </Panel>
-    </div>
+          {pages > 1 && (
+            <div className="row" style={{ justifyContent: 'center', gap: 8, padding: 10 }}>
+              <button className="btn btn-sm" disabled={cur === 0} onClick={() => setPage(cur - 1)}>Prev</button>
+              <span className="muted" style={{ fontSize: 13 }}>Page {cur + 1} / {pages}</span>
+              <button className="btn btn-sm" disabled={cur >= pages - 1} onClick={() => setPage(cur + 1)}>Next</button>
+            </div>
+          )}
+        </>
+      )}
+    </Panel>
   )
 }

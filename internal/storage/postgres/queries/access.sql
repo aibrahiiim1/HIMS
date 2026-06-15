@@ -23,9 +23,27 @@ SELECT device_id, protocol::text AS protocol, source::text AS source FROM (
          'evidence' AS source
     FROM os_inventory WHERE collection_method IN ('winrm', 'ssh', 'winrm-native', 'wmi')
 
-  -- 3) ONVIF camera inventory (authenticated device-info / profiles).
+  -- 3) Camera inventory (authenticated device-info / profiles). The PROTOCOL is
+  --    the device's actual last-successful web protocol (web_last_proto: isapi vs
+  --    onvif vs http) so the UI shows what really worked — never "ONVIF" when
+  --    ISAPI is what succeeded. Legacy rows with no recorded protocol default to
+  --    'onvif' (cameras historically onboarded via ONVIF); a re-collect stamps the
+  --    real protocol.
   UNION ALL
-  SELECT DISTINCT device_id, 'onvif' AS protocol, 'evidence' AS source FROM camera_info
+  SELECT DISTINCT ci.device_id,
+         COALESCE(NULLIF(d.web_last_proto, ''), 'onvif') AS protocol, 'evidence' AS source
+    FROM camera_info ci JOIN devices d ON d.id = ci.device_id
+
+  -- 3b) Hikvision NVR/DVR ISAPI inventory (authenticated recorder collection).
+  --     Recorders persist identity + channels + HDDs to nvr_info; a plain camera
+  --     keeps its identity in camera_info, but a recorder collected over ISAPI
+  --     does NOT always get a camera_info row, so nvr_info must be its own proven
+  --     evidence. Protocol = web_last_proto (recorders are ISAPI, so legacy rows
+  --     default to 'isapi').
+  UNION ALL
+  SELECT DISTINCT ni.device_id,
+         COALESCE(NULLIF(d.web_last_proto, ''), 'isapi') AS protocol, 'evidence' AS source
+    FROM nvr_info ni JOIN devices d ON d.id = ni.device_id
 
   -- 4) Wireless controller REST (UniFi/Omada/Ruckus/Extreme).
   UNION ALL
@@ -51,9 +69,12 @@ SELECT device_id, protocol::text AS protocol, source::text AS source FROM (
   UNION ALL
   SELECT DISTINCT device_id, 'snmp_v2c' AS protocol, 'evidence' AS source FROM printer_supplies
 
-  -- 9) PBX phone registry (Cisco CUCM AXL).
+  -- 9) PBX subscriber/phone registry — protocol per its collection_source so the
+  --    "Managed via" label is accurate: Cisco CUCM (AXL) vs Alcatel OmniPCX (mgr).
   UNION ALL
-  SELECT DISTINCT device_id, 'cucm_axl' AS protocol, 'evidence' AS source FROM pbx_phones
+  SELECT DISTINCT device_id,
+         CASE WHEN collection_source = 'omnipcx' THEN 'omnipcx' ELSE 'cucm_axl' END AS protocol,
+         'evidence' AS source FROM pbx_phones
 
   -- 10) Switch interface collection — SNMP or CLI(SSH) per its collection_source.
   UNION ALL

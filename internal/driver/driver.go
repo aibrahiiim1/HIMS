@@ -82,7 +82,9 @@ type Facts struct {
 	// Typed collections for switch inventory.
 	Interfaces []InterfaceSnap
 	VLANs      []VLANSnap
+	PortVLANs  []PortVlanSnap
 	MACs       []MACSnap
+	ARP        []ARPSnap
 	Neighbors  []NeighborSnap
 	// Server inventory (HOST-RESOURCES-MIB).
 	Storage []StorageSnap
@@ -332,6 +334,15 @@ type VLANSnap struct {
 	Name   string
 }
 
+// PortVlanSnap is one (port, VLAN) membership from Q-BRIDGE egress/untagged
+// bitmaps. Tagged=false means the port carries this VLAN untagged (its access /
+// native VLAN); Tagged=true means it's a tagged member (trunk).
+type PortVlanSnap struct {
+	IfIndex int
+	VLANID  int
+	Tagged  bool
+}
+
 // StorageSnap is one server storage volume (RAM or filesystem) from
 // HOST-RESOURCES-MIB.
 type StorageSnap struct {
@@ -348,6 +359,15 @@ type MACSnap struct {
 	VLANID  int
 	IfIndex int
 	Status  int
+}
+
+// ARPSnap is one ARP / ipNetToMedia row (IP ↔ MAC) learned by an L3 device. The
+// L3 switch / router that holds these is the IP→MAC resolver the Path Finder
+// needs to trace a wired endpoint's IP to its switch port.
+type ARPSnap struct {
+	IP      string // dotted IPv4 (e.g. 172.21.15.44)
+	MAC     string // aa:bb:cc:dd:ee:ff
+	IfIndex int
 }
 
 // NeighborSnap is one LLDP/CDP neighbor.

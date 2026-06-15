@@ -1,13 +1,14 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
-import { Network, Cable, Layers, Share2, Activity, Settings, Gauge, LayoutGrid, Table, Router } from 'lucide-react'
+import { Network, Cable, Layers, Share2, Activity, Settings, Gauge, LayoutGrid, Table, Router, KeyRound } from 'lucide-react'
 import { api, type Interface, type VLAN, type Neighbor, type TopologyLink, type MonitoringCheck, type MonitoringSample, type MacEntry, type ArpEntry } from '../api'
 import { DeviceHeader } from '../components/DeviceHeader'
 import { ClassificationCard } from '../components/ClassificationCard'
 import { DeepOSInventory } from '../components/DeepOSInventory'
 import { DeviceOps } from '../components/DeviceOps'
 import { DeviceCredentialHealth } from '../components/DeviceCredentialHealth'
+import { CredentialBindSelect } from '../components/CredentialBindSelect'
 import { SwitchPorts } from '../components/SwitchPorts'
 import { Panel, TabBar, Kpi, StatusPill, EmptyState, Sparkline, timeAgo, usePaged, Pager } from '../components/ui'
 
@@ -25,6 +26,18 @@ export function SwitchDetail() {
 
   const ifList = ifaces.data ?? []
   const ifUp = ifList.filter((i) => i.oper_status === 1).length
+  const ifDown = ifList.filter((i) => i.oper_status === 2).length
+  const ifOther = Math.max(0, ifList.length - ifUp - ifDown)
+  const neighList = neighbors.data ?? []
+  const lldpN = neighList.filter((n) => n.protocol === 'lldp').length
+  const cdpN = neighList.filter((n) => n.protocol === 'cdp').length
+  const neighInfra = neighList.filter(neighIsInfra).length
+  const neighEndpoints = neighList.length - neighInfra
+  const linkList = topo.data ?? []
+  const macLinks = linkList.filter((l) => l.link_source === 'mac').length
+  const roleCount = (role: string) => ifList.filter((i) => i.port_role === role).length
+  const accessPorts = roleCount('access'), trunkPorts = roleCount('trunk') + roleCount('uplink')
+  const utilPct = ifList.length ? Math.round((ifUp / ifList.length) * 100) : 0
 
   const tabs = [
     { key: 'overview', label: 'Overview', icon: Activity },
@@ -40,28 +53,47 @@ export function SwitchDetail() {
 
   return (
     <div>
-      <DeviceHeader deviceId={id!} icon={Network} />
+      <DeviceHeader deviceId={id!} icon={Network} showCredential={false} />
 
       <TabBar tabs={tabs} active={tab} onChange={(k) => setTab(k as Tab)} />
 
       {tab === 'overview' && (
         <div>
-          <div className="kpi-grid">
-            <Kpi label="Interfaces" value={ifList.length} icon={Cable} tone="info" sub={`${ifUp} operationally up`} />
-            <Kpi label="VLANs" value={vlans.data?.length ?? 0} icon={Layers} tone="default" />
-            <Kpi label="Neighbors" value={neighbors.data?.length ?? 0} icon={Share2} tone="default" sub="LLDP / CDP" />
-            <Kpi label="Topology Links" value={topo.data?.length ?? 0} icon={Network} tone="default" />
+          <div className="kpi-grid kpi-6">
+            <Kpi label="Ports" value={ifList.length} icon={Cable} tone="info" sub={ifList.length ? `${ifUp} up · ${ifDown} down` : 'none collected'} onClick={ifList.length ? () => setTab('ports') : undefined} />
+            <Kpi label="Port utilisation" value={ifList.length ? `${utilPct}%` : '—'} icon={Gauge} tone={utilPct >= 90 ? 'warn' : 'ok'} sub="operationally up" />
+            <Kpi label="Access / Trunk" value={ifList.length ? `${accessPorts} / ${trunkPorts}` : '—'} icon={LayoutGrid} tone="default" sub="access / trunk·uplink" />
+            <Kpi label="VLANs" value={vlans.data?.length ?? 0} icon={Layers} tone="default" onClick={(vlans.data?.length ?? 0) ? () => setTab('vlans') : undefined} />
+            <Kpi label="Neighbors" value={neighList.length} icon={Share2} tone="default" sub={neighList.length ? `${lldpN} LLDP · ${cdpN} CDP` : 'LLDP / CDP'} onClick={neighList.length ? () => setTab('neighbors') : undefined} />
+            <Kpi label="Topology Links" value={linkList.length} icon={Network} tone="default" sub={macLinks > 0 ? `${macLinks} MAC-derived` : 'LLDP/CDP'} onClick={linkList.length ? () => setTab('topology') : undefined} />
           </div>
-          <div style={{ marginBottom: 16 }}><ClassificationCard deviceId={id!} /></div>
+
+          {ifList.length > 0 && (
+            <Panel title="Port status" icon={LayoutGrid} subtitle={`${ifUp} up · ${ifDown} down${ifOther ? ` · ${ifOther} other` : ''}`}>
+              <div style={{ display: 'flex', height: 14, borderRadius: 7, overflow: 'hidden', background: 'var(--surface-3)' }} title={`${ifUp} up / ${ifDown} down / ${ifOther} other`}>
+                {ifUp > 0 && <div style={{ flex: ifUp, background: 'var(--ok)' }} />}
+                {ifDown > 0 && <div style={{ flex: ifDown, background: 'var(--crit)' }} />}
+                {ifOther > 0 && <div style={{ flex: ifOther, background: 'var(--surface-4, #94a3b8)' }} />}
+              </div>
+              <div className="row" style={{ gap: 14, marginTop: 10, flexWrap: 'wrap', fontSize: 12 }}>
+                <span className="row" style={{ gap: 6 }}><i style={{ width: 10, height: 10, borderRadius: 2, background: 'var(--ok)', display: 'inline-block' }} /> {ifUp} up</span>
+                <span className="row" style={{ gap: 6 }}><i style={{ width: 10, height: 10, borderRadius: 2, background: 'var(--crit)', display: 'inline-block' }} /> {ifDown} down</span>
+                {ifOther > 0 && <span className="row" style={{ gap: 6 }}><i style={{ width: 10, height: 10, borderRadius: 2, background: 'var(--surface-4, #94a3b8)', display: 'inline-block' }} /> {ifOther} other</span>}
+                <button className="btn btn-ghost btn-xs" style={{ marginLeft: 'auto' }} onClick={() => setTab('ports')}>Open port grid →</button>
+              </div>
+            </Panel>
+          )}
+
+          <div style={{ margin: '16px 0' }}><ClassificationCard deviceId={id!} /></div>
           <DeepOSInventory deviceId={id!} />
-          <div className="grid-2">
-            <Panel title="Top Interfaces" icon={Cable} pad={false}>
-              {ifList.length === 0 ? <EmptyState icon={Cable} title="No interfaces collected" />
+          <div className="grid-2" style={{ alignItems: 'start' }}>
+            <Panel title="Top Interfaces" icon={Cable} subtitle={ifList.length ? `showing ${Math.min(8, ifList.length)} of ${ifList.length}` : undefined} pad={false}>
+              {ifList.length === 0 ? <EmptyState icon={Cable} title="No interfaces collected" message="Bind a working SNMP/SSH credential and re-scan to collect ports." />
                 : <InterfaceTable data={ifList.slice(0, 8)} />}
             </Panel>
-            <Panel title="Neighbors" icon={Share2} pad={false}>
-              {(neighbors.data?.length ?? 0) === 0 ? <EmptyState icon={Share2} title="No LLDP/CDP neighbors" message="Empty is normal in mixed-vendor segments." />
-                : <NeighborTable data={neighbors.data!.slice(0, 8)} />}
+            <Panel title="Neighbors" icon={Share2} subtitle={neighList.length ? `${lldpN} LLDP · ${cdpN} CDP` : undefined} pad={false}>
+              {neighList.length === 0 ? <EmptyState icon={Share2} title="No LLDP/CDP neighbors" message="Empty is normal in mixed-vendor segments — cross-vendor links still appear under Topology (MAC-derived)." />
+                : <NeighborTable data={neighList.slice(0, 8)} />}
             </Panel>
           </div>
         </div>
@@ -93,29 +125,39 @@ export function SwitchDetail() {
       )}
 
       {tab === 'neighbors' && (
-        <Panel title="LLDP / CDP Neighbors" subtitle={`${neighbors.data?.length ?? 0}`} pad={false}>
+        <Panel title="LLDP / CDP Neighbors" subtitle={neighList.length ? `${neighList.length} · ${neighInfra} switch/infra · ${neighEndpoints} endpoint${neighEndpoints === 1 ? '' : 's'}` : 'raw protocol neighbours'} pad={false}>
           {neighbors.isLoading && <div className="loading">Loading neighbors…</div>}
-          {neighbors.data && neighbors.data.length === 0 && <EmptyState icon={Share2} title="No neighbors discovered" message="Empty is normal in mixed-vendor segments." />}
+          {neighList.length > 0 && (
+            <div className="enc-banner info" style={{ margin: '0 0 0 0', borderRadius: 0 }}>
+              LLDP/CDP is spoken by switches/APs <em>and</em> by directly-attached endpoints (PCs, IP phones, printers). Endpoints advertise only a MAC and no system name — they show as “endpoint” below. Switch-to-switch uplinks are the “switch / infra” rows.
+            </div>
+          )}
+          {neighbors.data && neighbors.data.length === 0 && <EmptyState icon={Share2} title="No LLDP/CDP neighbors" message="Empty is normal in mixed-vendor segments (e.g. a Cisco port that only speaks CDP facing an Aruba that only reads LLDP). Cross-vendor links still appear under the Topology tab, derived from the MAC forwarding table." />}
           {(neighbors.data?.length ?? 0) > 0 && <NeighborTable data={neighbors.data!} full />}
         </Panel>
       )}
 
       {tab === 'topology' && (
-        <Panel title="Topology Links" subtitle={`${topo.data?.length ?? 0}`} pad={false}>
+        <Panel title="Topology Links" subtitle={`${topo.data?.length ?? 0} · LLDP/CDP + MAC-derived, any vendor`} pad={false}>
           {topo.isLoading && <div className="loading">Loading links…</div>}
-          {topo.data && topo.data.length === 0 && <EmptyState icon={Network} title="No topology links computed" message="Links are derived from LLDP/CDP and ARP/MAC correlation." />}
-          {(topo.data?.length ?? 0) > 0 && (
-            <table className="data-table"><thead><tr><th>Local port</th><th>Connects to</th><th>Remote IP</th><th>Source</th></tr></thead>
-              <tbody>{topo.data!.map((l, i) => (
-                <tr key={i}><td>{l.local_if_name ?? l.local_if_index ?? '—'}</td><td className="cell-name">{l.remote_device_name ?? l.remote_sys_name ?? '—'}</td><td className="mono">{l.remote_ip ?? '—'}</td><td><span className={`badge badge-${l.link_source}`}>{l.link_source}</span></td></tr>
-              ))}</tbody>
-            </table>
-          )}
+          {topo.data && topo.data.length === 0 && <EmptyState icon={Network} title="No topology links computed" message="Links are derived from LLDP/CDP neighbours and, when those don't cross a vendor boundary, from the bridge MAC forwarding table (FDB)." />}
+          {(topo.data?.length ?? 0) > 0 && <TopologyLinkTable data={topo.data!} />}
         </Panel>
       )}
 
       {tab === 'monitoring' && <MonitoringTab id={id!} />}
-      {tab === 'operations' && <><DeviceCredentialHealth deviceId={id!} category="switch" /><DeviceOps deviceId={id!} /></>}
+      {tab === 'operations' && (
+        <>
+          <Panel title="Collection Credential" icon={KeyRound}>
+            <CredentialBindSelect deviceId={id!} />
+            <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+              The credential HIMS uses to collect from this switch (SNMP/SSH). After binding, use <strong>Re-scan this device</strong> in the header — or run a collection — to apply it.
+            </p>
+          </Panel>
+          <DeviceCredentialHealth deviceId={id!} category="switch" />
+          <DeviceOps deviceId={id!} />
+        </>
+      )}
     </div>
   )
 }
@@ -141,18 +183,77 @@ function InterfaceTable({ data, full }: { data: Interface[]; full?: boolean }) {
   )
 }
 
+// A neighbour is "infrastructure" (switch/AP/router) when it advertises a system
+// name; a bare endpoint (PC/phone/printer that just speaks LLDP-MED) advertises
+// only a MAC chassis-id + MAC port-id and no name.
+const isMacLike = (s?: string | null) => !!s && /^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/i.test(s.trim())
+const neighIsInfra = (n: Neighbor) => !!(n.rem_sys_name && n.rem_sys_name.trim()) || !!n.rem_mgmt_ip
+// Best human identity for the neighbour: its system name, else a readable
+// chassis-id (e.g. a hostname), else the chassis MAC.
+const neighName = (n: Neighbor) => (n.rem_sys_name && n.rem_sys_name.trim()) || n.rem_chassis_id || '—'
+// Prefer the port *description* (a readable interface name) over the raw port-id
+// (which is a MAC for endpoints that advertise a MAC port-id).
+const neighRemotePort = (n: Neighbor) => (n.rem_port_desc && n.rem_port_desc.trim()) || n.rem_port_id || '—'
+
 function NeighborTable({ data, full }: { data: Neighbor[]; full?: boolean }) {
   return (
     <table className="data-table">
-      <thead><tr><th>Local port</th><th>Neighbor</th><th>Remote port</th>{full && <th>Mgmt IP</th>}<th>Proto</th></tr></thead>
+      <thead><tr><th>Local port</th><th>Neighbor</th><th>Type</th><th>Remote port</th>{full && <th>Mgmt IP</th>}<th>Proto</th></tr></thead>
       <tbody>
-        {data.map((n) => (
-          <tr key={n.id}>
-            <td>{n.local_if_name ?? n.local_if_index ?? '—'}</td>
-            <td className="cell-name">{n.rem_sys_name ?? n.rem_chassis_id ?? '—'}</td>
-            <td>{n.rem_port_id ?? n.rem_port_desc ?? '—'}</td>
-            {full && <td className="mono">{n.rem_mgmt_ip ?? '—'}</td>}
-            <td><span className={`badge badge-${n.protocol}`}>{n.protocol}</span></td>
+        {data.map((n) => {
+          const infra = neighIsInfra(n)
+          const nm = neighName(n)
+          const rp = neighRemotePort(n)
+          return (
+            <tr key={n.id}>
+              <td>{n.local_if_name ?? n.local_if_index ?? '—'}</td>
+              <td className={isMacLike(nm) ? 'mono' : 'cell-name'}>{nm}</td>
+              <td>{infra
+                ? <span className="badge badge-up" title="Advertises a system name / management IP — another switch, AP or router">switch / infra</span>
+                : <span className="badge badge-unknown" title="Bare LLDP-MED endpoint (PC / phone / printer) — advertises only a MAC, no system name">endpoint</span>}</td>
+              <td className={isMacLike(rp) ? 'mono' : ''}>{rp}</td>
+              {full && <td className="mono">{n.rem_mgmt_ip ?? '—'}</td>}
+              <td><span className={`badge badge-${n.protocol}`}>{n.protocol}</span></td>
+            </tr>
+          )
+        })}
+      </tbody>
+    </table>
+  )
+}
+
+// How each link was derived, for the source badge tooltip.
+const LINK_SOURCE_LABEL: Record<string, string> = {
+  lldp: 'LLDP neighbour (standard, vendor-neutral)',
+  cdp: 'CDP neighbour (Cisco Discovery Protocol)',
+  mac: 'Derived from the bridge MAC forwarding table (FDB) — vendor-neutral L2 adjacency, used when LLDP/CDP does not cross the vendor boundary',
+  arp: 'Derived from ARP correlation',
+}
+
+// TopologyLinkTable renders the per-device links from the bidirectional view:
+// every link touching this device, with the OTHER end as "connects to". MAC-
+// derived links (cross-vendor uplinks) and links learned from the neighbour's
+// side (inbound) are labelled so the source is always honest.
+function TopologyLinkTable({ data }: { data: TopologyLink[] }) {
+  return (
+    <table className="data-table">
+      <thead><tr><th>Local port</th><th>Connects to</th><th>Vendor</th><th>Remote IP</th><th>Source</th></tr></thead>
+      <tbody>
+        {data.map((l, i) => (
+          <tr key={i}>
+            <td>
+              {l.inbound
+                ? <span className="muted" title="This link was learned from the neighbour's side (e.g. its MAC table), so this device's own port is not known.">via neighbour{l.remote_port ? ` · ${l.remote_port}` : ''}</span>
+                : (l.local_if_name ?? l.local_if_index ?? '—')}
+            </td>
+            <td className="cell-name">{l.remote_device_name ?? l.remote_sys_name ?? '—'}</td>
+            <td>{l.remote_vendor ?? '—'}</td>
+            <td className="mono">{l.remote_ip ?? '—'}</td>
+            <td>
+              <span className={`badge badge-${l.link_source}`} title={LINK_SOURCE_LABEL[l.link_source] ?? l.link_source}>
+                {l.link_source === 'mac' ? 'MAC/FDB' : l.link_source.toUpperCase()}
+              </span>
+            </td>
           </tr>
         ))}
       </tbody>

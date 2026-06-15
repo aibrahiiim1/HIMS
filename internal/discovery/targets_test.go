@@ -56,3 +56,40 @@ func TestParseTargets_CapEnforced(t *testing.T) {
 		t.Fatal("range exceeding maxHosts should error")
 	}
 }
+
+func TestFilterExcluded(t *testing.T) {
+	hosts, err := ParseTargets("172.21.96.1-172.21.96.10", 4096)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Empty exclude is a no-op.
+	if got, n, err := FilterExcluded(hosts, "", 4096); err != nil || n != 0 || len(got) != 10 {
+		t.Fatalf("empty exclude: got %d removed=%d err=%v; want 10/0/nil", len(got), n, err)
+	}
+	// Exclude a single IP, a list, and a sub-range — order preserved, only the
+	// named hosts removed. (.3 appears in both the list and the range — dedup.)
+	got, removed, err := FilterExcluded(hosts, "172.21.96.2, 172.21.96.3\n172.21.96.3-5", 4096)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 4 { // .2, .3, .4, .5
+		t.Fatalf("removed = %d; want 4", removed)
+	}
+	want := []string{"172.21.96.1", "172.21.96.6", "172.21.96.7", "172.21.96.8", "172.21.96.9", "172.21.96.10"}
+	if len(got) != len(want) {
+		t.Fatalf("got %d hosts %v; want %d", len(got), got, len(want))
+	}
+	for i, w := range want {
+		if got[i] != netip.MustParseAddr(w) {
+			t.Errorf("host[%d] = %s; want %s", i, got[i], w)
+		}
+	}
+	// Excluding an IP outside the scope removes nothing.
+	if _, n, _ := FilterExcluded(hosts, "10.9.9.9", 4096); n != 0 {
+		t.Fatalf("out-of-scope exclude removed %d; want 0", n)
+	}
+	// A CIDR exclude carves out the whole block.
+	if _, n, _ := FilterExcluded(hosts, "172.21.96.0/29", 4096); n != 6 { // .1..6 are in-scope hosts of /29
+		t.Fatalf("CIDR exclude removed %d; want 6", n)
+	}
+}

@@ -80,6 +80,36 @@ func ParseTargets(spec string, maxHosts int) ([]netip.Addr, error) {
 	return out, nil
 }
 
+// FilterExcluded removes from hosts every address the exclude spec resolves to.
+// The exclude spec accepts the SAME tokens as ParseTargets (single IP, IP range,
+// CIDR, or a comma/space/newline-separated mix), so an operator scanning a range
+// or subnet can carve out one or more IPs they don't want touched. An empty spec
+// is a no-op. Returns the filtered list (input order preserved) + the count
+// removed. Excluded entries that fall outside the scan scope simply match nothing.
+func FilterExcluded(hosts []netip.Addr, excludeSpec string, maxHosts int) ([]netip.Addr, int, error) {
+	if strings.TrimSpace(excludeSpec) == "" {
+		return hosts, 0, nil
+	}
+	ex, err := ParseTargets(excludeSpec, maxHosts)
+	if err != nil {
+		return nil, 0, fmt.Errorf("exclude: %w", err)
+	}
+	drop := make(map[netip.Addr]struct{}, len(ex))
+	for _, a := range ex {
+		drop[a] = struct{}{}
+	}
+	out := make([]netip.Addr, 0, len(hosts))
+	removed := 0
+	for _, h := range hosts {
+		if _, skip := drop[h]; skip {
+			removed++
+			continue
+		}
+		out = append(out, h)
+	}
+	return out, removed, nil
+}
+
 // expandRange enumerates an inclusive IPv4 range. Accepts both the full-end
 // form (10.0.0.1-10.0.0.50) and the last-octet shorthand (10.0.0.1-50).
 func expandRange(tok string, maxHosts int) ([]netip.Addr, error) {

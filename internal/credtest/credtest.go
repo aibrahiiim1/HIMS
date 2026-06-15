@@ -11,6 +11,7 @@ import (
 	"crypto/tls"
 	"net/http"
 	"net/netip"
+	"strconv"
 	"strings"
 	"time"
 
@@ -53,6 +54,11 @@ type Options struct {
 	// reachability probe) authenticates + collects through this WMI collector helper.
 	WMICollectorURL   string
 	WMICollectorToken string
+	// WebPorts are the device's open web/management ports (e.g. 8015 on a
+	// Hikvision NVR). An http_basic test tries these in addition to 80/443, so a
+	// device whose web UI is on a non-standard port is reached instead of being
+	// reported "no HTTP/HTTPS response" because only :80/:443 were probed.
+	WebPorts []int
 }
 
 func (o Options) timeout() time.Duration {
@@ -131,7 +137,7 @@ func Test(ctx context.Context, kind, secret, host string, opts Options) Outcome 
 	case "ssh":
 		return finish(testSSH(ctx, secret, host, opts))
 	case "http":
-		return finish(testHTTP(ctx, secret, host, opts.timeout()))
+		return finish(testHTTP(ctx, secret, host, opts.timeout(), opts.WebPorts))
 	case "onvif":
 		return finish(testONVIF(ctx, secret, host, opts.timeout()))
 	case "winrm":
@@ -187,23 +193,37 @@ func testSSH(ctx context.Context, secret, host string, opts Options) Outcome {
 	return Outcome{Category: cat, Detail: detail}
 }
 
-func testHTTP(ctx context.Context, secret, host string, timeout time.Duration) Outcome {
+func testHTTP(ctx context.Context, secret, host string, timeout time.Duration, webPorts []int) Outcome {
 	user, pass := SplitUserPass(secret)
 	client := &http.Client{
 		Timeout:       timeout,
 		Transport:     &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, DisableKeepAlives: true}, //nolint:gosec
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
-	// Try HTTPS first, then HTTP — appliances vary.
-	for _, scheme := range []string{"https", "http"} {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, scheme+"://"+host+"/", nil)
+	// Candidate (scheme, port) endpoints. Standard ports first, then any open
+	// web/management port the device exposes (e.g. 8015 on a Hikvision NVR). For
+	// a non-standard port try HTTP before HTTPS — the 8000+octet CCTV web/ISAPI
+	// ports are plain HTTP, and probing HTTPS first would hang on the full timeout.
+	type ep struct {
+		url string
+	}
+	eps := []ep{{"https://" + host + "/"}, {"http://" + host + "/"}}
+	for _, p := range webPorts {
+		if p == 80 || p == 443 {
+			continue
+		}
+		base := host + ":" + strconv.Itoa(p)
+		eps = append(eps, ep{"http://" + base + "/"}, ep{"https://" + base + "/"})
+	}
+	for _, e := range eps {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, e.url, nil)
 		if err != nil {
 			continue
 		}
 		req.SetBasicAuth(user, pass)
 		resp, err := client.Do(req)
 		if err != nil {
-			continue // try the other scheme
+			continue // try the next endpoint
 		}
 		resp.Body.Close()
 		switch {

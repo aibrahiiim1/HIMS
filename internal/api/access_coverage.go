@@ -34,18 +34,21 @@ var protocolLabels = map[string]string{
 	"http_basic":    "HTTP Basic",
 	"api_token":     "API Token",
 	"onvif":         "ONVIF",
+	"isapi":         "ISAPI",
+	"http":          "HTTP",
 	"rtsp":          "RTSP",
 	"vendor_api":    "Vendor API",
 	"vmware":        "VMware",
 	"fortigate_api": "FortiGate API",
 	"cucm_axl":      "CUCM AXL",
+	"omnipcx":       "OmniPCX (mgr)",
 	"ldap":          "LDAP",
 }
 
 // protocolOrder is the stable display order for the breakdown.
 var protocolOrder = []string{
-	"snmp_v2c", "snmp_v3", "ssh", "winrm", "wmi", "smb", "onvif", "rtsp",
-	"http_basic", "api_token", "vendor_api", "vmware", "fortigate_api", "cucm_axl", "ldap",
+	"snmp_v2c", "snmp_v3", "ssh", "winrm", "wmi", "smb", "onvif", "isapi", "http", "rtsp",
+	"http_basic", "api_token", "vendor_api", "vmware", "fortigate_api", "cucm_axl", "omnipcx", "ldap",
 }
 
 func protocolLabel(p string) string {
@@ -273,6 +276,16 @@ func (s *Server) accessCoverage(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	// Cameras that are an NVR/DVR channel are managed VIA the recorder (see
+	// deriveManagement) — don't count an RTSP-only feed as a credential failure.
+	nvrCams := map[uuid.UUID]bool{}
+	if ids, cerr := s.queries.ListLinkedCameraDeviceIDs(ctx); cerr == nil {
+		for _, id := range ids {
+			if id != nil {
+				nvrCams[*id] = true
+			}
+		}
+	}
 
 	type agg struct {
 		sources map[string]bool // bound_credential | evidence | test_result
@@ -300,6 +313,19 @@ func (s *Server) accessCoverage(w http.ResponseWriter, r *http.Request) {
 					a.sources[da.provenSrc[p]] = true
 				}
 			}
+			continue
+		}
+		// Camera that is an NVR/DVR channel → managed via the recorder (RTSP-only
+		// feeds have no web/ONVIF to authenticate; the NVR is the management point).
+		if d.Category == "camera" && nvrCams[d.ID] {
+			managed++
+			a := byProto["nvr"]
+			if a == nil {
+				a = &agg{sources: map[string]bool{}}
+				byProto["nvr"] = a
+			}
+			a.count++
+			a.sources["evidence"] = true
 			continue
 		}
 		// Unmanaged → classify the reason from REAL signals (mutually exclusive,
@@ -395,6 +421,10 @@ const missingClassLowConf = 50
 type badgeCountsDTO struct {
 	MissingClassification int `json:"missing_classification"`
 	Unmanaged             int `json:"unmanaged"`
+	// Unmapped = topology-capable fabric devices (switches/routers) absent from
+	// every topology link. Matches the Unmapped Devices page by construction
+	// (same fabric predicate + scoped device set).
+	Unmapped int `json:"unmapped"`
 }
 
 // deviceNeedsClassification mirrors web/src/lib/classify.ts needsClassification:
@@ -406,7 +436,12 @@ func deviceNeedsClassification(d db.Device) bool {
 	if d.Category == "" || d.Category == "unknown" {
 		return true
 	}
-	if d.Vendor == nil || strings.TrimSpace(*d.Vendor) == "" {
+	// A camera is classified BY being a camera; its vendor — especially for
+	// RTSP-only cameras recorded by an NVR/DVR, which are never directly
+	// identified — is enrichment HIMS frequently can't obtain, so a blank vendor
+	// is NOT a classification gap for cameras (it was flooding this list with the
+	// site's NVR-channel cameras). Other categories still require a vendor.
+	if d.Category != "camera" && (d.Vendor == nil || strings.TrimSpace(*d.Vendor) == "") {
 		return true
 	}
 	if d.ConfidenceScore != nil && *d.ConfidenceScore > 0 && int(*d.ConfidenceScore) < missingClassLowConf && !d.ClassificationLocked {
@@ -415,9 +450,11 @@ func deviceNeedsClassification(d db.Device) bool {
 	return false
 }
 
-// badgeCounts handles GET /dashboard/badge-counts. Both counts are derived from
-// the same site-scoped device set + proven-only access map used by the Missing
-// Classification / Unmanaged Devices pages, so the badges match those pages.
+// badgeCounts handles GET /dashboard/badge-counts. Counts are derived from the
+// same site-scoped device set + management derivation used by the Missing
+// Classification / Unmanaged Devices pages, so the badges match those pages
+// exactly (unmanaged = the not-managed set per deriveManagement, which honours
+// the managed-via-NVR rule — not a raw proven-only check).
 func (s *Server) badgeCounts(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	devices, err := s.queries.ListAllDevices(ctx)
@@ -426,21 +463,30 @@ func (s *Server) badgeCounts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	devices = s.scopeDevices(ctx, devices)
-	am, err := s.deviceAccessMap(ctx)
+	// Use the SAME management derivation the Unmanaged Devices page lists by
+	// (?management=not_managed). deriveManagement applies the managed-via-NVR rule
+	// (an RTSP camera recorded by an NVR is managed VIA the recorder) and the
+	// credential_failed/needs_credential/etc. classification — so the badge equals
+	// the page. A raw !hasProven() check over-counts by every NVR-channel camera.
+	sm, err := s.buildStatusMaps(ctx)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	var missing, unmanaged int
+	mapped := s.mappedDeviceIDs(ctx)
+	var missing, unmanaged, unmapped int
 	for _, d := range devices {
 		if deviceNeedsClassification(d) {
 			missing++
 		}
-		if !am[d.ID].hasProven() { // proven-only: a bare binding is NOT managed
-			unmanaged++
+		if st, _ := sm.deriveManagement(d); st != MgmtManaged {
+			unmanaged++ // matches the "needs attention" set the Unmanaged Devices page lists
+		}
+		if isUnmappedFabric(d, mapped) {
+			unmapped++
 		}
 	}
-	writeJSON(w, http.StatusOK, badgeCountsDTO{MissingClassification: missing, Unmanaged: unmanaged})
+	writeJSON(w, http.StatusOK, badgeCountsDTO{MissingClassification: missing, Unmanaged: unmanaged, Unmapped: unmapped})
 }
 
 // expectedProtocols lists the management protocol(s) a device of this class is
@@ -466,13 +512,18 @@ func expectedProtocols(category, osFamily string) []string {
 }
 
 // accessSatisfies reports whether the device's working access methods include the
-// expected protocol (treating snmp_v2c/snmp_v3 as interchangeable).
+// expected protocol (treating snmp_v2c/snmp_v3 as interchangeable, and the web
+// family onvif/isapi/http as interchangeable — a camera proven via ISAPI still
+// satisfies an "onvif" expectation).
 func accessSatisfies(da *deviceAccess, expected string) bool {
 	if da.has(expected) {
 		return true
 	}
-	if expected == "snmp_v2c" || expected == "snmp_v3" {
+	switch expected {
+	case "snmp_v2c", "snmp_v3":
 		return da.has("snmp_v2c") || da.has("snmp_v3")
+	case "onvif", "isapi", "http":
+		return da.has("onvif") || da.has("isapi") || da.has("http")
 	}
 	return false
 }

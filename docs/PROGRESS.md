@@ -1055,3 +1055,36 @@ MIB upload, reporting/dashboard. Remaining = explicitly deferred-with-trigger:
 scan job-record API/UI; per-physical-drive (Redfish) + GetStreamUri (ONVIF) +
 vCenter-multi-host (vSphere) + CUCM AXL paging; and the live-hardware
 validations for every credentialed collector.
+
+## Subnet Credential Coverage report — BACKLOG-SSC-COVERAGE ⏳ (open, filed 2026-06-11)
+
+Follow-on to the **subnet-scoped credentials** feature (commits `3031763`..`6e70e49`,
+migrations 000074/000075 — schema `subnet_credentials`, resolver `Input.Exclusive`,
+`GET/PUT /subnets/{id}/credentials`, source on `credential_test_results`). The
+feature + live verification on the real CHR subnets (210/23 = CCTV creds, 96/24 =
+network creds) are **accepted**. This entry captures the operator-requested
+reporting layer that makes the scope posture auditable at a glance.
+
+Build a **Subnet Credential Coverage** report (page or Data-Quality card) showing:
+- subnets **with** scoped credentials (count + which kinds per subnet);
+- subnets falling back to the **global/default** set (the `⚠ uses global creds`
+  state — surfaced as a list, not just per-row badges);
+- **devices that still failed auth because their subnet has no valid web/scoped
+  credential** — i.e. `credential_test_results` rows where `category='auth_failed'`
+  AND the device's subnet is scoped-but-wrong, OR unscoped-and-sprayed; the
+  actionable "assign the right cred here" list (ties back to the CCTV credential
+  gap: cameras whose subnet has no working web cred);
+- a **warning when a CCTV subnet has too many HTTP credentials selected** (>3 of the
+  same web kind → Hikvision lockout risk; mirror the existing `webOverLimit` warn in
+  the scan dialog / CctvCollect, applied at the subnet level).
+
+Data is already present: `subnet_credentials` (assignments), `SubnetCredentialCounts`
+(per-subnet count + kinds), `credential_test_results.source` (subnet/default/manual/
+bound) + `category` (auth_failed). Mostly a read-model + UI assembly; no new
+collection.
+
+**Trigger:** when the operator scopes a 3rd+ subnet, OR when the first scoped-subnet
+auth_failed appears in coverage (i.e. a device in a scoped subnet whose assigned cred
+is wrong) — that's the moment the at-a-glance coverage view earns its keep over the
+per-row badges. **Referenced-from:** subnet-scoped credentials feature (this turn);
+related to Management Access Coverage + Data Quality credential issues.

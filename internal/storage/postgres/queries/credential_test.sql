@@ -8,8 +8,8 @@ RETURNING id, started_at, finished_at, actor, pairs, successes, failures;
 
 -- name: InsertCredentialTestResult :exec
 INSERT INTO credential_test_results
-  (run_id, device_id, credential_id, credential_name, kind, protocol, category, success, detail, latency_ms, actor, relevant)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12);
+  (run_id, device_id, credential_id, credential_name, kind, protocol, category, success, detail, latency_ms, actor, relevant, source)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13);
 
 -- name: ListCredentialTestRuns :many
 SELECT id, started_at, finished_at, actor, pairs, successes, failures
@@ -19,7 +19,7 @@ SELECT id, started_at, finished_at, actor, pairs, successes, failures
 
 -- name: ListCredentialTestResultsByRun :many
 SELECT id, run_id, device_id, credential_id, credential_name, kind, protocol,
-       category, success, detail, latency_ms, tested_at, actor
+       category, success, detail, latency_ms, tested_at, actor, source
   FROM credential_test_results
   WHERE run_id = $1
   ORDER BY success DESC, device_id;
@@ -27,7 +27,7 @@ SELECT id, run_id, device_id, credential_id, credential_name, kind, protocol,
 -- name: ListDeviceCredentialTests :many
 -- Full recent test history for one device (Device Detail → Credential Health).
 SELECT id, run_id, device_id, credential_id, credential_name, kind, protocol,
-       category, success, detail, latency_ms, tested_at, actor, relevant
+       category, success, detail, latency_ms, tested_at, actor, relevant, source
   FROM credential_test_results
   WHERE device_id = $1
   ORDER BY tested_at DESC
@@ -43,6 +43,19 @@ SELECT r.id, r.run_id, r.device_id, d.name AS device_name, r.credential_id,
   WHERE r.credential_id = $1
   ORDER BY r.tested_at DESC
   LIMIT $2;
+
+-- name: LatestCCTVCredTest :one
+-- The most recent ONVIF/ISAPI credential-test outcome for a device — the CCTV
+-- fleet skip-guard reads this to avoid re-attempting a device that recently
+-- auth-failed (which would accumulate failed logins toward a Hikvision IP
+-- lockout). When two attempts share a timestamp (ONVIF + ISAPI in one batch) the
+-- auth_failed row wins the tie, so a transport failure on one protocol never
+-- masks an auth rejection on the other. No rows ⇒ never tested ⇒ safe to attempt.
+SELECT category, success, tested_at
+  FROM credential_test_results
+  WHERE device_id = $1 AND protocol IN ('onvif', 'isapi')
+  ORDER BY tested_at DESC, (category = 'auth_failed') DESC
+  LIMIT 1;
 
 -- name: LatestDeviceKindResults :many
 -- The most recent result per (device, credential-kind). This is the read model

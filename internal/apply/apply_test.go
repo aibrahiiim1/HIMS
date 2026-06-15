@@ -26,6 +26,8 @@ type fakeWriter struct {
 	facts      []db.UpsertDeviceFactParams
 	ifaces     []db.UpsertInterfaceParams
 	vlans      []db.UpsertVlanParams
+	portVlans  []db.UpsertPortVlanParams
+	arp        []db.UpsertARPParams
 	neighbors  []db.UpsertNeighborParams
 	bmcInfo    []db.UpsertBMCInfoParams
 	bmcSensors []db.UpsertBMCSensorParams
@@ -47,11 +49,11 @@ func (f *fakeWriter) LiveDeviceByIP(_ context.Context, _ *netip.Addr) (db.Device
 }
 func (f *fakeWriter) CreateDevice(_ context.Context, arg db.CreateDeviceParams) (db.Device, error) {
 	f.created = append(f.created, arg)
-	return db.Device{ID: uuid.New(), Name: arg.Name}, nil
+	return db.Device{ID: uuid.New(), Name: arg.Name, Category: arg.Category, PrimaryIp: arg.PrimaryIp}, nil
 }
 func (f *fakeWriter) UpdateDiscoveredDevice(_ context.Context, arg db.UpdateDiscoveredDeviceParams) (db.Device, error) {
 	f.updated = append(f.updated, arg)
-	return db.Device{ID: arg.ID, Name: arg.Name}, nil
+	return db.Device{ID: arg.ID, Name: arg.Name, Category: arg.Category}, nil
 }
 func (f *fakeWriter) SetDeviceCredential(_ context.Context, arg db.SetDeviceCredentialParams) error {
 	f.creds = append(f.creds, arg)
@@ -81,10 +83,22 @@ func (f *fakeWriter) DeleteStaleVlans(_ context.Context, _ db.DeleteStaleVlansPa
 	f.staleCalls++
 	return nil
 }
+func (f *fakeWriter) UpsertPortVlan(_ context.Context, arg db.UpsertPortVlanParams) error {
+	f.portVlans = append(f.portVlans, arg)
+	return nil
+}
+func (f *fakeWriter) DeleteStalePortVlans(_ context.Context, _ db.DeleteStalePortVlansParams) error {
+	return nil
+}
 func (f *fakeWriter) UpsertMAC(_ context.Context, _ db.UpsertMACParams) error { return nil }
 func (f *fakeWriter) DeleteStaleMACEntries(_ context.Context, _ db.DeleteStaleMACEntriesParams) error {
 	return nil
 }
+func (f *fakeWriter) UpsertARP(_ context.Context, arg db.UpsertARPParams) error {
+	f.arp = append(f.arp, arg)
+	return nil
+}
+func (f *fakeWriter) DeleteStaleARP(_ context.Context, _ db.DeleteStaleARPParams) error { return nil }
 func (f *fakeWriter) UpsertNeighbor(_ context.Context, arg db.UpsertNeighborParams) (db.Neighbor, error) {
 	f.neighbors = append(f.neighbors, arg)
 	return db.Neighbor{}, nil
@@ -196,6 +210,7 @@ func switchResult() discovery.HostResult {
 			Interfaces: []driver.InterfaceSnap{{IfIndex: 1, IfName: "1/1/1", PortRole: "access"}, {IfIndex: 2, IfName: "1/1/2"}},
 			VLANs:      []driver.VLANSnap{{VLANID: 10, Name: "guests"}},
 			Neighbors:  []driver.NeighborSnap{{LocalIfIndex: 1, RemSysName: "core", Protocol: "lldp"}},
+			ARP:        []driver.ARPSnap{{IP: "10.0.0.50", MAC: "aa:bb:cc:dd:ee:ff", IfIndex: 1}, {IP: "bad-ip", MAC: "00:00:00:00:00:01"}},
 		},
 	}
 }
@@ -221,6 +236,10 @@ func TestApply_CreatePathPersistsEverything(t *testing.T) {
 	}
 	if len(f.ifaces) != 2 || len(f.vlans) != 1 || len(f.neighbors) != 1 {
 		t.Fatalf("inventory not persisted: ifaces=%d vlans=%d neighbors=%d", len(f.ifaces), len(f.vlans), len(f.neighbors))
+	}
+	// ARP: the valid binding persists; the malformed IP is skipped (not 2).
+	if len(f.arp) != 1 || f.arp[0].Mac != "aa:bb:cc:dd:ee:ff" || f.arp[0].IpAddress.String() != "10.0.0.50" {
+		t.Fatalf("ARP not persisted/parsed correctly: %+v", f.arp)
 	}
 	if len(f.facts) != 1 {
 		t.Fatalf("KV facts not persisted: %+v", f.facts)
@@ -375,6 +394,36 @@ func TestApply_LockedClassificationStillPreserved(t *testing.T) {
 	}
 	if len(f.updated) != 1 || f.updated[0].Category != string(domain.CatPrinter) {
 		t.Fatalf("operator lock not honored: %+v", f.updated)
+	}
+}
+
+// TestApply_SNMPDoesNotRebindCCTVCredential pins the credential-drift fix: an SNMP
+// discovery success on a camera/NVR/DVR must NOT bind/overwrite credential_id —
+// that would clobber the ONVIF/ISAPI web credential CCTV collection depends on.
+// A switch (non-CCTV) with the same SNMP credential is still bound normally.
+func TestApply_SNMPDoesNotRebindCCTVCredential(t *testing.T) {
+	for _, cat := range []domain.DeviceCategory{domain.CatNVR, domain.CatCamera, domain.CatDVR} {
+		f := &fakeWriter{}
+		res := discovery.HostResult{
+			IP:        netip.MustParseAddr("172.21.210.10"),
+			Alive:     true,
+			Match:     driver.Match{Confidence: 90, Category: cat},
+			BoundCred: &credresolver.CredRef{ID: uuid.New(), Kind: domain.CredSNMPv2c},
+		}
+		if _, err := New(f).Apply(context.Background(), res, nil); err != nil {
+			t.Fatalf("%s: Apply err %v", cat, err)
+		}
+		if len(f.creds) != 0 {
+			t.Errorf("%s: SNMP credential was bound (%d binds) — must be skipped on CCTV devices", cat, len(f.creds))
+		}
+	}
+	// Control: a switch authenticating via SNMP IS bound (guard only protects CCTV).
+	f := &fakeWriter{}
+	if _, err := New(f).Apply(context.Background(), switchResult(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.creds) != 1 {
+		t.Errorf("switch SNMP credential not bound (%d); guard must only protect camera/nvr/dvr", len(f.creds))
 	}
 }
 

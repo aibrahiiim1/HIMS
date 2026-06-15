@@ -100,6 +100,7 @@ const (
 	CatVirtualMachine     DeviceCategory = "virtual_machine"
 	CatStorage            DeviceCategory = "storage"
 	CatNVR                DeviceCategory = "nvr"
+	CatDVR                DeviceCategory = "dvr"
 	CatCamera             DeviceCategory = "camera"
 	CatPrinter            DeviceCategory = "printer"
 	CatIPPhone            DeviceCategory = "ip_phone"

@@ -60,3 +60,24 @@ func TestPlanProtocols_ApplianceVsLinux(t *testing.T) {
 		})
 	}
 }
+
+// A Hikvision camera/recorder exposing ONLY its 8000+octet web/ISAPI port must be
+// planned as a camera (ONVIF/HTTP relevant, SNMP/SSH/WinRM not) — not dropped into
+// the SNMP-expected unknown bucket. A plain 8080 web app must NOT become a camera.
+func TestPlanProtocols_HikvisionWebPort(t *testing.T) {
+	p := planProtocols([]int{8011}, "", "", "", "")
+	if p.Candidate != "camera" {
+		t.Fatalf("8011-only host: candidate = %q, want camera", p.Candidate)
+	}
+	if !p.Relevant(domain.CredONVIF) || !p.Relevant(domain.CredHTTPBasic) {
+		t.Errorf("camera must allow ONVIF + HTTP-Basic")
+	}
+	if p.SNMPRelevant() || p.Relevant(domain.CredSSH) || p.Relevant(domain.CredWinRM) {
+		t.Errorf("camera must not probe SNMP/SSH/WinRM (got snmp=%v ssh=%v winrm=%v)",
+			p.SNMPRelevant(), p.Relevant(domain.CredSSH), p.Relevant(domain.CredWinRM))
+	}
+	// A plain 8080 web app is NOT a camera (no 8000+octet signature).
+	if got := planProtocols([]int{8080}, "", "nginx", "", ""); got.Candidate == "camera" {
+		t.Errorf("8080-only host must not be classified camera")
+	}
+}

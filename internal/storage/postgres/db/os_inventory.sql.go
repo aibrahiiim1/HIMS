@@ -105,7 +105,7 @@ func (q *Queries) DeleteStaleOSSoftware(ctx context.Context, arg DeleteStaleOSSo
 
 const getOSInventory = `-- name: GetOSInventory :one
 
-SELECT device_id, collection_method, collected_at, hostname, fqdn, domain, workgroup, logged_on_user, ad_distinguished_name, ad_ou_path, os_caption, os_version, os_build, os_edition, os_arch, kernel, install_date, last_boot, uptime_seconds, timezone, manufacturer, model, serial, asset_tag, bios_version, bios_date, cpu_model, cpu_sockets, cpu_cores, ram_total_bytes, ram_slots, swap_total_bytes, events_critical_24h, events_error_24h, events_warning_24h, last_critical_event, created_at, updated_at FROM os_inventory WHERE device_id = $1
+SELECT device_id, collection_method, collected_at, hostname, fqdn, domain, workgroup, logged_on_user, ad_distinguished_name, ad_ou_path, os_caption, os_version, os_build, os_edition, os_arch, kernel, install_date, last_boot, uptime_seconds, timezone, manufacturer, model, serial, asset_tag, bios_version, bios_date, cpu_model, cpu_sockets, cpu_cores, ram_total_bytes, ram_slots, swap_total_bytes, events_critical_24h, events_error_24h, events_warning_24h, last_critical_event, created_at, updated_at, software_note FROM os_inventory WHERE device_id = $1
 `
 
 // Deep OS Inventory queries. The 1:1 summary is upserted per device; the 1:N
@@ -153,6 +153,7 @@ func (q *Queries) GetOSInventory(ctx context.Context, deviceID uuid.UUID) (OsInv
 		&i.LastCriticalEvent,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SoftwareNote,
 	)
 	return i, err
 }
@@ -468,6 +469,7 @@ INSERT INTO os_inventory (
     manufacturer, model, serial, asset_tag, bios_version, bios_date,
     cpu_model, cpu_sockets, cpu_cores, ram_total_bytes, ram_slots, swap_total_bytes,
     events_critical_24h, events_error_24h, events_warning_24h, last_critical_event,
+    software_note,
     updated_at
 ) VALUES (
     $1, $2, now(),
@@ -477,6 +479,7 @@ INSERT INTO os_inventory (
     $20, $21, $22, $23, $24, $25,
     $26, $27, $28, $29, $30, $31,
     $32, $33, $34, $35,
+    $36,
     now()
 )
 ON CONFLICT (device_id) DO UPDATE SET
@@ -496,8 +499,9 @@ ON CONFLICT (device_id) DO UPDATE SET
     swap_total_bytes = EXCLUDED.swap_total_bytes,
     events_critical_24h = EXCLUDED.events_critical_24h, events_error_24h = EXCLUDED.events_error_24h,
     events_warning_24h = EXCLUDED.events_warning_24h, last_critical_event = EXCLUDED.last_critical_event,
+    software_note = EXCLUDED.software_note,
     updated_at = now()
-RETURNING device_id, collection_method, collected_at, hostname, fqdn, domain, workgroup, logged_on_user, ad_distinguished_name, ad_ou_path, os_caption, os_version, os_build, os_edition, os_arch, kernel, install_date, last_boot, uptime_seconds, timezone, manufacturer, model, serial, asset_tag, bios_version, bios_date, cpu_model, cpu_sockets, cpu_cores, ram_total_bytes, ram_slots, swap_total_bytes, events_critical_24h, events_error_24h, events_warning_24h, last_critical_event, created_at, updated_at
+RETURNING device_id, collection_method, collected_at, hostname, fqdn, domain, workgroup, logged_on_user, ad_distinguished_name, ad_ou_path, os_caption, os_version, os_build, os_edition, os_arch, kernel, install_date, last_boot, uptime_seconds, timezone, manufacturer, model, serial, asset_tag, bios_version, bios_date, cpu_model, cpu_sockets, cpu_cores, ram_total_bytes, ram_slots, swap_total_bytes, events_critical_24h, events_error_24h, events_warning_24h, last_critical_event, created_at, updated_at, software_note
 `
 
 type UpsertOSInventoryParams struct {
@@ -536,6 +540,7 @@ type UpsertOSInventoryParams struct {
 	EventsError24h      *int32     `json:"events_error_24h"`
 	EventsWarning24h    *int32     `json:"events_warning_24h"`
 	LastCriticalEvent   *string    `json:"last_critical_event"`
+	SoftwareNote        string     `json:"software_note"`
 }
 
 func (q *Queries) UpsertOSInventory(ctx context.Context, arg UpsertOSInventoryParams) (OsInventory, error) {
@@ -575,6 +580,7 @@ func (q *Queries) UpsertOSInventory(ctx context.Context, arg UpsertOSInventoryPa
 		arg.EventsError24h,
 		arg.EventsWarning24h,
 		arg.LastCriticalEvent,
+		arg.SoftwareNote,
 	)
 	var i OsInventory
 	err := row.Scan(
@@ -616,6 +622,7 @@ func (q *Queries) UpsertOSInventory(ctx context.Context, arg UpsertOSInventoryPa
 		&i.LastCriticalEvent,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SoftwareNote,
 	)
 	return i, err
 }

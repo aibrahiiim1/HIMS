@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -37,11 +38,32 @@ func TestHTTPBasic_RedirectIsNotSuccess(t *testing.T) {
 			}))
 			defer srv.Close()
 			host := strings.TrimPrefix(srv.URL, "http://") // host:port
-			out := testHTTP(context.Background(), "admin:secret", host, 5*time.Second)
+			out := testHTTP(context.Background(), "admin:secret", host, 5*time.Second, nil)
 			if out.Category != tc.want {
 				t.Errorf("status %d → category %q, want %q (detail: %s)", tc.code, out.Category, tc.want, out.Detail)
 			}
 		})
+	}
+}
+
+// A device whose web UI is on a non-standard port (e.g. 8015 on a Hikvision NVR)
+// must be reached via WebPorts, not reported "no HTTP/HTTPS response" because only
+// :80/:443 were probed.
+func TestHTTP_NonStandardPort(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized) // ISAPI 401 = reached + needs auth
+	}))
+	defer srv.Close()
+	hostPort := strings.TrimPrefix(srv.URL, "http://")
+	host, portStr, _ := strings.Cut(hostPort, ":")
+	port, _ := strconv.Atoi(portStr)
+	// Without WebPorts, only :80/:443 are tried → unreachable.
+	if out := testHTTP(context.Background(), "admin:secret", host, 3*time.Second, nil); out.Category != CatUnreachable {
+		t.Errorf("no WebPorts: got %q, want unreachable", out.Category)
+	}
+	// With the actual port supplied → reached, 401 → auth_failed (not unreachable).
+	if out := testHTTP(context.Background(), "admin:secret", host, 3*time.Second, []int{port}); out.Category != CatAuthFailed {
+		t.Errorf("with WebPort %d: got %q (%s), want auth_failed", port, out.Category, out.Detail)
 	}
 }
 

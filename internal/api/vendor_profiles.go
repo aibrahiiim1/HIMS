@@ -20,6 +20,7 @@ import (
 	"github.com/coralsearesorts/hims/internal/domain"
 	"github.com/coralsearesorts/hims/internal/extreme"
 	"github.com/coralsearesorts/hims/internal/omada"
+	"github.com/coralsearesorts/hims/internal/omnipcx"
 	"github.com/coralsearesorts/hims/internal/onvif"
 	"github.com/coralsearesorts/hims/internal/ruckus"
 	"github.com/coralsearesorts/hims/internal/ruckuszd"
@@ -54,11 +55,27 @@ func parseVPConfig(b []byte) vpConfig {
 	return c
 }
 
-// insecureDoer is an HTTP client that tolerates self-signed vendor certs.
+// insecureDoer is an HTTP client that tolerates self-signed vendor certs AND
+// the legacy TLS of old appliances (e.g. CUCM 7.x, ESXi). MinVersion TLS 1.0
+// alone is not enough — old boxes offer only legacy/insecure cipher suites that
+// Go disables by default, so the handshake fails ("remote error: tls: handshake
+// failure"). Enabling the full cipher list (secure + insecure) is what lets the
+// CUCM AXL endpoint complete the handshake. Verified live against CUCM 120.0.200.10.
 func insecureDoer(timeout time.Duration) *http.Client {
+	var ids []uint16
+	for _, s := range tls.CipherSuites() {
+		ids = append(ids, s.ID)
+	}
+	for _, s := range tls.InsecureCipherSuites() {
+		ids = append(ids, s.ID)
+	}
 	return &http.Client{
-		Timeout:   timeout,
-		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS10}},
+		Timeout: timeout,
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: true,
+			MinVersion:         tls.VersionTLS10,
+			CipherSuites:       ids,
+		}},
 	}
 }
 
@@ -356,7 +373,13 @@ func (s *Server) runVendorProfileCollection(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "invalid id", http.StatusBadRequest)
 		return
 	}
-	ctx := r.Context()
+	// Detach the collection from the request lifecycle: some vendor collections
+	// run for minutes (e.g. the OmniPCX mgr telnet walk of ~800 subscribers), and
+	// a client navigation or dev-proxy timeout would otherwise cancel r.Context()
+	// and abort the collection mid-run. WithoutCancel keeps config values but not
+	// cancellation; a generous deadline still bounds it.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 6*time.Minute)
+	defer cancel()
 	p, err := s.queries.GetVendorProfile(ctx, id)
 	if err != nil {
 		writeErr(w, err)
@@ -410,6 +433,9 @@ func (s *Server) runVendorProfileCollection(w http.ResponseWriter, r *http.Reque
 		_ = s.queries.SetVendorProfileTest(ctx, db.SetVendorProfileTestParams{ID: id, LastTestOk: &ok, LastTestDetail: detail})
 	case "cucm":
 		ok, detail = s.collectCUCMProfile(ctx, p, dev)
+		_ = s.queries.SetVendorProfileTest(ctx, db.SetVendorProfileTestParams{ID: id, LastTestOk: &ok, LastTestDetail: detail})
+	case "alcatel":
+		ok, detail = s.collectAlcatelProfile(ctx, p, dev)
 		_ = s.queries.SetVendorProfileTest(ctx, db.SetVendorProfileTestParams{ID: id, LastTestOk: &ok, LastTestDetail: detail})
 	default:
 		detail = p.VendorType + " deep collection not implemented yet — detection + classification + this gate remain active"
@@ -550,21 +576,29 @@ func (s *Server) collectCUCMProfile(ctx context.Context, p db.VendorConnectionPr
 	if err != nil {
 		return false, "CUCM AXL failed: " + shortErr(err)
 	}
+	// Best-effort real-time IP + registration status via RisPort (the AXL DB has
+	// no live IP). A RisPort failure is non-fatal — phones still persist sans IP.
+	ris, ipCount := map[string]cucm.DeviceStatus{}, 0
+	if r, rerr := c.RegisteredPhoneStatus(cctx); rerr == nil {
+		ris = r
+	}
 	now := time.Now().UTC()
 	for _, ph := range phones {
-		var model, desc, pool *string
-		if ph.Model != "" {
-			model = &ph.Model
+		ip, reg, registrar := ph.IP, "", ""
+		if st, ok := ris[ph.Name]; ok {
+			if ip == "" {
+				ip = st.IP
+			}
+			reg, registrar = st.Status, st.Registrar
 		}
-		if ph.Description != "" {
-			desc = &ph.Description
-		}
-		if ph.DevicePool != "" {
-			pool = &ph.DevicePool
+		if ip != "" {
+			ipCount++
 		}
 		_ = s.queries.UpsertPbxPhone(ctx, db.UpsertPbxPhoneParams{
-			DeviceID: dev.ID, Name: ph.Name, Model: model, Description: desc, DevicePool: pool,
-			CollectionSource: "axl", LastSeenAt: now,
+			DeviceID: dev.ID, Name: ph.Name, Model: nzPtr(ph.Model), Description: nzPtr(ph.Description),
+			DevicePool: nzPtr(ph.DevicePool), CollectionSource: "axl", LastSeenAt: now,
+			Extension: nzPtr(ph.Extension), MacAddress: nzPtr(ph.MAC), IpAddress: nzPtr(ip),
+			Registration: nzPtr(reg), Registrar: nzPtr(registrar),
 		})
 	}
 	if blob, merr := domain.MarshalEvidence(nil); merr == nil {
@@ -579,7 +613,50 @@ func (s *Server) collectCUCMProfile(ctx context.Context, p db.VendorConnectionPr
 		_ = s.queries.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: dev.ID, CredentialID: p.CredentialID})
 	}
 	_ = s.queries.UpdateDeviceMonitoringStatus(ctx, db.UpdateDeviceMonitoringStatusParams{ID: dev.ID, Status: "up"})
-	return true, "CUCM collected — " + itoaN(len(phones)) + " phone(s)"
+	detail := "CUCM collected — " + itoaN(len(phones)) + " phone(s)"
+	if ipCount > 0 {
+		detail += " (" + itoaN(ipCount) + " with live IP)"
+	}
+	return true, detail
+}
+
+// collectAlcatelProfile pulls the Alcatel OmniPCX Enterprise subscriber directory
+// over the `mgr` telnet CLI (see internal/omnipcx) and persists it to pbx_phones
+// with source "omnipcx". TargetUrl is the OXE host (telnet :23). Per-subscriber
+// name/set-type is a future enrichment (it needs a per-instance drilldown).
+func (s *Server) collectAlcatelProfile(ctx context.Context, p db.VendorConnectionProfile, dev db.Device) (bool, string) {
+	user, pass, hasCred := s.vendorProfileSecret(ctx, p)
+	if !hasCred {
+		return false, "no usable credential bound to this profile"
+	}
+	cctx, cancel := context.WithTimeout(ctx, 180*time.Second)
+	defer cancel()
+	c := &omnipcx.Client{Host: stripScheme(p.TargetUrl), User: user, Pass: pass}
+	res, err := c.ListSubscribers(cctx)
+	if err != nil {
+		return false, "OmniPCX mgr failed: " + shortErr(err)
+	}
+	now := time.Now().UTC()
+	for _, sub := range res.Subscribers {
+		// On OXE the directory number IS the entry key, so extension = number.
+		_ = s.queries.UpsertPbxPhone(ctx, db.UpsertPbxPhoneParams{
+			DeviceID: dev.ID, Name: sub.Number, Model: nzPtr(sub.SetType), Description: nzPtr(sub.Name),
+			CollectionSource: "omnipcx", LastSeenAt: now, Extension: nzPtr(sub.Number),
+		})
+	}
+	if blob, merr := domain.MarshalEvidence(nil); merr == nil {
+		conf := int16(85)
+		dc := "omnipcx"
+		_, _ = s.queries.UpdateDeviceClassification(ctx, db.UpdateDeviceClassificationParams{
+			ID: dev.ID, Category: string(domain.CatPBX), OsFamily: "", DeviceClass: &dc,
+			ConfidenceScore: &conf, ClassificationEvidence: blob,
+		})
+	}
+	if p.CredentialID != nil {
+		_ = s.queries.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: dev.ID, CredentialID: p.CredentialID})
+	}
+	_ = s.queries.UpdateDeviceMonitoringStatus(ctx, db.UpdateDeviceMonitoringStatusParams{ID: dev.ID, Status: "up"})
+	return true, "OmniPCX collected — " + itoaN(len(res.Subscribers)) + " subscriber(s)"
 }
 
 // resolveScanProfile finds the best enabled Vendor Connection Profile for a

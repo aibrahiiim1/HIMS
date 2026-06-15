@@ -12,8 +12,78 @@ import (
 	"github.com/google/uuid"
 )
 
+const countLinkedNVRChannels = `-- name: CountLinkedNVRChannels :one
+SELECT count(*) FROM nvr_channels WHERE camera_device_id IS NOT NULL
+`
+
+// Channels whose camera IP matched an already-discovered standalone camera device.
+func (q *Queries) CountLinkedNVRChannels(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countLinkedNVRChannels)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countNVRChannels = `-- name: CountNVRChannels :one
+SELECT count(*) FROM nvr_channels
+`
+
+// Total camera channels collected across all recorders (CCTV summary). Channels
+// are NOT inventory devices, so this is reported separately and never folded into
+// the device count.
+func (q *Queries) CountNVRChannels(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countNVRChannels)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const findNVRsForCamera = `-- name: FindNVRsForCamera :many
+SELECT ch.nvr_device_id, d.name AS nvr_name, COALESCE(host(d.primary_ip),'')::text AS nvr_ip,
+       ch.channel_no, COALESCE(ch.status,'')::text AS status
+FROM nvr_channels ch JOIN devices d ON d.id = ch.nvr_device_id AND d.deleted_at IS NULL
+WHERE ch.camera_device_id = $1
+ORDER BY d.name, ch.channel_no
+`
+
+type FindNVRsForCameraRow struct {
+	NvrDeviceID uuid.UUID `json:"nvr_device_id"`
+	NvrName     string    `json:"nvr_name"`
+	NvrIp       string    `json:"nvr_ip"`
+	ChannelNo   int32     `json:"channel_no"`
+	Status      string    `json:"status"`
+}
+
+// Path Finder: which NVR/DVR(s) record this camera device, with the channel +
+// recording status, so a camera's path shows the recorder it feeds.
+func (q *Queries) FindNVRsForCamera(ctx context.Context, cameraDeviceID *uuid.UUID) ([]FindNVRsForCameraRow, error) {
+	rows, err := q.db.Query(ctx, findNVRsForCamera, cameraDeviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []FindNVRsForCameraRow{}
+	for rows.Next() {
+		var i FindNVRsForCameraRow
+		if err := rows.Scan(
+			&i.NvrDeviceID,
+			&i.NvrName,
+			&i.NvrIp,
+			&i.ChannelNo,
+			&i.Status,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getCameraInfo = `-- name: GetCameraInfo :one
-SELECT device_id, manufacturer, model, resolution, rtsp_url, onvif_url, last_seen_at FROM camera_info WHERE device_id = $1
+SELECT device_id, manufacturer, model, resolution, rtsp_url, onvif_url, last_seen_at, device_name, firmware, serial, mac_address, ip_address, subnet_mask, gateway, dns_server, ntp_server, time_zone FROM camera_info WHERE device_id = $1
 `
 
 func (q *Queries) GetCameraInfo(ctx context.Context, deviceID uuid.UUID) (CameraInfo, error) {
@@ -27,12 +97,73 @@ func (q *Queries) GetCameraInfo(ctx context.Context, deviceID uuid.UUID) (Camera
 		&i.RtspUrl,
 		&i.OnvifUrl,
 		&i.LastSeenAt,
+		&i.DeviceName,
+		&i.Firmware,
+		&i.Serial,
+		&i.MacAddress,
+		&i.IpAddress,
+		&i.SubnetMask,
+		&i.Gateway,
+		&i.DnsServer,
+		&i.NtpServer,
+		&i.TimeZone,
 	)
 	return i, err
 }
 
+const getNVRInfo = `-- name: GetNVRInfo :one
+SELECT device_id, manufacturer, model, serial, firmware, device_type, channel_count, hdd_count, recording, health, source, collected_at FROM nvr_info WHERE device_id = $1
+`
+
+func (q *Queries) GetNVRInfo(ctx context.Context, deviceID uuid.UUID) (NvrInfo, error) {
+	row := q.db.QueryRow(ctx, getNVRInfo, deviceID)
+	var i NvrInfo
+	err := row.Scan(
+		&i.DeviceID,
+		&i.Manufacturer,
+		&i.Model,
+		&i.Serial,
+		&i.Firmware,
+		&i.DeviceType,
+		&i.ChannelCount,
+		&i.HddCount,
+		&i.Recording,
+		&i.Health,
+		&i.Source,
+		&i.CollectedAt,
+	)
+	return i, err
+}
+
+const listLinkedCameraDeviceIDs = `-- name: ListLinkedCameraDeviceIDs :many
+SELECT DISTINCT camera_device_id FROM nvr_channels WHERE camera_device_id IS NOT NULL
+`
+
+// Camera device_ids that are an NVR/DVR channel (recorded by a recorder). These
+// are managed VIA the recorder even when they expose no directly-authenticable
+// web/ONVIF interface (RTSP-only feeds) — so they must not show credential_failed.
+func (q *Queries) ListLinkedCameraDeviceIDs(ctx context.Context) ([]*uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listLinkedCameraDeviceIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*uuid.UUID{}
+	for rows.Next() {
+		var camera_device_id *uuid.UUID
+		if err := rows.Scan(&camera_device_id); err != nil {
+			return nil, err
+		}
+		items = append(items, camera_device_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listNVRChannels = `-- name: ListNVRChannels :many
-SELECT id, nvr_device_id, channel_no, camera_name, camera_ip, camera_device_id, status, last_seen_at FROM nvr_channels WHERE nvr_device_id = $1 ORDER BY channel_no
+SELECT id, nvr_device_id, channel_no, camera_name, camera_ip, camera_device_id, status, last_seen_at, enabled, recording, resolution FROM nvr_channels WHERE nvr_device_id = $1 ORDER BY channel_no
 `
 
 func (q *Queries) ListNVRChannels(ctx context.Context, nvrDeviceID uuid.UUID) ([]NvrChannel, error) {
@@ -53,6 +184,9 @@ func (q *Queries) ListNVRChannels(ctx context.Context, nvrDeviceID uuid.UUID) ([
 			&i.CameraDeviceID,
 			&i.Status,
 			&i.LastSeenAt,
+			&i.Enabled,
+			&i.Recording,
+			&i.Resolution,
 		); err != nil {
 			return nil, err
 		}
@@ -62,6 +196,199 @@ func (q *Queries) ListNVRChannels(ctx context.Context, nvrDeviceID uuid.UUID) ([
 		return nil, err
 	}
 	return items, nil
+}
+
+const listNVRStorage = `-- name: ListNVRStorage :many
+SELECT id, nvr_device_id, hdd_id, name, status, capacity_mb, free_mb, property, source, last_seen_at FROM nvr_storage WHERE nvr_device_id = $1 ORDER BY hdd_id
+`
+
+func (q *Queries) ListNVRStorage(ctx context.Context, nvrDeviceID uuid.UUID) ([]NvrStorage, error) {
+	rows, err := q.db.Query(ctx, listNVRStorage, nvrDeviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []NvrStorage{}
+	for rows.Next() {
+		var i NvrStorage
+		if err := rows.Scan(
+			&i.ID,
+			&i.NvrDeviceID,
+			&i.HddID,
+			&i.Name,
+			&i.Status,
+			&i.CapacityMb,
+			&i.FreeMb,
+			&i.Property,
+			&i.Source,
+			&i.LastSeenAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const nVRChannelStats = `-- name: NVRChannelStats :one
+SELECT count(*)::bigint AS total, count(camera_device_id)::bigint AS linked
+FROM nvr_channels WHERE nvr_device_id = $1
+`
+
+type NVRChannelStatsRow struct {
+	Total  int64 `json:"total"`
+	Linked int64 `json:"linked"`
+}
+
+// Path Finder: per-NVR channel totals (and how many are linked to a camera device).
+func (q *Queries) NVRChannelStats(ctx context.Context, nvrDeviceID uuid.UUID) (NVRChannelStatsRow, error) {
+	row := q.db.QueryRow(ctx, nVRChannelStats, nvrDeviceID)
+	var i NVRChannelStatsRow
+	err := row.Scan(&i.Total, &i.Linked)
+	return i, err
+}
+
+const reconcileNVRChannelLinks = `-- name: ReconcileNVRChannelLinks :execrows
+UPDATE nvr_channels ch
+SET camera_device_id = pick.id
+FROM (
+    SELECT DISTINCT ON (primary_ip) primary_ip, id
+    FROM devices
+    WHERE deleted_at IS NULL AND primary_ip IS NOT NULL
+    ORDER BY primary_ip, updated_at DESC
+) pick
+WHERE ch.camera_ip IS NOT NULL
+  AND pick.primary_ip = ch.camera_ip
+  AND pick.id <> ch.nvr_device_id
+  AND ch.camera_device_id IS DISTINCT FROM pick.id
+`
+
+// Link every NVR/DVR channel to the live device at its camera_ip, so a channel
+// and the standalone camera device cross-reference regardless of the order they
+// were discovered/collected. The per-channel link is computed once at NVR-collect
+// time (persistNVR via LiveDeviceByIP), so a camera discovered AFTER its NVR was
+// collected — or one whose apply raced the NVR collect — would otherwise stay
+// unlinked forever. Idempotent + set-based: exact primary_ip match, never links a
+// channel to its own NVR, picks the most-recently-updated device when an IP
+// recurs. Device deletes clear links via the FK (ON DELETE SET NULL), so this
+// only ADDS/repoints. Returns the number of channels (re)linked.
+func (q *Queries) ReconcileNVRChannelLinks(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, reconcileNVRChannelLinks)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const searchNVRChannels = `-- name: SearchNVRChannels :many
+SELECT ch.nvr_device_id, d.name AS nvr_name, d.category AS nvr_category,
+       ch.channel_no, ch.camera_name, COALESCE(host(ch.camera_ip), '')::text AS camera_ip,
+       ch.status, ch.camera_device_id
+FROM nvr_channels ch
+JOIN devices d ON d.id = ch.nvr_device_id AND d.deleted_at IS NULL
+WHERE COALESCE(ch.camera_name,'') ILIKE '%'||$1||'%'
+   OR COALESCE(host(ch.camera_ip),'') ILIKE '%'||$1||'%'
+   OR CAST(ch.channel_no AS TEXT) ILIKE '%'||$1||'%'
+   OR d.name ILIKE '%'||$1||'%'
+ORDER BY d.name, ch.channel_no
+LIMIT 50
+`
+
+type SearchNVRChannelsRow struct {
+	NvrDeviceID    uuid.UUID  `json:"nvr_device_id"`
+	NvrName        string     `json:"nvr_name"`
+	NvrCategory    string     `json:"nvr_category"`
+	ChannelNo      int32      `json:"channel_no"`
+	CameraName     *string    `json:"camera_name"`
+	CameraIp       string     `json:"camera_ip"`
+	Status         string     `json:"status"`
+	CameraDeviceID *uuid.UUID `json:"camera_device_id"`
+}
+
+// Global-search: NVR/DVR camera channels by channel name / camera IP / channel
+// number / recorder (NVR) name. Returns the owning recorder so a channel found
+// anywhere links back to the NVR detail page, plus any linked standalone camera
+// device. Channels are recorder-owned rows, not separate inventory devices.
+func (q *Queries) SearchNVRChannels(ctx context.Context, dollar_1 *string) ([]SearchNVRChannelsRow, error) {
+	rows, err := q.db.Query(ctx, searchNVRChannels, dollar_1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SearchNVRChannelsRow{}
+	for rows.Next() {
+		var i SearchNVRChannelsRow
+		if err := rows.Scan(
+			&i.NvrDeviceID,
+			&i.NvrName,
+			&i.NvrCategory,
+			&i.ChannelNo,
+			&i.CameraName,
+			&i.CameraIp,
+			&i.Status,
+			&i.CameraDeviceID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const upsertCameraEnrichment = `-- name: UpsertCameraEnrichment :exec
+INSERT INTO camera_info (device_id, device_name, firmware, serial, mac_address, ip_address, subnet_mask, gateway, dns_server, ntp_server, time_zone)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+ON CONFLICT (device_id) DO UPDATE SET
+    device_name = COALESCE(NULLIF(EXCLUDED.device_name,''), camera_info.device_name),
+    firmware    = COALESCE(NULLIF(EXCLUDED.firmware,''), camera_info.firmware),
+    serial      = COALESCE(NULLIF(EXCLUDED.serial,''), camera_info.serial),
+    mac_address = COALESCE(NULLIF(EXCLUDED.mac_address,''), camera_info.mac_address),
+    ip_address  = COALESCE(NULLIF(EXCLUDED.ip_address,''), camera_info.ip_address),
+    subnet_mask = COALESCE(NULLIF(EXCLUDED.subnet_mask,''), camera_info.subnet_mask),
+    gateway     = COALESCE(NULLIF(EXCLUDED.gateway,''), camera_info.gateway),
+    dns_server  = COALESCE(NULLIF(EXCLUDED.dns_server,''), camera_info.dns_server),
+    ntp_server  = COALESCE(NULLIF(EXCLUDED.ntp_server,''), camera_info.ntp_server),
+    time_zone   = COALESCE(NULLIF(EXCLUDED.time_zone,''), camera_info.time_zone),
+    last_seen_at = now()
+`
+
+type UpsertCameraEnrichmentParams struct {
+	DeviceID   uuid.UUID `json:"device_id"`
+	DeviceName *string   `json:"device_name"`
+	Firmware   *string   `json:"firmware"`
+	Serial     *string   `json:"serial"`
+	MacAddress *string   `json:"mac_address"`
+	IpAddress  *string   `json:"ip_address"`
+	SubnetMask *string   `json:"subnet_mask"`
+	Gateway    *string   `json:"gateway"`
+	DnsServer  *string   `json:"dns_server"`
+	NtpServer  *string   `json:"ntp_server"`
+	TimeZone   *string   `json:"time_zone"`
+}
+
+// Enriched read-only camera facts from ISAPI (NIC + time + firmware/serial).
+// COALESCE keeps an existing value when a re-collect doesn't re-resolve a field.
+func (q *Queries) UpsertCameraEnrichment(ctx context.Context, arg UpsertCameraEnrichmentParams) error {
+	_, err := q.db.Exec(ctx, upsertCameraEnrichment,
+		arg.DeviceID,
+		arg.DeviceName,
+		arg.Firmware,
+		arg.Serial,
+		arg.MacAddress,
+		arg.IpAddress,
+		arg.SubnetMask,
+		arg.Gateway,
+		arg.DnsServer,
+		arg.NtpServer,
+		arg.TimeZone,
+	)
+	return err
 }
 
 const upsertCameraInfo = `-- name: UpsertCameraInfo :one
@@ -74,7 +401,7 @@ ON CONFLICT (device_id) DO UPDATE SET
     rtsp_url = EXCLUDED.rtsp_url,
     onvif_url = EXCLUDED.onvif_url,
     last_seen_at = now()
-RETURNING device_id, manufacturer, model, resolution, rtsp_url, onvif_url, last_seen_at
+RETURNING device_id, manufacturer, model, resolution, rtsp_url, onvif_url, last_seen_at, device_name, firmware, serial, mac_address, ip_address, subnet_mask, gateway, dns_server, ntp_server, time_zone
 `
 
 type UpsertCameraInfoParams struct {
@@ -104,20 +431,38 @@ func (q *Queries) UpsertCameraInfo(ctx context.Context, arg UpsertCameraInfoPara
 		&i.RtspUrl,
 		&i.OnvifUrl,
 		&i.LastSeenAt,
+		&i.DeviceName,
+		&i.Firmware,
+		&i.Serial,
+		&i.MacAddress,
+		&i.IpAddress,
+		&i.SubnetMask,
+		&i.Gateway,
+		&i.DnsServer,
+		&i.NtpServer,
+		&i.TimeZone,
 	)
 	return i, err
 }
 
 const upsertNVRChannel = `-- name: UpsertNVRChannel :one
-INSERT INTO nvr_channels (nvr_device_id, channel_no, camera_name, camera_ip, camera_device_id, status)
-VALUES ($1,$2,$3,$4,$5,$6)
+INSERT INTO nvr_channels (nvr_device_id, channel_no, camera_name, camera_ip, camera_device_id, status, enabled, recording, resolution)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
 ON CONFLICT (nvr_device_id, channel_no) DO UPDATE SET
     camera_name = EXCLUDED.camera_name,
     camera_ip = EXCLUDED.camera_ip,
-    camera_device_id = EXCLUDED.camera_device_id,
+    -- Sticky link: a re-collect that resolves a device repoints the link, but one
+    -- that momentarily can't (transient lookup miss / race during a parallel scan)
+    -- keeps the existing link instead of nulling it. Links are only added/repointed
+    -- here; they are cleared only when the camera device is deleted (FK ON DELETE
+    -- SET NULL). ReconcileNVRChannelLinks heals any that were never set.
+    camera_device_id = COALESCE(EXCLUDED.camera_device_id, nvr_channels.camera_device_id),
     status = EXCLUDED.status,
+    enabled = EXCLUDED.enabled,
+    recording = EXCLUDED.recording,
+    resolution = EXCLUDED.resolution,
     last_seen_at = now()
-RETURNING id, nvr_device_id, channel_no, camera_name, camera_ip, camera_device_id, status, last_seen_at
+RETURNING id, nvr_device_id, channel_no, camera_name, camera_ip, camera_device_id, status, last_seen_at, enabled, recording, resolution
 `
 
 type UpsertNVRChannelParams struct {
@@ -127,6 +472,9 @@ type UpsertNVRChannelParams struct {
 	CameraIp       *netip.Addr `json:"camera_ip"`
 	CameraDeviceID *uuid.UUID  `json:"camera_device_id"`
 	Status         string      `json:"status"`
+	Enabled        bool        `json:"enabled"`
+	Recording      *bool       `json:"recording"`
+	Resolution     string      `json:"resolution"`
 }
 
 func (q *Queries) UpsertNVRChannel(ctx context.Context, arg UpsertNVRChannelParams) (NvrChannel, error) {
@@ -137,6 +485,9 @@ func (q *Queries) UpsertNVRChannel(ctx context.Context, arg UpsertNVRChannelPara
 		arg.CameraIp,
 		arg.CameraDeviceID,
 		arg.Status,
+		arg.Enabled,
+		arg.Recording,
+		arg.Resolution,
 	)
 	var i NvrChannel
 	err := row.Scan(
@@ -147,6 +498,125 @@ func (q *Queries) UpsertNVRChannel(ctx context.Context, arg UpsertNVRChannelPara
 		&i.CameraIp,
 		&i.CameraDeviceID,
 		&i.Status,
+		&i.LastSeenAt,
+		&i.Enabled,
+		&i.Recording,
+		&i.Resolution,
+	)
+	return i, err
+}
+
+const upsertNVRInfo = `-- name: UpsertNVRInfo :one
+INSERT INTO nvr_info (device_id, manufacturer, model, serial, firmware, device_type, channel_count, hdd_count, recording, health, source)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+ON CONFLICT (device_id) DO UPDATE SET
+    manufacturer = EXCLUDED.manufacturer,
+    model = EXCLUDED.model,
+    serial = EXCLUDED.serial,
+    firmware = EXCLUDED.firmware,
+    device_type = EXCLUDED.device_type,
+    channel_count = EXCLUDED.channel_count,
+    hdd_count = EXCLUDED.hdd_count,
+    recording = EXCLUDED.recording,
+    health = EXCLUDED.health,
+    source = EXCLUDED.source,
+    collected_at = now()
+RETURNING device_id, manufacturer, model, serial, firmware, device_type, channel_count, hdd_count, recording, health, source, collected_at
+`
+
+type UpsertNVRInfoParams struct {
+	DeviceID     uuid.UUID `json:"device_id"`
+	Manufacturer *string   `json:"manufacturer"`
+	Model        *string   `json:"model"`
+	Serial       *string   `json:"serial"`
+	Firmware     *string   `json:"firmware"`
+	DeviceType   *string   `json:"device_type"`
+	ChannelCount int32     `json:"channel_count"`
+	HddCount     int32     `json:"hdd_count"`
+	Recording    string    `json:"recording"`
+	Health       string    `json:"health"`
+	Source       string    `json:"source"`
+}
+
+func (q *Queries) UpsertNVRInfo(ctx context.Context, arg UpsertNVRInfoParams) (NvrInfo, error) {
+	row := q.db.QueryRow(ctx, upsertNVRInfo,
+		arg.DeviceID,
+		arg.Manufacturer,
+		arg.Model,
+		arg.Serial,
+		arg.Firmware,
+		arg.DeviceType,
+		arg.ChannelCount,
+		arg.HddCount,
+		arg.Recording,
+		arg.Health,
+		arg.Source,
+	)
+	var i NvrInfo
+	err := row.Scan(
+		&i.DeviceID,
+		&i.Manufacturer,
+		&i.Model,
+		&i.Serial,
+		&i.Firmware,
+		&i.DeviceType,
+		&i.ChannelCount,
+		&i.HddCount,
+		&i.Recording,
+		&i.Health,
+		&i.Source,
+		&i.CollectedAt,
+	)
+	return i, err
+}
+
+const upsertNVRStorage = `-- name: UpsertNVRStorage :one
+INSERT INTO nvr_storage (nvr_device_id, hdd_id, name, status, capacity_mb, free_mb, property, source)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+ON CONFLICT (nvr_device_id, hdd_id) DO UPDATE SET
+    name = EXCLUDED.name,
+    status = EXCLUDED.status,
+    capacity_mb = EXCLUDED.capacity_mb,
+    free_mb = EXCLUDED.free_mb,
+    property = EXCLUDED.property,
+    source = EXCLUDED.source,
+    last_seen_at = now()
+RETURNING id, nvr_device_id, hdd_id, name, status, capacity_mb, free_mb, property, source, last_seen_at
+`
+
+type UpsertNVRStorageParams struct {
+	NvrDeviceID uuid.UUID `json:"nvr_device_id"`
+	HddID       int32     `json:"hdd_id"`
+	Name        *string   `json:"name"`
+	Status      string    `json:"status"`
+	CapacityMb  int64     `json:"capacity_mb"`
+	FreeMb      int64     `json:"free_mb"`
+	Property    string    `json:"property"`
+	Source      string    `json:"source"`
+}
+
+func (q *Queries) UpsertNVRStorage(ctx context.Context, arg UpsertNVRStorageParams) (NvrStorage, error) {
+	row := q.db.QueryRow(ctx, upsertNVRStorage,
+		arg.NvrDeviceID,
+		arg.HddID,
+		arg.Name,
+		arg.Status,
+		arg.CapacityMb,
+		arg.FreeMb,
+		arg.Property,
+		arg.Source,
+	)
+	var i NvrStorage
+	err := row.Scan(
+		&i.ID,
+		&i.NvrDeviceID,
+		&i.HddID,
+		&i.Name,
+		&i.Status,
+		&i.CapacityMb,
+		&i.FreeMb,
+		&i.Property,
+		&i.Source,
 		&i.LastSeenAt,
 	)
 	return i, err

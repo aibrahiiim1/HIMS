@@ -131,6 +131,74 @@ func TestResolve_EmptyWhenNothingViable(t *testing.T) {
 	}
 }
 
+func TestResolve_ExclusiveSubnetIgnoresGlobalGroups(t *testing.T) {
+	// The IP's subnet is scoped to two CCTV creds. The global groups carry an
+	// SSH switch credential and an SNMP community — neither must be tried.
+	onvif := ref(domain.CredONVIF, 100, false)
+	webBasic := ref(domain.CredHTTPBasic, 100, false)
+	switchSSH := ref(domain.CredSSH, 1, false)
+	community := ref(domain.CredSNMPv2c, 1, false)
+	out := Resolve(Input{
+		// Camera surface: HTTP + SNMP open. Even though SNMP is "open", the
+		// exclusive set has no SNMP cred, so no community is sprayed.
+		Fingerprint: Fingerprint{HTTP: true, SNMP: true, SSH: true},
+		Groups: []ScopedGroup{
+			{Specificity: SpecLocation, Members: []CredRef{switchSSH, community}},
+			{Specificity: SpecSubnet, Members: []CredRef{switchSSH}},
+		},
+		Exclusive: []CredRef{onvif, webBasic},
+	})
+	if len(out) != 2 {
+		t.Fatalf("only the 2 subnet-scoped creds should be tried, got %d: %v", len(out), ids(out))
+	}
+	for _, r := range out {
+		if r.ID == switchSSH.ID || r.ID == community.ID {
+			t.Fatalf("a non-subnet credential (%s) leaked past exclusivity: %v", r.Kind, ids(out))
+		}
+		if r.Kind != domain.CredONVIF && r.Kind != domain.CredHTTPBasic {
+			t.Fatalf("unexpected kind %s in exclusive result", r.Kind)
+		}
+	}
+}
+
+func TestResolve_ExclusiveStillFingerprintFiltered(t *testing.T) {
+	// An RTSP-only camera (no HTTP surface) gets none of its subnet's web creds.
+	onvif := ref(domain.CredONVIF, 100, false)
+	out := Resolve(Input{
+		Fingerprint: Fingerprint{SNMP: true}, // no HTTP
+		Exclusive:   []CredRef{onvif},
+	})
+	if len(out) != 0 {
+		t.Fatalf("an ONVIF cred must not be tried against a host with no web surface, got %v", ids(out))
+	}
+}
+
+func TestResolve_ExclusiveBoundCredentialFirst(t *testing.T) {
+	a := ref(domain.CredHTTPBasic, 100, false)
+	b := ref(domain.CredHTTPBasic, 1, false) // better priority but not the bound one
+	out := Resolve(Input{
+		Fingerprint:       Fingerprint{HTTP: true},
+		BoundCredentialID: &a.ID,
+		Exclusive:         []CredRef{a, b},
+	})
+	if len(out) != 2 || out[0].ID != a.ID {
+		t.Fatalf("the bound credential must lead even within the exclusive set, got %v", ids(out))
+	}
+}
+
+func TestResolve_EmptyExclusiveFallsBackToGroups(t *testing.T) {
+	// Empty Exclusive ⇒ current behavior: the global/scope groups are used.
+	g := ref(domain.CredSSH, 10, false)
+	out := Resolve(Input{
+		Fingerprint: Fingerprint{SSH: true},
+		Groups:      []ScopedGroup{{Specificity: SpecSubnet, Members: []CredRef{g}}},
+		Exclusive:   nil,
+	})
+	if len(out) != 1 || out[0].ID != g.ID {
+		t.Fatalf("with no subnet scope, normal group resolution must still work, got %v", ids(out))
+	}
+}
+
 func TestFingerprint_Allows(t *testing.T) {
 	f := Fingerprint{SNMP: true, HTTP: true}
 	cases := map[domain.CredentialKind]bool{
