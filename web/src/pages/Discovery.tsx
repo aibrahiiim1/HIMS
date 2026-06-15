@@ -70,10 +70,16 @@ const STATE_LABEL: Record<string, { label: string; cls: string }> = {
   credential_kind_mismatch: { label: 'Credential kind mismatch', cls: 'badge-warning' },
   auth_rejected: { label: 'Auth rejected', cls: 'badge-down' },
   transport_blocked: { label: 'Transport blocked', cls: 'badge-warning' },
+  api_unavailable: { label: 'API endpoint unavailable', cls: 'badge-warning' },
+  config_required: { label: 'Setup needed', cls: 'badge-warning' },
   deep_inventory_failed: { label: 'Deep inventory failed', cls: 'badge-down' },
 }
 
-type CollectResult = { collected: boolean; state?: string; detail: string; required_kind?: string; candidates?: { id: string; name: string; kind: string }[] }
+type CollectResult = {
+  collected: boolean; state?: string; detail: string
+  required_kind?: string; candidates?: { id: string; name: string; kind: string }[]
+  aps?: number; ssids?: number; clients?: number; profile_created?: boolean
+}
 
 // CollectNowPanel runs the universal profile-free collect on a device and, when
 // it fails on a credential-kind mismatch (or auth rejection where a wrong-kind
@@ -113,6 +119,14 @@ export function CollectNowPanel({ deviceID, qc, jobID }: { deviceID: string; qc:
       {res && (
         <div style={{ fontSize: 11, marginTop: 3 }}>
           {st && <span className={`badge ${st.cls}`}>{st.label}</span>} <span className="muted">{res.detail}</span>
+          {res.collected && (res.aps !== undefined || res.ssids !== undefined || res.clients !== undefined) && (
+            <div className="muted" style={{ marginTop: 2 }}>{res.aps ?? 0} AP · {res.ssids ?? 0} SSID · {res.clients ?? 0} client{res.profile_created ? ' · profile auto-created' : ''}</div>
+          )}
+        </div>
+      )}
+      {res?.state === 'config_required' && (
+        <div style={{ marginTop: 6 }}>
+          <Link to={`/vendor-profiles?create=1&device_id=${deviceID}`} style={link}>Set up wireless collection →</Link>
         </div>
       )}
       {showDup && (

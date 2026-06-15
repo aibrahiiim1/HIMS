@@ -70,6 +70,15 @@ func (s *Server) collectDevice(w http.ResponseWriter, r *http.Request) {
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
 	defer cancel()
 
+	// Wireless controllers (Extreme XCC / Ruckus ZD / UniFi / Omada) use on-prem
+	// collectors that need a small vendor profile. collectWirelessAuto builds it
+	// from the discovered IP + a subnet-scoped credential automatically, so the
+	// operator never authors a profile to get AP/SSID/client data.
+	if isWirelessController(dev) {
+		writeJSON(w, http.StatusOK, s.collectWirelessAuto(cctx, dev))
+		return
+	}
+
 	// vSphere/ESXi has a dedicated collector that also accepts ssh-kind root
 	// credentials (the common ESXi case) — prefer it over the generic core.
 	if kind == "vsphere" {
@@ -140,12 +149,18 @@ func primaryLoginKind(kind string) string {
 func (s *Server) collectFailure(ctx context.Context, kind, detail string) map[string]any {
 	out := map[string]any{"collected": false, "kind": kind, "detail": detail}
 	low := strings.ToLower(detail)
-	authish := strings.Contains(low, "password") || strings.Contains(low, "login") || strings.Contains(low, "auth") ||
-		strings.Contains(low, "denied") || strings.Contains(low, "401") || strings.Contains(low, "403") || strings.Contains(low, "credential")
+	// API/firmware issues first: the credential may have authenticated but the
+	// device's API path/firmware doesn't expose what we need — NOT an auth failure.
+	apiIssue := strings.Contains(low, "no json api") || strings.Contains(low, "api root") || strings.Contains(low, "api path") ||
+		strings.Contains(low, "non-standard") || strings.Contains(low, "not implemented") || strings.Contains(low, "unsupported")
+	authish := !apiIssue && (strings.Contains(low, "password") || strings.Contains(low, "login") || strings.Contains(low, "rejected") ||
+		strings.Contains(low, "denied") || strings.Contains(low, "401") || strings.Contains(low, "403") || strings.Contains(low, "incorrect user"))
 	transport := strings.Contains(low, "not exposed") || strings.Contains(low, "refused") || strings.Contains(low, "timeout") ||
 		strings.Contains(low, "no route") || strings.Contains(low, "unreachable") || strings.Contains(low, "deadline") || strings.Contains(low, "connection")
 
 	switch {
+	case apiIssue:
+		out["state"] = "api_unavailable"
 	case authish:
 		login := loginKindsFor(kind)
 		isLogin := func(k string) bool {
