@@ -241,7 +241,7 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device, selectedCre
 		cid := cd.id
 		_ = s.queries.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: d.ID, CredentialID: &cid})
 		_ = s.queries.SetDeviceCCTVCredential(ctx, db.SetDeviceCCTVCredentialParams{ID: d.ID, CctvCredentialID: &cid}) // durable CCTV web credential
-		s.recordWebSuccess(ctx, d.ID, "onvif", okBase, &cid)                                                          // real source = ONVIF (actual port)
+		s.recordWebSuccess(ctx, d.ID, "onvif", okBase, &cid)                                                           // real source = ONVIF (actual port)
 		_ = s.queries.UpdateDeviceMonitoringStatus(ctx, db.UpdateDeviceMonitoringStatusParams{ID: d.ID, Status: "up"})
 
 		onvifRes := cctvResult{Status: "collected", CredentialUsed: cd.name, Category: string(cat),
@@ -323,7 +323,7 @@ func (s *Server) runCCTVCollection(ctx context.Context, d db.Device, selectedCre
 		cid := cd.id
 		_ = s.queries.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: d.ID, CredentialID: &cid})
 		_ = s.queries.SetDeviceCCTVCredential(ctx, db.SetDeviceCCTVCredentialParams{ID: d.ID, CctvCredentialID: &cid}) // durable CCTV web credential
-		s.recordWebSuccess(ctx, d.ID, "isapi", info.Endpoint, &cid)                                                   // real source = ISAPI
+		s.recordWebSuccess(ctx, d.ID, "isapi", info.Endpoint, &cid)                                                    // real source = ISAPI
 		_ = s.queries.UpdateDeviceMonitoringStatus(ctx, db.UpdateDeviceMonitoringStatusParams{ID: d.ID, Status: "up"})
 
 		res = cctvResult{Status: "collected", CredentialUsed: cd.name, Category: string(cat),

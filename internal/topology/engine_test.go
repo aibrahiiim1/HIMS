@@ -33,8 +33,8 @@ type fakeQuerier struct {
 	// Wireless association.
 	wirelessRows []db.FindWirelessClientRow
 	aps          map[string]db.GetAccessPointByNameRow // keyed by AP name
-	vlans        map[uuid.UUID][]db.Vlan                // configured VLANs per device
-	portVlans    map[uuid.UUID][]db.PortVlan            // per-port VLAN membership
+	vlans        map[uuid.UUID][]db.Vlan               // configured VLANs per device
+	portVlans    map[uuid.UUID][]db.PortVlan           // per-port VLAN membership
 }
 
 func (f *fakeQuerier) GetDevice(_ context.Context, id uuid.UUID) (db.Device, error) {

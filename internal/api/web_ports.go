@@ -440,9 +440,9 @@ func (s *Server) deviceWebAccess(w http.ResponseWriter, r *http.Request) {
 }
 
 type setWebAccessReq struct {
-	Scheme    string `json:"scheme"`     // '', http, https
-	Port      *int   `json:"port"`       // null clears
-	AltPorts  string `json:"alt_ports"`  // CSV
+	Scheme    string `json:"scheme"`    // '', http, https
+	Port      *int   `json:"port"`      // null clears
+	AltPorts  string `json:"alt_ports"` // CSV
 	Notes     string `json:"notes"`
 	PrefProto string `json:"pref_proto"` // '', isapi, onvif, http
 }

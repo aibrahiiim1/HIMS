@@ -332,9 +332,9 @@ func CollectARP(ctx context.Context, c snmp.Client) []driver.ARPSnap {
 // CollectLLDP walks lldpRemTable into neighbor snapshots.
 func CollectLLDP(ctx context.Context, c snmp.Client) []driver.NeighborSnap {
 	type acc struct {
-		chassisSub, portSub    int
-		chassisRaw, portRaw    []byte
-		chassisStr, portStr    string
+		chassisSub, portSub        int
+		chassisRaw, portRaw        []byte
+		chassisStr, portStr        string
 		portDesc, sysName, sysDesc string
 	}
 	rows := map[string]*acc{}

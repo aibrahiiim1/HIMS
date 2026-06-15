@@ -11,8 +11,8 @@ import (
 // MAC/IP/name found ANYWHERE — an access-point MAC, a wireless-client IP, a
 // learned FDB MAC, an ARP entry — back to the device that knows about it.
 type entityHit struct {
-	Kind           string `json:"kind"`    // access_point | wireless_client | fdb | arp
-	Title          string `json:"title"`   // primary label (name / hostname / MAC)
+	Kind           string `json:"kind"`     // access_point | wireless_client | fdb | arp
+	Title          string `json:"title"`    // primary label (name / hostname / MAC)
 	Subtitle       string `json:"subtitle"` // contextual detail (model, vlan/port, ssid, …)
 	IP             string `json:"ip,omitempty"`
 	Mac            string `json:"mac,omitempty"`

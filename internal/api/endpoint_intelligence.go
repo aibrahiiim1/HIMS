@@ -319,10 +319,10 @@ SELECT bucket, count(*) AS count FROM (
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"thresholds":               t.json(),
-		"cards":                    cards,
-		"worst_devices":            worst,
-		"best_devices":             best,
+		"thresholds":                t.json(),
+		"cards":                     cards,
+		"worst_devices":             worst,
+		"best_devices":              best,
 		"health_score_distribution": dist,
 	})
 }
@@ -517,7 +517,7 @@ func (s *Server) eiSoftware(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	q := r.URL.Query().Get("q")     // free-text filter for the top-software list
+	q := r.URL.Query().Get("q") // free-text filter for the top-software list
 	qLike := "%" + q + "%"
 	out := map[string]any{}
 	var err error

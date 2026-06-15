@@ -13,11 +13,11 @@ func TestShouldSkipCCTV(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	const window = 6 * time.Hour
 	cases := []struct {
-		name      string
-		category  string
-		success   bool
-		age       time.Duration
-		wantSkip  bool
+		name     string
+		category string
+		success  bool
+		age      time.Duration
+		wantSkip bool
 	}{
 		{"recent auth failure", "auth_failed", false, 1 * time.Hour, true},
 		{"auth failure at edge (still inside)", "auth_failed", false, 5*time.Hour + 59*time.Minute, true},

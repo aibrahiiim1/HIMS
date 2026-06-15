@@ -53,8 +53,8 @@ type Client struct {
 }
 
 const (
-	keyDownSS3 = "\x1bOB" // application cursor-key mode
-	keyEnter   = "\r"
+	keyDownSS3   = "\x1bOB" // application cursor-key mode
+	keyEnter     = "\r"
 	keyValidate  = "\x16" // CTRL-V
 	keyPageRight = "\x12" // CTRL-R — mgr "Page-Right"; the Users instance grid is
 	// column-major and overflows horizontally, so Page-Right (not Page-Down)
@@ -118,7 +118,7 @@ func (c *Client) ListSubscribers(ctx context.Context) (*Result, error) {
 	if !s.waitFor("All instances", 20*time.Second) {
 		return nil, fmt.Errorf("omnipcx: review form not shown")
 	}
-	s.send(keyEnter)    // select the "All instances" button (<< >>)
+	s.send(keyEnter) // select the "All instances" button (<< >>)
 	time.Sleep(300 * time.Millisecond)
 	s.send(keyValidate) // CTRL-V: execute
 
