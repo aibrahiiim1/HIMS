@@ -1,4 +1,7 @@
-import type { ScanDetail, ClassificationEvidenceChannels } from '../api'
+import { useQuery } from '@tanstack/react-query'
+import { ScanSearch } from 'lucide-react'
+import { api, type ScanDetail, type ClassificationEvidenceChannels } from '../api'
+import { EmptyState } from './ui'
 
 // ClassificationEvidence renders the Phase-3 "why was this classified this way"
 // record (probe_data.classification_detail) plus the surrounding scan signals
@@ -121,4 +124,26 @@ export function ClassificationEvidence({ detail }: { detail: ScanDetail }) {
       )}
     </div>
   )
+}
+
+// DeviceClassificationEvidence fetches a device's latest scan probe_data and
+// renders the evidence panel — or a polite empty state when the device has no
+// recorded scan yet. Reusable across detail pages (rendered inside ClassificationCard).
+export function DeviceClassificationEvidence({ deviceId }: { deviceId: string }) {
+  const q = useQuery({
+    queryKey: ['classification-evidence', deviceId],
+    queryFn: () => api.get<{ detail: ScanDetail | null }>(`/devices/${deviceId}/classification-evidence`),
+  })
+  if (q.isLoading) return <div className="loading" style={{ fontSize: 12 }}>Loading evidence…</div>
+  const detail = q.data?.detail
+  if (!detail || (!detail.classification_detail && !(detail.evidence && detail.evidence.length))) {
+    return (
+      <EmptyState
+        icon={ScanSearch}
+        title="No classification evidence yet"
+        message="No classification evidence recorded yet. Run discovery/collect to populate evidence."
+      />
+    )
+  }
+  return <ClassificationEvidence detail={detail} />
 }

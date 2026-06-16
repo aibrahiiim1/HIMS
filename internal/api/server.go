@@ -238,6 +238,7 @@ func (s *Server) routes() {
 		r.Patch("/devices/{id}", s.updateDevice)
 		r.Delete("/devices/{id}", s.deleteDevice)
 		r.Get("/devices/{id}/classification", s.getClassification)
+		r.Get("/devices/{id}/classification-evidence", s.getClassificationEvidence) // latest scan probe_data (classification_detail) for the evidence panel
 		r.Post("/devices/{id}/reclassify", s.reclassifyDevice)
 		r.Get("/devices/{id}/os-inventory", s.getOSInventory)
 		r.Post("/devices/{id}/collect-os", s.collectOSInventory)

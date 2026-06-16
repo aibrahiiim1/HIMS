@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ScanSearch, Lock, LockOpen, RefreshCw } from 'lucide-react'
 import { api, type Classification, type ReclassifyResponse } from '../api'
 import { Panel, EmptyState } from './ui'
+import { DeviceClassificationEvidence } from './ClassificationEvidence'
 
 const OS_LABEL: Record<string, string> = {
   windows: 'Windows', linux: 'Linux', network_os: 'Network OS', embedded: 'Embedded', macos: 'macOS',
@@ -86,6 +87,13 @@ export function ClassificationCard({ deviceId }: { deviceId: string }) {
           {(reclassify.error || lock.error) && (
             <p className="error-msg" style={{ marginTop: 8 }}>{((reclassify.error || lock.error) as Error).message}</p>
           )}
+
+          {/* Phase 5: discovery-scan evidence (matched/rejected fingerprints, channels,
+              protocols, likely-type) from the device's latest scan probe_data. */}
+          <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border, #2a3042)' }}>
+            <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--muted, #8a93a6)', marginBottom: 8 }}>Discovery evidence (latest scan)</div>
+            <DeviceClassificationEvidence deviceId={deviceId} />
+          </div>
         </>
       )}
     </Panel>
