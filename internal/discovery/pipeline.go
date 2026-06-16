@@ -413,7 +413,15 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 			tgt = snmp.Target{Addr: ip, Version: snmp.V3, V3: dec.V3, Timeout: cfg.SNMPTimeout}
 		}
 		emit("snmp_attempt_started", "snmp", "started", "")
-		if probe(tgt) {
+		ok := probe(tgt)
+		if !ok && cand.Kind == domain.CredSNMPv2c {
+			// SNMPv1 fallback: many printers and older devices answer ONLY SNMPv1
+			// (e.g. "Use SNMPv1: On, Community: public"). The community string is
+			// version-agnostic, so retry it as v1 before recording a failure —
+			// otherwise these stay SNMP-dead and unmanaged despite SNMP being enabled.
+			ok = probe(snmp.Target{Addr: ip, Version: snmp.V1, Community: dec.Community, Timeout: cfg.SNMPTimeout})
+		}
+		if ok {
 			r.CredAttempts = append(r.CredAttempts, snmpAttempt(cand, true)) // success always recorded → proven
 			c := cand
 			r.BoundCred = &c // bind-on-success, then stop trying further communities
@@ -430,6 +438,10 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 	if authCli == nil && snmpRelevant { // default-community fallback only when SNMP is expected
 		for _, comm := range []string{"public", "private"} {
 			if probe(snmp.Target{Addr: ip, Version: snmp.V2c, Community: comm, Timeout: cfg.SNMPTimeout}) {
+				break
+			}
+			// SNMPv1 fallback (same community) for v1-only devices like printers.
+			if probe(snmp.Target{Addr: ip, Version: snmp.V1, Community: comm, Timeout: cfg.SNMPTimeout}) {
 				break
 			}
 		}
