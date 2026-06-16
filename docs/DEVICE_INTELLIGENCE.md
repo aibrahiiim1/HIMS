@@ -338,3 +338,89 @@ Gates: `go build/vet/test ./...` green; frontend `lint`+`build` green (SC1 touch
 the category dropdown; SC2–4 frontend-untouched); migration `000079` validated
 against the real schema in a rolled-back transaction; production **not** mutated;
 branch local only — **not pushed**.
+
+### 1.10 Phase 5 status — DONE locally (explainable-classification UI, four gated sub-commits)
+
+Phase 5 surfaces the Phase-3 `classification_detail` (and the surrounding scan
+signals) to the operator as a read-only "why was this classified this way" panel,
+and normalizes the Phase-2 exclusions so they are editable in the UI. No classifier
+or schema change — this phase is purely the UI/API read surface over data already
+persisted in `discovery_results.probe_data.classification_detail`.
+
+**SC1 — Scan Results "Why" panel.** `ScanJobResults` gains a per-row **Why** toggle
+that expands an inline `<ClassificationEvidence>` row: the verdict (class /
+confidence / final source), matched fingerprints (ranked), **rejected candidates
+with the reason each lost** (incl. "excluded by …"), the evidence channels observed
+(sysObjectID/sysDescr/sysName/HTTP/SSH/ports), protocols tried, the bound credential,
+and the next action. For `unknown` devices it shows the best-guess `likely_type`.
+A legacy `evidence[]` fallback renders for pre-Phase-3 results.
+
+**SC2 — Device Detail evidence (per-device endpoint).** New thin read endpoint
+`GET /devices/{id}/classification-evidence` → `{ "detail": <scanDetail|null> }`,
+backed by `LatestDeviceProbeData`. `DeviceClassificationEvidence({deviceId})` fetches
+it and renders the same `ClassificationEvidence` renderer, or a polite empty state
+("Run discovery/collect to populate evidence."). Wired into `ClassificationCard`, so
+the Generic / Endpoint / Switch detail pages show it with no per-page work.
+
+**SC3 — Fingerprint catalog exclusions UI + API normalization.** The Phase-2 deferral
+(create/update/list encoding `exclusions` as base64) is closed: a `vendorFingerprintDTO`
+(`toVendorFingerprintDTO[s]`) decodes the JSONB blob to a **structured
+`[]fingerprint.Exclusion`** (empty → `[]`, never `null`, never base64) on list/create/
+update. `VendorFingerprints` gains an **Exclusions** column (count badge + tooltip) and
+an `ExclusionsEditor` in the form (kind + pattern rows, blank-pattern rows dropped on
+save). Tests `TestVendorFingerprintDTO_{StructuredNotBase64,EmptyIsArrayNotNull}`.
+
+**SC4 — Evidence-panel coverage + docs + smoke plan.** A reusable Panel-wrapped
+`ClassificationEvidencePanel({deviceId})` (in `ClassificationEvidence.tsx`) was added
+to every category-specific detail page that does **not** route through
+`ClassificationCard`, so the evidence panel is reachable from **every** main device
+detail page:
+
+| Detail page | Category(ies) routed | Evidence shown via |
+|---|---|---|
+| GenericDeviceDetail | unknown + all fall-through: load_balancer, pdu, access_point, ip_phone, storage, dvr, database, dhcp, … | `ClassificationCard` → `DeviceClassificationEvidence` (SC2) |
+| EndpointDetail | endpoint / workstation | `ClassificationCard` (SC2) |
+| SwitchDetail | switch / router | `ClassificationCard` (SC2) |
+| ServerDetail | server (incl. BMC) | `ClassificationEvidencePanel` (SC4) |
+| FirewallDetail | firewall | `ClassificationEvidencePanel` (SC4) |
+| PrinterDetail | printer | `ClassificationEvidencePanel` (SC4) |
+| UPSDetail | ups | `ClassificationEvidencePanel` (SC4) |
+| WirelessDetail | wireless_controller | `ClassificationEvidencePanel` (SC4) |
+| PbxDetail | pbx | `ClassificationEvidencePanel` (SC4) |
+| VirtualHostDetail | virtual_host | `ClassificationEvidencePanel` (SC4) |
+| CctvDetail | cctv / camera | `ClassificationEvidencePanel` (SC4) |
+
+No detail page omits the panel. The panel is self-guarding: it renders the empty
+state for devices with no recorded scan, so adding it to a page is low-risk. (Note:
+`DeepOSInventory`, embedded in ServerDetail's Overview tab, only *shares the
+react-query key* via a comment — it does not render a second evidence panel, so
+ServerDetail shows the panel exactly once.)
+
+**Production Chrome smoke checklist (run after deploy — REQUIRED final acceptance).**
+This is the only acceptance step that cannot be done locally; it must be performed in
+real Chrome against the deployed SPA on `:8090` before Phase 5 is declared finally
+accepted:
+1. Open **Scan Results** for a recent job; expand **Why** on a classified device →
+   verdict, matched fingerprints, rejected-with-reason, evidence channels, protocols,
+   bound cred, next action all render and are readable.
+2. Expand **Why** on an `unknown` device → best-guess `likely_type` + evidence render.
+3. Open **Device Detail** for one generic, one endpoint, and one switch device →
+   evidence shows via `ClassificationCard`.
+4. Open at least one **category page** (Server / Firewall / Printer / UPS / Wireless /
+   PBX / VirtualHost / CCTV) → the **Classification Evidence** panel renders (data or
+   empty state) without crashing.
+5. Open **Vendor Fingerprints** catalog → the **Exclusions** column shows counts;
+   open a fingerprint with exclusions → the editor lists kind+pattern rows.
+6. Edit a fingerprint's exclusions, then **Cancel** (no write) and re-open to confirm
+   unchanged; optionally **Save** and confirm it persists.
+7. Confirm **no base64 string** is visible anywhere exclusions appear (column, tooltip,
+   editor, API responses).
+
+**Deferred (carried forward):** G5 (TLS-cert-CN / MAC-OUI evidence capture); dedicated
+detail/dashboard views for the new device classes (load_balancer, pdu, access_point,
+ip_phone, storage, dvr) — they still fall through to the generic page (now with the
+evidence panel); a dedicated `bmc`/`management_controller` category.
+
+Gates: `go build/vet/test ./...` green; frontend `lint`+`build` green; tracked tree
+clean; production **not** mutated; commits **local only — not pushed**; Phase 5 is
+**not deployed** (the Chrome smoke above runs at the operator's next deploy).

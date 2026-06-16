@@ -8,6 +8,7 @@ import {
 import { api, type FirewallStatus, type VpnTunnel, type HAMember, type License, type DeviceFact, type Interface } from '../api'
 import { DeviceOps } from '../components/DeviceOps'
 import { DeviceHeader } from '../components/DeviceHeader'
+import { ClassificationEvidencePanel } from '../components/ClassificationEvidence'
 import { DeviceCredentialHealth } from '../components/DeviceCredentialHealth'
 import { CredentialBindSelect } from '../components/CredentialBindSelect'
 import { Panel, Kpi, DefList, EmptyState, StatusPill, Meter, TabBar } from '../components/ui'
@@ -103,6 +104,7 @@ export function FirewallDetail() {
   return (
     <div>
       <DeviceHeader deviceId={id!} icon={Flame} showCredential={false} />
+      <ClassificationEvidencePanel deviceId={id!} />
 
       <TabBar tabs={tabs} active={tab} onChange={(k) => setTab(k as Tab)} />
 

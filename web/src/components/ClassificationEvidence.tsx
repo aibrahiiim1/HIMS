@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { ScanSearch } from 'lucide-react'
 import { api, type ScanDetail, type ClassificationEvidenceChannels } from '../api'
-import { EmptyState } from './ui'
+import { EmptyState, Panel } from './ui'
 
 // ClassificationEvidence renders the Phase-3 "why was this classified this way"
 // record (probe_data.classification_detail) plus the surrounding scan signals
@@ -146,4 +146,15 @@ export function DeviceClassificationEvidence({ deviceId }: { deviceId: string })
     )
   }
   return <ClassificationEvidence detail={detail} />
+}
+
+// ClassificationEvidencePanel is the standalone Panel-wrapped form for category
+// detail pages that don't render ClassificationCard (which embeds the evidence
+// inline). One line per page: <ClassificationEvidencePanel deviceId={id!} />.
+export function ClassificationEvidencePanel({ deviceId }: { deviceId: string }) {
+  return (
+    <Panel title={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><ScanSearch size={15} /> Classification Evidence</span>}>
+      <DeviceClassificationEvidence deviceId={deviceId} />
+    </Panel>
+  )
 }

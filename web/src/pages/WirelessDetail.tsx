@@ -4,6 +4,7 @@ import { Link, useParams } from 'react-router-dom'
 import { Wifi, Router, Users, Radio, ShieldCheck, Activity, Plug, FlaskConical, DownloadCloud, Terminal, Layers, FileSearch, Pencil, Settings, LayoutDashboard } from 'lucide-react'
 import { api, type WirelessDetailResp, type MibWalkRow, type MibExplorerResp, type SSHCliSummary, type SSHCliRow, type AccessPoint, type WirelessClient, type WirelessSSID } from '../api'
 import { DeviceHeader } from '../components/DeviceHeader'
+import { ClassificationEvidencePanel } from '../components/ClassificationEvidence'
 import { RescanSplit } from '../components/RescanSplit'
 import { CredentialBindSelect } from '../components/CredentialBindSelect'
 import { Panel, Kpi, DefList, EmptyState, StatusPill, TabBar } from '../components/ui'
@@ -120,8 +121,9 @@ export function WirelessDetail() {
   return (
     <div>
       <DeviceHeader deviceId={id!} icon={Wifi} showCredential={false} />
+      <ClassificationEvidencePanel deviceId={id!} />
 
-      {msg && <div className={'enc-banner ' + (msg.startsWith('✗') ? 'crit' : 'info')} style={{ whiteSpace: 'pre-wrap', marginBottom: 12 }}>{msg}</div>}
+      {msg &&<div className={'enc-banner ' + (msg.startsWith('✗') ? 'crit' : 'info')} style={{ whiteSpace: 'pre-wrap', marginBottom: 12 }}>{msg}</div>}
 
       <TabBar tabs={tabs} active={tab} onChange={(k) => setTab(k as Tab)} />
 
