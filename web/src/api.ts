@@ -850,11 +850,44 @@ export interface ScanProfileResult {
   collection_ok?: boolean
   detail?: string
 }
+// Phase 3/5 explainable-classification record (probe_data.classification_detail).
+export interface ClassificationEvidenceChannels {
+  sysobjectid?: string
+  sysdescr?: string
+  sysname?: string
+  http_server?: string
+  ssh_banner?: string
+  ports?: number[]
+}
+export interface FingerprintMatch {
+  vendor: string
+  device_type: string
+  confidence: number
+  kind: string // oid | service | http | ssh | sysname | port
+  pattern: string
+  model?: string
+}
+export interface RejectedCandidate {
+  vendor: string
+  device_type: string
+  confidence: number
+  kind: string
+  pattern: string
+  reason: string // "excluded by …" | "lower confidence (N) than chosen …"
+}
+export interface ClassificationDetail {
+  evidence: ClassificationEvidenceChannels
+  final_source: string // fingerprint | driver | plan | none
+  winners?: FingerprintMatch[]
+  rejected?: RejectedCandidate[]
+  likely_type?: string // best guess for an otherwise-unknown device
+}
 export interface ScanDetail {
   open_ports?: number[]
   classification?: string
   confidence?: number
   evidence?: string[]
+  classification_detail?: ClassificationDetail | null
   candidate?: string
   expected_protocols?: string[]
   opportunistic_protocols?: string[] // not expected by the plan but probed anyway (e.g. SNMP)

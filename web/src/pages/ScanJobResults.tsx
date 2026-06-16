@@ -1,11 +1,12 @@
-import { useMemo, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
-import { Radar, Boxes, Wifi, ShieldCheck, ShieldOff, HelpCircle, KeyRound, Bot, CircleX, RefreshCw, ArrowLeft, Sparkles, History, LifeBuoy, EyeOff } from 'lucide-react'
+import { Radar, Boxes, Wifi, ShieldCheck, ShieldOff, HelpCircle, KeyRound, Bot, CircleX, RefreshCw, ArrowLeft, Sparkles, History, LifeBuoy, EyeOff, Search } from 'lucide-react'
 import { Pencil } from 'lucide-react'
 import { api, locationPaths, type Device, type DiscoveryJob, type DiscoveryResult, type Location, type ScanJobCounts } from '../api'
 import { PageHeader, Panel, Kpi, EmptyState, ProgressBar, timeAgo } from '../components/ui'
 import { ReachabilityBadge, ManagementBadge } from '../components/StatusBadges'
+import { ClassificationEvidence } from '../components/ClassificationEvidence'
 import { EditDevice } from '../components/EditDevice'
 import { OnboardingActions, CollectedViaCell, CollectNowPanel, outcomeBadge, duration } from './Discovery'
 
@@ -115,6 +116,8 @@ export function ScanJobResults() {
   const [filter, setFilter] = useState<Filter | Bucket>('all')
   const [editDev, setEditDev] = useState<Device | null>(null)
   const [msg, setMsg] = useState('')
+  const [whyOpen, setWhyOpen] = useState<Set<string>>(new Set()) // result ids with the evidence panel expanded
+  const toggleWhy = (id: string) => setWhyOpen((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n })
 
   const detail = useQuery({
     queryKey: ['discovery-job', jobId],
@@ -282,8 +285,10 @@ export function ScanJobResults() {
                   {filtered.map((r) => {
                     const d = dev(r)
                     const p = r.probe_data ?? {}
+                    const open = whyOpen.has(r.id)
                     return (
-                      <tr key={r.id}>
+                      <Fragment key={r.id}>
+                      <tr>
                         <td className="mono" style={{ fontSize: 12 }}>{r.ip} <span className={`badge badge-${outcomeBadge(r.outcome)}`}>{r.outcome}</span></td>
                         <td>{d ? <Link className="cell-name" to={`/devices/${d.id}`}>{d.name}</Link> : <span className="muted">not enrolled</span>}{d?.hostname && <small style={{ display: 'block' }}>{d.hostname}</small>}
                           {r.disposition && DISPOSITION[r.disposition] && (
@@ -322,9 +327,18 @@ export function ScanJobResults() {
                           {d && <button className="btn btn-ghost btn-xs" onClick={() => setEditDev(d)} title="Edit / Lock classification"><Pencil size={12} /></button>}{' '}
                           {d && <button className="btn btn-ghost btn-xs" disabled={reclassify.isPending} onClick={() => reclassify.mutate(d.id)} title="Reclassify from evidence">RC</button>}{' '}
                           <button className="btn btn-ghost btn-xs" disabled={rescanIP.isPending} onClick={() => rescanIP.mutate(r.ip)} title="Re-scan this device"><RefreshCw size={12} /></button>
+                          <button className={'btn btn-ghost btn-xs' + (open ? ' active' : '')} onClick={() => toggleWhy(r.id)} title="Why this classification? Show evidence, matched + rejected fingerprints"><Search size={12} /> Why</button>
                           {d && <div style={{ marginTop: 4 }}><CollectNowPanel deviceID={d.id} qc={qc} jobID={job?.id ?? null} /></div>}
                         </td>
                       </tr>
+                      {open && (
+                        <tr className="evidence-row">
+                          <td colSpan={14} style={{ background: 'var(--surface-2, rgba(255,255,255,0.02))', borderTop: '2px solid var(--accent, #4a7dff)' }}>
+                            <ClassificationEvidence detail={p} />
+                          </td>
+                        </tr>
+                      )}
+                      </Fragment>
                     )
                   })}
                 </tbody>
