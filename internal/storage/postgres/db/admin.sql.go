@@ -657,6 +657,42 @@ func (q *Queries) PermissionsForRole(ctx context.Context, roleID uuid.UUID) ([]P
 	return items, nil
 }
 
+const refreshBuiltinVendorFingerprint = `-- name: RefreshBuiltinVendorFingerprint :execrows
+UPDATE vendor_fingerprints
+SET vendor=$2, device_type=$3, confidence=$4, model=$5, exclusions=$6, updated_at=now()
+WHERE id=$1 AND source='builtin'
+`
+
+type RefreshBuiltinVendorFingerprintParams struct {
+	ID         uuid.UUID `json:"id"`
+	Vendor     string    `json:"vendor"`
+	DeviceType string    `json:"device_type"`
+	Confidence int32     `json:"confidence"`
+	Model      string    `json:"model"`
+	Exclusions []byte    `json:"exclusions"`
+}
+
+// Refresh shipped catalog metadata onto an EXISTING built-in row so newer
+// built-in knowledge (notably exclusions added after the row was first seeded)
+// reaches the live DB the classifier reads. The `source='builtin'` guard makes
+// this structurally unable to clobber an operator-created rule — even a user rule
+// that happens to share (kind,pattern). Operator knobs (enabled, priority) are
+// preserved; only descriptive metadata + exclusions are refreshed. Row id is kept.
+func (q *Queries) RefreshBuiltinVendorFingerprint(ctx context.Context, arg RefreshBuiltinVendorFingerprintParams) (int64, error) {
+	result, err := q.db.Exec(ctx, refreshBuiltinVendorFingerprint,
+		arg.ID,
+		arg.Vendor,
+		arg.DeviceType,
+		arg.Confidence,
+		arg.Model,
+		arg.Exclusions,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const rolesForUser = `-- name: RolesForUser :many
 SELECT r.id, r.name, r.description, r.created_at FROM roles r
 JOIN user_roles ur ON ur.role_id = r.id

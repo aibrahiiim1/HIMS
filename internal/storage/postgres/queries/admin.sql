@@ -107,6 +107,17 @@ ON CONFLICT (kind, pattern) DO UPDATE SET
     source=EXCLUDED.source, exclusions=EXCLUDED.exclusions, updated_at=now()
 RETURNING *;
 
+-- name: RefreshBuiltinVendorFingerprint :execrows
+-- Refresh shipped catalog metadata onto an EXISTING built-in row so newer
+-- built-in knowledge (notably exclusions added after the row was first seeded)
+-- reaches the live DB the classifier reads. The `source='builtin'` guard makes
+-- this structurally unable to clobber an operator-created rule — even a user rule
+-- that happens to share (kind,pattern). Operator knobs (enabled, priority) are
+-- preserved; only descriptive metadata + exclusions are refreshed. Row id is kept.
+UPDATE vendor_fingerprints
+SET vendor=$2, device_type=$3, confidence=$4, model=$5, exclusions=$6, updated_at=now()
+WHERE id=$1 AND source='builtin';
+
 -- name: DeleteVendorFingerprint :exec
 DELETE FROM vendor_fingerprints WHERE id=$1;
 

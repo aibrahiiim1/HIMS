@@ -592,6 +592,13 @@ type Querier interface {
 	RecordReportScheduleRun(ctx context.Context, arg RecordReportScheduleRunParams) error
 	// Bump version + stamp the rotation; sets the new key's fingerprint.
 	RecordRotation(ctx context.Context, arg RecordRotationParams) error
+	// Refresh shipped catalog metadata onto an EXISTING built-in row so newer
+	// built-in knowledge (notably exclusions added after the row was first seeded)
+	// reaches the live DB the classifier reads. The `source='builtin'` guard makes
+	// this structurally unable to clobber an operator-created rule — even a user rule
+	// that happens to share (kind,pattern). Operator knobs (enabled, priority) are
+	// preserved; only descriptive metadata + exclusions are refreshed. Row id is kept.
+	RefreshBuiltinVendorFingerprint(ctx context.Context, arg RefreshBuiltinVendorFingerprintParams) (int64, error)
 	RelayAgentHeartbeat(ctx context.Context, arg RelayAgentHeartbeatParams) error
 	ResolveAlert(ctx context.Context, id uuid.UUID) (Alert, error)
 	// The resolver-assembly query: for a device IP, return every credential in a

@@ -4,7 +4,107 @@ import (
 	"testing"
 
 	"github.com/coralsearesorts/hims/internal/fingerprint"
+	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
+	"github.com/google/uuid"
 )
+
+// fpRow builds a stored vendor_fingerprints row for the seed-plan tests.
+func fpRow(kind, pattern, vendor, dtype string, conf int32, source string, exclusions []byte) db.VendorFingerprint {
+	if exclusions == nil {
+		exclusions = []byte("[]")
+	}
+	return db.VendorFingerprint{
+		ID: uuid.New(), Kind: kind, Pattern: pattern, Vendor: vendor, DeviceType: dtype,
+		Confidence: conf, Enabled: true, Priority: 100, Source: source, Exclusions: exclusions,
+	}
+}
+
+func planByPattern(plan []seedAction, pattern string) (seedAction, bool) {
+	for _, a := range plan {
+		if a.Print.Pattern == pattern {
+			return a, true
+		}
+	}
+	return seedAction{}, false
+}
+
+// TestSeedPlan_RefreshesDriftedBuiltinExclusions is the core follow-up regression:
+// an existing BUILT-IN HP ".11" switch row seeded BEFORE exclusions existed (so it
+// holds []) must be planned for REFRESH against a catalog entry that carries the
+// JetDirect exclusion — i.e. the shipped exclusion propagates to the DB row. The
+// row id is reused (update in place), so no duplicate is created.
+func TestSeedPlan_RefreshesDriftedBuiltinExclusions(t *testing.T) {
+	hpRow := fpRow("oid", "1.3.6.1.4.1.11", "Aruba/HPE", "switch", 78, "builtin", []byte("[]"))
+	lib := []fingerprint.Print{{
+		Kind: fingerprint.KindOID, Pattern: "1.3.6.1.4.1.11", Vendor: "Aruba/HPE", DeviceType: "switch", Confidence: 78,
+		Exclusions: []fingerprint.Exclusion{{Kind: fingerprint.KindOID, Pattern: "1.3.6.1.4.1.11.2.3.9"}},
+	}}
+	plan := planBuiltinSeed([]db.VendorFingerprint{hpRow}, lib)
+	a, ok := planByPattern(plan, "1.3.6.1.4.1.11")
+	if !ok || a.Action != seedRefresh {
+		t.Fatalf("expected HP .11 row to be REFRESHED, got %+v", a)
+	}
+	if a.ExistingID != hpRow.ID {
+		t.Errorf("refresh must reuse the existing row id (no duplicate); got %v want %v", a.ExistingID, hpRow.ID)
+	}
+}
+
+// TestSeedPlan_IdempotentWhenInSync: once a built-in row matches the catalog
+// (incl. exclusions), a re-seed plans it as up-to-date — no redundant write.
+func TestSeedPlan_IdempotentWhenInSync(t *testing.T) {
+	inSync := fpRow("oid", "1.3.6.1.4.1.11", "Aruba/HPE", "switch", 78, "builtin",
+		[]byte(`[{"kind":"oid","pattern":"1.3.6.1.4.1.11.2.3.9"}]`))
+	lib := []fingerprint.Print{{
+		Kind: fingerprint.KindOID, Pattern: "1.3.6.1.4.1.11", Vendor: "Aruba/HPE", DeviceType: "switch", Confidence: 78,
+		Exclusions: []fingerprint.Exclusion{{Kind: fingerprint.KindOID, Pattern: "1.3.6.1.4.1.11.2.3.9"}},
+	}}
+	a, _ := planByPattern(planBuiltinSeed([]db.VendorFingerprint{inSync}, lib), "1.3.6.1.4.1.11")
+	if a.Action != seedUpToDate {
+		t.Fatalf("expected up-to-date (no write) when row matches catalog, got %v", a.Action)
+	}
+}
+
+// TestSeedPlan_PreservesOperatorRow: a 'user' row that shares a built-in
+// (kind,pattern) is PRESERVED — the operator's rule is authoritative and must
+// not be clobbered by built-in metadata.
+func TestSeedPlan_PreservesOperatorRow(t *testing.T) {
+	userRow := fpRow("oid", "1.3.6.1.4.1.11", "MyVendor", "router", 99, "user",
+		[]byte(`[{"kind":"service","pattern":"custom"}]`))
+	lib := []fingerprint.Print{{
+		Kind: fingerprint.KindOID, Pattern: "1.3.6.1.4.1.11", Vendor: "Aruba/HPE", DeviceType: "switch", Confidence: 78,
+		Exclusions: []fingerprint.Exclusion{{Kind: fingerprint.KindOID, Pattern: "1.3.6.1.4.1.11.2.3.9"}},
+	}}
+	a, _ := planByPattern(planBuiltinSeed([]db.VendorFingerprint{userRow}, lib), "1.3.6.1.4.1.11")
+	if a.Action != seedPreserve {
+		t.Fatalf("expected operator row PRESERVED, got %v", a.Action)
+	}
+}
+
+// TestSeedPlan_CreatesMissingNoDuplicates: a catalog pattern absent from the DB
+// is CREATE; a present one is never CREATE (no duplicate rows). Verified by
+// counting actions across a mixed library.
+func TestSeedPlan_CreatesMissingNoDuplicates(t *testing.T) {
+	existing := []db.VendorFingerprint{
+		fpRow("oid", "1.3.6.1.4.1.11", "Aruba/HPE", "switch", 78, "builtin", []byte("[]")),
+	}
+	lib := []fingerprint.Print{
+		{Kind: "oid", Pattern: "1.3.6.1.4.1.11", Vendor: "Aruba/HPE", DeviceType: "switch", Confidence: 78},   // present → not create
+		{Kind: "oid", Pattern: "1.3.6.1.4.1.9999", Vendor: "NewVendor", DeviceType: "router", Confidence: 80}, // absent → create
+	}
+	plan := planBuiltinSeed(existing, lib)
+	creates := 0
+	for _, a := range plan {
+		if a.Action == seedCreate {
+			creates++
+			if a.Print.Pattern != "1.3.6.1.4.1.9999" {
+				t.Errorf("create planned for an already-present pattern %q (would duplicate)", a.Print.Pattern)
+			}
+		}
+	}
+	if creates != 1 {
+		t.Fatalf("expected exactly 1 create (the missing pattern), got %d", creates)
+	}
+}
 
 // TestFpExclusionsJSONRoundTrip proves operator-defined exclusions survive the
 // JSONB column round-trip (Create/Update store fpExclusionsJSON, dbToPrints reads

@@ -207,6 +207,21 @@ Audit complete — matrix + gaps + sequence above. No code changed in Phase 1
   `000078`, `NOT NULL DEFAULT '[]'`). Create/Update/Upsert + import/export (JSON +
   CSV `exclusions` column) round-trip exclusions; the seed path persists the
   built-in exclusions. Malformed/empty blobs degrade safely to "no exclusions".
+- **Built-in catalog refresh (seed follow-up).** The live classifier reads
+  fingerprints from the DB, and a DB row *shadows* the same-(kind,pattern) built-in
+  catalog entry. So a built-in row first seeded BEFORE exclusions existed would keep
+  `[]` and the shipped exclusion would never reach the classifier. `seed` now
+  RE-SYNCS existing **built-in** rows in place: `planBuiltinSeed` classifies each
+  catalog entry as create / refresh / preserve / up-to-date, and
+  `RefreshBuiltinVendorFingerprint` (guarded `WHERE source='builtin'`) rewrites
+  vendor/device_type/confidence/model/**exclusions** while preserving the row id +
+  operator knobs (enabled, priority). Operator (`source='user'`) rows are **never**
+  overwritten — even one sharing a built-in (kind,pattern). Re-seed is idempotent
+  (a synced row is "up_to_date", no write). seed response now reports
+  `{created, refreshed, preserved, up_to_date, library_size}`.
+  - **Deploy step:** there is no startup auto-seed — after deploying this binary the
+    operator must `POST /api/v1/vendor-fingerprints/seed` once (or via the UI) to
+    propagate refreshed metadata + exclusions into the live catalog. Idempotent.
 
 **Phase 3 — confidence + rejected candidates, persisted.**
 - `fingerprint.MatchWithRejected()` returns winners **plus** rejected candidates

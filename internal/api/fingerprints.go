@@ -161,28 +161,120 @@ func (s *Server) seedVendorFingerprints(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, err)
 		return
 	}
-	have := make(map[string]bool, len(existing))
+	created, refreshed, preserved, upToDate := 0, 0, 0, 0
+	for _, a := range planBuiltinSeed(existing, fingerprint.Library()) {
+		p := a.Print
+		switch a.Action {
+		case seedCreate:
+			if _, err := s.queries.CreateVendorFingerprint(r.Context(), db.CreateVendorFingerprintParams{
+				Kind: p.Kind, Pattern: p.Pattern, Vendor: p.Vendor, DeviceType: p.DeviceType,
+				Confidence: int32(p.Confidence), Enabled: true, Model: p.Model, Priority: 100, Source: "builtin",
+				Exclusions: fpExclusionsJSON(p.Exclusions),
+			}); err != nil {
+				writeErr(w, err)
+				return
+			}
+			created++
+		case seedRefresh:
+			n, err := s.queries.RefreshBuiltinVendorFingerprint(r.Context(), db.RefreshBuiltinVendorFingerprintParams{
+				ID: a.ExistingID, Vendor: p.Vendor, DeviceType: p.DeviceType,
+				Confidence: int32(p.Confidence), Model: p.Model, Exclusions: fpExclusionsJSON(p.Exclusions),
+			})
+			if err != nil {
+				writeErr(w, err)
+				return
+			}
+			if n > 0 {
+				refreshed++
+			}
+		case seedPreserve:
+			preserved++
+		case seedUpToDate:
+			upToDate++
+		}
+	}
+	s.audit(r, "config", "fingerprint.seed", "vendor_fingerprint", "", "Seeded/refreshed built-in fingerprint library",
+		map[string]any{"created": created, "refreshed": refreshed, "preserved": preserved, "up_to_date": upToDate})
+	writeJSON(w, http.StatusOK, map[string]int{
+		"created": created, "refreshed": refreshed, "preserved": preserved,
+		"up_to_date": upToDate, "library_size": len(fingerprint.Library()),
+	})
+}
+
+// seedActionKind is the disposition the seed assigns to one built-in catalog
+// entry against the current DB state.
+type seedActionKind int
+
+const (
+	seedCreate   seedActionKind = iota // pattern absent from DB → INSERT a builtin row
+	seedRefresh                        // existing builtin row drifted → UPDATE metadata+exclusions (id preserved)
+	seedPreserve                       // operator ('user') row owns this pattern → leave it untouched
+	seedUpToDate                       // existing builtin row already matches the catalog → no write
+)
+
+// seedAction is one planned operation for a built-in catalog entry.
+type seedAction struct {
+	Print      fingerprint.Print
+	Action     seedActionKind
+	ExistingID uuid.UUID // set for refresh/preserve/uptodate (the matched row)
+}
+
+// planBuiltinSeed decides, per built-in catalog entry, what the seed should do
+// against the current DB rows — WITHOUT touching the DB, so the policy is unit
+// testable. Invariants this encodes:
+//   - never creates a row whose (kind,pattern) already exists (no duplicates);
+//   - operator-owned ('user') rows are PRESERVED even when they shadow a built-in
+//     pattern (the operator's rule wins);
+//   - existing built-in rows are REFRESHED only when their shipped metadata or
+//     exclusions drifted from the catalog (so a re-seed is idempotent once synced);
+//   - the row id is reused on refresh (caller updates in place).
+func planBuiltinSeed(existing []db.VendorFingerprint, lib []fingerprint.Print) []seedAction {
+	byKey := make(map[string]db.VendorFingerprint, len(existing))
 	for _, e := range existing {
-		have[e.Kind+"|"+e.Pattern] = true
+		byKey[e.Kind+"|"+e.Pattern] = e
 	}
-	created, skipped := 0, 0
-	for _, p := range fingerprint.Library() {
-		if have[p.Kind+"|"+p.Pattern] {
-			skipped++
-			continue
+	plan := make([]seedAction, 0, len(lib))
+	for _, p := range lib {
+		row, ok := byKey[p.Kind+"|"+p.Pattern]
+		switch {
+		case !ok:
+			plan = append(plan, seedAction{Print: p, Action: seedCreate})
+		case row.Source != "builtin":
+			plan = append(plan, seedAction{Print: p, Action: seedPreserve, ExistingID: row.ID})
+		case !builtinRowMatchesCatalog(row, p):
+			plan = append(plan, seedAction{Print: p, Action: seedRefresh, ExistingID: row.ID})
+		default:
+			plan = append(plan, seedAction{Print: p, Action: seedUpToDate, ExistingID: row.ID})
 		}
-		if _, err := s.queries.CreateVendorFingerprint(r.Context(), db.CreateVendorFingerprintParams{
-			Kind: p.Kind, Pattern: p.Pattern, Vendor: p.Vendor, DeviceType: p.DeviceType,
-			Confidence: int32(p.Confidence), Enabled: true, Model: "", Priority: 100, Source: "builtin",
-			Exclusions: fpExclusionsJSON(p.Exclusions),
-		}); err != nil {
-			writeErr(w, err)
-			return
-		}
-		created++
 	}
-	s.audit(r, "config", "fingerprint.seed", "vendor_fingerprint", "", "Seeded built-in fingerprint library", map[string]any{"created": created, "skipped": skipped})
-	writeJSON(w, http.StatusOK, map[string]int{"created": created, "skipped": skipped, "library_size": len(fingerprint.Library())})
+	return plan
+}
+
+// builtinRowMatchesCatalog reports whether a stored built-in row already carries
+// the shipped catalog metadata + exclusions, so the seed can skip a redundant
+// write. Operator knobs (enabled, priority) are intentionally NOT compared — they
+// are preserved across refreshes.
+func builtinRowMatchesCatalog(row db.VendorFingerprint, p fingerprint.Print) bool {
+	return row.Vendor == p.Vendor &&
+		row.DeviceType == p.DeviceType &&
+		int(row.Confidence) == p.Confidence &&
+		row.Model == p.Model &&
+		exclusionsEqual(fpExclusionsFromJSON(row.Exclusions), p.Exclusions)
+}
+
+// exclusionsEqual compares two exclusion sets by (kind,pattern) in order. Used to
+// detect drift between a stored row and the catalog without tripping on JSONB
+// whitespace/key-order differences (a raw []byte compare would).
+func exclusionsEqual(a, b []fingerprint.Exclusion) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Kind != b[i].Kind || a[i].Pattern != b[i].Pattern {
+			return false
+		}
+	}
+	return true
 }
 
 // matchVendorFingerprints handles POST /vendor-fingerprints/match — runs the
