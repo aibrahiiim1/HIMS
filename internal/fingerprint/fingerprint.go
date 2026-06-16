@@ -21,16 +21,30 @@ const (
 	KindPort    = "port"    // an open TCP port number (weak signal)
 )
 
+// Exclusion is a negative condition on a Print: when the evidence matches ANY of
+// a rule's exclusions, the rule does NOT fire — even if its positive pattern
+// matched. This is how a broad/shared signal is corrected in DATA instead of
+// hardcoded driver bails: e.g. "HP enterprise OID .1.3.6.1.4.1.11 = switch,
+// EXCEPT the JetDirect printer subtree .11.2.3.9 or a 'jetdirect'/'laserjet'
+// sysDescr = NOT a switch (it's a printer, classified by its own rule)". Kind +
+// Pattern use the same channels/semantics as a positive Print match.
+type Exclusion struct {
+	Kind    string `json:"kind"`
+	Pattern string `json:"pattern"`
+}
+
 // Print is one fingerprint rule. Model is an OPTIONAL explicit product model the
 // rule stamps when it wins (e.g. "VE6120 Medium"); built-in catalog entries leave
-// it empty and let the model be derived from sysDescr instead.
+// it empty and let the model be derived from sysDescr instead. Exclusions are
+// negative conditions that suppress the rule (see Exclusion).
 type Print struct {
-	Kind       string `json:"kind"`
-	Pattern    string `json:"pattern"`
-	Vendor     string `json:"vendor"`
-	DeviceType string `json:"device_type"`
-	Confidence int    `json:"confidence"`
-	Model      string `json:"model"`
+	Kind       string      `json:"kind"`
+	Pattern    string      `json:"pattern"`
+	Vendor     string      `json:"vendor"`
+	DeviceType string      `json:"device_type"`
+	Confidence int         `json:"confidence"`
+	Model      string      `json:"model"`
+	Exclusions []Exclusion `json:"exclusions,omitempty"`
 }
 
 // Evidence is what we observed about a device. Any field may be empty.
@@ -60,12 +74,14 @@ func normOID(s string) string {
 	return strings.TrimPrefix(strings.TrimSpace(s), ".")
 }
 
-// matches reports whether a single print matches the evidence.
-func (p Print) matches(ev Evidence) bool {
-	switch p.Kind {
+// matchKind reports whether a single (kind, pattern) condition matches the
+// evidence. Shared by positive Print matching AND Exclusion evaluation so both
+// use identical channel semantics.
+func matchKind(kind, pattern string, ev Evidence) bool {
+	switch kind {
 	case KindOID:
 		oid := normOID(ev.SysObjectID)
-		pat := normOID(p.Pattern)
+		pat := normOID(pattern)
 		if oid == "" || pat == "" {
 			return false
 		}
@@ -73,15 +89,15 @@ func (p Print) matches(ev Evidence) bool {
 		// 1.3.6.1.4.1.9.1.516 but not 1.3.6.1.4.1.99).
 		return oid == pat || strings.HasPrefix(oid, pat+".")
 	case KindHTTP:
-		return ev.HTTPServer != "" && containsFold(ev.HTTPServer, p.Pattern)
+		return ev.HTTPServer != "" && containsFold(ev.HTTPServer, pattern)
 	case KindSSH:
-		return ev.SSHBanner != "" && containsFold(ev.SSHBanner, p.Pattern)
+		return ev.SSHBanner != "" && containsFold(ev.SSHBanner, pattern)
 	case KindService:
-		return ev.SysDescr != "" && containsFold(ev.SysDescr, p.Pattern)
+		return ev.SysDescr != "" && containsFold(ev.SysDescr, pattern)
 	case KindSysName:
-		return ev.SysName != "" && containsFold(ev.SysName, p.Pattern)
+		return ev.SysName != "" && containsFold(ev.SysName, pattern)
 	case KindPort:
-		want := strings.TrimSpace(p.Pattern)
+		want := strings.TrimSpace(pattern)
 		for _, port := range ev.Ports {
 			if itoa(port) == want {
 				return true
@@ -93,23 +109,82 @@ func (p Print) matches(ev Evidence) bool {
 	}
 }
 
-// Match returns every matching print as a Result, ranked by confidence
-// (highest first); ties keep OID > service > http > ssh > port ordering so the
-// strongest evidence channel wins a tie.
-func Match(ev Evidence, lib []Print) []Result {
-	var out []Result
-	for _, p := range lib {
-		if p.matches(ev) {
-			out = append(out, Result{Vendor: p.Vendor, DeviceType: p.DeviceType, Confidence: p.Confidence, Kind: p.Kind, Pattern: p.Pattern, Model: p.Model})
+// matches reports whether a single print's POSITIVE pattern matches the evidence.
+func (p Print) matches(ev Evidence) bool { return matchKind(p.Kind, p.Pattern, ev) }
+
+// excludedBy returns the first exclusion that matches the evidence (suppressing
+// the rule), or nil if none do.
+func (p Print) excludedBy(ev Evidence) *Exclusion {
+	for i := range p.Exclusions {
+		if matchKind(p.Exclusions[i].Kind, p.Exclusions[i].Pattern, ev) {
+			return &p.Exclusions[i]
 		}
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].Confidence != out[j].Confidence {
-			return out[i].Confidence > out[j].Confidence
-		}
-		return kindRank(out[i].Kind) < kindRank(out[j].Kind)
-	})
+	return nil
+}
+
+// Rejected is a candidate that did NOT become the classification, with the
+// reason — for the explanation/"why" layer. A rule is rejected either because an
+// exclusion suppressed it, or because it lost the confidence ranking.
+type Rejected struct {
+	Vendor     string `json:"vendor"`
+	DeviceType string `json:"device_type"`
+	Confidence int    `json:"confidence"`
+	Kind       string `json:"kind"`
+	Pattern    string `json:"pattern"`
+	Reason     string `json:"reason"`
+}
+
+// Match returns every matching print as a Result, ranked by confidence (highest
+// first; ties keep OID > service > http > ssh > port ordering). Rules suppressed
+// by an exclusion are omitted. Backward-compatible: callers that only want the
+// winners keep using Match.
+func Match(ev Evidence, lib []Print) []Result {
+	out, _ := MatchWithRejected(ev, lib)
 	return out
+}
+
+// MatchWithRejected is Match plus the rejected candidates and why: rules whose
+// positive pattern matched but were either suppressed by an exclusion or out-
+// ranked on confidence. Powers the classification-evidence / rejected-candidates
+// explanation.
+func MatchWithRejected(ev Evidence, lib []Print) (winners []Result, rejected []Rejected) {
+	for _, p := range lib {
+		if !p.matches(ev) {
+			continue
+		}
+		if ex := p.excludedBy(ev); ex != nil {
+			rejected = append(rejected, Rejected{
+				Vendor: p.Vendor, DeviceType: p.DeviceType, Confidence: p.Confidence,
+				Kind: p.Kind, Pattern: p.Pattern,
+				Reason: "excluded by " + ex.Kind + " marker \"" + ex.Pattern + "\"",
+			})
+			continue
+		}
+		winners = append(winners, Result{Vendor: p.Vendor, DeviceType: p.DeviceType, Confidence: p.Confidence, Kind: p.Kind, Pattern: p.Pattern, Model: p.Model})
+	}
+	sort.SliceStable(winners, func(i, j int) bool {
+		if winners[i].Confidence != winners[j].Confidence {
+			return winners[i].Confidence > winners[j].Confidence
+		}
+		return kindRank(winners[i].Kind) < kindRank(winners[j].Kind)
+	})
+	// Runners-up (matched, not excluded, but out-ranked) are rejected "lower
+	// confidence than the chosen classification" — only when there's a winner and
+	// the runner-up resolves to a DIFFERENT device type (a competing classification).
+	if len(winners) > 1 {
+		top := winners[0]
+		for _, w := range winners[1:] {
+			if w.DeviceType != top.DeviceType {
+				rejected = append(rejected, Rejected{
+					Vendor: w.Vendor, DeviceType: w.DeviceType, Confidence: w.Confidence,
+					Kind: w.Kind, Pattern: w.Pattern,
+					Reason: "lower confidence (" + itoa(w.Confidence) + ") than chosen " + top.DeviceType + " (" + itoa(top.Confidence) + ")",
+				})
+			}
+		}
+	}
+	return winners, rejected
 }
 
 // ModelFromSysDescr pulls a product model out of an SNMP sysDescr that uses the
@@ -236,7 +311,17 @@ func Library() []Print {
 		p(KindOID, "1.3.6.1.4.1.9", "Cisco", "switch", 80),
 		p(KindOID, "1.3.6.1.4.1.9.1", "Cisco", "switch", 82),
 		p(KindOID, "1.3.6.1.4.1.9.6.1", "Cisco", "switch", 78), // Cisco SMB / Small Business
-		p(KindOID, "1.3.6.1.4.1.11", "Aruba/HPE", "switch", 78),
+		// HP enterprise PEN .11 is shared by ProCurve/Aruba SWITCHES and HP JetDirect
+		// PRINTERS (.11.2.3.9 subtree, "HP ETHERNET MULTI-ENVIRONMENT"/JetDirect/
+		// LaserJet sysDescr). The broad switch rule excludes those printer markers in
+		// DATA so it never offers a "switch" candidate for an HP printer — the printer
+		// rule (.11.2.3.9 @80) classifies it. (Mirrors the aruba driver's bail.)
+		{Kind: KindOID, Pattern: "1.3.6.1.4.1.11", Vendor: "Aruba/HPE", DeviceType: "switch", Confidence: 78, Exclusions: []Exclusion{
+			{Kind: KindOID, Pattern: "1.3.6.1.4.1.11.2.3.9"},
+			{Kind: KindService, Pattern: "jetdirect"},
+			{Kind: KindService, Pattern: "laserjet"},
+			{Kind: KindService, Pattern: "ethernet multi-environment"},
+		}},
 		p(KindOID, "1.3.6.1.4.1.14823", "Aruba", "wireless", 80),
 		p(KindOID, "1.3.6.1.4.1.2011", "Huawei", "switch", 80),
 		p(KindOID, "1.3.6.1.4.1.12356", "Fortinet", "firewall", 85),

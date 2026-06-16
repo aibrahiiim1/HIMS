@@ -17,6 +17,62 @@ func TestOIDPrefixMatch(t *testing.T) {
 	}
 }
 
+func TestExclusion_HPJetDirectNotSwitch(t *testing.T) {
+	lib := Library()
+	// HP JetDirect printer: OID under the .11 enterprise prefix AND the JetDirect
+	// subtree .11.2.3.9 with an "ethernet multi-environment" sysDescr. The broad
+	// .11→switch rule must be EXCLUDED; the .11.2.3.9→printer rule wins.
+	ev := Evidence{SysObjectID: "1.3.6.1.4.1.11.2.3.9.1", SysDescr: "HP ETHERNET MULTI-ENVIRONMENT"}
+	winners, rejected := MatchWithRejected(ev, lib)
+	if len(winners) == 0 || winners[0].DeviceType != "printer" {
+		t.Fatalf("HP JetDirect should classify as printer, got winners=%+v", winners)
+	}
+	for _, w := range winners {
+		if w.DeviceType == "switch" {
+			t.Errorf("no switch candidate should survive for an HP printer: %+v", w)
+		}
+	}
+	// The excluded switch rule must appear in rejected with an exclusion reason.
+	var sawExcluded bool
+	for _, rj := range rejected {
+		if rj.DeviceType == "switch" && rj.Pattern == "1.3.6.1.4.1.11" {
+			sawExcluded = true
+			if !contains(rj.Reason, "excluded") {
+				t.Errorf("switch rejection reason should mention exclusion: %q", rj.Reason)
+			}
+		}
+	}
+	if !sawExcluded {
+		t.Errorf("expected the .11 switch rule to be a rejected candidate, rejected=%+v", rejected)
+	}
+}
+
+func TestExclusion_RealProCurveSwitchStillMatches(t *testing.T) {
+	lib := Library()
+	// A real HP ProCurve switch (.11.2.3.7 subtree, no printer markers) must STILL
+	// match the .11→switch rule — the exclusion only fires on printer markers.
+	ev := Evidence{SysObjectID: "1.3.6.1.4.1.11.2.3.7.11.180", SysDescr: "ProCurve J9..."}
+	res := Match(ev, lib)
+	var sawSwitch bool
+	for _, r := range res {
+		if r.DeviceType == "switch" && r.Pattern == "1.3.6.1.4.1.11" {
+			sawSwitch = true
+		}
+	}
+	if !sawSwitch {
+		t.Fatalf("real ProCurve switch must still match the .11 switch rule, got %+v", res)
+	}
+}
+
+func contains(s, sub string) bool {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
+}
+
 func TestServiceAndConfidenceRanking(t *testing.T) {
 	lib := Library()
 	// FortiGate sysDescr should resolve to Fortinet/firewall.
