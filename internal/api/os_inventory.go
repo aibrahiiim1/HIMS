@@ -314,20 +314,34 @@ func (s *Server) runOSCollection(ctx context.Context, d db.Device) osCollectResu
 		res.Detail = "collected via " + res.Method + " using credential " + cd.name
 		return res
 	}
-	// WinRM exhausted for a reason OTHER than a rejected credential (disabled /
-	// unreachable / handshake). The host may still be reachable from inside the
-	// site, so PREFER the site Relay Agent (WMI/DCOM); fall back to the standalone
-	// WMI collector only if no online agent is assigned.
-	if res.Method == "winrm" && lastReason != "auth_failed" {
+	// Direct WinRM did not collect this Windows host (rejected credential,
+	// disabled/closed 5985, unreachable, or handshake). An online site Relay Agent
+	// runs INSIDE the site with a domain/local vantage point, so it routinely
+	// authenticates domain workstations that reject the server's NTLM from outside
+	// the domain — and reaches WMI/RPC (135/445) on hosts that have WinRM closed.
+	// PREFER it for ANY uncollected Windows host, INCLUDING auth_failed: a domain
+	// PC that returns auth_failed to the out-of-domain server is the single biggest
+	// source of "unmanaged" Windows in a real subnet, and the agent collects it.
+	// Previously auth_failed dead-ended on "add a WinRM credential" even when an
+	// online agent could have collected it — that gate is removed here. The agent
+	// path is async (queued) so it never burns the per-host scan budget, and
+	// routeViaSiteAgent de-dupes in-flight jobs so re-scans don't pile up.
+	if res.Method == "winrm" {
 		if ar, handled := s.routeViaSiteAgent(ctx, d, res.IP, "wmi"); handled {
 			return ar
 		}
-		if okw, wr, wd := s.tryWMIFallback(ctx, d, res.IP, cands); okw {
-			res.Status, res.Method, res.Detail = "collected", "wmi", "collected via WMI/DCOM fallback"
-			return res
-		} else if wr != "wmi_not_configured" {
-			res.Reason, res.Detail = "wmi_"+wr, wd
-			return res
+		// No online agent assigned. A rejected credential won't fare better via
+		// direct WMI/DCOM from the same out-of-domain vantage point, so only try
+		// that standalone fallback for non-auth failures; auth_failed falls through
+		// to the honest "verify the Windows credential" gate below.
+		if lastReason != "auth_failed" {
+			if okw, wr, wd := s.tryWMIFallback(ctx, d, res.IP, cands); okw {
+				res.Status, res.Method, res.Detail = "collected", "wmi", "collected via WMI/DCOM fallback"
+				return res
+			} else if wr != "wmi_not_configured" {
+				res.Reason, res.Detail = "wmi_"+wr, wd
+				return res
+			}
 		}
 	}
 	res.Reason, res.Detail = lastReason, lastDetail+" (tried "+strconv.Itoa(len(cands))+" credential(s))"

@@ -21,6 +21,10 @@ func TestWebVendorMarkers_VoiceVsSwitch(t *testing.T) {
 		{"cucm-8443-real", "", "Cisco Unified CM Console", "", string(domain.CatPBX)},
 		{"cucm-body-only", "", "", "<html>cisco unified communications manager</html>", string(domain.CatPBX)},
 		{"omnipcx-real", "Apache", "OmniPCX for Enterprise", "", string(domain.CatPBX)},
+		// Ruijie Easy-Smart web-managed switches answer only on HTTP/80 (no SNMP/SSH)
+		// — the page title is the only signal. Real banner from 172.21.96.28/.29/.41/.60.
+		{"ruijie-easy-smart", "", "Ruijie Easy-Smart Switch", "", string(domain.CatSwitch)},
+		{"easy-smart-generic", "", "Easy-Smart Switch Web Management", "", string(domain.CatSwitch)},
 	}
 	for _, c := range cases {
 		got := WebVendorMarkers(c.server, c.title, c.body)

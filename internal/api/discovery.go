@@ -1128,6 +1128,50 @@ func scanNextAction(category string, bound bool, boundKind string) string {
 	return "Add a matching credential to onboard"
 }
 
+// unknownNextAction builds a precise, evidence-bearing next action for a host
+// that stayed unclassified or unmanaged — never the vague "insufficient evidence
+// — re-scan". It names the open ports and any unauthenticated banner so the
+// operator can act (or classify by hand) instead of re-scanning blindly. This is
+// the Discovery Reliability rule made concrete: if HIMS knows the ports and the
+// banner, it must SAY what it knows and why management didn't complete.
+func unknownNextAction(ports []int, httpServer, httpTitle, sshBanner string) string {
+	parts := make([]string, 0, len(ports))
+	for _, p := range ports {
+		parts = append(parts, strconv.Itoa(p))
+	}
+	portList := strings.Join(parts, ", ")
+	has := func(p int) bool {
+		for _, x := range ports {
+			if x == p {
+				return true
+			}
+		}
+		return false
+	}
+	webOpen := has(80) || has(443) || has(8080) || has(8443) || has(8000)
+	web := strings.TrimSpace(httpServer)
+	if httpTitle != "" {
+		if web != "" {
+			web += " — "
+		}
+		web += httpTitle
+	}
+	switch {
+	case len(ports) == 1 && has(23):
+		return "Only Telnet (23) is open — HIMS manages via SNMP/SSH/WinRM/HTTP, not Telnet. This device is Telnet-only (unsupported); enable SSH/SNMP on it, or classify it manually."
+	case webOpen && web != "":
+		return "HTTP-only device — banner \"" + truncate(web, 80) + "\" (open ports " + portList + "). No SNMP/SSH/WinRM authenticated; classify it from this banner, add a matching credential, or manage it via its web UI."
+	case webOpen:
+		return "HTTP/HTTPS open (ports " + portList + ") with no recognizable banner and no SNMP/SSH/WinRM. Open its web UI to identify it, then classify manually."
+	case has(22) && sshBanner != "":
+		return "SSH open (banner \"" + truncate(sshBanner, 60) + "\") but no stored credential authenticated — add or fix an SSH credential."
+	case has(22):
+		return "SSH (22) open but no credential authenticated — add an SSH credential to manage this host."
+	default:
+		return "No supported management protocol answered on open ports [" + portList + "]. Add a matching SNMP/SSH/WinRM credential, or classify the device manually."
+	}
+}
+
 // scanNextActionWithProfile refines the next action for the profile-driven
 // categories (VMware / CCTV) using how a Vendor Connection Profile resolved and
 // performed during the scan. Other categories fall through to scanNextAction.
@@ -1366,6 +1410,15 @@ func (s *Server) recordResult(ctx context.Context, jobID uuid.UUID, ip netip.Add
 		detail.NextAction = "This host needs the site Relay Agent, which is offline — start/repair it (Discovery → Relay Agents)"
 	case "agent_missing":
 		detail.NextAction = "This host needs a Relay Agent — install or assign one to this site (Discovery → Relay Agents)"
+	}
+	// No vague dead-ends: when nothing managed the host and it stayed unclassified,
+	// replace the generic "insufficient evidence — re-scan" line with the concrete
+	// reason derived from the open ports + unauthenticated banners (Discovery
+	// Reliability rule: never show a vague unmanaged state when the precise reason
+	// is known). Classified-but-unmanaged hosts keep their category-specific gate.
+	if !bound && collectedVia == "" &&
+		(category == "" || category == string(domain.CatUnknown) || strings.HasPrefix(detail.NextAction, "Insufficient evidence")) {
+		detail.NextAction = unknownNextAction(r.OpenPorts, r.Probe.HTTPServer, r.Probe.Hints["http_title"], r.Probe.Hints["ssh_banner"])
 	}
 	blob, merr := json.Marshal(detail)
 	if merr != nil {

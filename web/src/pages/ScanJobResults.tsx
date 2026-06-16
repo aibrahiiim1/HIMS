@@ -42,6 +42,41 @@ function isMissingClassification(d?: Device): boolean {
   return !d.category || d.category === 'unknown' || !d.vendor
 }
 
+// Management buckets — the Discovery Reliability vocabulary. Every reachable
+// result lands in exactly ONE bucket so the operator can answer "why isn't this
+// managed?" at a glance and click through to the exact devices + next action.
+// Derived from the live device management state + the (precise) scan next_action,
+// so the bucket and the per-row guidance never disagree.
+const BUCKETS = ['managed', 'needs_agent', 'auth_failed', 'needs_credential', 'transport_blocked', 'unsupported', 'unknown_evidence', 'identified_only', 'offline'] as const
+type Bucket = typeof BUCKETS[number]
+const BUCKET_META: Record<Bucket, { label: string; tone: string }> = {
+  managed: { label: 'Managed', tone: 'up' },
+  needs_agent: { label: 'Needs / offline agent', tone: 'warning' },
+  auth_failed: { label: 'Auth failed', tone: 'down' },
+  needs_credential: { label: 'Needs credential', tone: 'warning' },
+  transport_blocked: { label: 'Transport blocked', tone: 'down' },
+  unsupported: { label: 'Unsupported / Telnet-only', tone: 'unknown' },
+  unknown_evidence: { label: 'Unknown (has evidence)', tone: 'info' },
+  identified_only: { label: 'Identified only', tone: 'info' },
+  offline: { label: 'Offline', tone: 'unknown' },
+}
+
+function bucketOf(r: DiscoveryResult, d?: Device): Bucket {
+  const p = r.probe_data ?? {}
+  const na = (p.next_action ?? '').toLowerCase()
+  const via = p.collected_via
+  if (via === 'direct' || via === 'relay_agent' || d?.management === 'managed' || na.startsWith('managed via')) return 'managed'
+  if (r.outcome === 'failed' || r.outcome === 'missed' || d?.reachability === 'offline') return 'offline'
+  if (d?.management === 'needs_agent' || d?.management === 'agent_offline' || via === 'agent_offline' || via === 'agent_missing' || na.includes('relay agent')) return 'needs_agent'
+  if (d?.management === 'credential_failed' || na.includes('auth_failed') || na.includes('authentication rejected') || na.includes('auth failed')) return 'auth_failed'
+  if (na.includes('telnet-only') || na.includes('unsupported')) return 'unsupported'
+  if (na.includes('http-only') || na.includes('open its web ui') || na.includes('classify it') || na.includes('classify the device') || na.includes('classify manually')) return 'unknown_evidence'
+  if (na.includes('add a') || na.includes('add an') || na.includes('needs ') || na.includes('onboard')) return 'needs_credential'
+  if (na.includes('unreachable') || na.includes('enable ') || na.includes('open 5985') || na.includes('open port') || na.includes('not responding') || na.includes('timed out')) return 'transport_blocked'
+  if (d?.category && d.category !== 'unknown') return 'identified_only'
+  return 'unknown_evidence'
+}
+
 // Progress stages — highlighted from the job status + what the results show.
 function Timeline({ job, results }: { job: DiscoveryJob; results: DiscoveryResult[] }) {
   const enrolled = results.filter((r) => r.outcome === 'enrolled').length
@@ -77,7 +112,7 @@ function Timeline({ job, results }: { job: DiscoveryJob; results: DiscoveryResul
 export function ScanJobResults() {
   const { jobId } = useParams()
   const qc = useQueryClient()
-  const [filter, setFilter] = useState<Filter>('all')
+  const [filter, setFilter] = useState<Filter | Bucket>('all')
   const [editDev, setEditDev] = useState<Device | null>(null)
   const [msg, setMsg] = useState('')
 
@@ -127,8 +162,18 @@ export function ScanJobResults() {
   const progressPct = done ? 100 : total > 0 ? (scanned / total) * 100 : 0
   const managedPct = k.pingable > 0 ? (k.managed / k.pingable) * 100 : 0
 
+  // Per-result management bucket (computed once) + counts for the summary strip.
+  const bucketCounts = useMemo(() => {
+    const c = {} as Record<Bucket, number>
+    for (const b of BUCKETS) c[b] = 0
+    for (const r of results) { if (r.outcome === 'skipped') continue; c[bucketOf(r, dev(r))]++ }
+    return c
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [results, devMap])
+
   const filtered = useMemo(() => results.filter((r) => {
     const d = dev(r)
+    if ((BUCKETS as readonly string[]).includes(filter)) return bucketOf(r, d) === filter
     switch (filter) {
       case 'all': return true
       case 'newly_discovered': return r.disposition === 'newly_discovered'
@@ -201,6 +246,22 @@ export function ScanJobResults() {
 
           {/* D. Onboarding Actions */}
           {results.length > 0 && <OnboardingActions results={results} qc={qc} setMsg={setMsg} onRescan={() => rerun.mutate()} rescanning={rerun.isPending} />}
+
+          {/* Management buckets — every reachable device in exactly one bucket, with
+              its precise reason. Click a bucket to filter the table to those devices. */}
+          {results.length > 0 && (
+            <Panel title="Management buckets" subtitle="Why each reachable device is or isn't managed — click to filter">
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {BUCKETS.filter((b) => bucketCounts[b] > 0).map((b) => (
+                  <button key={b} onClick={() => setFilter(filter === b ? 'all' : b)}
+                    className={`badge badge-${BUCKET_META[b].tone}`}
+                    style={{ cursor: 'pointer', fontSize: 12, padding: '6px 10px', border: filter === b ? '2px solid var(--brand)' : '1px solid var(--border)', display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                    <strong style={{ fontSize: 14 }}>{bucketCounts[b]}</strong> {BUCKET_META[b].label}
+                  </button>
+                ))}
+              </div>
+            </Panel>
+          )}
 
           {/* E. Filters + C. Results table */}
           <Panel title="Results" subtitle={`${filtered.length} of ${results.length} device(s)`} pad={false}>
