@@ -114,6 +114,25 @@ func reasonHTTP(reason string) int {
 func categorizeCollectErr(method, errStr string) (reason, detail string) {
 	e := strings.ToLower(errStr)
 	switch {
+	// Connection-level failures FIRST. A closed/filtered WinRM port commonly
+	// surfaces as "failed to authenticate ... dial tcp ... connectex: refused" —
+	// the dial failure is the real cause, NOT a rejected credential. Checking the
+	// "authentication" substring before this would mislabel a WinRM-closed host as
+	// auth_failed (which then reads as a credential problem and, worse, blocked the
+	// site-agent fallback). So match the transport error first.
+	case strings.Contains(e, "refused") || strings.Contains(e, "actively refused") || strings.Contains(e, "reset") ||
+		strings.Contains(e, "no connection could be made"):
+		switch method {
+		case "winrm":
+			return "winrm_disabled", "WinRM not responding on 5985 — enable PowerShell Remoting / open the port (or collect via the site Relay Agent)"
+		case "vsphere", "vmware":
+			return "connection_refused", "vSphere connection refused — check the vCenter/ESXi URL and that 443 is open"
+		case "onvif":
+			return "connection_refused", "ONVIF/HTTP connection refused — check the device address and that the HTTP port is open"
+		case "isapi":
+			return "connection_refused", "ISAPI connection refused — check the device address and that its HTTP/HTTPS port is open"
+		}
+		return "ssh_unreachable", "SSH connection refused on 22 — enable sshd / open the port"
 	case strings.Contains(e, "unable to authenticate") || strings.Contains(e, "permission denied") ||
 		strings.Contains(e, "unauthorized") || strings.Contains(e, "access is denied") ||
 		strings.Contains(e, "authentication") || // ISAPI surfaces "authentication rejected"
@@ -327,13 +346,13 @@ func (s *Server) runOSCollection(ctx context.Context, d db.Device) osCollectResu
 	// path is async (queued) so it never burns the per-host scan budget, and
 	// routeViaSiteAgent de-dupes in-flight jobs so re-scans don't pile up.
 	if res.Method == "winrm" {
-		if ar, handled := s.routeViaSiteAgent(ctx, d, res.IP, "wmi"); handled {
+		ar, handled := s.routeViaSiteAgent(ctx, d, res.IP, "wmi")
+		if handled {
 			return ar
 		}
-		// No online agent assigned. A rejected credential won't fare better via
+		// No online agent took it. A rejected credential won't fare better via
 		// direct WMI/DCOM from the same out-of-domain vantage point, so only try
-		// that standalone fallback for non-auth failures; auth_failed falls through
-		// to the honest "verify the Windows credential" gate below.
+		// that standalone fallback for non-auth failures.
 		if lastReason != "auth_failed" {
 			if okw, wr, wd := s.tryWMIFallback(ctx, d, res.IP, cands); okw {
 				res.Status, res.Method, res.Detail = "collected", "wmi", "collected via WMI/DCOM fallback"
@@ -342,6 +361,18 @@ func (s *Server) runOSCollection(ctx context.Context, d db.Device) osCollectResu
 				res.Reason, res.Detail = "wmi_"+wr, wd
 				return res
 			}
+		}
+		// Could not collect AND could not route. For a Windows host the in-site
+		// Relay Agent is the intended collection path, so surface the HONEST agent
+		// reason (agent_offline / agent_missing — routeViaSiteAgent always sets it
+		// when handled=false) instead of the direct-attempt failure. A 135/445
+		// workstation the LocalSystem server can't WinRM is NOT an "add a WinRM
+		// credential" problem; this keeps it in the Needs-agent bucket with an exact
+		// reason rather than dead-ending as a missing credential (e.g. when the agent
+		// briefly missed a heartbeat under heavy concurrent collection load).
+		if ar.Reason != "" {
+			res.Reason, res.Detail = ar.Reason, ar.Detail
+			return res
 		}
 	}
 	res.Reason, res.Detail = lastReason, lastDetail+" (tried "+strconv.Itoa(len(cands))+" credential(s))"

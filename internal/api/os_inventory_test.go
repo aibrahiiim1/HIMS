@@ -9,6 +9,11 @@ func TestCategorizeCollectErr(t *testing.T) {
 		{"winrm", "http error: 401 unauthorized", "auth_failed"},
 		{"ssh", "ssh: unable to authenticate, attempted methods [none password]", "auth_failed"},
 		{"winrm", "dial tcp 10.0.0.5:5985: connectex: No connection could be made (actively refused)", "winrm_disabled"},
+		// A closed WinRM port surfaces from the client as an AUTH error wrapping a
+		// connection refusal ("failed to authenticate ... refused"). The connection
+		// cause must win over the "authenticate" substring — else it mislabels as
+		// auth_failed and (pre-fix) blocked the site-agent fallback for the host.
+		{"winrm", "failed to authenticate: Post \"http://10.0.0.5:5985/wsman\": dial tcp 10.0.0.5:5985: connectex: No connection could be made because the target machine actively refused it", "winrm_disabled"},
 		{"ssh", "dial tcp 10.0.0.5:22: connect: connection refused", "ssh_unreachable"},
 		{"winrm", "context deadline exceeded (Client.Timeout)", "winrm_timeout"},
 		{"ssh", "dial 10.0.0.5:22: i/o timeout", "ssh_timeout"},
