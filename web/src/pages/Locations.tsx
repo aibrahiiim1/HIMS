@@ -77,10 +77,23 @@ export function Locations() {
 
   const [subParent, setSubParent] = useState<string | null>(null)
   const [subCidr, setSubCidr] = useState('')
+  const [subMsg, setSubMsg] = useState('') // inline error for the add-subnet form
   const addSubnet = useMutation({
     mutationFn: (locId: string) => api.post(`/locations/${locId}/subnets`, { cidr: subCidr.trim() }),
-    onSuccess: () => { setSubCidr(''); setSubParent(null); refresh() },
+    onSuccess: () => { setSubCidr(''); setSubMsg(''); setSubParent(null); refresh() },
+    onError: (e) => setSubMsg((e as Error).message), // surface the server reason instead of a silent 400
   })
+  // Validate the CIDR client-side (must include a prefix length) so the common
+  // "172.21.96.0" (no /24) mistake gets an instant, friendly hint, not a silent 400.
+  const submitSubnet = (locId: string) => {
+    const v = subCidr.trim()
+    setSubMsg('')
+    if (!v.includes(':') && !/^\d{1,3}(\.\d{1,3}){3}\/([0-9]|[12]\d|3[0-2])$/.test(v)) {
+      setSubMsg('Enter a network in CIDR form with a prefix length — e.g. 172.21.96.0/24')
+      return
+    }
+    addSubnet.mutate(locId)
+  }
   const delSubnet = useMutation({ mutationFn: (id: string) => api.del(`/subnets/${id}`), onSuccess: refresh })
 
   // --- Subnet-scoped credentials ---
@@ -161,7 +174,7 @@ export function Locations() {
               {loc.code && <span className="muted" style={{ fontSize: 11 }}>[{loc.code}]</span>}
               {kids.length > 0 && <span className="muted" style={{ fontSize: 11 }}>· {kids.length}</span>}
               <button style={ghost} onClick={() => openAdd(loc.id, loc.kind)}>+ child</button>
-              <button style={ghost} onClick={() => { setSubParent(subParent === loc.id ? null : loc.id); setSubCidr('') }}>+ subnet</button>
+              <button style={ghost} onClick={() => { setSubParent(subParent === loc.id ? null : loc.id); setSubCidr(''); setSubMsg('') }}>+ subnet</button>
               <button style={ghost} onClick={() => { setEditId(loc.id); setEditName(loc.name) }}>rename</button>
               <button style={{ ...ghost, color: '#ef9a9a', borderColor: '#ef9a9a' }} onClick={() => { if (confirm(`Delete "${loc.name}" and everything under it?`)) del.mutate(loc.id) }}>delete</button>
             </>
@@ -204,10 +217,13 @@ export function Locations() {
           </div>
         )}
         {subParent === loc.id && (
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center', margin: '4px 0 4px 24px' }}>
-            <input style={{ ...input, width: 180 }} placeholder="CIDR e.g. 172.21.96.0/24" value={subCidr} autoFocus onChange={(e) => setSubCidr(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && subCidr.trim()) addSubnet.mutate(loc.id) }} />
-            <button style={btn} disabled={!subCidr.trim() || addSubnet.isPending} onClick={() => addSubnet.mutate(loc.id)}>Add subnet</button>
-            <button style={ghost} onClick={() => setSubParent(null)}>Cancel</button>
+          <div style={{ margin: '4px 0 4px 24px' }}>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <input style={{ ...input, width: 180 }} placeholder="CIDR e.g. 172.21.96.0/24" value={subCidr} autoFocus onChange={(e) => { setSubCidr(e.target.value); if (subMsg) setSubMsg('') }} onKeyDown={(e) => { if (e.key === 'Enter' && subCidr.trim()) submitSubnet(loc.id) }} />
+              <button style={btn} disabled={!subCidr.trim() || addSubnet.isPending} onClick={() => submitSubnet(loc.id)}>Add subnet</button>
+              <button style={ghost} onClick={() => { setSubParent(null); setSubMsg('') }}>Cancel</button>
+            </div>
+            {subMsg && <div style={{ color: '#ef9a9a', fontSize: 12, marginTop: 4 }}>{subMsg}</div>}
           </div>
         )}
         {addParent === loc.id && <AddForm parent={loc.id} />}
