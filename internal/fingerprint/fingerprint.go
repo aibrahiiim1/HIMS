@@ -343,24 +343,37 @@ func Library() []Print {
 		p(KindOID, "1.3.6.1.4.1.6876", "VMware", "virtual_host", 85),
 		p(KindOID, "1.3.6.1.4.1.8072", "Net-SNMP (Linux)", "server", 65),
 		p(KindOID, "1.3.6.1.4.1.311", "Microsoft", "server", 68),
-		p(KindOID, "1.3.6.1.4.1.318", "APC", "ups", 85),
+		// APC PowerNet PEN .318 is shared by UPSes (.318.1.1.1) AND rack PDUs
+		// (.318.1.1.4 / .12 / .26). The broad ups rule excludes the PDU subtrees in
+		// DATA so an APC PDU isn't offered a "ups" candidate — the .318.1.1.4→pdu rule
+		// (SC3 edge pack below) classifies it. (Mirrors the HP/Dell exclusion pattern.)
+		{Kind: KindOID, Pattern: "1.3.6.1.4.1.318", Vendor: "APC", DeviceType: "ups", Confidence: 85, Exclusions: []Exclusion{
+			{Kind: KindOID, Pattern: "1.3.6.1.4.1.318.1.1.4"},
+			{Kind: KindOID, Pattern: "1.3.6.1.4.1.318.1.1.12"},
+			{Kind: KindOID, Pattern: "1.3.6.1.4.1.318.1.1.26"},
+		}},
 		p(KindOID, "1.3.6.1.4.1.39165", "Hikvision", "camera", 82),
 		p(KindOID, "1.3.6.1.4.1.368", "Axis", "camera", 82),
 		p(KindOID, "1.3.6.1.4.1.6574", "Synology", "storage", 80), // Synology DiskStation NAS (Phase 4 SC2: storage, was server)
 		p(KindOID, "1.3.6.1.4.1.367", "Ricoh", "printer", 80),
 		p(KindOID, "1.3.6.1.4.1.11.2.3.9", "HP", "printer", 80),
 		p(KindOID, "1.3.6.1.4.1.1602", "Canon", "printer", 80),
-		p(KindOID, "1.3.6.1.4.1.13885", "Polycom", "voip", 78),
+		p(KindOID, "1.3.6.1.4.1.13885", "Polycom", "ip_phone", 78), // Polycom/Poly desk phones (SC3: ip_phone, was voip→pbx)
 
 		// --- Extended vendor catalog (FP-ext): real IANA PENs ---
-		p(KindOID, "1.3.6.1.4.1.25053", "Ruckus Wireless", "wireless", 80),        // Ruckus Wireless (generic PEN; ZD product prints above pin model)
-		p(KindOID, "1.3.6.1.4.1.534", "Eaton", "ups", 82),                         // Eaton / Powerware UPS
-		p(KindOID, "1.3.6.1.4.1.24681", "QNAP", "storage", 80),                    // QNAP NAS (Phase 4 SC2: storage, was server)
-		p(KindOID, "1.3.6.1.4.1.10642", "Zebra", "printer", 80),                   // Zebra label printers
-		p(KindOID, "1.3.6.1.4.1.253", "Xerox", "printer", 80),                     // Xerox
-		p(KindOID, "1.3.6.1.4.1.1248", "Epson", "printer", 78),                    // Seiko Epson
-		p(KindOID, "1.3.6.1.4.1.11863", "TP-Link", "switch", 70),                  // TP-Link / Omada
-		p(KindOID, "1.3.6.1.4.1.21342", "Grandstream", "voip", 80),                // Grandstream
+		p(KindOID, "1.3.6.1.4.1.25053", "Ruckus Wireless", "wireless", 80), // Ruckus Wireless (generic PEN; ZD product prints above pin model)
+		p(KindOID, "1.3.6.1.4.1.534", "Eaton", "ups", 82),                  // Eaton / Powerware UPS
+		p(KindOID, "1.3.6.1.4.1.24681", "QNAP", "storage", 80),             // QNAP NAS (Phase 4 SC2: storage, was server)
+		p(KindOID, "1.3.6.1.4.1.10642", "Zebra", "printer", 80),            // Zebra label printers
+		p(KindOID, "1.3.6.1.4.1.253", "Xerox", "printer", 80),              // Xerox
+		p(KindOID, "1.3.6.1.4.1.1248", "Epson", "printer", 78),             // Seiko Epson
+		// TP-Link/Omada PEN .11863 covers Omada SWITCHES and Omada EAP access points.
+		// Exclude the EAP marker so an Omada AP isn't offered a "switch" candidate —
+		// the "EAP"→access_point rule (SC3) classifies it. (rule #7/#10)
+		{Kind: KindOID, Pattern: "1.3.6.1.4.1.11863", Vendor: "TP-Link", DeviceType: "switch", Confidence: 70, Exclusions: []Exclusion{
+			{Kind: KindService, Pattern: "EAP"},
+		}}, // TP-Link / Omada
+		p(KindOID, "1.3.6.1.4.1.21342", "Grandstream", "ip_phone", 80),            // Grandstream IP phones (SC3: ip_phone, was voip→pbx)
 		p(KindOID, "1.3.6.1.4.1.6486", "Alcatel-Lucent Enterprise", "switch", 78), // ALE OmniSwitch
 
 		// --- SNMP sysDescr / service keywords ---
@@ -399,14 +412,18 @@ func Library() []Print {
 		p(KindService, "Ruckus", "Ruckus Wireless", "wireless", 70),
 		pm(KindService, "ZoneDirector", "Ruckus Wireless", "wireless_controller", "ZoneDirector", 88),
 		p(KindService, "SmartZone", "Ruckus Wireless", "wireless_controller", 82),
-		p(KindService, "Eaton", "Eaton", "ups", 70),
+		// Eaton makes UPSes AND ePDUs; exclude the ePDU marker so an Eaton ePDU isn't
+		// offered a "ups" candidate — the "ePDU"→pdu rule (SC3) classifies it. (rule #5/#10)
+		{Kind: KindService, Pattern: "Eaton", Vendor: "Eaton", DeviceType: "ups", Confidence: 70, Exclusions: []Exclusion{
+			{Kind: KindService, Pattern: "ePDU"},
+		}},
 		p(KindService, "QNAP", "QNAP", "storage", 70),
 		p(KindService, "Zebra", "Zebra", "printer", 70),
 		p(KindService, "Xerox", "Xerox", "printer", 70),
 		p(KindService, "EPSON", "Epson", "printer", 70),
 		p(KindService, "TP-LINK", "TP-Link", "switch", 60),
-		p(KindService, "Grandstream", "Grandstream", "voip", 72),
-		p(KindService, "Yealink", "Yealink", "voip", 72),
+		p(KindService, "Grandstream", "Grandstream", "ip_phone", 72), // SC3: ip_phone (was voip→pbx)
+		p(KindService, "Yealink", "Yealink", "ip_phone", 72),         // SC3: ip_phone (was voip→pbx)
 		p(KindService, "Dahua", "Dahua", "camera", 72),
 
 		// --- HTTP Server header / title ---
@@ -415,7 +432,7 @@ func Library() []Print {
 		p(KindHTTP, "nginx", "nginx", "server", 45),
 		p(KindHTTP, "FortiGate", "Fortinet", "firewall", 80),
 		p(KindHTTP, "App-webs", "Hikvision", "camera", 70), // Hikvision embedded web
-		p(KindHTTP, "DNVRS-Webs", "Hikvision", "nvr", 72),
+		p(KindHTTP, "DNVRS-Webs", "Hikvision", "nvr", 86),  // Hikvision NVR web — must beat the .39165/App-webs camera @82 (SC3)
 		p(KindHTTP, "GoAhead-Webs", "Embedded", "camera", 55),
 		p(KindHTTP, "Boa", "Embedded", "camera", 50),
 		p(KindHTTP, "RomPager", "Embedded", "router", 50),
@@ -532,5 +549,77 @@ func Library() []Print {
 		p(KindService, "ONTAP", "NetApp", "storage", 84),
 		p(KindService, "PowerStore", "Dell EMC", "storage", 82),
 		p(KindService, "Isilon", "Dell EMC", "storage", 82),
+
+		// ============================================================
+		// Phase 4 — Edge pack (SC3): printers / UPS / PDU / CCTV / wireless-AP / VoIP
+		// ============================================================
+
+		// --- Printers / MFP (additional vendors; printer-MIB driver enriches) ---
+		p(KindOID, "1.3.6.1.4.1.1347", "Kyocera", "printer", 80),         // Kyocera (also UTAX/TA OEM)
+		p(KindOID, "1.3.6.1.4.1.2435", "Brother", "printer", 80),         // Brother
+		p(KindOID, "1.3.6.1.4.1.641", "Lexmark", "printer", 80),          // Lexmark
+		p(KindOID, "1.3.6.1.4.1.2385", "Sharp", "printer", 78),           // Sharp
+		p(KindOID, "1.3.6.1.4.1.18334", "Konica Minolta", "printer", 80), // Konica Minolta
+		p(KindOID, "1.3.6.1.4.1.1129", "Toshiba TEC", "printer", 76),     // Toshiba TEC MFP
+		p(KindService, "iR-ADV", "Canon", "printer", 82),                 // Canon imageRUNNER ADVANCE
+		p(KindService, "imageRUNNER", "Canon", "printer", 80),
+		p(KindService, "LBP", "Canon", "printer", 72),      // Canon laser (LBP series)
+		p(KindService, "ECOSYS", "Kyocera", "printer", 82), // Kyocera ECOSYS
+		p(KindService, "TASKalfa", "Kyocera", "printer", 82),
+		p(KindService, "UTAX", "UTAX", "printer", 80),
+		p(KindService, "Lexmark", "Lexmark", "printer", 76),
+		p(KindService, "Brother", "Brother", "printer", 74),
+		p(KindService, "KONICA MINOLTA", "Konica Minolta", "printer", 78),
+		p(KindService, "bizhub", "Konica Minolta", "printer", 80), // KM bizhub MFP
+		p(KindService, "RICOH", "Ricoh", "printer", 74),
+		p(KindService, "Lanier", "Ricoh", "printer", 74), // Ricoh OEM brand
+
+		// --- UPS (additional vendors; UPS-MIB driver enriches) ---
+		p(KindOID, "1.3.6.1.4.1.476", "Vertiv/Liebert", "ups", 82), // Liebert/Emerson Network Power UPS
+		p(KindOID, "1.3.6.1.4.1.3808", "CyberPower", "ups", 82),    // CyberPower
+		p(KindOID, "1.3.6.1.4.1.5491", "Tripp Lite", "ups", 80),    // Tripp Lite
+		p(KindService, "Liebert", "Vertiv/Liebert", "ups", 76),
+		p(KindService, "CyberPower", "CyberPower", "ups", 74),
+		p(KindService, "Riello", "Riello", "ups", 74),
+		p(KindService, "Smart-UPS", "APC", "ups", 80), // APC Smart-UPS line
+
+		// --- PDU (rack power distribution; pdu category, distinct from UPS) ---
+		pm(KindOID, "1.3.6.1.4.1.318.1.1.4", "APC", "pdu", "Rack PDU", 88),  // APC rPDU (excluded from .318→ups above)
+		pm(KindOID, "1.3.6.1.4.1.318.1.1.12", "APC", "pdu", "Rack PDU", 88), // APC rPDU2
+		pm(KindOID, "1.3.6.1.4.1.318.1.1.26", "APC", "pdu", "Rack PDU", 88), // APC rPDU (newer)
+		p(KindOID, "1.3.6.1.4.1.1718", "Server Technology", "pdu", 86),      // ServerTech Sentry PDU
+		p(KindOID, "1.3.6.1.4.1.13742.6", "Raritan", "pdu", 86),             // Raritan PX2/PX3 rPDU
+		p(KindOID, "1.3.6.1.4.1.21239", "Geist", "pdu", 84),                 // Geist (Vertiv) PDU
+		p(KindService, "ePDU", "Eaton", "pdu", 84),                          // Eaton ePDU (Eaton UPS stays .534→ups)
+		p(KindService, "Switched PDU", "Generic", "pdu", 76),
+		p(KindService, "Metered PDU", "Generic", "pdu", 76),
+		p(KindService, "Rack PDU", "Generic", "pdu", 74),
+
+		// --- CCTV: NVR / DVR markers must beat the generic vendor "camera" PEN ---
+		p(KindService, "Network Video Recorder", "Generic", "nvr", 84), // beats Hikvision .39165 camera @82
+		p(KindService, "Digital Video Recorder", "Generic", "dvr", 84),
+		p(KindService, "Uniview", "Uniview", "camera", 72), // Uniview (UNV); OID PEN left out (unverified)
+		p(KindHTTP, "Hipcam", "Generic", "camera", 55),
+
+		// --- Wireless access points (access_point; product markers beat the generic
+		//     vendor "wireless"→controller PEN and the TP-Link .11863 switch) ---
+		p(KindService, "Instant AP", "Aruba", "access_point", 84), // Aruba Instant AP
+		p(KindService, "Aruba AP", "Aruba", "access_point", 82),
+		p(KindService, "UniFi AP", "Ubiquiti", "access_point", 84),
+		p(KindService, "UAP", "Ubiquiti", "access_point", 80), // UniFi AP product code (UAP-AC-Pro …)
+		p(KindSysName, "UAP-", "Ubiquiti", "access_point", 80),
+		p(KindService, "ZoneFlex", "Ruckus Wireless", "access_point", 84), // Ruckus standalone AP line
+		p(KindService, "Ruckus AP", "Ruckus Wireless", "access_point", 82),
+		p(KindService, "EAP", "TP-Link/Omada", "access_point", 80),         // Omada EAP — beats TP-Link .11863 switch @70
+		p(KindService, "Aerohive", "Extreme/Aerohive", "access_point", 82), // Extreme (Aerohive) APs
+		p(KindService, "ExtremeWireless AP", "Extreme Networks", "access_point", 84),
+
+		// --- VoIP / IP phones (ip_phone; phones, not pbx) ---
+		p(KindService, "Cisco IP Phone", "Cisco", "ip_phone", 86),
+		p(KindSysName, "SEP", "Cisco", "ip_phone", 72), // Cisco phone sysName prefix SEP<mac>
+		p(KindService, "Polycom", "Polycom", "ip_phone", 76),
+		p(KindService, "Fanvil", "Fanvil", "ip_phone", 80),
+		p(KindService, "Snom", "Snom", "ip_phone", 78),
+		p(KindService, "Avaya", "Avaya", "ip_phone", 70), // Avaya deskphones (also PBX; phones dominate by count)
 	}
 }

@@ -228,11 +228,11 @@ func TestExtendedCatalog(t *testing.T) {
 	}{
 		{Evidence{SysObjectID: "1.3.6.1.4.1.25053.1.2"}, "Ruckus Wireless", "wireless"},
 		{Evidence{SysObjectID: "1.3.6.1.4.1.534.10"}, "Eaton", "ups"},
-		{Evidence{SysObjectID: "1.3.6.1.4.1.24681.1"}, "QNAP", "storage"}, // Phase 4 SC2: NAS reclassified server→storage
-		{Evidence{SysObjectID: "1.3.6.1.4.1.21342.3"}, "Grandstream", "voip"},
+		{Evidence{SysObjectID: "1.3.6.1.4.1.24681.1"}, "QNAP", "storage"},         // Phase 4 SC2: NAS reclassified server→storage
+		{Evidence{SysObjectID: "1.3.6.1.4.1.21342.3"}, "Grandstream", "ip_phone"}, // Phase 4 SC3: voip→ip_phone
 		{Evidence{SysDescr: "Ruckus ZoneDirector 1200"}, "Ruckus Wireless", "wireless_controller"},
 		{Evidence{SysDescr: "Alcatel-Lucent OmniSwitch 6450"}, "Alcatel-Lucent Enterprise", "switch"},
-		{Evidence{SysDescr: "Yealink SIP-T46G"}, "Yealink", "voip"},
+		{Evidence{SysDescr: "Yealink SIP-T46G"}, "Yealink", "ip_phone"}, // Phase 4 SC3: voip→ip_phone
 	}
 	for _, c := range cases {
 		res := Match(c.ev, lib)
@@ -498,5 +498,152 @@ func TestPack_GenericHTTPNotBMC(t *testing.T) {
 	}
 	if top.Model == "iDRAC" || top.Model == "iLO" || top.Vendor == "Generic BMC" {
 		t.Errorf("generic HTTP must not become a BMC: %+v", top)
+	}
+}
+
+// --- Phase 4 SC3: edge pack (printer / UPS / PDU / CCTV / wireless-AP / VoIP) -
+
+func TestPack_PrintersEdge(t *testing.T) {
+	cases := []struct {
+		name string
+		ev   Evidence
+	}{
+		{"HP JetDirect", Evidence{SysObjectID: "1.3.6.1.4.1.11.2.3.9.1", SysDescr: "HP ETHERNET MULTI-ENVIRONMENT"}},
+		{"Canon iR-ADV", Evidence{SysObjectID: "1.3.6.1.4.1.1602.1", SysDescr: "Canon iR-ADV C5560"}},
+		{"Canon LBP", Evidence{SysDescr: "Canon LBP6030"}},
+		{"Kyocera ECOSYS", Evidence{SysObjectID: "1.3.6.1.4.1.1347.43", SysDescr: "KYOCERA ECOSYS M2640idw"}},
+		{"UTAX", Evidence{SysDescr: "UTAX 5006ci"}},
+		{"Ricoh", Evidence{SysObjectID: "1.3.6.1.4.1.367.1"}},
+		{"Xerox", Evidence{SysObjectID: "1.3.6.1.4.1.253.8"}},
+		{"Brother", Evidence{SysObjectID: "1.3.6.1.4.1.2435.2"}},
+		{"Epson", Evidence{SysObjectID: "1.3.6.1.4.1.1248.1"}},
+		{"Lexmark", Evidence{SysObjectID: "1.3.6.1.4.1.641.1"}},
+		{"Sharp", Evidence{SysObjectID: "1.3.6.1.4.1.2385.1"}},
+		{"Konica bizhub", Evidence{SysObjectID: "1.3.6.1.4.1.18334.1", SysDescr: "KONICA MINOLTA bizhub C360"}},
+		{"Toshiba", Evidence{SysObjectID: "1.3.6.1.4.1.1129.1"}},
+	}
+	for _, c := range cases {
+		top, ok := topMatch(c.ev)
+		if !ok || top.DeviceType != "printer" {
+			t.Errorf("%s: expected printer, got %+v", c.name, top)
+		}
+	}
+}
+
+// TestPack_PrinterNotSwitch: an HP printer must never produce a switch candidate.
+func TestPack_PrinterNotSwitch(t *testing.T) {
+	winners := Match(Evidence{SysObjectID: "1.3.6.1.4.1.11.2.3.9.5", SysDescr: "HP LaserJet MFP M725"}, Library())
+	if len(winners) == 0 || winners[0].DeviceType != "printer" {
+		t.Fatalf("HP printer should be printer, got %+v", winners)
+	}
+	for _, w := range winners {
+		if w.DeviceType == "switch" {
+			t.Errorf("HP printer must not produce a switch candidate: %+v", w)
+		}
+	}
+}
+
+// TestPack_UPSvsPDU: APC UPS→ups, APC PDU→pdu (NOT ups — excluded), Eaton UPS→ups,
+// Eaton/ServerTech/Raritan/Geist PDU→pdu, Tripp Lite UPS→ups.
+func TestPack_UPSvsPDU(t *testing.T) {
+	upsCases := []Evidence{
+		{SysObjectID: "1.3.6.1.4.1.318.1.1.1.1"}, // APC Smart-UPS
+		{SysObjectID: "1.3.6.1.4.1.534.1"},       // Eaton UPS
+		{SysObjectID: "1.3.6.1.4.1.5491.1"},      // Tripp Lite UPS
+		{SysObjectID: "1.3.6.1.4.1.3808.1"},      // CyberPower UPS
+	}
+	for _, ev := range upsCases {
+		top, ok := topMatch(ev)
+		if !ok || top.DeviceType != "ups" {
+			t.Errorf("%+v: expected ups, got %+v", ev, top)
+		}
+	}
+	pduCases := []Evidence{
+		{SysObjectID: "1.3.6.1.4.1.318.1.1.4.5"},  // APC rPDU
+		{SysObjectID: "1.3.6.1.4.1.318.1.1.12.1"}, // APC rPDU2
+		{SysObjectID: "1.3.6.1.4.1.1718.3"},       // ServerTech
+		{SysObjectID: "1.3.6.1.4.1.13742.6.1"},    // Raritan PX
+		{SysObjectID: "1.3.6.1.4.1.21239.2"},      // Geist
+		{SysDescr: "Eaton ePDU G3 Managed"},       // Eaton ePDU
+	}
+	for _, ev := range pduCases {
+		winners := Match(ev, Library())
+		if len(winners) == 0 || winners[0].DeviceType != "pdu" {
+			t.Errorf("%+v: expected pdu, got %+v", ev, winners)
+		}
+		for _, w := range winners {
+			if w.DeviceType == "ups" {
+				t.Errorf("%+v: a PDU must not produce a ups candidate: %+v", ev, w)
+			}
+		}
+	}
+}
+
+// TestPack_CCTV_NVRDVRvsCamera: NVR/DVR evidence beats the generic vendor camera.
+func TestPack_CCTV_NVRDVRvsCamera(t *testing.T) {
+	// Hikvision NVR: shares the .39165 camera PEN but the NVR web banner wins.
+	nvr, _ := topMatch(Evidence{SysObjectID: "1.3.6.1.4.1.39165.1", HTTPServer: "DNVRS-Webs"})
+	if nvr.DeviceType != "nvr" {
+		t.Errorf("Hikvision NVR should be nvr, got %+v", nvr)
+	}
+	// DVR marker beats camera.
+	dvr, _ := topMatch(Evidence{SysObjectID: "1.3.6.1.4.1.39165.1", SysDescr: "Hikvision Digital Video Recorder DS-7208"})
+	if dvr.DeviceType != "dvr" {
+		t.Errorf("Hikvision DVR should be dvr, got %+v", dvr)
+	}
+	// Plain camera stays camera.
+	cam, _ := topMatch(Evidence{SysObjectID: "1.3.6.1.4.1.39165.1", HTTPServer: "App-webs"})
+	if cam.DeviceType != "camera" {
+		t.Errorf("Hikvision camera should be camera, got %+v", cam)
+	}
+}
+
+// TestPack_WirelessAPs: AP product markers classify as access_point and beat both
+// the generic vendor "wireless"→controller PEN and (for Omada) the TP-Link switch.
+func TestPack_WirelessAPs(t *testing.T) {
+	cases := []struct {
+		name string
+		ev   Evidence
+	}{
+		{"UniFi AP", Evidence{SysObjectID: "1.3.6.1.4.1.41112.1.4", SysDescr: "U6-Pro UniFi AP"}},
+		{"Aruba Instant AP", Evidence{SysObjectID: "1.3.6.1.4.1.14823.1", SysDescr: "Aruba AP-515 (Instant AP)"}},
+		{"Ruckus ZoneFlex", Evidence{SysDescr: "Ruckus Wireless ZoneFlex R610"}},
+		{"Extreme Aerohive", Evidence{SysDescr: "Aerohive AP250"}},
+	}
+	for _, c := range cases {
+		top, ok := topMatch(c.ev)
+		if !ok || top.DeviceType != "access_point" {
+			t.Errorf("%s: expected access_point, got %+v", c.name, top)
+		}
+	}
+	// Omada EAP under the TP-Link .11863 switch PEN must become access_point, not switch.
+	winners := Match(Evidence{SysObjectID: "1.3.6.1.4.1.11863.5", SysDescr: "EAP245(EU) 3.0"}, Library())
+	if len(winners) == 0 || winners[0].DeviceType != "access_point" {
+		t.Fatalf("Omada EAP should be access_point, got %+v", winners)
+	}
+	for _, w := range winners {
+		if w.DeviceType == "switch" {
+			t.Errorf("Omada AP must not classify as switch: %+v", w)
+		}
+	}
+}
+
+// TestPack_IPPhones: IP phones classify as ip_phone (not pbx, not endpoint).
+func TestPack_IPPhones(t *testing.T) {
+	cases := []struct {
+		name string
+		ev   Evidence
+	}{
+		{"Cisco IP Phone", Evidence{SysDescr: "Cisco IP Phone 8841"}},
+		{"Yealink", Evidence{SysDescr: "Yealink SIP-T46G"}},
+		{"Grandstream", Evidence{SysObjectID: "1.3.6.1.4.1.21342.3"}},
+		{"Fanvil", Evidence{SysDescr: "Fanvil X3S"}},
+		{"Polycom", Evidence{SysObjectID: "1.3.6.1.4.1.13885.1"}},
+	}
+	for _, c := range cases {
+		top, ok := topMatch(c.ev)
+		if !ok || top.DeviceType != "ip_phone" {
+			t.Errorf("%s: expected ip_phone, got %+v", c.name, top)
+		}
 	}
 }
