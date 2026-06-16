@@ -1093,6 +1093,11 @@ type scanDetail struct {
 	// EXCLUSIVE set tried for this host (subnet-scoped credentials). Empty ⇒ normal
 	// global/scope resolution was used.
 	CredScope string `json:"cred_scope,omitempty"`
+	// ClassDetail is the Phase-3 explainable-classification record: the evidence
+	// channels, the fingerprint(s) that won, and the candidates that were considered
+	// but rejected (with reasons). Powers the UI evidence panel and the "likely type"
+	// hint for unknowns. Nil when no classification stage ran (e.g. dead host).
+	ClassDetail *discovery.ClassificationDetail `json:"classification_detail,omitempty"`
 }
 
 // scanSSHSummary is the per-result SSH CLI collection rollup shown in Job Results.
@@ -1443,7 +1448,8 @@ func (s *Server) recordResult(ctx context.Context, jobID uuid.UUID, ip netip.Add
 		Enrichment: enrichment, Profile: profRes,
 		NextAction:   scanNextActionWithPlan(category, bound, boundKind, profRes, r.Plan, attempts),
 		CollectedVia: collectedVia, AgentName: agentName, SSH: sshSum, ClassNote: classNote,
-		CredScope: r.CredScope,
+		CredScope:   r.CredScope,
+		ClassDetail: r.Classification,
 	}
 	// Sharpen the next action for agent-routed Windows hosts.
 	switch collectedVia {

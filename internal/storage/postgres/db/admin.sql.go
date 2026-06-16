@@ -198,8 +198,8 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 }
 
 const createVendorFingerprint = `-- name: CreateVendorFingerprint :one
-INSERT INTO vendor_fingerprints (kind, pattern, vendor, device_type, confidence, enabled, model, priority, source)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id, kind, pattern, vendor, device_type, confidence, enabled, created_at, model, priority, source, updated_at
+INSERT INTO vendor_fingerprints (kind, pattern, vendor, device_type, confidence, enabled, model, priority, source, exclusions)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id, kind, pattern, vendor, device_type, confidence, enabled, created_at, model, priority, source, updated_at, exclusions
 `
 
 type CreateVendorFingerprintParams struct {
@@ -212,6 +212,7 @@ type CreateVendorFingerprintParams struct {
 	Model      string `json:"model"`
 	Priority   int32  `json:"priority"`
 	Source     string `json:"source"`
+	Exclusions []byte `json:"exclusions"`
 }
 
 func (q *Queries) CreateVendorFingerprint(ctx context.Context, arg CreateVendorFingerprintParams) (VendorFingerprint, error) {
@@ -225,6 +226,7 @@ func (q *Queries) CreateVendorFingerprint(ctx context.Context, arg CreateVendorF
 		arg.Model,
 		arg.Priority,
 		arg.Source,
+		arg.Exclusions,
 	)
 	var i VendorFingerprint
 	err := row.Scan(
@@ -240,6 +242,7 @@ func (q *Queries) CreateVendorFingerprint(ctx context.Context, arg CreateVendorF
 		&i.Priority,
 		&i.Source,
 		&i.UpdatedAt,
+		&i.Exclusions,
 	)
 	return i, err
 }
@@ -581,7 +584,7 @@ func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
 
 const listVendorFingerprints = `-- name: ListVendorFingerprints :many
 
-SELECT id, kind, pattern, vendor, device_type, confidence, enabled, created_at, model, priority, source, updated_at FROM vendor_fingerprints
+SELECT id, kind, pattern, vendor, device_type, confidence, enabled, created_at, model, priority, source, updated_at, exclusions FROM vendor_fingerprints
 ORDER BY (source='user') DESC, priority ASC, confidence DESC, kind, vendor, pattern
 `
 
@@ -611,6 +614,7 @@ func (q *Queries) ListVendorFingerprints(ctx context.Context) ([]VendorFingerpri
 			&i.Priority,
 			&i.Source,
 			&i.UpdatedAt,
+			&i.Exclusions,
 		); err != nil {
 			return nil, err
 		}
@@ -786,8 +790,8 @@ func (q *Queries) UpdateUser(ctx context.Context, arg UpdateUserParams) (User, e
 const updateVendorFingerprint = `-- name: UpdateVendorFingerprint :one
 UPDATE vendor_fingerprints
 SET kind=$2, pattern=$3, vendor=$4, device_type=$5, confidence=$6, enabled=$7,
-    model=$8, priority=$9, updated_at=now()
-WHERE id=$1 RETURNING id, kind, pattern, vendor, device_type, confidence, enabled, created_at, model, priority, source, updated_at
+    model=$8, priority=$9, exclusions=$10, updated_at=now()
+WHERE id=$1 RETURNING id, kind, pattern, vendor, device_type, confidence, enabled, created_at, model, priority, source, updated_at, exclusions
 `
 
 type UpdateVendorFingerprintParams struct {
@@ -800,6 +804,7 @@ type UpdateVendorFingerprintParams struct {
 	Enabled    bool      `json:"enabled"`
 	Model      string    `json:"model"`
 	Priority   int32     `json:"priority"`
+	Exclusions []byte    `json:"exclusions"`
 }
 
 func (q *Queries) UpdateVendorFingerprint(ctx context.Context, arg UpdateVendorFingerprintParams) (VendorFingerprint, error) {
@@ -813,6 +818,7 @@ func (q *Queries) UpdateVendorFingerprint(ctx context.Context, arg UpdateVendorF
 		arg.Enabled,
 		arg.Model,
 		arg.Priority,
+		arg.Exclusions,
 	)
 	var i VendorFingerprint
 	err := row.Scan(
@@ -828,18 +834,19 @@ func (q *Queries) UpdateVendorFingerprint(ctx context.Context, arg UpdateVendorF
 		&i.Priority,
 		&i.Source,
 		&i.UpdatedAt,
+		&i.Exclusions,
 	)
 	return i, err
 }
 
 const upsertVendorFingerprint = `-- name: UpsertVendorFingerprint :one
-INSERT INTO vendor_fingerprints (kind, pattern, vendor, device_type, confidence, enabled, model, priority, source)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+INSERT INTO vendor_fingerprints (kind, pattern, vendor, device_type, confidence, enabled, model, priority, source, exclusions)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 ON CONFLICT (kind, pattern) DO UPDATE SET
     vendor=EXCLUDED.vendor, device_type=EXCLUDED.device_type, confidence=EXCLUDED.confidence,
     enabled=EXCLUDED.enabled, model=EXCLUDED.model, priority=EXCLUDED.priority,
-    source=EXCLUDED.source, updated_at=now()
-RETURNING id, kind, pattern, vendor, device_type, confidence, enabled, created_at, model, priority, source, updated_at
+    source=EXCLUDED.source, exclusions=EXCLUDED.exclusions, updated_at=now()
+RETURNING id, kind, pattern, vendor, device_type, confidence, enabled, created_at, model, priority, source, updated_at, exclusions
 `
 
 type UpsertVendorFingerprintParams struct {
@@ -852,10 +859,11 @@ type UpsertVendorFingerprintParams struct {
 	Model      string `json:"model"`
 	Priority   int32  `json:"priority"`
 	Source     string `json:"source"`
+	Exclusions []byte `json:"exclusions"`
 }
 
 // Import path: idempotent by (kind, pattern). Re-importing updates the existing
-// rule's vendor/type/confidence/model/priority/source rather than duplicating it.
+// rule's vendor/type/confidence/model/priority/source/exclusions rather than duplicating it.
 func (q *Queries) UpsertVendorFingerprint(ctx context.Context, arg UpsertVendorFingerprintParams) (VendorFingerprint, error) {
 	row := q.db.QueryRow(ctx, upsertVendorFingerprint,
 		arg.Kind,
@@ -867,6 +875,7 @@ func (q *Queries) UpsertVendorFingerprint(ctx context.Context, arg UpsertVendorF
 		arg.Model,
 		arg.Priority,
 		arg.Source,
+		arg.Exclusions,
 	)
 	var i VendorFingerprint
 	err := row.Scan(
@@ -882,6 +891,7 @@ func (q *Queries) UpsertVendorFingerprint(ctx context.Context, arg UpsertVendorF
 		&i.Priority,
 		&i.Source,
 		&i.UpdatedAt,
+		&i.Exclusions,
 	)
 	return i, err
 }

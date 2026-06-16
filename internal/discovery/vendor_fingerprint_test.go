@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/coralsearesorts/hims/internal/domain"
@@ -102,5 +103,105 @@ func TestApplyFingerprintsNoEvidenceNoChange(t *testing.T) {
 	applyFingerprints(&r, fingerprint.Library())
 	if r.Match.Category != domain.CatServer || r.Vendor != "" || r.Model != "" {
 		t.Fatalf("expected no change without evidence, got %+v vendor=%q model=%q", r.Match, r.Vendor, r.Model)
+	}
+	// Phase 3: even on a no-op, the evidence record exists (so the UI can explain
+	// "nothing matched" rather than showing a blank panel).
+	if r.Classification == nil {
+		t.Fatal("expected a Classification record even with no match")
+	}
+	if len(r.Classification.Winners) != 0 || len(r.Classification.Rejected) != 0 {
+		t.Fatalf("expected no winners/rejected, got %+v", r.Classification)
+	}
+}
+
+// TestClassificationDetail_WinnerRecorded: a positive OID match records the
+// evidence channels + the winning fingerprint and marks the source "fingerprint".
+func TestClassificationDetail_WinnerRecorded(t *testing.T) {
+	r := HostResult{
+		Match: driver.Match{Category: domain.CatUnknown, Confidence: 10},
+		Probe: driver.Probe{SNMPSysObjectID: "1.3.6.1.4.1.4242.1", SNMPSysDescr: "Acme Box v1"},
+	}
+	lib := []fingerprint.Print{
+		{Kind: fingerprint.KindOID, Pattern: "1.3.6.1.4.1.4242.1", Vendor: "Acme", DeviceType: "router", Confidence: 95},
+	}
+	applyFingerprints(&r, lib)
+	d := r.Classification
+	if d == nil {
+		t.Fatal("expected Classification detail")
+	}
+	if d.Evidence.SysObjectID != "1.3.6.1.4.1.4242.1" {
+		t.Errorf("evidence sysObjectID not captured: %q", d.Evidence.SysObjectID)
+	}
+	if len(d.Winners) != 1 || d.Winners[0].DeviceType != "router" {
+		t.Fatalf("expected one router winner, got %+v", d.Winners)
+	}
+	if d.FinalSource != "fingerprint" {
+		t.Errorf("expected final_source fingerprint, got %q", d.FinalSource)
+	}
+}
+
+// TestClassificationDetail_RejectedByExclusion: a broad rule whose positive
+// pattern matches but is suppressed by an exclusion is recorded as rejected with
+// a reason naming the exclusion — and, with no surviving winner, the rejected
+// candidate's type becomes the "likely type" for the unknown bucket.
+func TestClassificationDetail_RejectedByExclusion(t *testing.T) {
+	r := HostResult{
+		Match: driver.Match{Category: domain.CatUnknown, Confidence: 10},
+		Probe: driver.Probe{
+			SNMPSysObjectID: "1.3.6.1.4.1.11.2.3.9.1", // HP JetDirect sub-tree
+			SNMPSysDescr:    "HP ETHERNET MULTI-ENVIRONMENT",
+		},
+	}
+	lib := []fingerprint.Print{{
+		Kind: fingerprint.KindOID, Pattern: "1.3.6.1.4.1.11", Vendor: "Aruba/HPE", DeviceType: "switch", Confidence: 78,
+		Exclusions: []fingerprint.Exclusion{{Kind: fingerprint.KindOID, Pattern: "1.3.6.1.4.1.11.2.3.9"}},
+	}}
+	applyFingerprints(&r, lib)
+	d := r.Classification
+	if d == nil || len(d.Winners) != 0 {
+		t.Fatalf("expected no winners (rule excluded), got %+v", d)
+	}
+	if len(d.Rejected) != 1 || d.Rejected[0].DeviceType != "switch" {
+		t.Fatalf("expected one rejected switch candidate, got %+v", d.Rejected)
+	}
+	if !strings.Contains(d.Rejected[0].Reason, "excluded by") {
+		t.Errorf("expected an exclusion reason, got %q", d.Rejected[0].Reason)
+	}
+	if d.LikelyType != "switch" {
+		t.Errorf("expected likely_type switch (top rejected), got %q", d.LikelyType)
+	}
+	// The host's category was NOT overridden to switch by an excluded rule.
+	if r.Match.Category == domain.CatSwitch {
+		t.Error("excluded rule must not set the category")
+	}
+}
+
+// TestClassificationDetail_RejectedRunnerUp: when two different-type rules match,
+// the higher-confidence one wins and the other is recorded as a rejected runner-up.
+func TestClassificationDetail_RejectedRunnerUp(t *testing.T) {
+	r := HostResult{
+		Match: driver.Match{Category: domain.CatUnknown, Confidence: 10},
+		Probe: driver.Probe{
+			SNMPSysObjectID: "1.3.6.1.4.1.11",  // generic HP prefix → switch @78
+			SNMPSysDescr:    "HP LaserJet MFP", // service marker → printer @90
+		},
+	}
+	lib := []fingerprint.Print{
+		{Kind: fingerprint.KindOID, Pattern: "1.3.6.1.4.1.11", Vendor: "HPE", DeviceType: "switch", Confidence: 78},
+		{Kind: fingerprint.KindService, Pattern: "laserjet", Vendor: "HP", DeviceType: "printer", Confidence: 90},
+	}
+	applyFingerprints(&r, lib)
+	d := r.Classification
+	if d == nil || len(d.Winners) == 0 || d.Winners[0].DeviceType != "printer" {
+		t.Fatalf("expected printer to win, got %+v", d)
+	}
+	found := false
+	for _, rj := range d.Rejected {
+		if rj.DeviceType == "switch" && strings.Contains(rj.Reason, "lower confidence") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected switch rejected as lower-confidence runner-up, got %+v", d.Rejected)
 	}
 }

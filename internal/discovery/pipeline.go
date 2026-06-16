@@ -130,7 +130,27 @@ type HostResult struct {
 	// applied over the driver's generic identity when a specific fingerprint hits.
 	Vendor string
 	Model  string
-	Error  error
+	// Classification is the Phase-3 explainable-classification record: the evidence
+	// channels, the fingerprint(s) that won, and the candidates that were considered
+	// but rejected (with reasons). Nil until applyFingerprints runs. Persisted into
+	// discovery_results.probe_data so the UI can show WHY a device was classified the
+	// way it was — and, for unknowns, what it most likely is.
+	Classification *ClassificationDetail
+	Error          error
+}
+
+// ClassificationDetail captures the "why" behind a device's category for the
+// evidence panel. Winners are the fingerprints that survived (highest first);
+// Rejected lists candidates that matched a positive pattern but lost — either
+// suppressed by an exclusion (e.g. HP JetDirect excluded from the Aruba switch
+// rule) or outranked by a more confident different-category match. LikelyType is
+// the best guess for an otherwise-unknown device (the top runner-up category).
+type ClassificationDetail struct {
+	Evidence    fingerprint.Evidence   `json:"evidence"`
+	FinalSource string                 `json:"final_source"` // "fingerprint" | "driver" | "plan" | "none"
+	Winners     []fingerprint.Result   `json:"winners,omitempty"`
+	Rejected    []fingerprint.Rejected `json:"rejected,omitempty"`
+	LikelyType  string                 `json:"likely_type,omitempty"`
 }
 
 // CandidateFetcher abstracts the DB call that assembles credentials for an IP.
@@ -596,9 +616,6 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 // only). Pure precedence lives in fingerprint.Match (exact OID > sysDescr/sysName
 // > prefix; operator prints passed first win ties).
 func applyFingerprints(r *HostResult, lib []fingerprint.Print) {
-	if len(lib) == 0 {
-		return
-	}
 	ev := fingerprint.Evidence{
 		SysObjectID: r.Probe.SNMPSysObjectID,
 		SysDescr:    r.Probe.SNMPSysDescr,
@@ -607,13 +624,26 @@ func applyFingerprints(r *HostResult, lib []fingerprint.Print) {
 		SSHBanner:   r.Probe.Hints["ssh_banner"],
 		Ports:       r.OpenPorts,
 	}
-	results := fingerprint.Match(ev, lib)
+	// Record evidence even when the library is empty / nothing matches, so the
+	// evidence panel can explain unknowns (what we saw + why no rule fired).
+	detail := &ClassificationDetail{Evidence: ev, FinalSource: classificationSource(r)}
+	r.Classification = detail
+	if len(lib) == 0 {
+		return
+	}
+	results, rejected := fingerprint.MatchWithRejected(ev, lib)
+	detail.Winners = results
+	detail.Rejected = rejected
 	if len(results) == 0 {
+		// No positive match. If a candidate was rejected only by exclusion/confidence,
+		// surface the best guess for the unknown bucket (top rejected device type).
+		detail.LikelyType = likelyTypeFromRejected(rejected)
 		return
 	}
 	top := results[0]
 	if cat := fingerprintCategory(top.DeviceType); cat != "" && top.Confidence >= r.Match.Confidence {
 		r.Match = driver.Match{Category: cat, Confidence: top.Confidence}
+		detail.FinalSource = "fingerprint"
 	}
 	// A strong/specific match is authoritative for vendor + product model, so we
 	// record "Extreme Networks / VE6120 Medium" instead of only the firmware string.
@@ -629,6 +659,32 @@ func applyFingerprints(r *HostResult, lib []fingerprint.Print) {
 			r.Model = m
 		}
 	}
+}
+
+// classificationSource names what set the current category BEFORE fingerprints
+// run, for the evidence panel's provenance line. A driver match beats a bare
+// protocol-plan guess; an empty/unknown category is "none".
+func classificationSource(r *HostResult) string {
+	if r.MatchedDrv != nil {
+		return "driver"
+	}
+	if r.Match.Category != "" && r.Match.Category != domain.CatUnknown {
+		return "plan"
+	}
+	return "none"
+}
+
+// likelyTypeFromRejected returns the highest-confidence rejected candidate's
+// device type — the system's best guess for a device that ended up unknown.
+func likelyTypeFromRejected(rejected []fingerprint.Rejected) string {
+	best := ""
+	bestConf := -1
+	for _, rj := range rejected {
+		if rj.DeviceType != "" && rj.Confidence > bestConf {
+			best, bestConf = rj.DeviceType, rj.Confidence
+		}
+	}
+	return best
 }
 
 // fingerprintCategory maps a fingerprint device_type token to a domain device

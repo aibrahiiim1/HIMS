@@ -119,9 +119,37 @@ func dbToPrints(rows []db.VendorFingerprint, enabledOnly bool) []fingerprint.Pri
 		out = append(out, fingerprint.Print{
 			Kind: r.Kind, Pattern: r.Pattern, Vendor: r.Vendor,
 			DeviceType: r.DeviceType, Confidence: int(r.Confidence), Model: r.Model,
+			Exclusions: fpExclusionsFromJSON(r.Exclusions),
 		})
 	}
 	return out
+}
+
+// fpExclusionsFromJSON decodes the vendor_fingerprints.exclusions JSONB column
+// into the matcher's exclusion slice. A malformed/empty blob yields no
+// exclusions (the rule fires unconditionally) so classification never breaks.
+func fpExclusionsFromJSON(b []byte) []fingerprint.Exclusion {
+	if len(b) == 0 {
+		return nil
+	}
+	var ex []fingerprint.Exclusion
+	if err := json.Unmarshal(b, &ex); err != nil {
+		return nil
+	}
+	return ex
+}
+
+// fpExclusionsJSON marshals exclusions for the JSONB column, normalising nil/empty
+// to "[]" so the NOT NULL DEFAULT is satisfied and round-trips cleanly.
+func fpExclusionsJSON(ex []fingerprint.Exclusion) []byte {
+	if len(ex) == 0 {
+		return []byte("[]")
+	}
+	b, err := json.Marshal(ex)
+	if err != nil {
+		return []byte("[]")
+	}
+	return b
 }
 
 // seedVendorFingerprints handles POST /vendor-fingerprints/seed — imports the
@@ -146,6 +174,7 @@ func (s *Server) seedVendorFingerprints(w http.ResponseWriter, r *http.Request) 
 		if _, err := s.queries.CreateVendorFingerprint(r.Context(), db.CreateVendorFingerprintParams{
 			Kind: p.Kind, Pattern: p.Pattern, Vendor: p.Vendor, DeviceType: p.DeviceType,
 			Confidence: int32(p.Confidence), Enabled: true, Model: "", Priority: 100, Source: "builtin",
+			Exclusions: fpExclusionsJSON(p.Exclusions),
 		}); err != nil {
 			writeErr(w, err)
 			return
@@ -306,15 +335,16 @@ func (s *Server) testDeviceFingerprint(w http.ResponseWriter, r *http.Request) {
 // ---- Import / Export (req #4) ---------------------------------------------
 
 type fingerprintExport struct {
-	Kind       string `json:"kind"`
-	Pattern    string `json:"pattern"`
-	Vendor     string `json:"vendor"`
-	DeviceType string `json:"device_type"`
-	Model      string `json:"model"`
-	Confidence int    `json:"confidence"`
-	Priority   int    `json:"priority"`
-	Enabled    bool   `json:"enabled"`
-	Source     string `json:"source"`
+	Kind       string                  `json:"kind"`
+	Pattern    string                  `json:"pattern"`
+	Vendor     string                  `json:"vendor"`
+	DeviceType string                  `json:"device_type"`
+	Model      string                  `json:"model"`
+	Confidence int                     `json:"confidence"`
+	Priority   int                     `json:"priority"`
+	Enabled    bool                    `json:"enabled"`
+	Source     string                  `json:"source"`
+	Exclusions []fingerprint.Exclusion `json:"exclusions,omitempty"`
 }
 
 // exportVendorFingerprints handles GET /vendor-fingerprints/export?format=json|csv —
@@ -330,12 +360,16 @@ func (s *Server) exportVendorFingerprints(w http.ResponseWriter, r *http.Request
 		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 		w.Header().Set("Content-Disposition", "attachment; filename=\"vendor-fingerprints.csv\"")
 		cw := csv.NewWriter(w)
-		_ = cw.Write([]string{"kind", "pattern", "vendor", "device_type", "model", "confidence", "priority", "enabled", "source"})
+		_ = cw.Write([]string{"kind", "pattern", "vendor", "device_type", "model", "confidence", "priority", "enabled", "source", "exclusions"})
 		for _, r := range rows {
+			exc := strings.TrimSpace(string(r.Exclusions))
+			if exc == "" || exc == "[]" || exc == "null" {
+				exc = ""
+			}
 			_ = cw.Write([]string{
 				r.Kind, r.Pattern, r.Vendor, r.DeviceType, r.Model,
 				strconv.Itoa(int(r.Confidence)), strconv.Itoa(int(r.Priority)),
-				strconv.FormatBool(r.Enabled), r.Source,
+				strconv.FormatBool(r.Enabled), r.Source, exc,
 			})
 		}
 		cw.Flush()
@@ -346,7 +380,7 @@ func (s *Server) exportVendorFingerprints(w http.ResponseWriter, r *http.Request
 		out = append(out, fingerprintExport{
 			Kind: r.Kind, Pattern: r.Pattern, Vendor: r.Vendor, DeviceType: r.DeviceType,
 			Model: r.Model, Confidence: int(r.Confidence), Priority: int(r.Priority),
-			Enabled: r.Enabled, Source: r.Source,
+			Enabled: r.Enabled, Source: r.Source, Exclusions: fpExclusionsFromJSON(r.Exclusions),
 		})
 	}
 	w.Header().Set("Content-Disposition", "attachment; filename=\"vendor-fingerprints.json\"")
@@ -397,6 +431,7 @@ func (s *Server) importVendorFingerprints(w http.ResponseWriter, r *http.Request
 			Kind: it.Kind, Pattern: it.Pattern, Vendor: it.Vendor, DeviceType: it.DeviceType,
 			Confidence: conf, Enabled: it.Enabled || it.Source == "", Model: it.Model,
 			Priority: prio, Source: "user", // imported rules are operator-owned
+			Exclusions: fpExclusionsJSON(it.Exclusions),
 		}); err != nil {
 			failed++
 			if len(errs) < 10 {
@@ -444,11 +479,15 @@ func parseFingerprintCSV(body []byte) ([]fingerprintExport, error) {
 		if e := get(rec, "enabled"); e != "" {
 			enabled, _ = strconv.ParseBool(e)
 		}
+		var excl []fingerprint.Exclusion
+		if e := get(rec, "exclusions"); e != "" {
+			_ = json.Unmarshal([]byte(e), &excl) // best-effort; malformed → no exclusions
+		}
 		out = append(out, fingerprintExport{
 			Kind: strings.ToLower(get(rec, "kind")), Pattern: get(rec, "pattern"),
 			Vendor: get(rec, "vendor"), DeviceType: get(rec, "device_type"),
 			Model: get(rec, "model"), Confidence: conf, Priority: prio, Enabled: enabled,
-			Source: "user",
+			Source: "user", Exclusions: excl,
 		})
 	}
 	return out, nil

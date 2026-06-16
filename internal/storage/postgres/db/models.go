@@ -1093,6 +1093,7 @@ type VendorFingerprint struct {
 	Priority   int32     `json:"priority"`
 	Source     string    `json:"source"`
 	UpdatedAt  time.Time `json:"updated_at"`
+	Exclusions []byte    `json:"exclusions"`
 }
 
 type VirtualMachine struct {

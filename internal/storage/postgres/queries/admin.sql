@@ -87,24 +87,24 @@ SELECT * FROM vendor_fingerprints
 ORDER BY (source='user') DESC, priority ASC, confidence DESC, kind, vendor, pattern;
 
 -- name: CreateVendorFingerprint :one
-INSERT INTO vendor_fingerprints (kind, pattern, vendor, device_type, confidence, enabled, model, priority, source)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *;
+INSERT INTO vendor_fingerprints (kind, pattern, vendor, device_type, confidence, enabled, model, priority, source, exclusions)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *;
 
 -- name: UpdateVendorFingerprint :one
 UPDATE vendor_fingerprints
 SET kind=$2, pattern=$3, vendor=$4, device_type=$5, confidence=$6, enabled=$7,
-    model=$8, priority=$9, updated_at=now()
+    model=$8, priority=$9, exclusions=$10, updated_at=now()
 WHERE id=$1 RETURNING *;
 
 -- name: UpsertVendorFingerprint :one
 -- Import path: idempotent by (kind, pattern). Re-importing updates the existing
--- rule's vendor/type/confidence/model/priority/source rather than duplicating it.
-INSERT INTO vendor_fingerprints (kind, pattern, vendor, device_type, confidence, enabled, model, priority, source)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+-- rule's vendor/type/confidence/model/priority/source/exclusions rather than duplicating it.
+INSERT INTO vendor_fingerprints (kind, pattern, vendor, device_type, confidence, enabled, model, priority, source, exclusions)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 ON CONFLICT (kind, pattern) DO UPDATE SET
     vendor=EXCLUDED.vendor, device_type=EXCLUDED.device_type, confidence=EXCLUDED.confidence,
     enabled=EXCLUDED.enabled, model=EXCLUDED.model, priority=EXCLUDED.priority,
-    source=EXCLUDED.source, updated_at=now()
+    source=EXCLUDED.source, exclusions=EXCLUDED.exclusions, updated_at=now()
 RETURNING *;
 
 -- name: DeleteVendorFingerprint :exec

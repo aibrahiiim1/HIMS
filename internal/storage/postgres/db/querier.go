@@ -798,7 +798,7 @@ type Querier interface {
 	// Upsert keyed on (host, name): re-collecting refreshes state without dups.
 	UpsertVM(ctx context.Context, arg UpsertVMParams) (VirtualMachine, error)
 	// Import path: idempotent by (kind, pattern). Re-importing updates the existing
-	// rule's vendor/type/confidence/model/priority/source rather than duplicating it.
+	// rule's vendor/type/confidence/model/priority/source/exclusions rather than duplicating it.
 	UpsertVendorFingerprint(ctx context.Context, arg UpsertVendorFingerprintParams) (VendorFingerprint, error)
 	// ---- VLANs ----------------------------------------------------------------
 	UpsertVlan(ctx context.Context, arg UpsertVlanParams) (Vlan, error)

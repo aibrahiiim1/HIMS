@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/coralsearesorts/hims/internal/fingerprint"
 	"github.com/coralsearesorts/hims/internal/reports"
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
 )
@@ -449,14 +450,15 @@ func (s *Server) listVendorFingerprints(w http.ResponseWriter, r *http.Request) 
 }
 
 type fingerprintReq struct {
-	Kind       string `json:"kind"`
-	Pattern    string `json:"pattern"`
-	Vendor     string `json:"vendor"`
-	DeviceType string `json:"device_type"`
-	Model      string `json:"model"`
-	Confidence *int32 `json:"confidence"`
-	Priority   *int32 `json:"priority"`
-	Enabled    *bool  `json:"enabled"`
+	Kind       string                  `json:"kind"`
+	Pattern    string                  `json:"pattern"`
+	Vendor     string                  `json:"vendor"`
+	DeviceType string                  `json:"device_type"`
+	Model      string                  `json:"model"`
+	Confidence *int32                  `json:"confidence"`
+	Priority   *int32                  `json:"priority"`
+	Enabled    *bool                   `json:"enabled"`
+	Exclusions []fingerprint.Exclusion `json:"exclusions"`
 }
 
 const fpKindsMsg = "kind must be one of oid/service/sysname/port/http/ssh"
@@ -491,6 +493,7 @@ func (s *Server) createVendorFingerprint(w http.ResponseWriter, r *http.Request)
 	row, err := s.queries.CreateVendorFingerprint(r.Context(), db.CreateVendorFingerprintParams{
 		Kind: req.Kind, Pattern: req.Pattern, Vendor: req.Vendor, DeviceType: req.DeviceType,
 		Confidence: conf, Enabled: enabled, Model: req.Model, Priority: prio, Source: "user",
+		Exclusions: fpExclusionsJSON(req.Exclusions),
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -533,6 +536,7 @@ func (s *Server) updateVendorFingerprint(w http.ResponseWriter, r *http.Request)
 	row, err := s.queries.UpdateVendorFingerprint(r.Context(), db.UpdateVendorFingerprintParams{
 		ID: id, Kind: req.Kind, Pattern: req.Pattern, Vendor: req.Vendor, DeviceType: req.DeviceType,
 		Confidence: conf, Enabled: enabled, Model: req.Model, Priority: prio,
+		Exclusions: fpExclusionsJSON(req.Exclusions),
 	})
 	if err != nil {
 		if isUniqueViolation(err) {

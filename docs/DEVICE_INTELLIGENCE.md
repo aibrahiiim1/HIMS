@@ -190,3 +190,43 @@ discovery core (Windows/printer/site closures) stays intact.
 ### 1.7 Phase 1 status
 Audit complete — matrix + gaps + sequence above. No code changed in Phase 1
 (read-only). Build/vet/tests green, working tree clean, branch local only.
+
+### 1.8 Phase 2 + 3 status — DONE (built together, per operator direction)
+
+**Phase 2 — exclusion engine + operator-editable exclusions.**
+- `fingerprint.Exclusion{Kind,Pattern}` + `Print.Exclusions`. A rule whose
+  positive pattern matches is **suppressed** when the evidence also matches any
+  exclusion, using the same per-channel semantics as a positive match
+  (`matchKind`). This closes **G1** — broad/shared prefixes are corrected in
+  *data*, not by a hardcoded driver bail.
+- The hardcoded HP-JetDirect-≠-switch carve-out is now **data**: the built-in
+  Aruba/HPE `.11` switch rule carries exclusions for the JetDirect OID subtree
+  (`.11.2.3.9`) + the `jetdirect`/`laserjet`/`ethernet multi-environment` service
+  markers.
+- **Operator-editable**: `vendor_fingerprints.exclusions` JSONB column (migration
+  `000078`, `NOT NULL DEFAULT '[]'`). Create/Update/Upsert + import/export (JSON +
+  CSV `exclusions` column) round-trip exclusions; the seed path persists the
+  built-in exclusions. Malformed/empty blobs degrade safely to "no exclusions".
+
+**Phase 3 — confidence + rejected candidates, persisted.**
+- `fingerprint.MatchWithRejected()` returns winners **plus** rejected candidates
+  with a reason: `excluded by <kind> marker "<pattern>"` (exclusion-suppressed) or
+  `lower confidence (N) than chosen <type> (M)` (out-ranked runner-up of a
+  different device type).
+- `discovery.ClassificationDetail{Evidence, FinalSource, Winners, Rejected,
+  LikelyType}` is attached to every classified host and **persisted into
+  `discovery_results.probe_data`** as `classification_detail`. Evidence is recorded
+  even when nothing matches, and an unknown's `likely_type` is the top rejected
+  candidate's device type — so the eventual UI panel (Phase 5) can explain *why*,
+  and what an unknown most likely is, with no further backend work.
+
+Not in this pass (deferred, as directed): Phase 4 vendor packs, Phase 5 UI
+evidence panel, G5 (TLS-cert-CN / MAC-OUI evidence capture), UniFi catalog
+registration (G2 — confirmed a false alarm in audit: UniFi/Omada/Ruckus are
+collection-only, not in the classification registry).
+
+Gates: `go build/vet/test ./...` green (new tests:
+`TestClassificationDetail_*`, `TestFpExclusions*`, plus the engine-level
+`TestExclusion_*`). No frontend changed this pass. Working tree clean of tracked
+files; branch local only — **not pushed**. Migration `000078` is applied by the
+operator-run deploy (additive, default-valued, safe with the old binary).
