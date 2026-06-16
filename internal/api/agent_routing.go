@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -42,12 +43,22 @@ func (s *Server) routeViaSiteAgent(ctx context.Context, d db.Device, ip, protoco
 		return res, false
 	}
 
+	// Enqueuing an agent job is a quick DB write that MUST complete even when the
+	// caller's per-host scan budget is already exhausted — the direct WinRM attempt
+	// against a filtered 5985 port can burn the whole budget before we get here, so
+	// using the caller's ctx made ResolveSiteAgent / CreateAgentJob fail on a dead
+	// context and the host silently fell back to a misleading auth_failed instead of
+	// being dispatched to the online agent. Resolve + enqueue on a FRESH, independent
+	// context so routing always completes. Mirrors the enroll-on-fresh-ctx fix.
+	actx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
 	// Is there an online agent for this site? ResolveSiteAgent returns the newest
 	// enabled+online row, but DB status can be stale, so re-check heartbeat.
-	online, ok := s.onlineSiteAgent(ctx, *d.LocationID)
+	online, ok := s.onlineSiteAgent(actx, *d.LocationID)
 	if !ok {
 		// Distinguish "an agent is assigned but offline" from "no agent at all".
-		if s.siteHasAnyAgent(ctx, *d.LocationID) {
+		if s.siteHasAnyAgent(actx, *d.LocationID) {
 			res.Reason, res.Detail = "agent_offline", "the Relay Agent assigned to this site is offline (no recent heartbeat) — start/repair it, or assign another"
 		} else {
 			res.Reason, res.Detail = "agent_missing", "no Relay Agent is assigned to this site — install or assign one to collect legacy/local Windows hosts"
@@ -57,15 +68,15 @@ func (s *Server) routeViaSiteAgent(ctx context.Context, d db.Device, ip, protoco
 
 	// Avoid piling up duplicate jobs when the same device is re-scanned before its
 	// previous job ran.
-	if n, _ := s.queries.CountActiveDeviceAgentJobs(ctx, &d.ID); n > 0 {
+	if n, _ := s.queries.CountActiveDeviceAgentJobs(actx, &d.ID); n > 0 {
 		res.Status, res.Method = "queued", "relay-agent"
 		res.Reason, res.AgentName = "via_agent", online.Name
 		res.Detail = "collection already queued for site agent " + online.Name + " — awaiting agent poll"
 		return res, true
 	}
 
-	credID := s.pickAgentCredID(ctx, d, protocol)
-	job, err := s.queries.CreateAgentJob(ctx, db.CreateAgentJobParams{
+	credID := s.pickAgentCredID(actx, d, protocol)
+	job, err := s.queries.CreateAgentJob(actx, db.CreateAgentJobParams{
 		AgentID: online.ID, DeviceID: &d.ID, CredentialID: credID,
 		Kind: "collect_os", Protocol: protocol, Target: ip, Request: []byte("{}"),
 	})
