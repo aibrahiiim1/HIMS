@@ -273,3 +273,102 @@ func TestMultiSignalRanksStrongest(t *testing.T) {
 		t.Errorf("OID match should rank first, got %+v", res[0])
 	}
 }
+
+// --- Phase 4 SC1: network & firewall vendor pack ---------------------------
+
+// TestPack_DellPowerConnectNotServer: the Dell PEN .674 is shared by PowerEdge
+// servers and PowerConnect SWITCHES (.674.10895). The broad .674→server rule must
+// be EXCLUDED for the networking subtree, and the .674.10895→switch rule wins.
+func TestPack_DellPowerConnectNotServer(t *testing.T) {
+	lib := Library()
+	ev := Evidence{SysObjectID: "1.3.6.1.4.1.674.10895.3041", SysDescr: "Dell Networking N3048"}
+	winners, rejected := MatchWithRejected(ev, lib)
+	if len(winners) == 0 || winners[0].DeviceType != "switch" {
+		t.Fatalf("Dell PowerConnect should classify as switch, got winners=%+v", winners)
+	}
+	for _, w := range winners {
+		if w.DeviceType == "server" {
+			t.Errorf("no server candidate should survive for a Dell switch: %+v", w)
+		}
+	}
+	var sawExcluded bool
+	for _, rj := range rejected {
+		if rj.DeviceType == "server" && rj.Pattern == "1.3.6.1.4.1.674" && contains(rj.Reason, "excluded") {
+			sawExcluded = true
+		}
+	}
+	if !sawExcluded {
+		t.Errorf("expected the .674 server rule excluded for the networking subtree, rejected=%+v", rejected)
+	}
+}
+
+// TestPack_DellServerStillServer: a Dell PowerEdge (OpenManage .674.10892) is NOT
+// in the excluded networking subtree, so .674→server still classifies it.
+func TestPack_DellServerStillServer(t *testing.T) {
+	ev := Evidence{SysObjectID: "1.3.6.1.4.1.674.10892.1", SysDescr: "Dell OpenManage"}
+	res := Match(ev, Library())
+	if len(res) == 0 || res[0].DeviceType != "server" {
+		t.Fatalf("Dell PowerEdge should stay server, got %+v", res)
+	}
+}
+
+// TestPack_LoadBalancers: F5/Citrix/A10 classify into the new load_balancer
+// category via OID and sysDescr.
+func TestPack_LoadBalancers(t *testing.T) {
+	lib := Library()
+	cases := []struct {
+		name string
+		ev   Evidence
+	}{
+		{"F5 OID", Evidence{SysObjectID: "1.3.6.1.4.1.3375.2.1.3.4.43"}},
+		{"F5 descr", Evidence{SysDescr: "BIG-IP 15.1.0 Build 0.0.31"}},
+		{"NetScaler", Evidence{SysDescr: "NetScaler NS13.0"}},
+		{"A10", Evidence{SysObjectID: "1.3.6.1.4.1.22610.1.3.11"}},
+		{"Kemp", Evidence{SysDescr: "LoadMaster by Kemp"}},
+	}
+	for _, c := range cases {
+		res := Match(c.ev, lib)
+		if len(res) == 0 || res[0].DeviceType != "load_balancer" {
+			t.Errorf("%s: expected load_balancer, got %+v", c.name, res)
+		}
+	}
+}
+
+// TestPack_Firewalls: the new firewall pack entries classify into firewall.
+func TestPack_Firewalls(t *testing.T) {
+	lib := Library()
+	cases := []struct {
+		name string
+		ev   Evidence
+	}{
+		{"PAN-OS", Evidence{SysDescr: "Palo Alto Networks PA-220 PAN-OS 10.1"}},
+		{"SonicWall OID", Evidence{SysObjectID: "1.3.6.1.4.1.8741.1"}},
+		{"WatchGuard OID", Evidence{SysObjectID: "1.3.6.1.4.1.3097.1"}},
+		{"Check Point", Evidence{SysDescr: "Check Point Gaia R81"}},
+		{"pfSense", Evidence{SysDescr: "pfSense firewall"}},
+		{"OPNsense", Evidence{SysDescr: "OPNsense 23.7"}},
+		{"Juniper SRX", Evidence{SysObjectID: "1.3.6.1.4.1.2636.1.1.1", SysDescr: "Juniper SRX340 JUNOS"}},
+	}
+	for _, c := range cases {
+		res := Match(c.ev, lib)
+		if len(res) == 0 || res[0].DeviceType != "firewall" {
+			t.Errorf("%s: expected firewall, got %+v", c.name, res)
+		}
+	}
+}
+
+// TestPack_NewSwitchVendors: the new switch-vendor PENs classify into switch.
+func TestPack_NewSwitchVendors(t *testing.T) {
+	lib := Library()
+	for _, oid := range []string{
+		"1.3.6.1.4.1.171.10",   // D-Link
+		"1.3.6.1.4.1.25506.11", // H3C
+		"1.3.6.1.4.1.4881.1",   // Ruijie
+		"1.3.6.1.4.1.207.1",    // Allied Telesis
+	} {
+		res := Match(Evidence{SysObjectID: oid}, lib)
+		if len(res) == 0 || res[0].DeviceType != "switch" {
+			t.Errorf("%s: expected switch, got %+v", oid, res)
+		}
+	}
+}

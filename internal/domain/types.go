@@ -115,6 +115,8 @@ const (
 	CatUPS                DeviceCategory = "ups"
 	CatISPRouter          DeviceCategory = "isp_router"
 	CatApplication        DeviceCategory = "application"
+	CatLoadBalancer       DeviceCategory = "load_balancer" // F5/Citrix ADC/A10/Kemp
+	CatPDU                DeviceCategory = "pdu"           // switched/metered rack PDU (distinct from UPS)
 )
 
 // IsStickyInfraCategory reports whether a category is managed network/wireless
@@ -126,7 +128,7 @@ const (
 // known wireless controller from flipping to "server" on a single SNMP timeout.
 func IsStickyInfraCategory(cat string) bool {
 	switch DeviceCategory(cat) {
-	case CatWirelessController, CatAccessPoint, CatSwitch, CatRouter, CatFirewall, CatISPRouter:
+	case CatWirelessController, CatAccessPoint, CatSwitch, CatRouter, CatFirewall, CatISPRouter, CatLoadBalancer:
 		return true
 	}
 	return false

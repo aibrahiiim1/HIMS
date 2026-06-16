@@ -329,7 +329,13 @@ func Library() []Print {
 		p(KindOID, "1.3.6.1.4.1.1916", "Extreme", "switch", 82),
 		p(KindOID, "1.3.6.1.4.1.30065", "Arista", "switch", 82),
 		p(KindOID, "1.3.6.1.4.1.25461", "Palo Alto", "firewall", 85),
-		p(KindOID, "1.3.6.1.4.1.674", "Dell", "server", 72),
+		// Dell PEN .674 is shared by PowerEdge servers + OpenManage (.674.10892) AND
+		// PowerConnect/Force10/OS9-OS10 SWITCHES (.674.10895). The broad server rule
+		// excludes the networking subtree in DATA so a Dell switch isn't offered a
+		// "server" candidate — the .674.10895 switch rule (below) classifies it.
+		{Kind: KindOID, Pattern: "1.3.6.1.4.1.674", Vendor: "Dell", DeviceType: "server", Confidence: 72, Exclusions: []Exclusion{
+			{Kind: KindOID, Pattern: "1.3.6.1.4.1.674.10895"},
+		}},
 		p(KindOID, "1.3.6.1.4.1.14988", "MikroTik", "router", 80),
 		p(KindOID, "1.3.6.1.4.1.41112", "Ubiquiti", "wireless", 78),
 		p(KindOID, "1.3.6.1.4.1.4526", "Netgear", "switch", 70),
@@ -425,5 +431,58 @@ func Library() []Print {
 		p(KindPort, "9100", "Generic", "printer", 55),
 		p(KindPort, "554", "Generic", "camera", 50),
 		p(KindPort, "5060", "Generic", "voip", 50),
+
+		// ============================================================
+		// Phase 4 — Network & firewall pack (SC1)
+		// Vendor/device packs extend coverage of the compatibility matrix's
+		// catalog-only (🟡) and uncovered (❌) network gear. Product OIDs +
+		// sysDescr keywords; HTTP banners where a vendor's appliance is web-first.
+		// ============================================================
+
+		// --- Switches / routers (enterprise PENs) ---
+		p(KindOID, "1.3.6.1.4.1.171", "D-Link", "switch", 75),         // D-Link
+		p(KindOID, "1.3.6.1.4.1.25506", "H3C", "switch", 80),          // H3C / New H3C
+		p(KindOID, "1.3.6.1.4.1.4881", "Ruijie", "switch", 78),        // Ruijie Networks
+		p(KindOID, "1.3.6.1.4.1.207", "Allied Telesis", "switch", 78), // Allied Telesis
+		p(KindOID, "1.3.6.1.4.1.674.10895", "Dell", "switch", 82),     // Dell PowerConnect / Force10 / OS9-OS10 (more specific than .674→server)
+		p(KindOID, "1.3.6.1.4.1.29671", "Cisco Meraki", "switch", 72), // Meraki (cloud-managed; MS switch — MX/MR refined by sysDescr below)
+		p(KindOID, "1.3.6.1.4.1.3955", "Linksys", "switch", 65),       // Linksys / Belkin SMB
+
+		// --- Switch / router sysDescr keywords ---
+		p(KindService, "NX-OS", "Cisco", "switch", 80), // Cisco Nexus
+		p(KindService, "Nexus", "Cisco", "switch", 78),
+		p(KindService, "IOS-XE", "Cisco", "switch", 76),
+		p(KindService, "IOS XR", "Cisco", "router", 78),
+		p(KindService, "Comware", "H3C", "switch", 78), // H3C/HPE Comware
+		p(KindService, "VyOS", "VyOS", "router", 80),
+		p(KindService, "EdgeOS", "Ubiquiti", "router", 78), // Ubiquiti EdgeRouter
+		p(KindService, "EdgeSwitch", "Ubiquiti", "switch", 78),
+
+		// --- Firewalls (enterprise PENs) ---
+		p(KindOID, "1.3.6.1.4.1.8741", "SonicWall", "firewall", 85),   // SonicWall
+		p(KindOID, "1.3.6.1.4.1.3097", "WatchGuard", "firewall", 82),  // WatchGuard Firebox
+		p(KindOID, "1.3.6.1.4.1.2620", "Check Point", "firewall", 85), // Check Point
+		p(KindOID, "1.3.6.1.4.1.21067", "Sophos", "firewall", 82),     // Sophos (XG/SG)
+		p(KindOID, "1.3.6.1.4.1.20632", "Barracuda", "firewall", 80),  // Barracuda
+
+		// --- Firewall sysDescr keywords ---
+		p(KindService, "PAN-OS", "Palo Alto", "firewall", 85),
+		p(KindService, "SonicWALL", "SonicWall", "firewall", 82),
+		p(KindService, "Firepower", "Cisco", "firewall", 84), // Cisco Firepower / FTD — beats generic Cisco .9.1 switch @82
+		p(KindService, "Check Point", "Check Point", "firewall", 80),
+		p(KindService, "Sophos", "Sophos", "firewall", 72),
+		p(KindService, "pfSense", "Netgate", "firewall", 85),
+		p(KindService, "OPNsense", "OPNsense", "firewall", 85),
+		p(KindService, "SRX", "Juniper", "firewall", 85),  // Juniper SRX product marker — beats generic Juniper .2636 switch @80
+		p(KindService, "USG", "Ubiquiti", "firewall", 72), // UniFi Security Gateway
+
+		// --- Load balancers / ADCs (new category load_balancer) ---
+		p(KindOID, "1.3.6.1.4.1.3375", "F5 Networks", "load_balancer", 88),   // F5 BIG-IP
+		p(KindOID, "1.3.6.1.4.1.5951", "Citrix", "load_balancer", 85),        // Citrix NetScaler / ADC
+		p(KindOID, "1.3.6.1.4.1.22610", "A10 Networks", "load_balancer", 84), // A10 Thunder / AX
+		p(KindService, "BIG-IP", "F5 Networks", "load_balancer", 84),
+		p(KindService, "NetScaler", "Citrix", "load_balancer", 84),
+		p(KindService, "LoadMaster", "Kemp", "load_balancer", 82), // Kemp LoadMaster
+		p(KindHTTP, "BIG-IP", "F5 Networks", "load_balancer", 78),
 	}
 }

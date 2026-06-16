@@ -19,7 +19,7 @@ const input: React.CSSProperties = { padding: '8px 10px', border: '1px solid #cc
 const TABS = ['Network scan', 'Import', 'Controllers', 'Active Directory'] as const
 type Tab = typeof TABS[number]
 
-const CATEGORIES =['unknown', 'switch', 'router', 'firewall', 'access_point', 'wireless_controller', 'server', 'virtual_host', 'virtual_machine', 'storage', 'nvr', 'camera', 'printer', 'ip_phone', 'pbx', 'voice_gateway', 'database', 'directory', 'dns', 'dhcp', 'fingerprint', 'endpoint', 'ups', 'isp_router', 'application']
+const CATEGORIES =['unknown', 'switch', 'router', 'firewall', 'load_balancer', 'access_point', 'wireless_controller', 'server', 'virtual_host', 'virtual_machine', 'storage', 'nvr', 'camera', 'printer', 'ip_phone', 'pbx', 'voice_gateway', 'database', 'directory', 'dns', 'dhcp', 'fingerprint', 'endpoint', 'ups', 'pdu', 'isp_router', 'application']
 const CTRL_KINDS = ['unifi', 'ruckus', 'omada', 'extreme', 'vsphere', 'hyperv', 'redfish', 'onvif', 'cucm']
 
 // eslint-disable-next-line react-refresh/only-export-components -- shared helper reused by the standalone Scan Jobs pages
