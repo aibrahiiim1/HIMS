@@ -245,3 +245,96 @@ Gates: `go build/vet/test ./...` green (new tests:
 `TestExclusion_*`). No frontend changed this pass. Working tree clean of tracked
 files; branch local only — **not pushed**. Migration `000078` is applied by the
 operator-run deploy (additive, default-valued, safe with the old binary).
+
+### 1.9 Phase 4 status — DONE (vendor/device packs, four gated sub-commits)
+
+Phase 4 expands `fingerprint.Library()` to cover the compatibility-matrix gaps,
+across four sub-commits (SC1 network/firewall/LB, SC2 compute, SC3 edge, SC4
+audit/docs). Pure catalog data + a migration for two new categories + data-driven
+exclusions; the engine (Phase 2/3) is unchanged.
+
+**Categories added (migration `000079`).** `load_balancer` (F5/Citrix/A10/Kemp) and
+`pdu` (rack power distribution, distinct from `ups`). The `devices.category` CHECK
+is extended; `domain.CatLoadBalancer`/`CatPDU`; `load_balancer` is sticky-infra
+(must not downgrade to `server` on a weak re-scan); the Discovery category
+dropdown lists both. All other Phase-4 device types reuse existing categories.
+
+**Category validity is enforced by a test.** `TestLibraryCategoriesAreValid` walks
+the whole catalog and fails if any print's `device_type` (after `CanonicalCategory`)
+is not in the `devices.category` CHECK set — so a typo'd/unmapped category can
+never reach scan-apply. (Audit confirmed: every Phase-4 device_type maps to a valid
+category; no invalid/unexpected category string in catalog or tests.)
+
+**Vendor packs added.**
+- SC1 — switches/routers (D-Link, H3C, Ruijie, Allied Telesis, Dell PowerConnect,
+  Meraki, Linksys; NX-OS/IOS-XE/XR, Comware, VyOS, EdgeOS), firewalls (SonicWall,
+  WatchGuard, Check Point, Sophos, Barracuda, PAN-OS, Firepower, pfSense, OPNsense,
+  Juniper SRX, UniFi USG), load balancers (F5, Citrix ADC, A10, Kemp).
+- SC2 — server/BMC (HPE `.232` ProLiant+iLO, Dell iDRAC `.674.10892.2`, Lenovo
+  XCC, Supermicro, AMI MegaRAC, Redfish; **BMCs classify as `server` with a
+  vendor/model management-controller identity — no dedicated `bmc` category this
+  phase**, per operator decision), virtualization (Proxmox, vCenter, Nutanix →
+  `virtual_host`), storage (NetApp, EMC, TrueNAS, ONTAP, PowerStore, Isilon; +
+  Synology/QNAP **reclassified `server`→`storage`**).
+- SC3 — printers (Kyocera, Brother, Lexmark, Sharp, Konica, Toshiba + Canon/Kyocera
+  markers), UPS (Vertiv/Liebert, CyberPower, Tripp Lite, Riello), PDU (APC rPDU,
+  ServerTech, Raritan, Geist, Eaton ePDU), CCTV (vendor-neutral NVR/DVR markers,
+  Uniview), wireless APs (Aruba Instant, UniFi, Ruckus ZoneFlex, Omada EAP,
+  Aerohive → `access_point`), IP phones (Cisco/Yealink/Grandstream/Fanvil/Snom/
+  Polycom → `ip_phone`; Grandstream/Yealink/Polycom moved off the `voip`→`pbx`
+  default).
+
+**Broad-prefix exclusion strategy (G6).** A broad/shared enterprise prefix keeps
+its common classification but **excludes** the subtrees/markers that belong to a
+different device family, in data (mirrors the original HP/JetDirect carve-out):
+
+| Broad rule | Default | Excluded subtree/marker | Goes to |
+|---|---|---|---|
+| HP/Aruba `.11` | switch | `.11.2.3.9` OID + `jetdirect`/`laserjet`/`ethernet multi-environment` | printer |
+| Dell `.674` | server | `.674.10895` (PowerConnect/Force10) | switch |
+| APC `.318` | ups | `.318.1.1.4` / `.12` / `.26` (rPDU) | pdu |
+| Eaton `Eaton` (sysDescr) | ups | `ePDU` marker | pdu |
+| TP-Link `.11863` | switch | `EAP` marker (Omada AP) | access_point |
+
+Other broad prefixes (Microsoft `.311`, Net-SNMP `.8072`) stay low-confidence
+server signals with no competing specific family, so they need no exclusion;
+specific product markers (e.g. SRX 85, Firepower 84, iDRAC 88) simply outrank the
+generic vendor PEN they sit under.
+
+**Template/detail behavior.** The new categories (`load_balancer`, `pdu`) — and
+`access_point`/`ip_phone`/`storage`/`dvr` — are **not** in the frontend
+`detailBase` route map, so they fall through to the generic device-detail view.
+Notably `pdu` does **not** render the UPS template and `load_balancer` does **not**
+render the firewall template (neither is mapped to those routes). Dedicated
+detail/dashboard views for the new classes are deferred to Phase 5.
+
+**Deploy / seed sequence (REQUIRED after deploying Phase 2–4).** The live classifier
+reads DB rows, which shadow the built-in catalog, so the new metadata/exclusions/
+categories reach production only after:
+1. `hims-migrate up` applies **`000078`** (exclusions column) and **`000079`**
+   (load_balancer + pdu categories).
+2. `POST /api/v1/vendor-fingerprints/seed` is run **once** — `planBuiltinSeed`
+   then creates the new built-in rows and refreshes drifted ones (vendor/type/
+   confidence/model/exclusions), so e.g. the HP exclusion, the Synology/QNAP
+   `storage` reclassification, and the new PDU/AP/LB prints become live.
+   Operator-edited (`source='user'`) rows are never overwritten.
+
+**Test coverage (Phase 2 → SC4).**
+- Phase 2: `TestExclusion_HPJetDirectNotSwitch`, `TestExclusion_RealProCurveSwitchStillMatches`,
+  `TestFpExclusions{RoundTrip,EmptyNormalizesToBracket,FromJSONMalformedIsSafe}`,
+  `TestSeedPlan_{RefreshesDriftedBuiltinExclusions,IdempotentWhenInSync,PreservesOperatorRow,CreatesMissingNoDuplicates}`.
+- Phase 3: `TestClassificationDetail_{WinnerRecorded,RejectedByExclusion,RejectedRunnerUp}` + evidence-on-no-match.
+- SC1: `TestPack_{DellPowerConnectNotServer,DellServerStillServer,LoadBalancers,Firewalls,NewSwitchVendors}`.
+- SC2: `TestPack_{BMCsAreServerWithIdentity,PowerEdgeNotIDRAC,HPEProLiantNotSwitch,Virtualization,StorageNAS,GenericLinuxStaysServer,GenericHTTPNotBMC}`.
+- SC3: `TestPack_{PrintersEdge,PrinterNotSwitch,UPSvsPDU,CCTV_NVRDVRvsCamera,WirelessAPs,IPPhones}`.
+- SC4: `TestLibraryCategoriesAreValid` (catalog→category invariant).
+
+**Deferred (unchanged):** Phase 5 UI evidence panel; G5 (TLS-cert-CN / MAC-OUI
+evidence capture); a dedicated `bmc`/`management_controller` category (revisit if
+BMC-specific dashboards/reports are wanted); the create/update/list API encoding
+`exclusions` as base64 (normalize before the Phase 5 UI consumes it).
+
+Gates: `go build/vet/test ./...` green; frontend `lint`+`build` green (SC1 touched
+the category dropdown; SC2–4 frontend-untouched); migration `000079` validated
+against the real schema in a rolled-back transaction; production **not** mutated;
+branch local only — **not pushed**.

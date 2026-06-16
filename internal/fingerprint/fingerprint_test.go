@@ -647,3 +647,31 @@ func TestPack_IPPhones(t *testing.T) {
 		}
 	}
 }
+
+// --- Phase 4 SC4: category-validity invariant ------------------------------
+
+// TestLibraryCategoriesAreValid guards the whole built-in catalog: every print's
+// device_type, after CanonicalCategory, MUST be a category the devices.category
+// CHECK accepts (migrations 000066 + 000079) — otherwise scan-apply would fail to
+// persist that classification. This catches a typo'd or unmapped device_type the
+// moment it's added to the catalog.
+func TestLibraryCategoriesAreValid(t *testing.T) {
+	// Mirror of the devices.category CHECK set (keep in sync with migration 000079).
+	valid := map[string]bool{}
+	for _, c := range []string{
+		"unknown", "switch", "router", "firewall", "access_point", "wireless_controller",
+		"server", "virtual_host", "virtual_machine", "storage", "nvr", "dvr", "camera",
+		"printer", "ip_phone", "pbx", "voice_gateway", "database", "directory", "dns",
+		"dhcp", "fingerprint", "endpoint", "ups", "isp_router", "application",
+		"load_balancer", "pdu",
+	} {
+		valid[c] = true
+	}
+	for _, p := range Library() {
+		cat := CanonicalCategory(p.DeviceType)
+		if cat == "" || !valid[cat] {
+			t.Errorf("fingerprint %s/%q emits device_type %q → category %q, which is NOT a valid devices.category",
+				p.Kind, p.Pattern, p.DeviceType, cat)
+		}
+	}
+}
