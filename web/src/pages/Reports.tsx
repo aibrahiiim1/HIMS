@@ -1,15 +1,16 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
-import { FileChartColumn, Boxes, Activity, Tag, Radar, Download, Printer, FileSpreadsheet, CalendarClock, Plus, Trash2, Play } from 'lucide-react'
+import { FileChartColumn, Boxes, Activity, Tag, Radar, Download, Printer, FileSpreadsheet, CalendarClock, Plus, Trash2, Play, Plug } from 'lucide-react'
 import { api, type Device, type Location, type MonitoringOverviewRow, type DiscoveryJob, type ReportSchedule, type NotificationChannel, locationPaths } from '../api'
 import { PageHeader, Panel, Kpi, BarList, TabBar, EmptyState, StatusPill, colorFor, timeAgo } from '../components/ui'
+import { ConnectivityReport } from '../components/ConnectivityReport'
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? '/api/v1'
 const exportHref = (type: string, format: 'xlsx' | 'csv') => `${API_BASE}/reports/${type}/export?format=${format}`
 
-type View = 'inventory' | 'availability' | 'vendors' | 'discovery' | 'export' | 'scheduled'
-const VIEWS: View[] = ['inventory', 'availability', 'vendors', 'discovery', 'export', 'scheduled']
+type View = 'inventory' | 'availability' | 'vendors' | 'discovery' | 'connectivity' | 'export' | 'scheduled'
+const VIEWS: View[] = ['inventory', 'availability', 'vendors', 'discovery', 'connectivity', 'export', 'scheduled']
 
 function groupCount<T>(items: T[], key: (t: T) => string): { label: string; value: number; color: string }[] {
   const m: Record<string, number> = {}
@@ -55,6 +56,7 @@ export function Reports() {
     { key: 'availability', label: 'Availability', icon: Activity },
     { key: 'vendors', label: 'Vendors', icon: Tag },
     { key: 'discovery', label: 'Discovery', icon: Radar },
+    { key: 'connectivity', label: 'Connectivity', icon: Plug },
     { key: 'export', label: 'Export Center', icon: Download },
     { key: 'scheduled', label: 'Scheduled', icon: CalendarClock },
   ]
@@ -181,6 +183,8 @@ export function Reports() {
           </Panel>
         </div>
       )}
+
+      {tab === 'connectivity' && <ConnectivityReport />}
 
       {tab === 'scheduled' && <ScheduledReports />}
     </div>
