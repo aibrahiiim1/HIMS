@@ -495,6 +495,14 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 	}
 	applier := apply.New(s.queries)
 
+	// Per-device site resolution. When the scan itself carries no site (a targets /
+	// CIDR scan, locID == nil), resolve each device's location from the configured
+	// subnet→site mappings so a device whose IP falls inside a site's subnet (e.g.
+	// 172.21.60.0/24 → CHR) is auto-assigned that site — and an EXISTING device left
+	// with a null location gets it filled on re-scan (reconcile COALESCEs the
+	// non-nil FillLocation). A site-scoped scan's explicit location always wins.
+	resolveLoc := s.subnetLocationResolver(ctx, locID)
+
 	// Web credentials selected for this scan (ONVIF / HTTP-Basic). CCTV collection
 	// tries EACH of these in turn on a camera/NVR/DVR — first success binds — so
 	// selecting several http_basic credentials actually tries all of them, not just
@@ -553,7 +561,7 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 		// Persist on a fresh budget from the job context so a discovered host is never
 		// lost just because its probe ran long.
 		actx, acancel := context.WithTimeout(ctx, 30*time.Second)
-		id, err := applier.Apply(actx, r, locID)
+		id, err := applier.Apply(actx, r, resolveLoc(ip))
 		acancel()
 		// Post-onboarding follow-ups for an enrolled host (best-effort).
 		enrichment := ""
@@ -887,7 +895,7 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 	// sweep is retried separately with slower, contention-free targeted probes
 	// (longer timeouts + its last-known open ports), up to 3 attempts. Recovered →
 	// "known_recovered"; still gone → a "missed" row so it never disappears. ---
-	s.retryMissedKnown(ctx, jobID, locID, cfg, applier, knownByIP, seenAlive, &recoveredCount, &missedCount)
+	s.retryMissedKnown(ctx, jobID, resolveLoc, cfg, applier, knownByIP, seenAlive, &recoveredCount, &missedCount)
 
 	status, errMsg := "completed", (*string)(nil)
 	if ctx.Err() != nil {
@@ -939,7 +947,42 @@ func (s *Server) bumpScanned(jobID uuid.UUID) {
 // no concurrency contention, its last-known open ports added — up to 3 attempts.
 // Recovered devices are applied + recorded "known_recovered"; the rest get a
 // "missed" row (recordMissed) so a known managed device is never silently absent.
-func (s *Server) retryMissedKnown(ctx context.Context, jobID uuid.UUID, locID *uuid.UUID, base discovery.PipelineConfig, applier *apply.Applier, knownByIP map[netip.Addr]db.Device, seenAlive map[netip.Addr]bool, recoveredCount, missedCount *int) {
+// subnetLocationResolver returns a per-IP site resolver for a scan. If the scan
+// carried an explicit site (jobLoc != nil) that always wins. Otherwise it matches
+// each IP against the configured subnet→site mappings (narrowest containing CIDR
+// wins) so an unscoped targets/CIDR scan still resolves a device to its site —
+// and reconcile fills the site on devices previously left with a null location
+// (e.g. 172.21.60.181 in 172.21.60.0/24 → CHR). Subnets are loaded ONCE per scan.
+func (s *Server) subnetLocationResolver(ctx context.Context, jobLoc *uuid.UUID) func(netip.Addr) *uuid.UUID {
+	if jobLoc != nil {
+		return func(netip.Addr) *uuid.UUID { return jobLoc }
+	}
+	subs, err := s.queries.ListSubnets(ctx)
+	if err != nil || len(subs) == 0 {
+		return func(netip.Addr) *uuid.UUID { return nil }
+	}
+	return func(ip netip.Addr) *uuid.UUID { return subnetLocationFor(subs, ip) }
+}
+
+// subnetLocationFor returns the site/location of the configured subnet that
+// contains ip, preferring the narrowest (longest-prefix) match so a /24 site
+// subnet outranks an overlapping /16. Returns nil when no configured subnet
+// contains the IP. Pure (no DB) so the reconcile rule is unit-testable.
+func subnetLocationFor(subs []db.Subnet, ip netip.Addr) *uuid.UUID {
+	var best *uuid.UUID
+	bestBits := -1
+	for i := range subs {
+		p := subs[i].Cidr
+		if p.IsValid() && p.Contains(ip) && p.Bits() > bestBits {
+			bestBits = p.Bits()
+			loc := subs[i].LocationID
+			best = &loc
+		}
+	}
+	return best
+}
+
+func (s *Server) retryMissedKnown(ctx context.Context, jobID uuid.UUID, resolveLoc func(netip.Addr) *uuid.UUID, base discovery.PipelineConfig, applier *apply.Applier, knownByIP map[netip.Addr]db.Device, seenAlive map[netip.Addr]bool, recoveredCount, missedCount *int) {
 	var missed []netip.Addr
 	for ip := range knownByIP {
 		if !seenAlive[ip] {
@@ -972,9 +1015,9 @@ func (s *Server) retryMissedKnown(ctx context.Context, jobID uuid.UUID, locID *u
 				return
 			}
 			actx, acancel := context.WithTimeout(ctx, 40*time.Second)
-			rr := discovery.Run(actx, ip, locID, rcfg)
+			rr := discovery.Run(actx, ip, resolveLoc(ip), rcfg)
 			if rr.Alive {
-				id, aerr := applier.Apply(actx, rr, locID)
+				id, aerr := applier.Apply(actx, rr, resolveLoc(ip))
 				if aerr == nil && id != uuid.Nil {
 					if d2, e := s.queries.GetDevice(actx, id); e == nil {
 						s.persistScanCredAttempts(actx, d2, rr.CredAttempts, "")

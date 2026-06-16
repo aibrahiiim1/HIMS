@@ -28,7 +28,7 @@ func (*Driver) Name() string { return "printer_snmp" }
 // Template implements driver.Driver.
 func (*Driver) Template() string { return "printer" }
 
-var printerKeywords = []string{"jetdirect", "laserjet", "officejet", "printer", "kyocera", "ricoh", "lexmark", "brother", "canon imagerunner", "xerox", "konica"}
+var printerKeywords = []string{"jetdirect", "laserjet", "officejet", "designjet", "ethernet multi-environment", "printer", "kyocera", "ricoh", "lexmark", "brother", "canon", "ir-adv", "lbp", "imagerunner", "xerox", "konica", "utax"}
 
 // Fingerprint scores printer evidence: a printer-ish sysDescr/banner (70), or
 // the raw-print port 9100 open (62). Below an authoritative switch OID.

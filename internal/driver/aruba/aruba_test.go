@@ -53,6 +53,28 @@ func TestAruba_DescrNeedsSNMPPort(t *testing.T) {
 	}
 }
 
+// HP printers / JetDirect print servers share the HP enterprise OID (.11) with HP
+// ProCurve switches but live under .11.2.3.9 and report "HP ETHERNET MULTI-
+// ENVIRONMENT" — they must NOT be claimed as switches (regression: 172.21.60.42 /
+// .39 / .73 / .159 were wrongly given the aruba_hpe switch driver/template).
+func TestAruba_NoMatchForHPPrinter(t *testing.T) {
+	d := New()
+	cases := []driver.Probe{
+		{SNMPSysObjectID: ".1.3.6.1.4.1.11.2.3.9.1", SNMPSysDescr: "HP ETHERNET MULTI-ENVIRONMENT", OpenTCPPorts: []int{161, 9100}},
+		{SNMPSysDescr: "HP ETHERNET MULTI-ENVIRONMENT,SN:CNB7G3PCQ7,PID:HP LaserJet", OpenTCPPorts: []int{161, 9100}},
+		{SNMPSysDescr: "HP ETHERNET MULTI-ENVIRONMENT,ROM none,JETDIRECT,JD149", OpenTCPPorts: []int{161, 9100}},
+	}
+	for _, p := range cases {
+		if m := d.Fingerprint(p); m.Confidence != 0 {
+			t.Errorf("HP printer must NOT match aruba switch: %q → %+v", p.SNMPSysDescr, m)
+		}
+	}
+	// A real HP ProCurve switch (…11.2.3.7…) must STILL match — no regression.
+	if m := d.Fingerprint(driver.Probe{SNMPSysObjectID: ".1.3.6.1.4.1.11.2.3.7.11.180", SNMPSysDescr: "ProCurve J9..."}); m.Confidence != 90 {
+		t.Fatalf("real ProCurve switch must still match: %+v", m)
+	}
+}
+
 func TestAruba_NameAndTemplate(t *testing.T) {
 	d := New()
 	if d.Name() != "aruba_hpe" || d.Template() != "switch" {

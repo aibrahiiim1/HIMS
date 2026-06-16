@@ -22,6 +22,19 @@ func TestFingerprint(t *testing.T) {
 	if d.Fingerprint(driver.Probe{SNMPSysDescr: "Linux server"}).Confidence != 0 {
 		t.Fatal("non-printer should not match")
 	}
+	// The HP/Canon printers that were misclassified as Aruba switches must now match
+	// the printer driver from their sysDescr (172.21.60.42/.39/.73/.159 + Canon v1).
+	for _, descr := range []string{
+		"HP ETHERNET MULTI-ENVIRONMENT",
+		"HP ETHERNET MULTI-ENVIRONMENT,ROM none,JETDIRECT,JD149",
+		"Canon iR-ADV 4045 /P",
+		"Canon LBP6780 /P",
+		"UTAX_TA Printing System",
+	} {
+		if m := d.Fingerprint(driver.Probe{SNMPSysDescr: descr}); m.Confidence < 70 || m.Category != domain.CatPrinter {
+			t.Errorf("printer sysDescr %q → %+v, want >=70 printer", descr, m)
+		}
+	}
 }
 
 // fakeSNMP emits canned PDUs for the Printer-MIB walks.
