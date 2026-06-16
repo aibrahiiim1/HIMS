@@ -346,7 +346,7 @@ func Library() []Print {
 		p(KindOID, "1.3.6.1.4.1.318", "APC", "ups", 85),
 		p(KindOID, "1.3.6.1.4.1.39165", "Hikvision", "camera", 82),
 		p(KindOID, "1.3.6.1.4.1.368", "Axis", "camera", 82),
-		p(KindOID, "1.3.6.1.4.1.6574", "Synology", "server", 78),
+		p(KindOID, "1.3.6.1.4.1.6574", "Synology", "storage", 80), // Synology DiskStation NAS (Phase 4 SC2: storage, was server)
 		p(KindOID, "1.3.6.1.4.1.367", "Ricoh", "printer", 80),
 		p(KindOID, "1.3.6.1.4.1.11.2.3.9", "HP", "printer", 80),
 		p(KindOID, "1.3.6.1.4.1.1602", "Canon", "printer", 80),
@@ -355,7 +355,7 @@ func Library() []Print {
 		// --- Extended vendor catalog (FP-ext): real IANA PENs ---
 		p(KindOID, "1.3.6.1.4.1.25053", "Ruckus Wireless", "wireless", 80),        // Ruckus Wireless (generic PEN; ZD product prints above pin model)
 		p(KindOID, "1.3.6.1.4.1.534", "Eaton", "ups", 82),                         // Eaton / Powerware UPS
-		p(KindOID, "1.3.6.1.4.1.24681", "QNAP", "server", 78),                     // QNAP NAS
+		p(KindOID, "1.3.6.1.4.1.24681", "QNAP", "storage", 80),                    // QNAP NAS (Phase 4 SC2: storage, was server)
 		p(KindOID, "1.3.6.1.4.1.10642", "Zebra", "printer", 80),                   // Zebra label printers
 		p(KindOID, "1.3.6.1.4.1.253", "Xerox", "printer", 80),                     // Xerox
 		p(KindOID, "1.3.6.1.4.1.1248", "Epson", "printer", 78),                    // Seiko Epson
@@ -400,7 +400,7 @@ func Library() []Print {
 		pm(KindService, "ZoneDirector", "Ruckus Wireless", "wireless_controller", "ZoneDirector", 88),
 		p(KindService, "SmartZone", "Ruckus Wireless", "wireless_controller", 82),
 		p(KindService, "Eaton", "Eaton", "ups", 70),
-		p(KindService, "QNAP", "QNAP", "server", 70),
+		p(KindService, "QNAP", "QNAP", "storage", 70),
 		p(KindService, "Zebra", "Zebra", "printer", 70),
 		p(KindService, "Xerox", "Xerox", "printer", 70),
 		p(KindService, "EPSON", "Epson", "printer", 70),
@@ -484,5 +484,53 @@ func Library() []Print {
 		p(KindService, "NetScaler", "Citrix", "load_balancer", 84),
 		p(KindService, "LoadMaster", "Kemp", "load_balancer", 82), // Kemp LoadMaster
 		p(KindHTTP, "BIG-IP", "F5 Networks", "load_balancer", 78),
+
+		// ============================================================
+		// Phase 4 — Compute pack (SC2): server / BMC / virtualization / storage
+		// NOTE ON BMCs: there is no bmc/management_controller device category in this
+		// system; the existing redfish_bmc driver classifies BMCs as "server", so the
+		// management-controller identity is carried by VENDOR + MODEL within the server
+		// category (not a separate category). These prints beat generic HTTP/Linux so a
+		// BMC is never left as a bare web server (Redfish/iLO/iDRAC > generic HTTP).
+		// ============================================================
+
+		// --- Server / BMC enterprise PENs ---
+		p(KindOID, "1.3.6.1.4.1.232", "HPE", "server", 74),                    // HP/HPE ProLiant + iLO (Compaq PEN; NOT the .11 ProCurve switch tree)
+		pm(KindOID, "1.3.6.1.4.1.674.10892.2", "Dell", "server", "iDRAC", 88), // Dell iDRAC (more specific than .674→server / .10892 OpenManage)
+		p(KindOID, "1.3.6.1.4.1.674.10892.1", "Dell", "server", 80),           // Dell OpenManage / PowerEdge server agent
+		p(KindOID, "1.3.6.1.4.1.19046", "Lenovo", "server", 74),               // Lenovo (ThinkSystem / XCC)
+		p(KindOID, "1.3.6.1.4.1.10876", "Supermicro", "server", 74),           // Supermicro
+
+		// --- Server / BMC sysDescr + HTTP markers (management controllers) ---
+		pm(KindService, "iDRAC", "Dell", "server", "iDRAC", 86), // Dell iDRAC
+		p(KindService, "Integrated Dell Remote Access", "Dell", "server", 86),
+		p(KindService, "PowerEdge", "Dell", "server", 80),                          // Dell PowerEdge (server, not iDRAC)
+		pm(KindService, "Integrated Lights-Out", "HPE", "server", "iLO", 86),       // HPE iLO (bare "iLO" omitted from sysDescr — substring-matches kilo/silo)
+		p(KindService, "ProLiant", "HPE", "server", 80),                            // HPE ProLiant (server, not switch)
+		pm(KindService, "XClarity", "Lenovo", "server", "XClarity Controller", 86), // Lenovo XCC
+		p(KindService, "iBMC", "Huawei", "server", 80),                             // Huawei iBMC
+		p(KindService, "Supermicro", "Supermicro", "server", 76),
+		pm(KindHTTP, "iLO", "HPE", "server", "iLO", 84),     // iLO web — beats generic HTTP
+		p(KindHTTP, "iDRAC", "Dell", "server", 84),          // iDRAC web
+		p(KindHTTP, "Redfish", "Generic BMC", "server", 70), // generic Redfish service banner
+		p(KindHTTP, "AMI MegaRAC", "AMI", "server", 72),     // AMI MegaRAC BMC (Supermicro/others)
+
+		// --- Virtualization hosts ---
+		p(KindService, "Proxmox", "Proxmox", "virtual_host", 84), // Proxmox VE — beats generic Linux/net-snmp @55-65
+		p(KindHTTP, "pve-", "Proxmox", "virtual_host", 72),       // Proxmox web (pve-manager)
+		p(KindService, "vCenter", "VMware", "virtual_host", 84),  // vCenter Server appliance
+		p(KindService, "Nutanix", "Nutanix", "virtual_host", 82), // Nutanix AHV/CVM
+		// (Hyper-V is plain Windows over SNMP — no distinct SNMP/banner fingerprint; it
+		//  classifies as server/endpoint then the WinRM Get-VM collector finds the role.)
+
+		// --- Storage / NAS (storage category; beats generic Linux/net-snmp server) ---
+		p(KindOID, "1.3.6.1.4.1.789", "NetApp", "storage", 84),    // NetApp ONTAP
+		p(KindOID, "1.3.6.1.4.1.1139", "Dell EMC", "storage", 82), // EMC (Unity/VNX/Isilon/PowerStore family)
+		p(KindService, "DiskStation", "Synology", "storage", 82),
+		p(KindService, "TrueNAS", "iXsystems", "storage", 84),
+		p(KindService, "FreeNAS", "iXsystems", "storage", 80),
+		p(KindService, "ONTAP", "NetApp", "storage", 84),
+		p(KindService, "PowerStore", "Dell EMC", "storage", 82),
+		p(KindService, "Isilon", "Dell EMC", "storage", 82),
 	}
 }

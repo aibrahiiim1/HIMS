@@ -228,7 +228,7 @@ func TestExtendedCatalog(t *testing.T) {
 	}{
 		{Evidence{SysObjectID: "1.3.6.1.4.1.25053.1.2"}, "Ruckus Wireless", "wireless"},
 		{Evidence{SysObjectID: "1.3.6.1.4.1.534.10"}, "Eaton", "ups"},
-		{Evidence{SysObjectID: "1.3.6.1.4.1.24681.1"}, "QNAP", "server"},
+		{Evidence{SysObjectID: "1.3.6.1.4.1.24681.1"}, "QNAP", "storage"}, // Phase 4 SC2: NAS reclassified server→storage
 		{Evidence{SysObjectID: "1.3.6.1.4.1.21342.3"}, "Grandstream", "voip"},
 		{Evidence{SysDescr: "Ruckus ZoneDirector 1200"}, "Ruckus Wireless", "wireless_controller"},
 		{Evidence{SysDescr: "Alcatel-Lucent OmniSwitch 6450"}, "Alcatel-Lucent Enterprise", "switch"},
@@ -370,5 +370,133 @@ func TestPack_NewSwitchVendors(t *testing.T) {
 		if len(res) == 0 || res[0].DeviceType != "switch" {
 			t.Errorf("%s: expected switch, got %+v", oid, res)
 		}
+	}
+}
+
+// --- Phase 4 SC2: compute pack (server / BMC / virtualization / storage) ----
+
+// topMatch is a small helper for the SC2 table tests.
+func topMatch(ev Evidence) (Result, bool) {
+	res := Match(ev, Library())
+	if len(res) == 0 {
+		return Result{}, false
+	}
+	return res[0], true
+}
+
+// TestPack_BMCsAreServerWithIdentity: iDRAC/iLO/XCC/Redfish classify as the
+// "server" category (no bmc category in this system) but carry a distinct
+// management-controller identity (vendor/model), and beat generic HTTP.
+func TestPack_BMCsAreServerWithIdentity(t *testing.T) {
+	cases := []struct {
+		name       string
+		ev         Evidence
+		wantVendor string
+		wantModel  string // "" = don't care
+	}{
+		{"Dell iDRAC OID", Evidence{SysObjectID: "1.3.6.1.4.1.674.10892.2.1"}, "Dell", "iDRAC"},
+		{"Dell iDRAC descr", Evidence{SysDescr: "Integrated Dell Remote Access Controller 9"}, "Dell", ""},
+		{"HPE iLO", Evidence{SysDescr: "HP Integrated Lights-Out 5"}, "HPE", "iLO"},
+		{"Lenovo XCC", Evidence{SysDescr: "Lenovo XClarity Controller"}, "Lenovo", "XClarity Controller"},
+		{"Redfish HTTP", Evidence{HTTPServer: "Redfish/1.0"}, "Generic BMC", ""},
+		{"iLO HTTP header", Evidence{HTTPServer: "HPE-iLO-Server/1.30"}, "HPE", "iLO"},
+	}
+	for _, c := range cases {
+		top, ok := topMatch(c.ev)
+		if !ok || top.DeviceType != "server" {
+			t.Errorf("%s: expected server, got %+v", c.name, top)
+			continue
+		}
+		if top.Vendor != c.wantVendor {
+			t.Errorf("%s: vendor=%q want %q", c.name, top.Vendor, c.wantVendor)
+		}
+		if c.wantModel != "" && top.Model != c.wantModel {
+			t.Errorf("%s: model=%q want %q", c.name, top.Model, c.wantModel)
+		}
+	}
+}
+
+// TestPack_PowerEdgeNotIDRAC: a Dell PowerEdge (OpenManage .674.10892.1, no BMC
+// marker) classifies as server but must NOT pick up the iDRAC identity.
+func TestPack_PowerEdgeNotIDRAC(t *testing.T) {
+	ev := Evidence{SysObjectID: "1.3.6.1.4.1.674.10892.1.700", SysDescr: "Dell PowerEdge R740"}
+	top, ok := topMatch(ev)
+	if !ok || top.DeviceType != "server" {
+		t.Fatalf("PowerEdge should be server, got %+v", top)
+	}
+	if top.Model == "iDRAC" {
+		t.Errorf("PowerEdge must not become iDRAC without BMC evidence: %+v", top)
+	}
+}
+
+// TestPack_HPEProLiantNotSwitch: an HPE ProLiant (Compaq PEN .232) must classify
+// as server, never as an Aruba/HPE switch (the .11 ProCurve tree).
+func TestPack_HPEProLiantNotSwitch(t *testing.T) {
+	ev := Evidence{SysObjectID: "1.3.6.1.4.1.232.9.4.10", SysDescr: "HP ProLiant DL380 Gen10"}
+	winners := Match(ev, Library())
+	if len(winners) == 0 || winners[0].DeviceType != "server" {
+		t.Fatalf("ProLiant should be server, got %+v", winners)
+	}
+	for _, w := range winners {
+		if w.DeviceType == "switch" {
+			t.Errorf("ProLiant must never produce a switch candidate: %+v", w)
+		}
+	}
+}
+
+// TestPack_Virtualization: ESXi/Proxmox/vCenter/Nutanix → virtual_host, beating
+// generic Linux/SSH evidence.
+func TestPack_Virtualization(t *testing.T) {
+	cases := []Evidence{
+		{SysDescr: "VMware ESXi 7.0.3 build-19482537", SSHBanner: "SSH-2.0-OpenSSH"},
+		{SysDescr: "Proxmox VE 8.1", SSHBanner: "SSH-2.0-OpenSSH_9.2"},
+		{SysDescr: "VMware vCenter Server Appliance"},
+		{SysDescr: "Nutanix Controller VM"},
+	}
+	for _, ev := range cases {
+		top, ok := topMatch(ev)
+		if !ok || top.DeviceType != "virtual_host" {
+			t.Errorf("%q: expected virtual_host, got %+v", ev.SysDescr, top)
+		}
+	}
+}
+
+// TestPack_StorageNAS: Synology/QNAP/TrueNAS/NetApp/EMC classify as storage
+// (Synology + QNAP RECLASSIFIED from server — see commit note on behavior impact).
+func TestPack_StorageNAS(t *testing.T) {
+	cases := []Evidence{
+		{SysObjectID: "1.3.6.1.4.1.6574.1"},      // Synology
+		{SysObjectID: "1.3.6.1.4.1.24681.1.2.1"}, // QNAP
+		{SysDescr: "TrueNAS-13.0-U6.1"},          // TrueNAS
+		{SysObjectID: "1.3.6.1.4.1.789.2"},       // NetApp
+		{SysDescr: "Dell EMC Isilon OneFS"},      // EMC Isilon
+	}
+	for _, ev := range cases {
+		top, ok := topMatch(ev)
+		if !ok || top.DeviceType != "storage" {
+			t.Errorf("%+v: expected storage, got %+v", ev, top)
+		}
+	}
+}
+
+// TestPack_GenericLinuxStaysServer: a plain Linux host with only OS + SSH evidence
+// must remain server — not promoted to ESXi/Proxmox/BMC/storage.
+func TestPack_GenericLinuxStaysServer(t *testing.T) {
+	ev := Evidence{SysDescr: "Linux db01 5.15.0-86-generic x86_64", SSHBanner: "SSH-2.0-OpenSSH_8.9p1"}
+	top, ok := topMatch(ev)
+	if !ok || top.DeviceType != "server" {
+		t.Fatalf("generic Linux should stay server, got %+v", top)
+	}
+}
+
+// TestPack_GenericHTTPNotBMC: a bare web server banner must not be classified as a
+// BMC/management controller.
+func TestPack_GenericHTTPNotBMC(t *testing.T) {
+	top, ok := topMatch(Evidence{HTTPServer: "Apache/2.4.41 (Ubuntu)"})
+	if !ok {
+		t.Fatal("expected a match for Apache banner")
+	}
+	if top.Model == "iDRAC" || top.Model == "iLO" || top.Vendor == "Generic BMC" {
+		t.Errorf("generic HTTP must not become a BMC: %+v", top)
 	}
 }
