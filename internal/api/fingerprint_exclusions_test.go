@@ -1,6 +1,8 @@
 package api
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/coralsearesorts/hims/internal/fingerprint"
@@ -145,6 +147,46 @@ func TestFpExclusionsFromJSONMalformedIsSafe(t *testing.T) {
 	for _, b := range [][]byte{nil, []byte(""), []byte("not json"), []byte("{")} {
 		if got := fpExclusionsFromJSON(b); got != nil {
 			t.Errorf("expected nil for malformed/empty %q, got %+v", string(b), got)
+		}
+	}
+}
+
+// --- Phase 5 SC3: API response shape (structured exclusions, never base64) ---
+
+// TestVendorFingerprintDTO_StructuredNotBase64: the list/create/update DTO must
+// expose exclusions as a JSON array, NOT the raw db []byte (which would base64).
+func TestVendorFingerprintDTO_StructuredNotBase64(t *testing.T) {
+	row := fpRow("oid", "1.3.6.1.4.1.11", "Aruba/HPE", "switch", 78, "builtin",
+		[]byte(`[{"kind":"oid","pattern":"1.3.6.1.4.1.11.2.3.9"},{"kind":"service","pattern":"jetdirect"}]`))
+	dto := toVendorFingerprintDTO(row)
+	if len(dto.Exclusions) != 2 || dto.Exclusions[0].Pattern != "1.3.6.1.4.1.11.2.3.9" || dto.Exclusions[1].Kind != fingerprint.KindService {
+		t.Fatalf("structured exclusions not decoded: %+v", dto.Exclusions)
+	}
+	b, err := json.Marshal(dto)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	if !strings.Contains(s, `"exclusions":[{`) {
+		t.Errorf("exclusions must marshal as a JSON array, got: %s", s)
+	}
+	if strings.Contains(s, `"exclusions":"`) { // a base64 string would look like this
+		t.Errorf("exclusions must NOT be a base64 string: %s", s)
+	}
+}
+
+// TestVendorFingerprintDTO_EmptyIsArrayNotNull: rows with []/nil/malformed
+// exclusions emit `[]` (non-nil, not base64, not null) so the UI shows "no
+// exclusions" cleanly and never crashes.
+func TestVendorFingerprintDTO_EmptyIsArrayNotNull(t *testing.T) {
+	for _, blob := range [][]byte{[]byte("[]"), nil, []byte("not json")} {
+		dto := toVendorFingerprintDTO(fpRow("oid", "1.2.3", "V", "switch", 50, "builtin", blob))
+		if dto.Exclusions == nil {
+			t.Errorf("blob %q: exclusions must be a non-nil empty slice", string(blob))
+		}
+		b, _ := json.Marshal(dto)
+		if !strings.Contains(string(b), `"exclusions":[]`) {
+			t.Errorf("blob %q: empty exclusions must marshal to []: %s", string(blob), string(b))
 		}
 	}
 }

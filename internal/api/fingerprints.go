@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -150,6 +151,49 @@ func fpExclusionsJSON(ex []fingerprint.Exclusion) []byte {
 		return []byte("[]")
 	}
 	return b
+}
+
+// vendorFingerprintDTO is the operator-facing fingerprint row. It mirrors the
+// stored row but exposes exclusions as a STRUCTURED array — the raw db column is
+// []byte, which would JSON-encode as base64 and break the catalog UI. Used by the
+// list/create/update responses; export uses fingerprintExport (also structured).
+type vendorFingerprintDTO struct {
+	ID         uuid.UUID               `json:"id"`
+	Kind       string                  `json:"kind"`
+	Pattern    string                  `json:"pattern"`
+	Vendor     string                  `json:"vendor"`
+	DeviceType string                  `json:"device_type"`
+	Confidence int32                   `json:"confidence"`
+	Enabled    bool                    `json:"enabled"`
+	Model      string                  `json:"model"`
+	Priority   int32                   `json:"priority"`
+	Source     string                  `json:"source"`
+	CreatedAt  time.Time               `json:"created_at"`
+	UpdatedAt  time.Time               `json:"updated_at"`
+	Exclusions []fingerprint.Exclusion `json:"exclusions"`
+}
+
+// toVendorFingerprintDTO decodes the stored exclusions JSONB into a structured
+// array. A nil/empty/malformed blob yields an empty (non-nil) slice so the API
+// emits `[]` (not base64, not null) and the UI shows "no exclusions" cleanly.
+func toVendorFingerprintDTO(r db.VendorFingerprint) vendorFingerprintDTO {
+	ex := fpExclusionsFromJSON(r.Exclusions)
+	if ex == nil {
+		ex = []fingerprint.Exclusion{}
+	}
+	return vendorFingerprintDTO{
+		ID: r.ID, Kind: r.Kind, Pattern: r.Pattern, Vendor: r.Vendor, DeviceType: r.DeviceType,
+		Confidence: r.Confidence, Enabled: r.Enabled, Model: r.Model, Priority: r.Priority,
+		Source: r.Source, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt, Exclusions: ex,
+	}
+}
+
+func toVendorFingerprintDTOs(rows []db.VendorFingerprint) []vendorFingerprintDTO {
+	out := make([]vendorFingerprintDTO, len(rows))
+	for i, r := range rows {
+		out[i] = toVendorFingerprintDTO(r)
+	}
+	return out
 }
 
 // seedVendorFingerprints handles POST /vendor-fingerprints/seed — imports the

@@ -446,7 +446,7 @@ func (s *Server) listVendorFingerprints(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, rows)
+	writeJSON(w, http.StatusOK, toVendorFingerprintDTOs(rows))
 }
 
 type fingerprintReq struct {
@@ -505,7 +505,7 @@ func (s *Server) createVendorFingerprint(w http.ResponseWriter, r *http.Request)
 	}
 	s.audit(r, "config", "fingerprint.create", "vendor_fingerprint", row.ID.String(),
 		"Created "+row.Kind+" fingerprint "+row.Pattern+" → "+row.Vendor+"/"+row.DeviceType, nil)
-	writeJSON(w, http.StatusCreated, row)
+	writeJSON(w, http.StatusCreated, toVendorFingerprintDTO(row))
 }
 
 func (s *Server) updateVendorFingerprint(w http.ResponseWriter, r *http.Request) {
@@ -552,7 +552,7 @@ func (s *Server) updateVendorFingerprint(w http.ResponseWriter, r *http.Request)
 		action, summary = "fingerprint.disable", "Disabled fingerprint "+row.Pattern
 	}
 	s.audit(r, "config", action, "vendor_fingerprint", id.String(), summary, nil)
-	writeJSON(w, http.StatusOK, row)
+	writeJSON(w, http.StatusOK, toVendorFingerprintDTO(row))
 }
 
 func (s *Server) deleteVendorFingerprint(w http.ResponseWriter, r *http.Request) {

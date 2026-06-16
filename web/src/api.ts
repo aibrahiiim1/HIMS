@@ -1599,6 +1599,12 @@ export interface ApplyTemplateResult {
   alerts_skipped: number
   warnings: string[]
 }
+// A negative condition on a fingerprint: when the evidence matches it, the rule
+// does NOT fire (e.g. HP .11=switch EXCEPT the JetDirect printer subtree).
+export interface FingerprintExclusion {
+  kind: string // oid | service | http | ssh | sysname | port
+  pattern: string
+}
 export interface VendorFingerprint {
   id: string
   kind: string
@@ -1610,6 +1616,7 @@ export interface VendorFingerprint {
   priority: number
   source: string // 'builtin' | 'user'
   enabled: boolean
+  exclusions?: FingerprintExclusion[]
   created_at: string
   updated_at?: string
 }
