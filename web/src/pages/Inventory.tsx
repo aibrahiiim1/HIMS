@@ -7,6 +7,7 @@ import { PageHeader, Panel, Kpi, BarList, EmptyState, colorFor, usePaged, Pager 
 import { ReachabilityBadge, ManagementBadge } from '../components/StatusBadges'
 import { DeleteAllToggle } from '../components/DeleteAllToggle'
 import { RescanSplit } from '../components/RescanSplit'
+import { ExportDevicesButton } from '../components/ExportDevicesButton'
 
 const DETAIL_BASE: Record<string, string> = {
   switch: '/devices', server: '/servers', virtual_host: '/virtual-hosts', firewall: '/firewalls',
@@ -187,6 +188,7 @@ export function Inventory() {
         icon={Boxes}
         actions={
           <>
+            <ExportDevicesButton devices={rows} filename="inventory" locName={locName} />
             <Link className="btn btn-primary btn-sm" to="/devices/virtual/new"><Plus size={14} /> Virtual Device</Link>
             <RescanSplit
               targets={(selRows.map((d) => d.primary_ip).filter(Boolean) as string[]).join(',')}

@@ -7,6 +7,7 @@ import { PageHeader, Panel, Kpi, EmptyState, usePaged, Pager, colorFor } from '.
 import { ReachabilityBadge, ManagementBadge } from '../components/StatusBadges'
 import { EditDevice } from '../components/EditDevice'
 import { needsClassification } from '../lib/classify'
+import { ExportDevicesButton } from '../components/ExportDevicesButton'
 
 // Missing Classification = HIMS does not yet KNOW WHAT the device is (category,
 // vendor, model, weak/low-confidence evidence). This is a classification-cleanup
@@ -35,7 +36,8 @@ export function MissingClassification() {
 
   return (
     <div>
-      <PageHeader title="Missing Classification" subtitle="Devices HIMS cannot fully identify yet — category / vendor / model / weak evidence. This is classification cleanup, not a management problem." icon={HelpCircle} />
+      <PageHeader title="Missing Classification" subtitle="Devices HIMS cannot fully identify yet — category / vendor / model / weak evidence. This is classification cleanup, not a management problem." icon={HelpCircle}
+        actions={<ExportDevicesButton devices={rows.map((x) => x.d)} filename="missing-classification" />} />
       <div className="kpi-grid">
         <Kpi label="Need classification" value={rows.length} icon={HelpCircle} tone={rows.length > 0 ? 'warn' : 'ok'} sub="category / vendor / confidence" />
         <Kpi label="Total devices" value={(data ?? []).length} icon={Boxes} tone="info" />

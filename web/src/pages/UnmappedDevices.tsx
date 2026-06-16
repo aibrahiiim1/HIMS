@@ -6,6 +6,7 @@ import { api, type Device, type OperationalHealth } from '../api'
 import { PageHeader, Panel, Kpi, EmptyState, usePaged, Pager, colorFor } from '../components/ui'
 import { ReachabilityBadge, ManagementBadge } from '../components/StatusBadges'
 import { EditDevice } from '../components/EditDevice'
+import { ExportDevicesButton } from '../components/ExportDevicesButton'
 
 // Unmapped = a topology-capable FABRIC device (switch / router / ISP router)
 // that appears in NO LLDP/CDP topology link. These are the devices dragging down
@@ -72,6 +73,7 @@ export function UnmappedDevices() {
         title="Unmapped Devices"
         subtitle="Switches & routers that appear in no LLDP/CDP topology link — the fabric the network map can't yet place. These are what hold back Topology Coverage."
         icon={Unplug}
+        actions={<ExportDevicesButton devices={rows} filename="unmapped-devices" />}
       />
       <div className="kpi-grid">
         <Kpi label="Unmapped fabric" value={total} icon={Unplug} tone={total > 0 ? 'warn' : 'ok'} sub="no topology link" />

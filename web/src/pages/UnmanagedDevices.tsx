@@ -6,6 +6,7 @@ import { api, type Device, MGMT_BADGE } from '../api'
 import { PageHeader, Panel, Kpi, EmptyState, usePaged, Pager, colorFor } from '../components/ui'
 import { ReachabilityBadge, ManagementBadge } from '../components/StatusBadges'
 import { EditDevice } from '../components/EditDevice'
+import { ExportDevicesButton } from '../components/ExportDevicesButton'
 
 // Unmanaged = HIMS SEES the device (it's in inventory, often Online) but has NO
 // proven authenticated access/collection. Strict proven-only management model —
@@ -56,7 +57,8 @@ export function UnmanagedDevices() {
 
   return (
     <div>
-      <PageHeader title="Unmanaged Devices" subtitle="Devices HIMS can see but cannot manage — no proven authenticated access. Online does NOT mean Managed; open ports never count." icon={ShieldOff} />
+      <PageHeader title="Unmanaged Devices" subtitle="Devices HIMS can see but cannot manage — no proven authenticated access. Online does NOT mean Managed; open ports never count." icon={ShieldOff}
+        actions={<ExportDevicesButton devices={rows} filename="unmanaged-devices" />} />
       <div className="kpi-grid">
         <Kpi label="Unmanaged" value={(data ?? []).length} icon={ShieldOff} tone={(data ?? []).length > 0 ? 'warn' : 'ok'} sub="no proven access" />
         <Kpi label="Credential failed" value={counts['credential_failed'] ?? 0} icon={KeyRound} tone={(counts['credential_failed'] ?? 0) > 0 ? 'crit' : 'default'} />
