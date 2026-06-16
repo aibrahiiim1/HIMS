@@ -96,3 +96,48 @@ func TestCollect_WrongSession(t *testing.T) {
 		t.Fatal("expected error for non-printer session")
 	}
 }
+
+func TestVendorFromSysDescr(t *testing.T) {
+	cases := map[string]string{
+		"HP ETHERNET MULTI-ENVIRONMENT":              "HP",
+		"Canon iR-ADV 4045 /P":                       "Canon",
+		"KYOCERA Document Solutions Printing System": "Kyocera",
+		"RICOH Aficio MP C3003":                      "Ricoh",
+		"Brother HL-L2350DW series":                  "Brother",
+		"some unknown device":                        "",
+	}
+	for descr, want := range cases {
+		if got := VendorFromSysDescr(descr); got != want {
+			t.Errorf("VendorFromSysDescr(%q) = %q, want %q", descr, got, want)
+		}
+	}
+}
+
+func TestModelFromSysDescr(t *testing.T) {
+	if got := ModelFromSysDescr("Canon iR-ADV 4045 /P"); got != "iR-ADV 4045" {
+		t.Errorf("Canon model = %q, want \"iR-ADV 4045\"", got)
+	}
+	// Generic HP JetDirect descr carries no model — must NOT guess.
+	if got := ModelFromSysDescr("HP ETHERNET MULTI-ENVIRONMENT"); got != "" {
+		t.Errorf("HP generic model = %q, want \"\"", got)
+	}
+}
+
+// A printer that exposes prtGeneralPrinterName + prtGeneralSerialNumber must
+// surface them as Model + Serial so the inventory row is no longer blank.
+func TestCollect_ModelAndSerial(t *testing.T) {
+	pdus := map[string][]snmp.PDU{
+		mibs.PrtGeneralPrinterNameEntry:  {{OID: mibs.PrtGeneralPrinterNameEntry + ".1", Type: snmp.TypeOctetString, Value: "LaserJet Pro MFP M127fn"}},
+		mibs.PrtGeneralSerialNumberEntry: {{OID: mibs.PrtGeneralSerialNumberEntry + ".1", Type: snmp.TypeOctetString, Value: "CNB7G1K9XY"}},
+	}
+	f, err := New().Collect(&Session{Client: fakeSNMP{pdus: pdus}, Ctx: context.Background()}, driver.Probe{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Model != "LaserJet Pro MFP M127fn" {
+		t.Errorf("Model = %q, want from prtGeneralPrinterName", f.Model)
+	}
+	if f.Serial != "CNB7G1K9XY" {
+		t.Errorf("Serial = %q, want from prtGeneralSerialNumber", f.Serial)
+	}
+}

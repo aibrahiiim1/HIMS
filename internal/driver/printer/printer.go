@@ -61,6 +61,18 @@ func (d *Driver) Collect(sess driver.Session, _ driver.Probe) (driver.Facts, err
 	f.Hostname = si.Hostname
 	f.Raw["sysDescr"] = si.SysDescr
 
+	// Identity: the operator needs vendor/model/serial in the inventory, not just
+	// "printer". Vendor comes from the sysDescr (no SNMP standard carries it);
+	// model + serial come from the vendor-neutral prtGeneral columns, falling back
+	// to the sysDescr when a device leaves them blank. The first non-empty value
+	// across the per-marker index wins (a printer has one general entry in practice).
+	f.Vendor = VendorFromSysDescr(si.SysDescr)
+	f.Model = firstWalkString(ctx, c, mibs.PrtGeneralPrinterNameEntry)
+	if f.Model == "" {
+		f.Model = ModelFromSysDescr(si.SysDescr)
+	}
+	f.Serial = firstWalkString(ctx, c, mibs.PrtGeneralSerialNumberEntry)
+
 	f.PrinterSupplies = CollectSupplies(ctx, c)
 
 	// Lifetime page count: take the max across markers (usually one).
@@ -75,6 +87,61 @@ func (d *Driver) Collect(sess driver.Session, _ driver.Probe) (driver.Facts, err
 		f.KV["printer.page_count"] = fmt.Sprintf("%d", maxPages)
 	}
 	return f, nil
+}
+
+// firstWalkString returns the first non-empty string value under an SNMP table
+// column root (the printer's general entry is per-hrDeviceIndex; in practice one).
+func firstWalkString(ctx context.Context, c snmp.Client, root string) string {
+	var out string
+	_ = c.BulkWalk(ctx, root, func(p snmp.PDU) error {
+		if out == "" {
+			if s := strings.TrimSpace(snmp.PDUString(p)); s != "" {
+				out = s
+			}
+		}
+		return nil
+	})
+	return out
+}
+
+// printerVendorTokens maps a substring that may appear in a printer sysDescr to
+// the canonical vendor name. Ordered: first containment wins (deterministic).
+var printerVendorTokens = []struct{ tok, vendor string }{
+	{"jetdirect", "HP"}, {"laserjet", "HP"}, {"officejet", "HP"}, {"hewlett", "HP"}, {"hp ", "HP"},
+	{"canon", "Canon"}, {"kyocera", "Kyocera"}, {"ricoh", "Ricoh"}, {"lexmark", "Lexmark"},
+	{"brother", "Brother"}, {"xerox", "Xerox"}, {"konica", "Konica Minolta"}, {"epson", "Epson"},
+	{"samsung", "Samsung"}, {"oki", "OKI"}, {"sharp", "Sharp"}, {"toshiba", "Toshiba"}, {"zebra", "Zebra"},
+	{"utax", "UTAX"}, {"triumph-adler", "TA Triumph-Adler"}, {"develop", "Develop"},
+}
+
+// VendorFromSysDescr derives the printer vendor from its sysDescr. No SNMP
+// standard carries the manufacturer, so the descr (e.g. "HP ETHERNET
+// MULTI-ENVIRONMENT", "Canon iR-ADV 4045", "KYOCERA Document Solutions") is the
+// signal. Returns "" when no known vendor token is present.
+func VendorFromSysDescr(sysDescr string) string {
+	d := strings.ToLower(sysDescr)
+	for _, v := range printerVendorTokens {
+		if strings.Contains(d, v.tok) {
+			return v.vendor
+		}
+	}
+	return ""
+}
+
+// ModelFromSysDescr is a conservative best-effort model when prtGeneralPrinterName
+// is blank — returns "" rather than a guess for descrs that carry no model (e.g.
+// the generic "HP ETHERNET MULTI-ENVIRONMENT").
+func ModelFromSysDescr(sysDescr string) string {
+	s := strings.TrimSpace(sysDescr)
+	low := strings.ToLower(s)
+	if i := strings.Index(low, "ir-adv"); i >= 0 { // Canon imageRUNNER ADVANCE
+		m := strings.TrimSpace(s[i:])
+		if j := strings.Index(m, " /"); j >= 0 {
+			m = strings.TrimSpace(m[:j])
+		}
+		return m
+	}
+	return ""
 }
 
 // CollectSupplies walks prtMarkerSuppliesTable into supply snapshots, computing
