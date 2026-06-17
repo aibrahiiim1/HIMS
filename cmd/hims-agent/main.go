@@ -31,6 +31,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -45,8 +46,17 @@ const agentVersion = "1.1.0"
 // (agentDispatchCap), so the batch here is small; running it concurrently instead
 // of serially is what keeps a from-zero subnet scan draining in minutes rather
 // than one-host-at-a-time. Windows WMI/WinRM is safe to parallelize (unlike
-// lockout-prone appliances, which the server does not bulk-dispatch).
-const agentMaxConcurrent = 8
+// lockout-prone appliances, which the server does not bulk-dispatch). Configurable
+// via HIMS_AGENT_MAX_CONCURRENT (default 8, clamped 1..32) so a weaker agent host
+// can be tuned down per environment.
+var agentMaxConcurrent = func() int {
+	if v := os.Getenv("HIMS_AGENT_MAX_CONCURRENT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= 32 {
+			return n
+		}
+	}
+	return 8
+}()
 
 // serviceName is the Windows Service name the installer registers under and the
 // agent answers to when launched by the Service Control Manager.
@@ -189,6 +199,18 @@ type job struct {
 	Target   string `json:"target"`
 	Username string `json:"username"`
 	Password string `json:"password"`
+	// Credentials is the ordered candidate list to try (multi-credential collection,
+	// mirroring the server's direct WinRM path). When present the agent tries each in
+	// order and STOPS at the first success; when empty it falls back to the single
+	// Username/Password (legacy). Secrets are never logged.
+	Credentials []agentCred `json:"credentials,omitempty"`
+}
+
+type agentCred struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Username string `json:"username"`
+	Password string `json:"password"`
 }
 
 func (a *agent) pollOnce() {
@@ -215,20 +237,65 @@ func (a *agent) pollOnce() {
 }
 
 func (a *agent) runJob(j job) {
-	// NEVER log the password. Log only target/protocol.
-	logf("job %s: kind=%s protocol=%s target=%s", j.ID, j.Kind, j.Protocol, j.Target)
-	res := map[string]any{}
+	// NEVER log the password. Log only target/protocol/cred-count.
+	logf("job %s: kind=%s protocol=%s target=%s creds=%d", j.ID, j.Kind, j.Protocol, j.Target, len(j.Credentials))
 	if j.Kind == "test" {
-		res = map[string]any{"success": true, "category": "success"}
-	} else {
-		rep, cat, err := collect(j)
-		if err != nil {
-			res = map[string]any{"success": false, "category": cat, "error": sanitize(err.Error(), j.Password)}
-		} else {
-			res = map[string]any{"success": true, "category": "success", "report": rep}
-		}
+		a.post(j.ID, map[string]any{"success": true, "category": "success"})
+		return
 	}
-	if err := a.do(http.MethodPost, "/api/v1/agent/jobs/"+j.ID+"/result", res, nil); err != nil {
+
+	// Build the ordered candidate list. Multi-credential when the server supplied one,
+	// else the single legacy credential.
+	creds := j.Credentials
+	if len(creds) == 0 {
+		creds = []agentCred{{Username: j.Username, Password: j.Password}}
+	}
+
+	// Try each candidate in order; STOP at the first success. Record every attempt's
+	// outcome (success / auth / access-denied / transport / namespace / timeout) so the
+	// server can surface full history and bind the winner. Never spray: the server has
+	// already filtered to applicable Windows credentials and capped the count, and we
+	// never retry the same credential within this cycle.
+	attempts := make([]map[string]any, 0, len(creds))
+	for _, c := range creds {
+		jc := j
+		jc.Username, jc.Password = c.Username, c.Password
+		rep, cat, err := collect(jc)
+		ok := err == nil
+		att := map[string]any{"credential_id": c.ID, "success": ok}
+		if ok {
+			att["category"] = "success"
+			attempts = append(attempts, att)
+			a.post(j.ID, map[string]any{
+				"success": true, "category": "success", "report": rep,
+				"credential_id": c.ID, "attempts": attempts,
+			})
+			return
+		}
+		att["category"] = cat
+		att["detail"] = sanitize(err.Error(), c.Password)
+		attempts = append(attempts, att)
+	}
+
+	// All candidates failed — report the most-significant failure (last attempt) plus
+	// the full per-credential history.
+	res := map[string]any{"success": false, "category": "error", "error": "no candidate credential succeeded", "attempts": attempts}
+	if n := len(attempts); n > 0 {
+		last := attempts[n-1]
+		if cat, ok := last["category"].(string); ok {
+			res["category"] = cat
+		}
+		if d, ok := last["detail"].(string); ok {
+			res["error"] = d
+		}
+		res["credential_id"] = last["credential_id"]
+	}
+	a.post(j.ID, res)
+}
+
+// post sends a job result back to HIMS (never logs secrets — res carries none).
+func (a *agent) post(jobID string, res map[string]any) {
+	if err := a.do(http.MethodPost, "/api/v1/agent/jobs/"+jobID+"/result", res, nil); err != nil {
 		logln("post result error:", err)
 	}
 }

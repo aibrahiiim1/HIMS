@@ -283,6 +283,72 @@ func TestDeriveManagementNeverEmpty(t *testing.T) {
 	}
 }
 
+// Multi-credential agent path — pins the invariants behind making the agent WMI
+// path equivalent to the direct WinRM path (the .106/.119 fix).
+
+// Test: direct WinRM and agent WMI resolve the SAME candidate credential set —
+// both winrm and wmi methods match both winrm+wmi (Windows) credential kinds, so
+// the two paths converge. SSH stays separate.
+func TestCredKindMatchesMethod_WindowsConverge(t *testing.T) {
+	for _, m := range []string{"winrm", "wmi"} {
+		if !credKindMatchesMethod("winrm", m) || !credKindMatchesMethod("wmi", m) {
+			t.Errorf("method %q must match both winrm and wmi credential kinds", m)
+		}
+		if credKindMatchesMethod("ssh", m) || credKindMatchesMethod("snmp_v2c", m) {
+			t.Errorf("method %q must NOT match ssh/snmp credential kinds", m)
+		}
+	}
+	if !credKindMatchesMethod("ssh", "ssh") || !credKindMatchesMethod("cli", "ssh") {
+		t.Error("ssh method must match ssh/cli kinds")
+	}
+	if credKindMatchesMethod("winrm", "ssh") {
+		t.Error("ssh method must NOT match winrm kind")
+	}
+}
+
+// Test: access-denied is an AUTH/authz failure (→ credential_failed), while a
+// non-auth transport error (wmi_error/unreachable/timeout) is NOT — so when the
+// agent tries every applicable credential and they are all rejected it reports
+// credential_failed, but a firewall/transport failure stays collection_failed.
+func TestCategoryIsAuthFailure(t *testing.T) {
+	auth := []string{"auth_failed", "access_denied", "wmi_access_denied"}
+	for _, c := range auth {
+		if !categoryIsAuthFailure(c) {
+			t.Errorf("category %q must be an auth failure (→ credential_failed)", c)
+		}
+	}
+	nonAuth := []string{"wmi_error", "unreachable", "timeout", "rpc_unreachable", "auth_ok_operation_fault", "namespace_unavailable", "error", "success"}
+	for _, c := range nonAuth {
+		if categoryIsAuthFailure(c) {
+			t.Errorf("category %q must NOT be an auth failure", c)
+		}
+	}
+}
+
+// Test: a device whose latest agent attempt was access-denied (all applicable
+// creds rejected) derives credential_failed, not collection_failed; a non-auth
+// (wmi_error) derives collection_failed. Mirrors deviceTestMap's authFailed wiring.
+func TestAccessDeniedDerivesCredentialFailed(t *testing.T) {
+	id := uuid.New()
+	mk := func(category string) *statusMaps {
+		return &statusMaps{
+			access: map[uuid.UUID]*deviceAccess{},
+			test: map[uuid.UUID]*deviceTestStatus{
+				id: {tested: true, authFailed: categoryIsAuthFailure(category),
+					failedKinds: map[string]bool{"wmi": true}, kindCategory: map[string]string{"wmi": category}},
+			},
+			onlineSites: map[uuid.UUID]bool{}, anySites: map[uuid.UUID]bool{}, activeCollect: map[uuid.UUID]bool{},
+		}
+	}
+	dev := db.Device{ID: id, OsFamily: "windows", Category: "endpoint"}
+	if st, _ := mk("wmi_access_denied").deriveManagement(dev); st != MgmtCredentialFailed {
+		t.Errorf("all-creds access_denied: got %s, want credential_failed", st)
+	}
+	if st, _ := mk("wmi_error").deriveManagement(dev); st != MgmtCollectionFailed {
+		t.Errorf("non-auth wmi_error: got %s, want collection_failed", st)
+	}
+}
+
 // Class 6b — the Connectivity report (which lists failed credential attempts as
 // history) must not contradict Device Detail's management state. Management is
 // derived from PROVEN evidence, so a managed device that also has a failed

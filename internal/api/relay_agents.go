@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -304,17 +306,40 @@ type agentJobOut struct {
 	Kind     string `json:"kind"`
 	Protocol string `json:"protocol"`
 	Target   string `json:"target"`
-	Username string `json:"username,omitempty"`
-	Password string `json:"password,omitempty"`
+	// Username/Password is the legacy single credential (kept so an older agent still
+	// works). Credentials is the ordered candidate list the agent should try in order,
+	// stopping at the first success — the SAME set the direct WinRM path tries, so the
+	// agent WMI path converges to the same managed state when any valid credential
+	// exists. Secrets travel only over the authenticated agent channel and are never
+	// logged.
+	Username    string      `json:"username,omitempty"`
+	Password    string      `json:"password,omitempty"`
+	Credentials []agentCred `json:"credentials,omitempty"`
+}
+
+type agentCred struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Username string `json:"username"`
+	Password string `json:"password"`
 }
 
 // agentDispatchCap bounds how many collect jobs the server hands a single relay
-// agent at once. The agent runs its batch with bounded parallelism
-// (agentMaxConcurrent), so this is the real in-flight ceiling per agent: high
-// enough to keep the agent's workers busy and drain a from-zero subnet scan in
-// minutes, low enough to avoid a thundering herd / lockouts. Matches the agent's
-// worker-pool size.
-const agentDispatchCap = 8
+// agent at once. The agent runs its batch with bounded parallelism, so this is the
+// real in-flight ceiling per agent: high enough to keep the agent's workers busy
+// and drain a from-zero subnet scan in minutes, low enough to avoid a thundering
+// herd / lockouts. Configurable via HIMS_AGENT_DISPATCH_CAP (default 8, clamped
+// 1..64) so a smaller or overloaded site agent can be throttled per environment —
+// never hardcoded behavior that could overwhelm a weak agent. Should be ≥ the
+// agent's HIMS_AGENT_MAX_CONCURRENT so the agent's workers stay fed.
+var agentDispatchCap = func() int {
+	if v := os.Getenv("HIMS_AGENT_DISPATCH_CAP"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= 64 {
+			return n
+		}
+	}
+	return 8
+}()
 
 // staleDispatchedAfter is how long a job may sit 'dispatched' (handed to an agent,
 // never reported back) before the reaper requeues/fails it. Longer than the agent's
@@ -386,10 +411,26 @@ func (s *Server) agentPollJobs(w http.ResponseWriter, r *http.Request) {
 	cph := s.cipher()
 	for _, j := range rows {
 		o := agentJobOut{ID: j.ID.String(), Kind: j.Kind, Protocol: j.Protocol, Target: j.Target}
-		if j.CredentialID != nil && cph != nil {
-			if c, err := s.queries.GetCredential(r.Context(), *j.CredentialID); err == nil {
-				if plain, derr := cph.Open(c.EncryptedBlob, c.KeyID); derr == nil {
-					o.Username, o.Password = credtest.SplitUserPass(string(plain))
+		if cph != nil {
+			// For a deep OS collection, hand the agent the SAME ordered candidate
+			// credential list the direct WinRM path would try (bound cred first, then
+			// applicable Windows creds, capped) so the agent tries each and stops on the
+			// first success — making the agent path equivalent to direct WinRM.
+			if j.Kind == "collect_os" && j.DeviceID != nil {
+				if dev, derr := s.queries.GetDevice(r.Context(), *j.DeviceID); derr == nil {
+					for _, cd := range s.osCandidateCreds(r.Context(), cph, dev, j.Protocol) {
+						o.Credentials = append(o.Credentials, agentCred{ID: cd.id.String(), Name: cd.name, Username: cd.user, Password: cd.pass})
+					}
+				}
+			}
+			if len(o.Credentials) > 0 {
+				// Back-compat: an older agent ignores Credentials and uses the single field.
+				o.Username, o.Password = o.Credentials[0].Username, o.Credentials[0].Password
+			} else if j.CredentialID != nil {
+				if c, err := s.queries.GetCredential(r.Context(), *j.CredentialID); err == nil {
+					if plain, derr := cph.Open(c.EncryptedBlob, c.KeyID); derr == nil {
+						o.Username, o.Password = credtest.SplitUserPass(string(plain))
+					}
 				}
 			}
 		}
@@ -425,10 +466,27 @@ func (s *Server) agentJobResult(w http.ResponseWriter, r *http.Request) {
 		Category string          `json:"category"`
 		Error    string          `json:"error"`
 		Report   json.RawMessage `json:"report"`
+		// CredentialID is the credential that SUCCEEDED (multi-credential agent path);
+		// Attempts is the per-credential outcome list (every applicable cred tried, in
+		// order, stopping at the first success). Empty for a legacy single-cred agent.
+		CredentialID string `json:"credential_id"`
+		Attempts     []struct {
+			CredentialID string `json:"credential_id"`
+			Category     string `json:"category"`
+			Success      bool   `json:"success"`
+			Detail       string `json:"detail"`
+		} `json:"attempts"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 		return
+	}
+	// The credential to bind on success: the winner the agent reported, else the job's.
+	winningCred := job.CredentialID
+	if req.CredentialID != "" {
+		if id, perr := uuid.Parse(req.CredentialID); perr == nil {
+			winningCred = &id
+		}
 	}
 
 	// The request body is fully read; detach the persist + job-completion work from
@@ -450,8 +508,10 @@ func (s *Server) agentJobResult(w http.ResponseWriter, r *http.Request) {
 			if jerr := json.Unmarshal(req.Report, &rep); jerr == nil {
 				if perr := osinv.Persist(pctx, s.queries, *job.DeviceID, rep, time.Now().UTC()); perr == nil {
 					_ = s.queries.UpdateDeviceMonitoringStatus(pctx, db.UpdateDeviceMonitoringStatusParams{ID: *job.DeviceID, Status: "up"})
-					if job.CredentialID != nil {
-						_ = s.queries.SetDeviceCredential(pctx, db.SetDeviceCredentialParams{ID: *job.DeviceID, CredentialID: job.CredentialID})
+					// Bind the credential that actually WORKED (multi-cred winner), so a
+					// re-collect goes straight to it.
+					if winningCred != nil {
+						_ = s.queries.SetDeviceCredential(pctx, db.SetDeviceCredentialParams{ID: *job.DeviceID, CredentialID: winningCred})
 					}
 					s.reclassifyFromCaption(pctx, db.Device{ID: *job.DeviceID}, rep.OS.Caption)
 				} else {
@@ -479,22 +539,48 @@ func (s *Server) agentJobResult(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Record a credential-test attempt (success or failure) so Credential Health /
-	// Coverage reflect the agent path. Protocol maps to a credential kind.
-	if job.DeviceID != nil && job.CredentialID != nil && job.Kind == "collect_os" {
-		cat := req.Category
-		if cat == "" {
-			if status == "done" {
-				cat = "success"
-			} else {
-				cat = "error"
+	// Record EVERY credential the agent tried (success + each failure with its exact
+	// category) so Credential Health / Coverage / the Connectivity report reflect the
+	// full agent multi-credential attempt — failed creds are retained as history and
+	// never override the later success. Falls back to the single bound credential for
+	// a legacy agent that didn't report an attempts list.
+	if job.DeviceID != nil && job.Kind == "collect_os" {
+		var attempts []discovery.CredAttempt
+		for _, at := range req.Attempts {
+			cid, perr := uuid.Parse(at.CredentialID)
+			if perr != nil {
+				continue
 			}
+			cat := at.Category
+			if cat == "" {
+				if at.Success {
+					cat = "success"
+				} else {
+					cat = "error"
+				}
+			}
+			attempts = append(attempts, discovery.CredAttempt{
+				CredentialID: cid, Kind: domain.CredentialKind(job.Protocol), Protocol: job.Protocol,
+				Success: at.Success, Category: cat, Detail: "via relay agent " + a.Name,
+			})
 		}
-		s.persistScanCredAttempts(pctx, db.Device{ID: *job.DeviceID}, []discovery.CredAttempt{{
-			CredentialID: *job.CredentialID, Kind: domain.CredentialKind(job.Protocol),
-			Protocol: job.Protocol, Success: status == "done", Category: cat,
-			Detail: "via relay agent " + a.Name,
-		}}, "default")
+		if len(attempts) == 0 && job.CredentialID != nil { // legacy single-cred agent
+			cat := req.Category
+			if cat == "" {
+				if status == "done" {
+					cat = "success"
+				} else {
+					cat = "error"
+				}
+			}
+			attempts = append(attempts, discovery.CredAttempt{
+				CredentialID: *job.CredentialID, Kind: domain.CredentialKind(job.Protocol), Protocol: job.Protocol,
+				Success: status == "done", Category: cat, Detail: "via relay agent " + a.Name,
+			})
+		}
+		if len(attempts) > 0 {
+			s.persistScanCredAttempts(pctx, db.Device{ID: *job.DeviceID}, attempts, "default")
+		}
 	}
 	_ = s.queries.CompleteAgentJob(pctx, db.CompleteAgentJobParams{
 		ID: jobID, Status: status, Result: nilIfEmpty(req.Report), Category: req.Category, Error: req.Error,

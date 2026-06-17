@@ -1776,5 +1776,19 @@ func (s *Server) getDiscoveryJob(w http.ResponseWriter, r *http.Request) {
 		"known_missed_this_run":    knownMissed,
 		"enrolled_updated":         enrolledUpdated,
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"job": job, "results": out, "counts": counts})
+	// Deep OS collection runs ASYNC through the site relay agent AFTER the scan's
+	// probe/enroll phase completes, so the job can be "completed" while devices are
+	// still being collected (managed count climbing). Surface that explicitly so the
+	// operator-facing result is never shown as fully settled while collection drains:
+	// settled = queued + retry_waiting + running all 0.
+	collection := map[string]any{"queued": 0, "retry_waiting": 0, "running": 0, "done": 0, "failed": 0, "pending": 0, "settled": true}
+	if cp, cerr := s.queries.CollectionProgressForJob(ctx, id); cerr == nil {
+		pending := cp.Queued + cp.RetryWaiting + cp.Running
+		collection = map[string]any{
+			"queued": cp.Queued, "retry_waiting": cp.RetryWaiting, "running": cp.Running,
+			"done": cp.Done, "failed": cp.Failed, "pending": pending,
+			"settled": pending == 0,
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"job": job, "results": out, "counts": counts, "collection": collection})
 }

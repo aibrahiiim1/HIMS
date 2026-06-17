@@ -10,7 +10,8 @@ import { ClassificationEvidence } from '../components/ClassificationEvidence'
 import { EditDevice } from '../components/EditDevice'
 import { OnboardingActions, CollectedViaCell, CollectNowPanel, outcomeBadge, duration } from './Discovery'
 
-type JobDetail = { job: DiscoveryJob; results: DiscoveryResult[]; counts?: ScanJobCounts }
+type CollectionProgress = { queued: number; retry_waiting: number; running: number; done: number; failed: number; pending: number; settled: boolean }
+type JobDetail = { job: DiscoveryJob; results: DiscoveryResult[]; counts?: ScanJobCounts; collection?: CollectionProgress }
 
 // Known-Device-Retry disposition → short badge label + tone. A known device that
 // the sweep missed never disappears: it shows as "Missed this run".
@@ -136,6 +137,7 @@ export function ScanJobResults() {
   const job = detail.data?.job
   const results = detail.data?.results ?? []
   const counts = detail.data?.counts
+  const collection = detail.data?.collection
   const dev = (r: DiscoveryResult) => (r.device_id ? devMap.get(r.device_id) : undefined)
 
   // KPI rollup (joined to the live device for reachability/management).
@@ -202,7 +204,7 @@ export function ScanJobResults() {
   return (
     <div>
       <PageHeader title="Scan Job Results" icon={Radar}
-        subtitle={job ? `${job.scope_cidr ?? 'import'} · ${job.status}${job.location_id ? ' · ' + (locPath[job.location_id] ?? '') : ''}` : 'Loading…'}
+        subtitle={job ? `${job.scope_cidr ?? 'import'} · ${job.status}${collection && !collection.settled ? ` · collecting ${collection.pending}` : ''}${job.location_id ? ' · ' + (locPath[job.location_id] ?? '') : ''}` : 'Loading…'}
         actions={<>
           <Link className="btn btn-ghost btn-sm" to="/discovery/jobs"><ArrowLeft size={14} /> All jobs</Link>
           <Link className="btn btn-ghost btn-sm" to={`/discovery/jobs/${jobId}/live`}><Radar size={14} /> Visual View</Link>
@@ -221,6 +223,27 @@ export function ScanJobResults() {
             <ProgressBar value={managedPct} tone="#16a34a"
               label="Managed of reachable" sublabel={`${k.managed} of ${k.pingable} reachable managed`} />
           </div>
+          {/* Collection progress — deep OS collection runs ASYNC after discovery, so the
+              job can be "completed" while devices are still being collected. Show it so the
+              operator never reads the result as fully settled while the queue drains. */}
+          {collection && !collection.settled && (
+            <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderLeft: '3px solid #d97706', borderRadius: 8, padding: '10px 14px', marginBottom: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600 }}>
+                <RefreshCw size={14} /> {job.status === 'completed' ? 'Discovery complete · collecting' : 'Collecting'} {collection.pending}
+              </div>
+              <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 6, fontSize: 13, color: 'var(--text-muted)' }}>
+                <span>Queued {collection.queued}</span>
+                <span>Running {collection.running}</span>
+                <span>Retry-waiting {collection.retry_waiting}</span>
+                <span>Done {collection.done}</span>
+                <span>Failed {collection.failed}</span>
+              </div>
+              <div style={{ marginTop: 6, fontSize: 12, color: 'var(--text-muted)' }}>Deep OS collection runs after discovery via the site relay agent — the managed count may still be increasing.</div>
+            </div>
+          )}
+          {collection && collection.settled && collection.done + collection.failed > 0 && (
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>✓ Collection settled — {collection.done} collected{collection.failed > 0 ? `, ${collection.failed} failed` : ''}.</div>
+          )}
           {/* A. Scan stability — separated, honest counts (NOT a stable inventory total). */}
           <div className="kpi-grid">
             <Kpi label="Targets probed" value={counts?.targets_probed ?? job.host_count} icon={Boxes} tone="info" sub={`duration ${duration(job.started_at, job.finished_at)}`} />

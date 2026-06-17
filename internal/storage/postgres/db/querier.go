@@ -48,6 +48,12 @@ type Querier interface {
 	ClearAllCredentialSecrets(ctx context.Context) error
 	ClearReentryFlag(ctx context.Context, id uuid.UUID) error
 	ClearSubnetCredentials(ctx context.Context, subnetID uuid.UUID) error
+	// Collect-job rollup for the devices a discovery job enrolled — lets the UI/API show
+	// "Discovery complete · collecting N" while deep collection drains AFTER the scan's
+	// probe/enroll phase finishes. retry_waiting (backoff) is split from queued so the
+	// operator sees jobs that are waiting vs ready. The scan is "settled" when
+	// queued + retry_waiting + running all reach 0.
+	CollectionProgressForJob(ctx context.Context, jobID uuid.UUID) (CollectionProgressForJobRow, error)
 	CompleteAgentJob(ctx context.Context, arg CompleteAgentJobParams) error
 	// ---- Work-order parts (stock consumption) ---------------------------------
 	// Atomic: decrement stock AND record the consumption in ONE statement. The

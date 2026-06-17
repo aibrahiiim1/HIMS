@@ -117,6 +117,23 @@ SELECT status::text AS status, count(*) AS n FROM agent_jobs GROUP BY status;
 -- Per-agent job rollup by status (queued / dispatched / done / failed).
 SELECT status::text AS status, count(*) AS n FROM agent_jobs WHERE agent_id = $1 GROUP BY status;
 
+-- name: CollectionProgressForJob :one
+-- Collect-job rollup for the devices a discovery job enrolled — lets the UI/API show
+-- "Discovery complete · collecting N" while deep collection drains AFTER the scan's
+-- probe/enroll phase finishes. retry_waiting (backoff) is split from queued so the
+-- operator sees jobs that are waiting vs ready. The scan is "settled" when
+-- queued + retry_waiting + running all reach 0.
+SELECT
+  count(*) FILTER (WHERE status = 'queued' AND (next_attempt_at IS NULL OR next_attempt_at <= now()))::bigint AS queued,
+  count(*) FILTER (WHERE status = 'queued' AND next_attempt_at > now())::bigint               AS retry_waiting,
+  count(*) FILTER (WHERE status = 'dispatched')::bigint                                        AS running,
+  count(*) FILTER (WHERE status = 'done')::bigint                                              AS done,
+  count(*) FILTER (WHERE status = 'failed')::bigint                                            AS failed
+FROM agent_jobs
+WHERE kind = 'collect_os' AND device_id IN (
+  SELECT device_id FROM discovery_results WHERE job_id = $1 AND device_id IS NOT NULL
+);
+
 -- name: GetAgentJob :one
 SELECT * FROM agent_jobs WHERE id = $1;
 

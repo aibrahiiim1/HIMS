@@ -42,6 +42,45 @@ func (q *Queries) AgentJobStatusCounts(ctx context.Context) ([]AgentJobStatusCou
 	return items, nil
 }
 
+const collectionProgressForJob = `-- name: CollectionProgressForJob :one
+SELECT
+  count(*) FILTER (WHERE status = 'queued' AND (next_attempt_at IS NULL OR next_attempt_at <= now()))::bigint AS queued,
+  count(*) FILTER (WHERE status = 'queued' AND next_attempt_at > now())::bigint               AS retry_waiting,
+  count(*) FILTER (WHERE status = 'dispatched')::bigint                                        AS running,
+  count(*) FILTER (WHERE status = 'done')::bigint                                              AS done,
+  count(*) FILTER (WHERE status = 'failed')::bigint                                            AS failed
+FROM agent_jobs
+WHERE kind = 'collect_os' AND device_id IN (
+  SELECT device_id FROM discovery_results WHERE job_id = $1 AND device_id IS NOT NULL
+)
+`
+
+type CollectionProgressForJobRow struct {
+	Queued       int64 `json:"queued"`
+	RetryWaiting int64 `json:"retry_waiting"`
+	Running      int64 `json:"running"`
+	Done         int64 `json:"done"`
+	Failed       int64 `json:"failed"`
+}
+
+// Collect-job rollup for the devices a discovery job enrolled — lets the UI/API show
+// "Discovery complete · collecting N" while deep collection drains AFTER the scan's
+// probe/enroll phase finishes. retry_waiting (backoff) is split from queued so the
+// operator sees jobs that are waiting vs ready. The scan is "settled" when
+// queued + retry_waiting + running all reach 0.
+func (q *Queries) CollectionProgressForJob(ctx context.Context, jobID uuid.UUID) (CollectionProgressForJobRow, error) {
+	row := q.db.QueryRow(ctx, collectionProgressForJob, jobID)
+	var i CollectionProgressForJobRow
+	err := row.Scan(
+		&i.Queued,
+		&i.RetryWaiting,
+		&i.Running,
+		&i.Done,
+		&i.Failed,
+	)
+	return i, err
+}
+
 const completeAgentJob = `-- name: CompleteAgentJob :exec
 UPDATE agent_jobs
 SET status = $2, result = $3, category = $4, error = $5, finished_at = now()
