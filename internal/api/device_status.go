@@ -153,6 +153,18 @@ func (m *statusMaps) deriveManagement(d db.Device) (state string, managedBy []st
 		// A credential is bound but nothing successfully collected with it.
 		return MgmtCollectionFailed, nil
 	}
+	// A credential was actually TRIED (not merely bound) yet nothing succeeded and
+	// it was not a clean auth rejection (handled above): the attempt reached the
+	// host and failed for a non-credential reason — a WinRM/WMI firewall block
+	// (agent New-CimSession "firewall exception for the WinRM"), an RPC/DCOM
+	// error, an unreachable port, or a protocol fault. That is a COLLECTION
+	// failure, NOT "needs a credential": labeling it needs_credential points the
+	// operator at the wrong fix (supply a credential) when the real fix is the
+	// host firewall / GPO or access method. needs_credential is reserved below for
+	// a credentialed-class host that was NEVER attempted and has no binding.
+	if ts != nil && ts.tested {
+		return MgmtCollectionFailed, nil
+	}
 	if credentialedCategories[d.Category] || windowsLike(d) || d.OsFamily == "linux" {
 		return MgmtNeedsCredential, nil
 	}

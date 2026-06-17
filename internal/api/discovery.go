@@ -46,6 +46,31 @@ type scanReq struct {
 	Exclude string `json:"exclude"`
 }
 
+// osCollectionCandidate decides whether the discovery pipeline should attempt a
+// deep OS collection for an enrolled device. It deliberately takes NO open-port
+// list: a Windows host is ALWAYS worth an attempt — even if it bound no
+// WinRM/SSH credential this run and even if no Windows management port
+// (445/135/5985/5986) was observed in this run's port scan. runOSCollection
+// tries WinRM, then FALLS BACK to the site Relay Agent (WMI/DCOM), which works
+// where WinRM is off and regardless of which TCP ports the scan happened to
+// catch, and returns an HONEST reason (no_credential / agent_missing /
+// winrm_disabled / wmi_firewall_blocked) when nothing works — never a false auth
+// failure and never a silent skip.
+//
+// Gating on an OBSERVED management port was the bug that silently left
+// late/slow-probed Windows endpoints (port not seen this run) enrolled with ZERO
+// collection attempts, stuck at "needs_credential". Keeping ports OUT of this
+// signature makes that regression impossible to reintroduce. Specialized
+// appliances (wireless / VMware / voice / CCTV) have their own collection branch
+// and are excluded here.
+func osCollectionCandidate(d db.Device, boundOS, legacyWSMan, specialized bool) bool {
+	if specialized {
+		return false
+	}
+	winHost := d.OsFamily == domain.OSFamilyWindows || d.Category == string(domain.CatEndpoint)
+	return boundOS || legacyWSMan || winHost
+}
+
 // startScan launches a background subnet scan and returns the job immediately
 // (202). The scan runs in its own goroutine writing progress to the
 // discovery_jobs / discovery_results tables; the UI polls the job.
@@ -625,21 +650,11 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 					}
 					return false
 				}(dev.Category)
-				// A Windows host is ALWAYS worth a deep OS collection attempt — even if it
-				// did NOT bind a WinRM/SSH credential this run, and even if no Windows
-				// management port (445/135/5985/5986) was observed in this run's port scan.
-				// runOSCollection tries WinRM, then FALLS BACK to the site Relay Agent
-				// (WMI/DCOM), which works where WinRM is off and regardless of which TCP
-				// ports the scan happened to catch. This was previously gated on an
-				// OBSERVED management port, which silently left late/slow-probed Windows
-				// endpoints (port not seen this run) enrolled with NO collection attempt,
-				// stuck at "needs_credential" with zero recorded attempts. winHost keeps
-				// this scoped to Windows-like hosts only; runOSCollection returns an honest
-				// reason (no_credential / agent_missing / winrm_disabled / wmi_firewall_blocked)
-				// when nothing works — never a false auth failure, and never a silent skip.
-				winHost := dev.OsFamily == domain.OSFamilyWindows || dev.Category == string(domain.CatEndpoint)
-				windowsManageable := winHost
-				if s.cipher() != nil && (boundOS || legacyWSMan || windowsManageable) && !specialized {
+				// A Windows host is ALWAYS worth a deep OS collection attempt regardless
+				// of which ports the scan observed — see osCollectionCandidate, which
+				// owns this decision (and deliberately excludes ports so the
+				// "gated on an observed management port" regression can't return).
+				if s.cipher() != nil && osCollectionCandidate(dev, boundOS, legacyWSMan, specialized) {
 					s.publishScanEvent(jobID, ip, id, "collection_started", "", "started", "deep OS inventory")
 					cctx, ccancel := context.WithTimeout(ctx, 2*time.Minute)
 					oc := s.runOSCollection(cctx, dev)
