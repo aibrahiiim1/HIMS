@@ -159,6 +159,32 @@ func TestActiveAgentJobIsPendingNotFailed(t *testing.T) {
 	}
 }
 
+// Class 6c — an in-flight job PARKED on an offline site agent must report
+// agent_offline (honest: waiting for the agent to return), while the same job with
+// an online site agent reports pending_collection (actively draining). Pins the
+// distinction added after the not_attempted from-zero gap.
+func TestActiveJobPendingVsParkedOnOfflineAgent(t *testing.T) {
+	id, loc := uuid.New(), uuid.New()
+	base := func(online bool) *statusMaps {
+		m := &statusMaps{
+			access: map[uuid.UUID]*deviceAccess{}, test: map[uuid.UUID]*deviceTestStatus{},
+			onlineSites: map[uuid.UUID]bool{}, anySites: map[uuid.UUID]bool{loc: true},
+			activeCollect: map[uuid.UUID]bool{id: true},
+		}
+		if online {
+			m.onlineSites[loc] = true
+		}
+		return m
+	}
+	dev := db.Device{ID: id, OsFamily: "windows", Category: "endpoint", LocationID: &loc}
+	if st, _ := base(true).deriveManagement(dev); st != MgmtPendingCollection {
+		t.Errorf("active job + online agent: got %s, want pending_collection", st)
+	}
+	if st, _ := base(false).deriveManagement(dev); st != MgmtAgentOffline {
+		t.Errorf("active job + offline agent: got %s, want agent_offline (parked, not pending)", st)
+	}
+}
+
 // Class 8 — proven collection evidence outranks everything: a device that is
 // managed-by-evidence AND also has an in-flight job (and a failed history) stays
 // managed. A later transient failure must never silently un-manage proven evidence.

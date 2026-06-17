@@ -32,12 +32,21 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coralsearesorts/hims/internal/osinv"
 )
 
-const agentVersion = "1.0.0"
+const agentVersion = "1.1.0"
+
+// agentMaxConcurrent bounds how many collection jobs the agent runs in parallel
+// per poll. The HIMS server already caps how many jobs it dispatches to one agent
+// (agentDispatchCap), so the batch here is small; running it concurrently instead
+// of serially is what keeps a from-zero subnet scan draining in minutes rather
+// than one-host-at-a-time. Windows WMI/WinRM is safe to parallelize (unlike
+// lockout-prone appliances, which the server does not bulk-dispatch).
+const agentMaxConcurrent = 8
 
 // serviceName is the Windows Service name the installer registers under and the
 // agent answers to when launched by the Service Control Manager.
@@ -188,9 +197,21 @@ func (a *agent) pollOnce() {
 		logln("poll error:", err)
 		return
 	}
+	// Run the received batch concurrently (bounded). Serial processing made a
+	// from-zero subnet scan drain one host at a time over ~40 min; parallelizing the
+	// small server-throttled batch settles it in minutes.
+	sem := make(chan struct{}, agentMaxConcurrent)
+	var wg sync.WaitGroup
 	for _, j := range jobs {
-		a.runJob(j)
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(j job) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			a.runJob(j)
+		}(j)
 	}
+	wg.Wait()
 }
 
 func (a *agent) runJob(j job) {

@@ -168,6 +168,11 @@ func (m *statusMaps) deriveManagement(d db.Device) (state string, managedBy []st
 	// or as needs-agent while the agent job is still mid-flight. Proven evidence
 	// (above) wins; this only outranks the not-yet-settled failure signals below.
 	if m.activeCollect[d.ID] {
+		// If the site agent is offline, the queued job is PARKED (waiting for the
+		// agent to return) — surface agent_offline, not a misleading "in progress".
+		if d.LocationID != nil && m.anySites[*d.LocationID] && !m.onlineSites[*d.LocationID] {
+			return MgmtAgentOffline, nil
+		}
 		return MgmtPendingCollection, nil
 	}
 

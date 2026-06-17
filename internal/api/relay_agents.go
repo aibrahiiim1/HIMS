@@ -309,9 +309,12 @@ type agentJobOut struct {
 }
 
 // agentDispatchCap bounds how many collect jobs the server hands a single relay
-// agent at once (the agent runs them serially). Keeps a from-zero scan's ~one
-// job-per-Windows-host draining in controlled batches instead of a thundering herd.
-const agentDispatchCap = 4
+// agent at once. The agent runs its batch with bounded parallelism
+// (agentMaxConcurrent), so this is the real in-flight ceiling per agent: high
+// enough to keep the agent's workers busy and drain a from-zero subnet scan in
+// minutes, low enough to avoid a thundering herd / lockouts. Matches the agent's
+// worker-pool size.
+const agentDispatchCap = 8
 
 // staleDispatchedAfter is how long a job may sit 'dispatched' (handed to an agent,
 // never reported back) before the reaper requeues/fails it. Longer than the agent's
