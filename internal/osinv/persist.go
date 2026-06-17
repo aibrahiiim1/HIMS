@@ -56,6 +56,10 @@ func baseSource(method string) string {
 // transport family of Report.Method (see baseSource); os_inventory keeps the
 // precise method. Returns the first error encountered.
 func Persist(ctx context.Context, w Writer, deviceID uuid.UUID, rep Report, poll time.Time) error {
+	// Strip NUL bytes / invalid UTF-8 from every collected string before any
+	// write so a stray 0x00 in a WMI/registry/WinRM value can't fail the whole
+	// save (Postgres SQLSTATE 22021) and silently lose a successful collection.
+	scrubReport(&rep)
 	src := baseSource(rep.Method)
 
 	if _, err := w.UpsertOSInventory(ctx, buildOSInventoryParams(deviceID, rep)); err != nil {
