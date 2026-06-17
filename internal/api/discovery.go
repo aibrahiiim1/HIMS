@@ -625,24 +625,20 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 					}
 					return false
 				}(dev.Category)
-				// A Windows host that did NOT bind a WinRM/SSH credential this run —
-				// because WinRM is disabled/closed (connection refused) — is still worth a
-				// collection attempt: runOSCollection tries WinRM, then FALLS BACK to the
-				// site Relay Agent / WMI-DCOM, which works where WinRM is off. Gate on a
-				// real Windows management surface (SMB 445 / RPC 135 / WinRM 5985-6 open)
-				// so this only fires on actual Windows hosts, not every alive IP. This is
-				// what lets the legacy-WSMan + WinRM-disabled boxes route to WMI instead of
-				// silently staying unmanaged. Failures stay honestly categorized
-				// (winrm_disabled / wmi_firewall_blocked / agent_missing), never auth_failed.
+				// A Windows host is ALWAYS worth a deep OS collection attempt — even if it
+				// did NOT bind a WinRM/SSH credential this run, and even if no Windows
+				// management port (445/135/5985/5986) was observed in this run's port scan.
+				// runOSCollection tries WinRM, then FALLS BACK to the site Relay Agent
+				// (WMI/DCOM), which works where WinRM is off and regardless of which TCP
+				// ports the scan happened to catch. This was previously gated on an
+				// OBSERVED management port, which silently left late/slow-probed Windows
+				// endpoints (port not seen this run) enrolled with NO collection attempt,
+				// stuck at "needs_credential" with zero recorded attempts. winHost keeps
+				// this scoped to Windows-like hosts only; runOSCollection returns an honest
+				// reason (no_credential / agent_missing / winrm_disabled / wmi_firewall_blocked)
+				// when nothing works — never a false auth failure, and never a silent skip.
 				winHost := dev.OsFamily == domain.OSFamilyWindows || dev.Category == string(domain.CatEndpoint)
-				winMgmtPort := false
-				for _, p := range r.OpenPorts {
-					if p == 445 || p == 135 || p == 5985 || p == 5986 {
-						winMgmtPort = true
-						break
-					}
-				}
-				windowsManageable := winHost && winMgmtPort
+				windowsManageable := winHost
 				if s.cipher() != nil && (boundOS || legacyWSMan || windowsManageable) && !specialized {
 					s.publishScanEvent(jobID, ip, id, "collection_started", "", "started", "deep OS inventory")
 					cctx, ccancel := context.WithTimeout(ctx, 2*time.Minute)
