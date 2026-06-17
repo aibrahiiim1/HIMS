@@ -353,6 +353,7 @@ func (s *Server) routes() {
 		// --- Reports Pro (#21): server-side multi-format export -------
 		r.Get("/reports/{type}/export", s.exportReport)               // ?format=xlsx|csv
 		r.Get("/reports/credential-attempts", s.connectivityAttempts) // Connectivity report: per-device cred outcomes
+		r.Get("/reports/collection-queue", s.collectionQueueSummary)  // Agent collect-job queue rollup (queued/dispatched/done/failed)
 		r.Get("/report-schedules", s.listReportSchedules)
 		r.Post("/report-schedules", s.createReportSchedule)
 		r.Patch("/report-schedules/{id}", s.setReportScheduleEnabled)

@@ -28,6 +28,8 @@ type Querier interface {
 	// Absolute set of on-hand quantity (a stock count / receiving correction).
 	// The CHECK (quantity >= 0) constraint rejects negative results.
 	AdjustSparePartStock(ctx context.Context, arg AdjustSparePartStockParams) (SparePart, error)
+	// Fleet-wide collect-job rollup by status (acceptance / queue-visibility report).
+	AgentJobStatusCounts(ctx context.Context) ([]AgentJobStatusCountsRow, error)
 	// Alert volume + responsiveness over the window. MTTA/MTTR are NULL until alerts
 	// with acknowledged/resolved timestamps exist (honest empty state). $1 = window.
 	AlertAnalyticsSummary(ctx context.Context, dollar_1 string) (AlertAnalyticsSummaryRow, error)
@@ -57,12 +59,17 @@ type Querier interface {
 	// In-flight collection jobs for a device (queued or dispatched) — used to avoid
 	// enqueuing a duplicate when a scan re-routes the same device to its site agent.
 	CountActiveDeviceAgentJobs(ctx context.Context, deviceID *uuid.UUID) (int64, error)
+	// Per-agent job rollup by status (queued / dispatched / done / failed).
+	CountAgentJobsByStatusForAgent(ctx context.Context, agentID uuid.UUID) ([]CountAgentJobsByStatusForAgentRow, error)
 	// Overview KPIs: total versions, distinct devices backed up, and changes today.
 	CountConfigBackupStats(ctx context.Context) (CountConfigBackupStatsRow, error)
 	CountCredentialsNeedingReentry(ctx context.Context) (int64, error)
 	// Total live devices (for the dashboard total / discovered split).
 	CountDevices(ctx context.Context) (int64, error)
 	CountDevicesNeedingAttention(ctx context.Context) (int64, error)
+	// Jobs currently handed to the agent and not yet reported back — the in-flight
+	// count subtracted from the dispatch cap to compute the poll budget.
+	CountDispatchedAgentJobs(ctx context.Context, agentID uuid.UUID) (int64, error)
 	// ===== Credential secret accounting / recovery =============================
 	CountEncryptedCredentials(ctx context.Context) (int64, error)
 	// Systems whose license OR support expires within 90 days (or already has).
@@ -416,6 +423,10 @@ type Querier interface {
 	// Devices with a reachable IP but no monitoring check yet — the seeder turns
 	// each into a default TCP check (port chosen by category + os_family).
 	ListDevicesNeedingDefaultCheck(ctx context.Context) ([]ListDevicesNeedingDefaultCheckRow, error)
+	// Device ids with an in-flight collect_os job (queued or dispatched). Feeds the
+	// pending_collection management state so an in-flight host is not misreported as a
+	// terminal failure from its stale direct-probe attempt.
+	ListDevicesWithActiveAgentJobs(ctx context.Context) ([]*uuid.UUID, error)
 	// Credentialed device classes (server/endpoint) that have never been OS-inventoried.
 	ListDevicesWithoutOSInventory(ctx context.Context) ([]ListDevicesWithoutOSInventoryRow, error)
 	ListDiscoveryJobEvents(ctx context.Context, jobID uuid.UUID) ([]ListDiscoveryJobEventsRow, error)
@@ -493,7 +504,6 @@ type Querier interface {
 	ListPortVlans(ctx context.Context, deviceID uuid.UUID) ([]PortVlan, error)
 	ListPrinterSupplies(ctx context.Context, deviceID uuid.UUID) ([]PrinterSupply, error)
 	ListPurchases(ctx context.Context) ([]Purchase, error)
-	ListQueuedAgentJobs(ctx context.Context, agentID uuid.UUID) ([]AgentJob, error)
 	// Recent jobs across all agents (fleet-wide failed-job / Data Quality views).
 	ListRecentAgentJobsAll(ctx context.Context, limit int32) ([]ListRecentAgentJobsAllRow, error)
 	// Fleet activity feed for the Config page: recent captures with device name.
@@ -502,6 +512,11 @@ type Querier interface {
 	ListReportSchedules(ctx context.Context) ([]ReportSchedule, error)
 	ListRoles(ctx context.Context) ([]Role, error)
 	ListRootLocations(ctx context.Context) ([]Location, error)
+	// The next queued jobs for an agent that are ready to run now (backoff elapsed),
+	// capped by $2 = the per-agent dispatch budget (cap - in-flight dispatched). This
+	// is what bounds the thundering herd: the server never hands one agent more than
+	// the cap of concurrent collect jobs.
+	ListRunnableAgentJobs(ctx context.Context, arg ListRunnableAgentJobsParams) ([]AgentJob, error)
 	// Bulk fetch of the raw SNMP system-group identity facts across ALL devices, for
 	// Data Quality checks that re-evaluate fingerprints against stored evidence
 	// without re-probing. Only the identity keys, not the full fact set.
@@ -600,6 +615,14 @@ type Querier interface {
 	// preserved; only descriptive metadata + exclusions are refreshed. Row id is kept.
 	RefreshBuiltinVendorFingerprint(ctx context.Context, arg RefreshBuiltinVendorFingerprintParams) (int64, error)
 	RelayAgentHeartbeat(ctx context.Context, arg RelayAgentHeartbeatParams) error
+	// Return a transiently-failed job to the queue with an incremented attempt and a
+	// backoff deadline ($2). Clears dispatched_at so it can be re-dispatched once the
+	// backoff elapses. Used for retryable (non-auth) collection failures.
+	RequeueAgentJob(ctx context.Context, arg RequeueAgentJobParams) error
+	// Recover jobs stuck 'dispatched' whose agent never reported back (agent crash /
+	// dropped connection): requeue (bumped attempt) if attempts remain, else mark
+	// failed so they never block re-enqueue forever. $1 = dispatched-before cutoff.
+	RequeueStaleAgentJobs(ctx context.Context, dispatchedAt *time.Time) (int64, error)
 	ResolveAlert(ctx context.Context, id uuid.UUID) (Alert, error)
 	// The resolver-assembly query: for a device IP, return every credential in a
 	// group bound to either a subnet that contains the IP (more specific) or a

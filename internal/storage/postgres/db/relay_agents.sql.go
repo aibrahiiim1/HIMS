@@ -12,6 +12,36 @@ import (
 	"github.com/google/uuid"
 )
 
+const agentJobStatusCounts = `-- name: AgentJobStatusCounts :many
+SELECT status::text AS status, count(*) AS n FROM agent_jobs GROUP BY status
+`
+
+type AgentJobStatusCountsRow struct {
+	Status string `json:"status"`
+	N      int64  `json:"n"`
+}
+
+// Fleet-wide collect-job rollup by status (acceptance / queue-visibility report).
+func (q *Queries) AgentJobStatusCounts(ctx context.Context) ([]AgentJobStatusCountsRow, error) {
+	rows, err := q.db.Query(ctx, agentJobStatusCounts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AgentJobStatusCountsRow{}
+	for rows.Next() {
+		var i AgentJobStatusCountsRow
+		if err := rows.Scan(&i.Status, &i.N); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const completeAgentJob = `-- name: CompleteAgentJob :exec
 UPDATE agent_jobs
 SET status = $2, result = $3, category = $4, error = $5, finished_at = now()
@@ -51,6 +81,49 @@ func (q *Queries) CountActiveDeviceAgentJobs(ctx context.Context, deviceID *uuid
 	return count, err
 }
 
+const countAgentJobsByStatusForAgent = `-- name: CountAgentJobsByStatusForAgent :many
+SELECT status::text AS status, count(*) AS n FROM agent_jobs WHERE agent_id = $1 GROUP BY status
+`
+
+type CountAgentJobsByStatusForAgentRow struct {
+	Status string `json:"status"`
+	N      int64  `json:"n"`
+}
+
+// Per-agent job rollup by status (queued / dispatched / done / failed).
+func (q *Queries) CountAgentJobsByStatusForAgent(ctx context.Context, agentID uuid.UUID) ([]CountAgentJobsByStatusForAgentRow, error) {
+	rows, err := q.db.Query(ctx, countAgentJobsByStatusForAgent, agentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CountAgentJobsByStatusForAgentRow{}
+	for rows.Next() {
+		var i CountAgentJobsByStatusForAgentRow
+		if err := rows.Scan(&i.Status, &i.N); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const countDispatchedAgentJobs = `-- name: CountDispatchedAgentJobs :one
+SELECT count(*) FROM agent_jobs WHERE agent_id = $1 AND status = 'dispatched'
+`
+
+// Jobs currently handed to the agent and not yet reported back — the in-flight
+// count subtracted from the dispatch cap to compute the poll budget.
+func (q *Queries) CountDispatchedAgentJobs(ctx context.Context, agentID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countDispatchedAgentJobs, agentID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countFailedAgentJobs = `-- name: CountFailedAgentJobs :one
 SELECT count(*) FROM agent_jobs WHERE agent_id = $1 AND status = 'failed'
 `
@@ -66,7 +139,7 @@ func (q *Queries) CountFailedAgentJobs(ctx context.Context, agentID uuid.UUID) (
 const createAgentJob = `-- name: CreateAgentJob :one
 INSERT INTO agent_jobs (agent_id, device_id, credential_id, kind, protocol, target, request)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, agent_id, device_id, credential_id, kind, protocol, target, status, request, result, category, error, created_at, dispatched_at, finished_at
+RETURNING id, agent_id, device_id, credential_id, kind, protocol, target, status, request, result, category, error, created_at, dispatched_at, finished_at, attempt, max_attempts, next_attempt_at
 `
 
 type CreateAgentJobParams struct {
@@ -106,6 +179,9 @@ func (q *Queries) CreateAgentJob(ctx context.Context, arg CreateAgentJobParams) 
 		&i.CreatedAt,
 		&i.DispatchedAt,
 		&i.FinishedAt,
+		&i.Attempt,
+		&i.MaxAttempts,
+		&i.NextAttemptAt,
 	)
 	return i, err
 }
@@ -158,7 +234,7 @@ func (q *Queries) DeleteRelayAgent(ctx context.Context, id uuid.UUID) error {
 }
 
 const getAgentJob = `-- name: GetAgentJob :one
-SELECT id, agent_id, device_id, credential_id, kind, protocol, target, status, request, result, category, error, created_at, dispatched_at, finished_at FROM agent_jobs WHERE id = $1
+SELECT id, agent_id, device_id, credential_id, kind, protocol, target, status, request, result, category, error, created_at, dispatched_at, finished_at, attempt, max_attempts, next_attempt_at FROM agent_jobs WHERE id = $1
 `
 
 func (q *Queries) GetAgentJob(ctx context.Context, id uuid.UUID) (AgentJob, error) {
@@ -180,6 +256,9 @@ func (q *Queries) GetAgentJob(ctx context.Context, id uuid.UUID) (AgentJob, erro
 		&i.CreatedAt,
 		&i.DispatchedAt,
 		&i.FinishedAt,
+		&i.Attempt,
+		&i.MaxAttempts,
+		&i.NextAttemptAt,
 	)
 	return i, err
 }
@@ -296,39 +375,27 @@ func (q *Queries) ListAgentJobs(ctx context.Context, arg ListAgentJobsParams) ([
 	return items, nil
 }
 
-const listQueuedAgentJobs = `-- name: ListQueuedAgentJobs :many
-SELECT id, agent_id, device_id, credential_id, kind, protocol, target, status, request, result, category, error, created_at, dispatched_at, finished_at FROM agent_jobs WHERE agent_id = $1 AND status = 'queued' ORDER BY created_at LIMIT 20
+const listDevicesWithActiveAgentJobs = `-- name: ListDevicesWithActiveAgentJobs :many
+SELECT DISTINCT device_id FROM agent_jobs
+WHERE kind = 'collect_os' AND status IN ('queued', 'dispatched') AND device_id IS NOT NULL
 `
 
-func (q *Queries) ListQueuedAgentJobs(ctx context.Context, agentID uuid.UUID) ([]AgentJob, error) {
-	rows, err := q.db.Query(ctx, listQueuedAgentJobs, agentID)
+// Device ids with an in-flight collect_os job (queued or dispatched). Feeds the
+// pending_collection management state so an in-flight host is not misreported as a
+// terminal failure from its stale direct-probe attempt.
+func (q *Queries) ListDevicesWithActiveAgentJobs(ctx context.Context) ([]*uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listDevicesWithActiveAgentJobs)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []AgentJob{}
+	items := []*uuid.UUID{}
 	for rows.Next() {
-		var i AgentJob
-		if err := rows.Scan(
-			&i.ID,
-			&i.AgentID,
-			&i.DeviceID,
-			&i.CredentialID,
-			&i.Kind,
-			&i.Protocol,
-			&i.Target,
-			&i.Status,
-			&i.Request,
-			&i.Result,
-			&i.Category,
-			&i.Error,
-			&i.CreatedAt,
-			&i.DispatchedAt,
-			&i.FinishedAt,
-		); err != nil {
+		var device_id *uuid.UUID
+		if err := rows.Scan(&device_id); err != nil {
 			return nil, err
 		}
-		items = append(items, i)
+		items = append(items, device_id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -430,6 +497,62 @@ func (q *Queries) ListRelayAgents(ctx context.Context) ([]RelayAgent, error) {
 	return items, nil
 }
 
+const listRunnableAgentJobs = `-- name: ListRunnableAgentJobs :many
+SELECT id, agent_id, device_id, credential_id, kind, protocol, target, status, request, result, category, error, created_at, dispatched_at, finished_at, attempt, max_attempts, next_attempt_at FROM agent_jobs
+WHERE agent_id = $1 AND status = 'queued'
+  AND (next_attempt_at IS NULL OR next_attempt_at <= now())
+ORDER BY created_at
+LIMIT $2
+`
+
+type ListRunnableAgentJobsParams struct {
+	AgentID uuid.UUID `json:"agent_id"`
+	Limit   int32     `json:"limit"`
+}
+
+// The next queued jobs for an agent that are ready to run now (backoff elapsed),
+// capped by $2 = the per-agent dispatch budget (cap - in-flight dispatched). This
+// is what bounds the thundering herd: the server never hands one agent more than
+// the cap of concurrent collect jobs.
+func (q *Queries) ListRunnableAgentJobs(ctx context.Context, arg ListRunnableAgentJobsParams) ([]AgentJob, error) {
+	rows, err := q.db.Query(ctx, listRunnableAgentJobs, arg.AgentID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AgentJob{}
+	for rows.Next() {
+		var i AgentJob
+		if err := rows.Scan(
+			&i.ID,
+			&i.AgentID,
+			&i.DeviceID,
+			&i.CredentialID,
+			&i.Kind,
+			&i.Protocol,
+			&i.Target,
+			&i.Status,
+			&i.Request,
+			&i.Result,
+			&i.Category,
+			&i.Error,
+			&i.CreatedAt,
+			&i.DispatchedAt,
+			&i.FinishedAt,
+			&i.Attempt,
+			&i.MaxAttempts,
+			&i.NextAttemptAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const markAgentJobDispatched = `-- name: MarkAgentJobDispatched :exec
 UPDATE agent_jobs SET status = 'dispatched', dispatched_at = now() WHERE id = $1
 `
@@ -456,6 +579,59 @@ type RelayAgentHeartbeatParams struct {
 func (q *Queries) RelayAgentHeartbeat(ctx context.Context, arg RelayAgentHeartbeatParams) error {
 	_, err := q.db.Exec(ctx, relayAgentHeartbeat, arg.ID, arg.Column2, arg.Column3)
 	return err
+}
+
+const requeueAgentJob = `-- name: RequeueAgentJob :exec
+UPDATE agent_jobs
+SET status = 'queued', attempt = attempt + 1, next_attempt_at = $2,
+    dispatched_at = NULL, error = $3, category = $4
+WHERE id = $1
+`
+
+type RequeueAgentJobParams struct {
+	ID            uuid.UUID  `json:"id"`
+	NextAttemptAt *time.Time `json:"next_attempt_at"`
+	Error         string     `json:"error"`
+	Category      string     `json:"category"`
+}
+
+// Return a transiently-failed job to the queue with an incremented attempt and a
+// backoff deadline ($2). Clears dispatched_at so it can be re-dispatched once the
+// backoff elapses. Used for retryable (non-auth) collection failures.
+func (q *Queries) RequeueAgentJob(ctx context.Context, arg RequeueAgentJobParams) error {
+	_, err := q.db.Exec(ctx, requeueAgentJob,
+		arg.ID,
+		arg.NextAttemptAt,
+		arg.Error,
+		arg.Category,
+	)
+	return err
+}
+
+const requeueStaleAgentJobs = `-- name: RequeueStaleAgentJobs :execrows
+UPDATE agent_jobs
+SET status          = CASE WHEN attempt + 1 >= max_attempts THEN 'failed' ELSE 'queued' END,
+    attempt         = attempt + 1,
+    dispatched_at   = NULL,
+    next_attempt_at = CASE WHEN attempt + 1 >= max_attempts THEN NULL ELSE now() END,
+    finished_at     = CASE WHEN attempt + 1 >= max_attempts THEN now() ELSE finished_at END,
+    error           = CASE WHEN attempt + 1 >= max_attempts
+                           THEN 'agent did not report a result (stale dispatched; gave up after max attempts)'
+                           ELSE error END,
+    category        = CASE WHEN attempt + 1 >= max_attempts THEN 'agent_no_result' ELSE category END
+WHERE kind = 'collect_os' AND status = 'dispatched'
+  AND dispatched_at IS NOT NULL AND dispatched_at < $1
+`
+
+// Recover jobs stuck 'dispatched' whose agent never reported back (agent crash /
+// dropped connection): requeue (bumped attempt) if attempts remain, else mark
+// failed so they never block re-enqueue forever. $1 = dispatched-before cutoff.
+func (q *Queries) RequeueStaleAgentJobs(ctx context.Context, dispatchedAt *time.Time) (int64, error) {
+	result, err := q.db.Exec(ctx, requeueStaleAgentJobs, dispatchedAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const resolveSiteAgent = `-- name: ResolveSiteAgent :one

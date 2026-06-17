@@ -308,6 +308,51 @@ type agentJobOut struct {
 	Password string `json:"password,omitempty"`
 }
 
+// agentDispatchCap bounds how many collect jobs the server hands a single relay
+// agent at once (the agent runs them serially). Keeps a from-zero scan's ~one
+// job-per-Windows-host draining in controlled batches instead of a thundering herd.
+const agentDispatchCap = 4
+
+// staleDispatchedAfter is how long a job may sit 'dispatched' (handed to an agent,
+// never reported back) before the reaper requeues/fails it. Longer than the agent's
+// 4-minute per-job timeout plus margin so we never reap a job that is still running.
+const staleDispatchedAfter = 8 * time.Minute
+
+// agentPollBudget returns how many new collect jobs may be dispatched to an agent
+// given the count currently in flight — never below zero, never above the cap.
+// This is the throttle that keeps a from-zero scan draining in bounded batches.
+func agentPollBudget(inflight int) int {
+	if b := agentDispatchCap - inflight; b > 0 {
+		return b
+	}
+	return 0
+}
+
+// agentJobRetryable reports whether a failed collect job should be retried. Auth
+// and authorization rejections are terminal (the same credential keeps being
+// rejected); connection/timeout/RPC/WMI/transient errors are worth a bounded retry.
+func agentJobRetryable(category string) bool {
+	switch category {
+	case credtest.CatAuthFailed, credtest.CatUnsupported,
+		"wmi_access_denied", "access_denied", "lockout_suspected":
+		return false
+	}
+	return true
+}
+
+// agentRetryBackoff returns the wait before re-dispatching a transiently-failed
+// job, growing with the attempt number to ease pressure on a saturated agent.
+func agentRetryBackoff(attempt int) time.Duration {
+	switch attempt {
+	case 0:
+		return 30 * time.Second
+	case 1:
+		return 2 * time.Minute
+	default:
+		return 5 * time.Minute
+	}
+}
+
 func (s *Server) agentPollJobs(w http.ResponseWriter, r *http.Request) {
 	a := s.authAgent(r)
 	if a == nil {
@@ -316,7 +361,20 @@ func (s *Server) agentPollJobs(w http.ResponseWriter, r *http.Request) {
 	}
 	// heartbeat-on-poll: a polling agent is alive.
 	_ = s.queries.RelayAgentHeartbeat(r.Context(), db.RelayAgentHeartbeatParams{ID: a.ID})
-	rows, err := s.queries.ListQueuedAgentJobs(r.Context(), a.ID)
+
+	// Per-agent dispatch budget: never hand one agent more than agentDispatchCap
+	// jobs in flight at once. The agent runs jobs SERIALLY (one PowerShell /
+	// New-CimSession at a time) and many target hosts are lockout-prone, so a
+	// from-zero subnet scan that enqueues ~70 collect_os jobs must drain in bounded
+	// batches — this is the throttle that prevents the thundering herd. The reaper
+	// (RequeueStaleAgentJobs) frees the budget if an agent dies holding jobs.
+	inflight, _ := s.queries.CountDispatchedAgentJobs(r.Context(), a.ID)
+	budget := agentPollBudget(int(inflight))
+	if budget <= 0 {
+		writeJSON(w, http.StatusOK, []agentJobOut{})
+		return
+	}
+	rows, err := s.queries.ListRunnableAgentJobs(r.Context(), db.ListRunnableAgentJobsParams{AgentID: a.ID, Limit: int32(budget)})
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -401,6 +459,23 @@ func (s *Server) agentJobResult(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// Transient failure → bounded retry with backoff instead of a TERMINAL 'failed'.
+	// Under a from-zero scan the agent can blip (queue saturation, temporary
+	// WinRM/WMI/RPC error, timeout under concurrency pressure); a single blip must
+	// not strand a reachable host as failed forever. The job goes back to 'queued'
+	// with a backoff deadline, so the device keeps the pending_collection state
+	// (an in-flight job) rather than misreporting a terminal failure. Auth/authz
+	// rejections are NOT retried (the same credential will keep being rejected).
+	if status == "failed" && job.Kind == "collect_os" &&
+		agentJobRetryable(req.Category) && int(job.Attempt)+1 < int(job.MaxAttempts) {
+		next := time.Now().Add(agentRetryBackoff(int(job.Attempt)))
+		_ = s.queries.RequeueAgentJob(pctx, db.RequeueAgentJobParams{
+			ID: jobID, NextAttemptAt: &next, Error: req.Error, Category: req.Category,
+		})
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "status": "requeued", "attempt": int(job.Attempt) + 1})
+		return
+	}
+
 	// Record a credential-test attempt (success or failure) so Credential Health /
 	// Coverage reflect the agent path. Protocol maps to a credential kind.
 	if job.DeviceID != nil && job.CredentialID != nil && job.Kind == "collect_os" {
@@ -429,4 +504,41 @@ func nilIfEmpty(b json.RawMessage) []byte {
 		return nil
 	}
 	return b
+}
+
+// collectionQueueSummary — GET /reports/collection-queue. Fleet-wide and per-agent
+// rollup of collect-job status (queued / dispatched / done / failed) plus the
+// dispatch cap, so the operator and the acceptance report can see the live
+// collection backlog and drain rate instead of guessing. Read-only.
+func (s *Server) collectionQueueSummary(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	fleet := map[string]int64{}
+	if rows, err := s.queries.AgentJobStatusCounts(ctx); err == nil {
+		for _, c := range rows {
+			fleet[c.Status] = c.N
+		}
+	}
+	type agentQueue struct {
+		ID     string           `json:"id"`
+		Name   string           `json:"name"`
+		Online bool             `json:"online"`
+		Counts map[string]int64 `json:"counts"`
+	}
+	agents := []agentQueue{}
+	if list, err := s.queries.ListRelayAgents(ctx); err == nil {
+		for _, a := range list {
+			counts := map[string]int64{}
+			if rows, cerr := s.queries.CountAgentJobsByStatusForAgent(ctx, a.ID); cerr == nil {
+				for _, c := range rows {
+					counts[c.Status] = c.N
+				}
+			}
+			agents = append(agents, agentQueue{ID: a.ID.String(), Name: a.Name, Online: relayAgentOnline(a), Counts: counts})
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"fleet":        fleet, // {queued, dispatched, done, failed}
+		"agents":       agents,
+		"dispatch_cap": agentDispatchCap,
+	})
 }

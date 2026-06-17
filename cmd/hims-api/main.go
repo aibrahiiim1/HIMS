@@ -215,6 +215,10 @@ func run(ctx context.Context, serviceMode, logPath string) error {
 	// then watchdog scans that hang past 45m (single targets/CIDRs finish in
 	// minutes — a longer "running" job has no live worker).
 	srv.StartScanReconciler(ctx, 5*time.Minute, 45*time.Minute)
+	// Recover relay-agent collect_os jobs orphaned in 'dispatched' (agent crashed
+	// mid-collection) so they never wedge the per-agent dispatch budget or block
+	// re-enqueue. Runs on startup, then every 2 minutes.
+	srv.StartAgentJobReaper(ctx, 2*time.Minute)
 	if err := srv.BootstrapAdmin(ctx, os.Getenv("HIMS_ADMIN_USER"), os.Getenv("HIMS_ADMIN_PASSWORD")); err != nil {
 		slog.Error("admin bootstrap failed", "error", err)
 	}

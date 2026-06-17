@@ -57,11 +57,65 @@ INSERT INTO agent_jobs (agent_id, device_id, credential_id, kind, protocol, targ
 VALUES ($1, $2, $3, $4, $5, $6, $7)
 RETURNING *;
 
--- name: ListQueuedAgentJobs :many
-SELECT * FROM agent_jobs WHERE agent_id = $1 AND status = 'queued' ORDER BY created_at LIMIT 20;
+-- name: ListRunnableAgentJobs :many
+-- The next queued jobs for an agent that are ready to run now (backoff elapsed),
+-- capped by $2 = the per-agent dispatch budget (cap - in-flight dispatched). This
+-- is what bounds the thundering herd: the server never hands one agent more than
+-- the cap of concurrent collect jobs.
+SELECT * FROM agent_jobs
+WHERE agent_id = $1 AND status = 'queued'
+  AND (next_attempt_at IS NULL OR next_attempt_at <= now())
+ORDER BY created_at
+LIMIT $2;
+
+-- name: CountDispatchedAgentJobs :one
+-- Jobs currently handed to the agent and not yet reported back — the in-flight
+-- count subtracted from the dispatch cap to compute the poll budget.
+SELECT count(*) FROM agent_jobs WHERE agent_id = $1 AND status = 'dispatched';
 
 -- name: MarkAgentJobDispatched :exec
 UPDATE agent_jobs SET status = 'dispatched', dispatched_at = now() WHERE id = $1;
+
+-- name: RequeueAgentJob :exec
+-- Return a transiently-failed job to the queue with an incremented attempt and a
+-- backoff deadline ($2). Clears dispatched_at so it can be re-dispatched once the
+-- backoff elapses. Used for retryable (non-auth) collection failures.
+UPDATE agent_jobs
+SET status = 'queued', attempt = attempt + 1, next_attempt_at = $2,
+    dispatched_at = NULL, error = $3, category = $4
+WHERE id = $1;
+
+-- name: RequeueStaleAgentJobs :execrows
+-- Recover jobs stuck 'dispatched' whose agent never reported back (agent crash /
+-- dropped connection): requeue (bumped attempt) if attempts remain, else mark
+-- failed so they never block re-enqueue forever. $1 = dispatched-before cutoff.
+UPDATE agent_jobs
+SET status          = CASE WHEN attempt + 1 >= max_attempts THEN 'failed' ELSE 'queued' END,
+    attempt         = attempt + 1,
+    dispatched_at   = NULL,
+    next_attempt_at = CASE WHEN attempt + 1 >= max_attempts THEN NULL ELSE now() END,
+    finished_at     = CASE WHEN attempt + 1 >= max_attempts THEN now() ELSE finished_at END,
+    error           = CASE WHEN attempt + 1 >= max_attempts
+                           THEN 'agent did not report a result (stale dispatched; gave up after max attempts)'
+                           ELSE error END,
+    category        = CASE WHEN attempt + 1 >= max_attempts THEN 'agent_no_result' ELSE category END
+WHERE kind = 'collect_os' AND status = 'dispatched'
+  AND dispatched_at IS NOT NULL AND dispatched_at < $1;
+
+-- name: ListDevicesWithActiveAgentJobs :many
+-- Device ids with an in-flight collect_os job (queued or dispatched). Feeds the
+-- pending_collection management state so an in-flight host is not misreported as a
+-- terminal failure from its stale direct-probe attempt.
+SELECT DISTINCT device_id FROM agent_jobs
+WHERE kind = 'collect_os' AND status IN ('queued', 'dispatched') AND device_id IS NOT NULL;
+
+-- name: AgentJobStatusCounts :many
+-- Fleet-wide collect-job rollup by status (acceptance / queue-visibility report).
+SELECT status::text AS status, count(*) AS n FROM agent_jobs GROUP BY status;
+
+-- name: CountAgentJobsByStatusForAgent :many
+-- Per-agent job rollup by status (queued / dispatched / done / failed).
+SELECT status::text AS status, count(*) AS n FROM agent_jobs WHERE agent_id = $1 GROUP BY status;
 
 -- name: GetAgentJob :one
 SELECT * FROM agent_jobs WHERE id = $1;

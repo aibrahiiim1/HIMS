@@ -31,21 +31,24 @@ type AccessPoint struct {
 }
 
 type AgentJob struct {
-	ID           uuid.UUID  `json:"id"`
-	AgentID      uuid.UUID  `json:"agent_id"`
-	DeviceID     *uuid.UUID `json:"device_id"`
-	CredentialID *uuid.UUID `json:"credential_id"`
-	Kind         string     `json:"kind"`
-	Protocol     string     `json:"protocol"`
-	Target       string     `json:"target"`
-	Status       string     `json:"status"`
-	Request      []byte     `json:"request"`
-	Result       []byte     `json:"result"`
-	Category     string     `json:"category"`
-	Error        string     `json:"error"`
-	CreatedAt    time.Time  `json:"created_at"`
-	DispatchedAt *time.Time `json:"dispatched_at"`
-	FinishedAt   *time.Time `json:"finished_at"`
+	ID            uuid.UUID  `json:"id"`
+	AgentID       uuid.UUID  `json:"agent_id"`
+	DeviceID      *uuid.UUID `json:"device_id"`
+	CredentialID  *uuid.UUID `json:"credential_id"`
+	Kind          string     `json:"kind"`
+	Protocol      string     `json:"protocol"`
+	Target        string     `json:"target"`
+	Status        string     `json:"status"`
+	Request       []byte     `json:"request"`
+	Result        []byte     `json:"result"`
+	Category      string     `json:"category"`
+	Error         string     `json:"error"`
+	CreatedAt     time.Time  `json:"created_at"`
+	DispatchedAt  *time.Time `json:"dispatched_at"`
+	FinishedAt    *time.Time `json:"finished_at"`
+	Attempt       int32      `json:"attempt"`
+	MaxAttempts   int32      `json:"max_attempts"`
+	NextAttemptAt *time.Time `json:"next_attempt_at"`
 }
 
 type Alert struct {

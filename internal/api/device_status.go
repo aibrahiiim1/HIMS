@@ -43,7 +43,20 @@ const (
 	MgmtNeedsAgent       = "needs_agent"
 	MgmtAgentOffline     = "agent_offline"
 	MgmtCollectionFailed = "collection_failed"
-	MgmtVirtual          = "virtual" // operator-entered placeholder; not probed/monitored
+	// MgmtPendingCollection: a collect_os agent job is queued or dispatched right
+	// now — collection is actively in progress, not settled. Transient/healthy, NOT
+	// a failure: it outranks the stale direct-probe failure so an in-flight host is
+	// never misreported as credential_failed/collection_failed/needs_agent while its
+	// agent job is still mid-flight.
+	MgmtPendingCollection = "pending_collection"
+	// MgmtNotAttempted: a reachable Windows-like host that was enrolled but for which
+	// NO collection was attempted (no in-flight job, no evidence, no auth attempt, no
+	// binding). This is "not attempted yet", NOT "needs a credential" — surfacing
+	// needs_credential here would wrongly blame the operator's credentials when
+	// collection simply never ran (an enqueue gap). After the hardening this should
+	// be 0 for a settled from-zero scan.
+	MgmtNotAttempted = "not_attempted"
+	MgmtVirtual      = "virtual" // operator-entered placeholder; not probed/monitored
 )
 
 // reachabilityFromStatus maps the honest backend device.status to a reachability
@@ -72,6 +85,10 @@ type statusMaps struct {
 	// are managed VIA the recorder, so an RTSP-only feed (no web/ONVIF to
 	// authenticate) must not be reported as credential_failed.
 	nvrChannelCams map[uuid.UUID]bool
+	// activeCollect are device_ids with an in-flight collect_os agent job (queued or
+	// dispatched). Drives MgmtPendingCollection so an in-flight host is not
+	// misreported with its stale direct-probe failure.
+	activeCollect map[uuid.UUID]bool
 }
 
 func (s *Server) buildStatusMaps(ctx context.Context) (*statusMaps, error) {
@@ -103,7 +120,15 @@ func (s *Server) buildStatusMaps(ctx context.Context) (*statusMaps, error) {
 			}
 		}
 	}
-	return &statusMaps{access: am, test: tm, onlineSites: onlineSites, anySites: anySites, nvrChannelCams: nvrCams}, nil
+	activeCollect := map[uuid.UUID]bool{}
+	if ids, perr := s.queries.ListDevicesWithActiveAgentJobs(ctx); perr == nil {
+		for _, id := range ids {
+			if id != nil {
+				activeCollect[*id] = true
+			}
+		}
+	}
+	return &statusMaps{access: am, test: tm, onlineSites: onlineSites, anySites: anySites, nvrChannelCams: nvrCams, activeCollect: activeCollect}, nil
 }
 
 // windowsLike reports whether a device is (or is most likely) a Windows host even
@@ -136,6 +161,16 @@ func (m *statusMaps) deriveManagement(d db.Device) (state string, managedBy []st
 		return MgmtManaged, []string{"nvr"}
 	}
 
+	// A collect_os job is queued or dispatched for this device RIGHT NOW — deep
+	// collection is actively in progress (typically routed to the site Relay Agent
+	// during a scan). Report pending_collection so the in-flight host is NOT
+	// misreported with its stale direct-probe failure (auth_failed/collection_failed)
+	// or as needs-agent while the agent job is still mid-flight. Proven evidence
+	// (above) wins; this only outranks the not-yet-settled failure signals below.
+	if m.activeCollect[d.ID] {
+		return MgmtPendingCollection, nil
+	}
+
 	// Not managed — classify the gap so the operator knows the next action.
 	legacy := ts.winrmLegacy()
 	if windowsLike(d) && legacy {
@@ -165,7 +200,19 @@ func (m *statusMaps) deriveManagement(d db.Device) (state string, managedBy []st
 	if ts != nil && ts.tested {
 		return MgmtCollectionFailed, nil
 	}
-	if credentialedCategories[d.Category] || windowsLike(d) || d.OsFamily == "linux" {
+	// Reachable, enrolled, but NOTHING was attempted (no in-flight job — handled
+	// above; no evidence; no auth attempt; no binding) and nothing tested. For a
+	// Windows-like host the pipeline ALWAYS routes a collection attempt
+	// (osCollectionCandidate), so reaching here means collection never ran — an
+	// enqueue gap, NOT a credential problem. Report not_attempted (with the real
+	// reason surfaced elsewhere), never the misleading needs_credential. After the
+	// dispatch/retry hardening this should be 0 for a settled from-zero scan.
+	if windowsLike(d) {
+		return MgmtNotAttempted, nil
+	}
+	// Other credentialed classes (switch/server/SNMP/SSH appliances) genuinely need
+	// a credential of the right kind to be added before HIMS can even attempt them.
+	if credentialedCategories[d.Category] || d.OsFamily == "linux" {
 		return MgmtNeedsCredential, nil
 	}
 	return MgmtUnmanaged, nil
@@ -203,7 +250,7 @@ func (m *statusMaps) statusFor(d db.Device) deviceStatus {
 // (derived from monitoring status + proven access, never from open ports).
 func (m *statusMaps) statusDataQualityIssues(devs []db.Device, now time.Time) []dqIssue {
 	var onlineUnmanaged, reachableNoCred, credBoundNotWorking, needsAgentColl,
-		agentOfflineManaged, offlinePrevManaged, managedStale []db.Device
+		agentOfflineManaged, offlinePrevManaged, managedStale, notAttempted []db.Device
 	staleBefore := now.Add(-reachStale)
 	for _, d := range devs {
 		st := m.statusFor(d)
@@ -227,12 +274,20 @@ func (m *statusMaps) statusDataQualityIssues(devs []db.Device, now time.Time) []
 			if st.Reachability == ReachOnline {
 				reachableNoCred = append(reachableNoCred, d)
 			}
+		case MgmtNotAttempted:
+			// Reachable + enrolled but collection never ran — an enqueue gap to fix
+			// (should be 0 once a from-zero scan settles). Distinct from "needs cred".
+			if st.Reachability == ReachOnline {
+				notAttempted = append(notAttempted, d)
+			}
 		case MgmtCollectionFailed, MgmtCredentialFailed:
 			credBoundNotWorking = append(credBoundNotWorking, d)
 		case MgmtNeedsAgent:
 			needsAgentColl = append(needsAgentColl, d)
 		case MgmtAgentOffline:
 			agentOfflineManaged = append(agentOfflineManaged, d)
+			// MgmtPendingCollection is intentionally omitted: collection is actively in
+			// progress, not a data-quality issue.
 		}
 	}
 	out := []dqIssue{}
@@ -249,6 +304,7 @@ func (m *statusMaps) statusDataQualityIssues(devs []db.Device, now time.Time) []
 	add("agent_offline_for_managed_site", "Agent offline for managed site", "Hosts that depend on a site Relay Agent for collection, but that site's agent is currently offline. Bring the agent back online to resume management.", "critical", agentOfflineManaged)
 	add("offline_but_previously_managed", "Offline but previously Managed", "These devices have a proven working management method on record but are currently offline (unreachable). Check power/network — management resumes when they are reachable again.", "warning", offlinePrevManaged)
 	add("managed_device_collection_stale", "Managed device collection stale", "Devices that are Managed but whose last successful authenticated check is over 30 days old. Re-test the credential / re-collect to confirm management is still working.", "info", managedStale)
+	add("collection_not_attempted", "Collection not attempted", "Reachable Windows hosts that were enrolled but never had a collection attempt (no in-flight job, no recorded attempt). This should be 0 once a from-zero scan settles — a non-zero count is an enqueue gap, not a credential problem. Re-run a targeted collection.", "warning", notAttempted)
 	return out
 }
 
