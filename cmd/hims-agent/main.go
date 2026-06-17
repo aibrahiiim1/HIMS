@@ -39,7 +39,7 @@ import (
 	"github.com/coralsearesorts/hims/internal/osinv"
 )
 
-const agentVersion = "1.1.0"
+const agentVersion = "1.2.0"
 
 // agentMaxConcurrent bounds how many collection jobs the agent runs in parallel
 // per poll. The HIMS server already caps how many jobs it dispatches to one agent
@@ -308,23 +308,74 @@ func collect(j job) (*osinv.Report, string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 	switch j.Protocol {
-	case "winrm":
-		cl, err := osinv.NewWinRMClient(j.Target, j.Username, j.Password, 120*time.Second)
-		if err != nil {
-			return nil, "error", err
-		}
-		rep, err := osinv.CollectWindows(ctx, osinv.WinRMRunner{C: cl})
-		if err != nil {
-			cat, _, _ := osinv.ClassifyWinRMError(err)
-			return nil, cat, err
-		}
-		rep.Method = "winrm-agent"
-		return &rep, "success", nil
-	case "wmi":
-		return collectWMI(ctx, j)
+	case "winrm", "wmi":
+		// Both labels run the SAME Windows ladder so the agent path is equivalent to the
+		// server's direct collector regardless of which protocol the router picked.
+		return collectWindows(ctx, j)
 	default:
 		return nil, "unsupported", fmt.Errorf("protocol %q not implemented in this agent build", j.Protocol)
 	}
+}
+
+// collectWindows runs the two-rung Windows ladder, preferring the WinRM command-shell
+// collector and falling back to WMI/DCOM. WinRM-first is what makes the agent path
+// equivalent to the server's proven direct path: a non-domain host managed by a LOCAL
+// admin blocks remote WMI/CIM via UAC (LocalAccountTokenFilterPolicy → "Access is
+// denied"), but the WinRM-shell collector runs its Get-CimInstance/registry reads
+// LOCALLY on the target inside the shell session, so the local-admin logon succeeds.
+// WMI/DCOM remains as the fallback for hosts that have WinRM disabled but RPC/DCOM open.
+func collectWindows(ctx context.Context, j job) (*osinv.Report, string, error) {
+	rep, wcat, werr := collectWinRM(ctx, j)
+	if werr == nil {
+		return rep, "success", nil
+	}
+	// If WinRM definitively REJECTED the credential, the same credential will not fare
+	// better over WMI — return the auth verdict without a second auth attempt, so we do
+	// not double account-lockout pressure on the host. Fall back to WMI only when WinRM
+	// was unavailable (port filtered/disabled), where DCOM may still be open. The WMI
+	// PowerShell collector needs a Windows host; elsewhere the WinRM result stands.
+	if wcat == "auth_failed" || runtime.GOOS != "windows" {
+		return nil, wcat, werr
+	}
+	rep, mcat, merr := collectWMI(ctx, j)
+	if merr == nil {
+		return rep, "success", nil
+	}
+	// Both rungs failed: WinRM was unreachable, so surface the WMI category (the rung
+	// that may have reached the host over DCOM) as the headline — falling back to the
+	// WinRM category only if WMI produced none — so the server classifies
+	// credential_failed vs collection_failed honestly.
+	return nil, pickWindowsFailCat(wcat, mcat), fmt.Errorf("winrm: %v | wmi: %v", werr, merr)
+}
+
+// pickWindowsFailCat chooses the headline category when BOTH Windows rungs fail. The
+// WinRM rung ran first and (since a definitive auth_failed short-circuits before the WMI
+// fallback) reached here only as "unreachable"/"error" — a pure transport miss. The WMI
+// rung's category therefore carries the more informative signal (e.g. wmi_access_denied
+// means the host WAS reached over DCOM and the credential was rejected), so prefer it.
+func pickWindowsFailCat(winrmCat, wmiCat string) string {
+	if wmiCat != "" {
+		return wmiCat
+	}
+	return winrmCat
+}
+
+// collectWinRM gathers inventory over a WinRM command shell (Go-winrm) — the same
+// collector the server's direct path uses. Its Get-CimInstance and Uninstall-registry
+// reads execute locally on the target inside the shell, so they succeed for a
+// local-admin account where remote WMI/CIM is UAC-blocked.
+func collectWinRM(ctx context.Context, j job) (*osinv.Report, string, error) {
+	cl, err := osinv.NewWinRMClient(j.Target, j.Username, j.Password, 120*time.Second)
+	if err != nil {
+		return nil, "error", err
+	}
+	rep, err := osinv.CollectWindows(ctx, osinv.WinRMRunner{C: cl})
+	if err != nil {
+		cat, _, _ := osinv.ClassifyWinRMError(err)
+		return nil, cat, err
+	}
+	rep.Method = "winrm-agent"
+	return &rep, "success", nil
 }
 
 // collectWMI gathers inventory via PowerShell Get-WmiObject over DCOM (Windows
