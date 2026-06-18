@@ -1608,18 +1608,25 @@ type scanJobDTO struct {
 	Targets      string     `json:"targets"`
 	Scope        string     `json:"scope"`
 	// Phase is the HONEST end-to-end state: a scan whose probe/enroll phase is
-	// 'completed' is reported as "collecting" (not "complete") while deep OS collection
-	// still drains async via the relay agent, and only "complete" once it settles.
+	// 'completed' is reported as "collecting" while deep OS collection drains, then
+	// "self_healing" while terminal transient failures are still awaiting automatic
+	// re-collection, and only "complete" once ALL automatic collection is actually done.
 	Phase             string `json:"phase"`
 	CollectingPending int64  `json:"collecting_pending"`
+	SelfHealing       int64  `json:"self_healing"`
 }
 
-// scanPhase derives the honest end-to-end scan phase from the probe-phase status and
-// the count of collect_os jobs still in flight for the job's devices. The DB `status`
-// only reflects the probe/enroll phase, which finishes BEFORE deep collection drains —
-// so the UI must show "collecting" until collection settles, never a premature
-// "complete". Single source of truth for the Scan Jobs list and the job detail header.
-func scanPhase(status string, collectionPending int64) string {
+// scanPhase derives the honest end-to-end scan phase. The DB `status` only reflects the
+// probe/enroll phase, which finishes BEFORE deep collection drains — and self-heal will
+// keep re-collecting terminal transient failures AFTER that. So the UI must not show
+// "complete" while any automatic collection remains:
+//   - collectionPending > 0 (collect_os jobs queued/retry-waiting/dispatched) -> "collecting"
+//   - else healing > 0 (terminal transient failures self-heal will still retry, including
+//     the cooldown window where no job is in flight) -> "self_healing"
+//   - else -> "complete"
+//
+// Single source of truth for the Scan Jobs list and the job detail header.
+func scanPhase(status string, collectionPending, healing int64) string {
 	switch status {
 	case "pending":
 		return "queued"
@@ -1632,6 +1639,9 @@ func scanPhase(status string, collectionPending int64) string {
 	case "completed", "":
 		if collectionPending > 0 {
 			return "collecting"
+		}
+		if healing > 0 {
+			return "self_healing"
 		}
 		return "complete"
 	}
@@ -1661,12 +1671,15 @@ func (s *Server) listDiscoveryJobs(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	// One small query maps job_id → in-flight collection count so the list shows an
-	// honest "collecting" phase while deep collection drains after probe completion.
+	// One small query maps job_id → (in-flight collection, self-heal-eligible) counts so
+	// the list shows an honest "collecting" / "self-heal" phase (never a premature
+	// "complete") while deep collection drains AND while self-heal will still re-collect.
 	pending := map[uuid.UUID]int64{}
-	if rowsP, perr := s.queries.JobsWithPendingCollection(r.Context()); perr == nil {
+	healing := map[uuid.UUID]int64{}
+	if rowsP, perr := s.queries.JobsCollectionState(r.Context()); perr == nil {
 		for _, p := range rowsP {
 			pending[p.JobID] = p.Pending
+			healing[p.JobID] = p.Healing
 		}
 	}
 	out := make([]scanJobDTO, 0, len(rows))
@@ -1688,7 +1701,8 @@ func (s *Server) listDiscoveryJobs(w http.ResponseWriter, r *http.Request) {
 		d.Targets = spec.Targets
 		d.Scope = scanScopeLabel(j, spec)
 		d.CollectingPending = pending[j.ID]
-		d.Phase = scanPhase(j.Status, d.CollectingPending)
+		d.SelfHealing = healing[j.ID]
+		d.Phase = scanPhase(j.Status, d.CollectingPending, d.SelfHealing)
 		out = append(out, d)
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -1830,8 +1844,11 @@ func (s *Server) getDiscoveryJob(w http.ResponseWriter, r *http.Request) {
 			"settled": collectionPending == 0,
 		}
 	}
-	// Honest end-to-end phase: "collecting" while deep collection drains, never a
-	// premature "complete" (single source of truth shared with the Scan Jobs list).
-	phase := scanPhase(job.Status, collectionPending)
+	// Honest end-to-end phase: "collecting" while collection drains, "self_healing" while
+	// terminal transient failures still await automatic re-collection (incl. the cooldown
+	// window), never a premature "complete". Single source of truth with the jobs list.
+	healing, _ := s.queries.CountSelfHealEligibleForJob(ctx, id)
+	phase := scanPhase(job.Status, collectionPending, healing)
+	collection["self_healing"] = healing
 	writeJSON(w, http.StatusOK, map[string]any{"job": job, "results": out, "counts": counts, "collection": collection, "phase": phase})
 }

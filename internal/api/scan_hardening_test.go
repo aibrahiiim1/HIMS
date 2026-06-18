@@ -234,6 +234,38 @@ func TestAgentPollBudgetRespectsCap(t *testing.T) {
 	}
 }
 
+// Layer 4 — honest scan phase. The UI must never show "complete" while any AUTOMATIC
+// collection remains: collecting while jobs are in flight, self_healing while terminal
+// transient failures still await automatic re-collection (incl. the cooldown window
+// where no job is in flight), complete only when both are zero.
+func TestScanPhaseHonesty(t *testing.T) {
+	cases := []struct {
+		status           string
+		pending, healing int64
+		want             string
+	}{
+		{"running", 0, 0, "discovering"},
+		{"running", 5, 0, "discovering"}, // probe phase dominates regardless of collection
+		{"completed", 9, 0, "collecting"},
+		{"completed", 0, 3, "self_healing"}, // cooldown window: no in-flight job but self-heal pending
+		{"completed", 2, 4, "collecting"},   // in-flight beats self-heal in label precedence
+		{"completed", 0, 0, "complete"},
+		{"failed", 0, 0, "failed"},
+		{"cancelled", 0, 0, "cancelled"},
+		{"pending", 0, 0, "queued"},
+	}
+	for _, c := range cases {
+		if got := scanPhase(c.status, c.pending, c.healing); got != c.want {
+			t.Errorf("scanPhase(%q, p=%d, h=%d) = %q, want %q", c.status, c.pending, c.healing, got, c.want)
+		}
+	}
+	// The critical gate: a "completed" probe phase with self-heal still eligible must
+	// NOT read as complete (the false-complete the operator must never see).
+	if scanPhase("completed", 0, 1) == "complete" {
+		t.Fatal("self-heal still eligible must never show phase=complete")
+	}
+}
+
 // Layer 2 — adaptive load governor. When load-induced transient backoff is high the
 // dispatch budget is clamped to a trickle (so concurrent WinRM negotiations drop and
 // listeners recover); when it is low the full in-flight budget is handed out. Never

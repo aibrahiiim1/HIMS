@@ -10,7 +10,7 @@ import { ClassificationEvidence } from '../components/ClassificationEvidence'
 import { EditDevice } from '../components/EditDevice'
 import { OnboardingActions, CollectedViaCell, CollectNowPanel, outcomeBadge, phaseMeta, duration } from './Discovery'
 
-type CollectionProgress = { queued: number; retry_waiting: number; running: number; done: number; failed: number; pending: number; settled: boolean }
+type CollectionProgress = { queued: number; retry_waiting: number; running: number; done: number; failed: number; pending: number; settled: boolean; self_healing?: number }
 type JobDetail = { job: DiscoveryJob; results: DiscoveryResult[]; counts?: ScanJobCounts; collection?: CollectionProgress; phase?: string }
 
 // Known-Device-Retry disposition → short badge label + tone. A known device that
@@ -227,10 +227,12 @@ export function ScanJobResults() {
           {/* Collection progress — deep OS collection runs ASYNC after discovery, so the
               job can be "completed" while devices are still being collected. Show it so the
               operator never reads the result as fully settled while the queue drains. */}
-          {collection && !collection.settled && (
+          {collection && (phase === 'collecting' || phase === 'self_healing') && (
             <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderLeft: '3px solid #d97706', borderRadius: 8, padding: '10px 14px', marginBottom: 12 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600 }}>
-                <RefreshCw size={14} /> {job.status === 'completed' ? 'Discovery complete · collecting' : 'Collecting'} {collection.pending}
+                <RefreshCw size={14} /> {phase === 'self_healing'
+                  ? `Discovery complete · self-heal pending ${collection.self_healing ?? 0}`
+                  : `${job.status === 'completed' ? 'Discovery complete · collecting' : 'Collecting'} ${collection.pending}`}
               </div>
               <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 6, fontSize: 13, color: 'var(--text-muted)' }}>
                 <span>Queued {collection.queued}</span>
@@ -238,11 +240,16 @@ export function ScanJobResults() {
                 <span>Retry-waiting {collection.retry_waiting}</span>
                 <span>Done {collection.done}</span>
                 <span>Failed {collection.failed}</span>
+                {(collection.self_healing ?? 0) > 0 && <span>Self-heal eligible {collection.self_healing}</span>}
               </div>
-              <div style={{ marginTop: 6, fontSize: 12, color: 'var(--text-muted)' }}>Deep OS collection runs after discovery via the site relay agent — the managed count may still be increasing.</div>
+              <div style={{ marginTop: 6, fontSize: 12, color: 'var(--text-muted)' }}>
+                {phase === 'self_healing'
+                  ? 'Transient collection failures are awaiting automatic self-heal (re-collected after a short cooldown) — not yet settled.'
+                  : 'Deep OS collection runs after discovery via the site relay agent — the managed count may still be increasing.'}
+              </div>
             </div>
           )}
-          {collection && collection.settled && collection.done + collection.failed > 0 && (
+          {collection && phase === 'complete' && collection.done + collection.failed > 0 && (
             <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>✓ Collection settled — {collection.done} collected{collection.failed > 0 ? `, ${collection.failed} failed` : ''}.</div>
           )}
           {/* A. Scan stability — separated, honest counts (NOT a stable inventory total). */}

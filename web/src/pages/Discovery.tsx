@@ -34,6 +34,7 @@ export const phaseMeta = (p?: string): { tone: string; label: string } => {
     case 'queued': return { tone: 'unknown', label: 'Queued' }
     case 'discovering': return { tone: 'warning', label: 'Discovering' }
     case 'collecting': return { tone: 'access', label: 'Collecting' }
+    case 'self_healing': return { tone: 'warning', label: 'Self-heal' }
     case 'complete': return { tone: 'up', label: 'Complete' }
     case 'failed': return { tone: 'down', label: 'Failed' }
     case 'cancelled': return { tone: 'down', label: 'Cancelled' }

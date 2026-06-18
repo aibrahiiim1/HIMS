@@ -161,23 +161,63 @@ FROM agent_jobs ORDER BY created_at DESC LIMIT $1;
 -- Failed jobs for one agent (for the agent detail page + Data Quality count).
 SELECT count(*) FROM agent_jobs WHERE agent_id = $1 AND status = 'failed';
 
--- name: JobsWithPendingCollection :many
--- Discovery jobs that still have collect_os jobs in flight (queued or dispatched) for
--- the devices they enrolled — lets the Scan Jobs LIST show an honest "collecting"
--- phase instead of a premature "completed" while deep collection drains. Each in-flight
--- collection is attributed to the device's MOST RECENT scan job (a device has one row,
--- reconciled by IP across re-scans), so an old job never shows "collecting". Returns
--- only jobs with pending > 0 (small result set).
+-- name: JobsCollectionState :many
+-- Per discovery job: how many of its devices still have a collect_os job IN FLIGHT
+-- (pending) and how many are still ELIGIBLE for automatic self-heal (healing). A job is
+-- NOT fully settled while either is > 0 — so the Scan Jobs LIST shows "collecting" or
+-- "self-heal" instead of a premature "complete", honestly reflecting that the self-heal
+-- sweep will still re-collect terminal transient failures. Each device is attributed to
+-- its MOST RECENT scan job (a device has one row, reconciled by IP across re-scans).
+-- Self-heal eligible = latest collect_os job failed with a load-induced transient
+-- category, no os_inventory evidence, and the 4-round/24h budget is not yet burned
+-- (mirrors ListSelfHealCandidates without the cooldown — the job is unsettled for the
+-- whole window, not only after the cooldown elapses). Returns only unsettled jobs.
 WITH latest_result AS (
   SELECT DISTINCT ON (device_id) device_id, job_id
   FROM discovery_results WHERE device_id IS NOT NULL
   ORDER BY device_id, probed_at DESC
+),
+latest_job AS (
+  SELECT DISTINCT ON (device_id) device_id, status, category
+  FROM agent_jobs WHERE kind = 'collect_os' AND device_id IS NOT NULL
+  ORDER BY device_id, created_at DESC
+),
+per_dev AS (
+  SELECT lr.job_id,
+    (lj.status IN ('queued', 'dispatched')) AS in_flight,
+    (lj.status = 'failed'
+       AND lj.category IN ('winrm_negotiate_error', 'winrm_connect_timeout', 'agent_no_result')
+       AND NOT EXISTS (SELECT 1 FROM os_inventory oi WHERE oi.device_id = lr.device_id AND oi.collection_method <> '')
+       AND (SELECT count(*) FROM agent_jobs a2 WHERE a2.device_id = lr.device_id AND a2.kind = 'collect_os'
+              AND a2.status = 'failed' AND a2.finished_at > now() - interval '24 hours') < 4
+    ) AS healing
+  FROM latest_result lr
+  JOIN latest_job lj ON lj.device_id = lr.device_id
 )
-SELECT lr.job_id, count(*)::bigint AS pending
-FROM agent_jobs aj
-JOIN latest_result lr ON lr.device_id = aj.device_id
-WHERE aj.kind = 'collect_os' AND aj.status IN ('queued', 'dispatched')
-GROUP BY lr.job_id;
+SELECT job_id,
+  count(*) FILTER (WHERE in_flight)::bigint AS pending,
+  count(*) FILTER (WHERE healing)::bigint   AS healing
+FROM per_dev
+GROUP BY job_id
+HAVING count(*) FILTER (WHERE in_flight) > 0 OR count(*) FILTER (WHERE healing) > 0;
+
+-- name: CountSelfHealEligibleForJob :one
+-- Count of a job's enrolled devices still eligible for automatic self-heal (terminal
+-- load-induced transient failure, no evidence, round budget remaining). Drives the
+-- job-detail phase: > 0 keeps the job "self-heal" (not "complete") even while no
+-- collect_os job is in flight (the self-heal cooldown window).
+WITH latest_job AS (
+  SELECT DISTINCT ON (device_id) device_id, status, category
+  FROM agent_jobs WHERE kind = 'collect_os' AND device_id IS NOT NULL
+  ORDER BY device_id, created_at DESC
+)
+SELECT count(*)::bigint FROM latest_job lj
+WHERE lj.device_id IN (SELECT device_id FROM discovery_results WHERE job_id = $1 AND device_id IS NOT NULL)
+  AND lj.status = 'failed'
+  AND lj.category IN ('winrm_negotiate_error', 'winrm_connect_timeout', 'agent_no_result')
+  AND NOT EXISTS (SELECT 1 FROM os_inventory oi WHERE oi.device_id = lj.device_id AND oi.collection_method <> '')
+  AND (SELECT count(*) FROM agent_jobs a2 WHERE a2.device_id = lj.device_id AND a2.kind = 'collect_os'
+         AND a2.status = 'failed' AND a2.finished_at > now() - interval '24 hours') < 4;
 
 -- name: CountAgentLoadBackoff :one
 -- Count of this agent's collect_os jobs currently waiting on a LOAD-INDUCED transient

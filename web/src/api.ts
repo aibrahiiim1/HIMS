@@ -841,6 +841,7 @@ export interface DiscoveryJob {
   // phase stays 'collecting' until deep OS collection settles (never a premature complete).
   phase?: string
   collecting_pending?: number // collect_os jobs still in flight for this job's devices
+  self_healing?: number // terminal transient failures still eligible for automatic self-heal
 }
 
 export interface ScanCredAttempt { kind: string; protocol: string; category: string; detail: string; success: boolean; relevant?: boolean }

@@ -100,6 +100,11 @@ type Querier interface {
 	CountOpenAlerts(ctx context.Context) (int64, error)
 	CountOpenWorkOrders(ctx context.Context) (int64, error)
 	CountSSHCliBySource(ctx context.Context, deviceID uuid.UUID) ([]CountSSHCliBySourceRow, error)
+	// Count of a job's enrolled devices still eligible for automatic self-heal (terminal
+	// load-induced transient failure, no evidence, round budget remaining). Drives the
+	// job-detail phase: > 0 keeps the job "self-heal" (not "complete") even while no
+	// collect_os job is in flight (the self-heal cooldown window).
+	CountSelfHealEligibleForJob(ctx context.Context, jobID uuid.UUID) (int64, error)
 	// Blobs sealed under a key id other than the one currently loaded.
 	CountUndecryptableCredentials(ctx context.Context, keyID string) (int64, error)
 	CountUsersWithPassword(ctx context.Context) (int64, error)
@@ -350,13 +355,17 @@ type Querier interface {
 	// (channel, alert) a no-op, so RETURNING yields a row only on a real insert.
 	InsertNotificationLog(ctx context.Context, arg InsertNotificationLogParams) (NotificationLog, error)
 	InsertWirelessEvent(ctx context.Context, arg InsertWirelessEventParams) error
-	// Discovery jobs that still have collect_os jobs in flight (queued or dispatched) for
-	// the devices they enrolled — lets the Scan Jobs LIST show an honest "collecting"
-	// phase instead of a premature "completed" while deep collection drains. Each in-flight
-	// collection is attributed to the device's MOST RECENT scan job (a device has one row,
-	// reconciled by IP across re-scans), so an old job never shows "collecting". Returns
-	// only jobs with pending > 0 (small result set).
-	JobsWithPendingCollection(ctx context.Context) ([]JobsWithPendingCollectionRow, error)
+	// Per discovery job: how many of its devices still have a collect_os job IN FLIGHT
+	// (pending) and how many are still ELIGIBLE for automatic self-heal (healing). A job is
+	// NOT fully settled while either is > 0 — so the Scan Jobs LIST shows "collecting" or
+	// "self-heal" instead of a premature "complete", honestly reflecting that the self-heal
+	// sweep will still re-collect terminal transient failures. Each device is attributed to
+	// its MOST RECENT scan job (a device has one row, reconciled by IP across re-scans).
+	// Self-heal eligible = latest collect_os job failed with a load-induced transient
+	// category, no os_inventory evidence, and the 4-round/24h budget is not yet burned
+	// (mirrors ListSelfHealCandidates without the cooldown — the job is unsettled for the
+	// whole window, not only after the cooldown elapses). Returns only unsettled jobs.
+	JobsCollectionState(ctx context.Context) ([]JobsCollectionStateRow, error)
 	LastSuccessfulBackup(ctx context.Context) (BackupRun, error)
 	// The most recent ONVIF/ISAPI credential-test outcome for a device — the CCTV
 	// fleet skip-guard reads this to avoid re-attempting a device that recently
