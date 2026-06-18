@@ -370,14 +370,26 @@ func agentJobRetryable(category string) bool {
 
 // agentRetryBackoff returns the wait before re-dispatching a transiently-failed
 // job, growing with the attempt number to ease pressure on a saturated agent.
+//
+// The schedule is deliberately long-tailed so the LAST retry of the default
+// 5-attempt envelope (see migration 000081) lands ~17.5 min after the first failure
+// (cumulative 30s + 2m + 5m + 10m). A from-zero subnet collection storm drains in
+// ~12 min; load-induced WinRM failures (winrm_negotiate_error / winrm_connect_timeout)
+// are caused BY that load, so an early-storm host must still have a retry left once
+// the storm clears — otherwise it strands as collection_failed despite being
+// reachable with correct creds (the 172.21.60.106/.119 from-zero gate failure). The
+// growing delay also de-correlates retries from the storm peak, easing the very load
+// that produced the transient 401.
 func agentRetryBackoff(attempt int) time.Duration {
 	switch attempt {
 	case 0:
 		return 30 * time.Second
 	case 1:
 		return 2 * time.Minute
-	default:
+	case 2:
 		return 5 * time.Minute
+	default:
+		return 10 * time.Minute
 	}
 }
 

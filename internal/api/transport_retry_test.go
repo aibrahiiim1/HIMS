@@ -2,6 +2,7 @@ package api
 
 import (
 	"testing"
+	"time"
 
 	"github.com/coralsearesorts/hims/internal/osinv"
 	"github.com/google/uuid"
@@ -70,6 +71,32 @@ func TestTransport_WinRMTimeoutExhaustedIsCollectionFailed(t *testing.T) {
 	}
 	if st == MgmtCredentialFailed {
 		t.Fatal("exhausted transport timeout must never be credential_failed")
+	}
+}
+
+//  8. The retry envelope must OUTLAST a from-zero collection storm. A load-induced
+//     transient (winrm_negotiate_error / winrm_connect_timeout) is caused by the storm
+//     itself; if every retry of the default 5-attempt budget fires while the storm is
+//     still at peak (a ~12-min drain), the host goes terminal collection_failed with no
+//     post-storm attempt — the 172.21.60.106/.119 gate failure. Assert the cumulative
+//     backoff across the 4 retries of a 5-attempt job pushes the final attempt well
+//     past a typical drain, AND that each step is monotonically non-decreasing.
+func TestTransport_RetryEnvelopeOutlastsStorm(t *testing.T) {
+	const maxAttempts = 5 // migration 000081 default
+	var cumulative time.Duration
+	var prev time.Duration
+	// Retries happen after attempts 0..maxAttempts-2 (the final attempt is terminal).
+	for attempt := 0; attempt < maxAttempts-1; attempt++ {
+		b := agentRetryBackoff(attempt)
+		if b < prev {
+			t.Fatalf("backoff must be monotonically non-decreasing: attempt %d = %s < prev %s", attempt, b, prev)
+		}
+		prev = b
+		cumulative += b
+	}
+	// A from-zero subnet drain is ~12 min; the last retry must land clearly past it.
+	if cumulative < 15*time.Minute {
+		t.Fatalf("retry envelope too short to outlast a from-zero storm: cumulative %s, want >= 15m", cumulative)
 	}
 }
 
