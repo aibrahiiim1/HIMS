@@ -5,29 +5,42 @@
 > `172.21.60.0/24` fresh-discovery acceptance (from-zero #6, 83/83 managed).
 >
 > **Core principles (read first):**
-> 1. **WinRM negotiation failures are treated as transient unless proven otherwise.**
-> 2. **No single WinRM 401 / "invalid content type" pattern is terminal by itself.**
-> 3. **Governed retry + WMI/DCOM fallback + self-heal decide the final state.**
-> 4. **"Host-policy-blocked" is an operator-facing diagnosis only AFTER every automatic
->    option is exhausted** — never a premature terminal classification.
+> 1. **Try EVERY applicable credential before failing a host.** The candidate loop only
+>    stops early on a SILENT WinRM listener (connect-timeout); a negotiate-error never
+>    abandons the remaining credentials. ("Given the credentials, connect any way.")
+> 2. **Drive the OS-native remoting stack first** (PowerShell Remoting), not the
+>    third-party Go WinRM library — Microsoft's client negotiates robustly under load.
+> 3. **WinRM negotiation failures are transient unless proven otherwise**; no single
+>    WinRM 401 / "invalid content type" pattern is terminal by itself.
+> 4. **Governed retry + WMI/DCOM fallback + self-heal decide the final state**, across
+>    all credentials and transports; "host-policy-blocked" is an operator diagnosis only
+>    AFTER every automatic option (every cred × every transport) is exhausted.
+>
+> **⚠️ Correction (2026-06-18):** an earlier revision of this doc claimed `.106`/`.119`
+> were a "storm-induced load-transient." That was WRONG. A real hotel-subnets scan proved
+> the true root cause: the candidate-credential loop **broke on the first WinRM transient**,
+> so after the LOCAL admin `.\administrator` was UAC-denied, the agent never advanced to
+> the authorized `dpm` DOMAIN credential. No host-side change was ever needed. See §7.
 
 ---
 
 ## 1. The Windows collection ladder (relay agent)
 
 The API service runs as LocalSystem and cannot authenticate to domain Windows hosts, so
-Windows collection is routed to the in-domain **relay agent**, which runs a multi-rung
-ladder per candidate credential and stops at the first success (`cmd/hims-agent`):
+Windows collection is routed to the in-domain **relay agent**. For EACH candidate
+credential the agent runs a multi-rung transport ladder and stops at the first success;
+it advances to the next candidate unless the listener is silent (`cmd/hims-agent`):
 
-1. **WinRM command shell** (`collectWinRM`, Go `masterzen/winrm` + `go-ntlmssp`).
-   NTLM/Negotiate over HTTP/5985 **with WSMan message encryption** (`AllowUnencrypted`
-   is *not* used — the payload is NTLM-sealed). `Get-CimInstance`/registry reads run
-   locally inside the shell, so a **local-admin** account succeeds where remote WMI is
-   UAC-blocked. Writes `collection_method = winrm-agent`.
-2. **WMI / DCOM** (`collectWMI`, PowerShell `Get-WmiObject` over RPC/135). Fallback for
-   hosts with WinRM unusable but DCOM open. Writes `collection_method = wmi`.
-   - Internally this rung *also* falls back to a **WSMan CIM session** (`New-CimSession`)
-     when DCOM (`Get-WmiObject`) throws — same classes over a different transport.
+0. **Native PowerShell Remoting** (`collectWinRMNative`, agent v1.2.6) — **the primary
+   rung**. Uses Windows' OWN WinRM/PSRP client (`New-PSSession` + `Invoke-Command`,
+   Negotiate auth), not the Go library: Microsoft's client does NTLM/Kerberos (SPNEGO) +
+   WSMan message-encryption negotiation correctly and does NOT emit "401 invalid content
+   type" under scan-storm load. The inventory script runs LOCALLY in the remote runspace
+   (full token), bypassing the UAC remote-token filter. Writes `winrm-native`.
+1. **Go WinRM command shell** (`collectWinRM`, `masterzen/winrm` + `go-ntlmssp`) — kept as
+   a fallback (e.g. PowerShell/PSRP unavailable on the agent host). Writes `winrm-agent`.
+2. **WMI / DCOM** (`collectWMI`, `Get-WmiObject` over RPC/135) — for hosts with WinRM
+   unusable but DCOM open; internally also tries a **WSMan CIM session**. Writes `wmi`.
 
 **Short-circuit rule (`winRMShortCircuitsWMI`):** only a clean **`auth_failed`** stops
 the ladder before WMI (the same credential would be rejected over DCOM too, and a second
@@ -166,12 +179,40 @@ all 0, stable for two checks (~56 min). Gate hosts `.49`/`.50` (winrm-agent), `.
 instability; no host-side change was made — they collect automatically under the governed
 pipeline, proving the reliability model fixed the issue.
 
-### Future enhancement (not built — gated on need)
-WinRM message encryption already exists in the client, so there is no encryption gap. If a
-host is ever found to *genuinely* refuse all transports after the full automatic budget is
-exhausted (confirmed by stable host probes), the operator-facing options are: enable WinRM
-HTTPS/5986, set `LocalAccountTokenFilterPolicy` for remote local-admin WMI, or supply a
-policy-allowed credential. A dedicated post-exhaustion "host-policy-blocked" diagnosis
-(only after retry + self-heal are spent, confirmed by probes) could be added if such hosts
-prove common — but per the #6 evidence, the load-induced transient case must not be
-classified terminal up front.
+---
+
+## 7. The `.106`/`.119` resolution — true root cause (supersedes the #6 narrative)
+
+A subsequent **real hotel-subnets scan** (1500+ hosts) showed `.106`/`.119` failing again —
+proving the #6 "all managed" was a low-load fluke and the "load-transient" story was wrong.
+Live forensics pinned the actual cause:
+
+- The discovery candidate list for these hosts is `[.\administrator (local), dpm@…
+  (domain)]`. `.\administrator` is a **local** admin → remote WinRM/WMI is **UAC
+  token-filtered** → `winrm_negotiate_error` (Go lib) / **"Access is denied"** (native
+  PSRP and `New-CimSession` alike). The **`dpm` DOMAIN credential is authorized** and
+  collects them.
+- **The bug:** the agent's candidate-credential loop **broke on the first WinRM transient**
+  (`.\administrator`'s `negotiate_error`), so it **never tried the `dpm` domain credential**.
+  The engine gave up before trying a credential the operator had provided.
+
+**Fixes (both general, network-agnostic):**
+- **v1.2.6** — native PowerShell Remoting as the primary rung (robust negotiation; in-
+  session local exec bypasses UAC). Removes the Go-lib "401 invalid content type"
+  fragility as the primary path.
+- **v1.2.7** — the candidate loop now tries **every** applicable credential; it stops early
+  only on a SILENT listener (`connect_timeout`), never on a `negotiate_error` (where the
+  next credential may be the one that works).
+
+**Verified:** with both fixes, `.106` → managed via `winrm-native`, `.119` → via `wmi`,
+both on the **`dpm` domain credential** (`.\administrator` correctly recorded as a failed
+attempt). This is the durable answer to "given the credentials, connect any way": the
+engine attempts every credential over every transport before a host is marked failed —
+on this or any other network.
+
+### Residual / future (gated on need)
+"Host-policy-blocked" remains an operator diagnosis **only after every credential × every
+transport is exhausted** (never a premature terminal). A local-admin host with no working
+domain credential and UAC filtering still needs an operator action (set
+`LocalAccountTokenFilterPolicy`, or provide a host-authorized credential) — but HIMS will
+have honestly tried everything first.
