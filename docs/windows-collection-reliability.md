@@ -183,6 +183,13 @@ pipeline, proving the reliability model fixed the issue.
 
 ## 7. The `.106`/`.119` resolution — true root cause (supersedes the #6 narrative)
 
+> **FINAL ROOT CAUSE (authoritative):** The issue was not primarily a fixed host-policy
+> block or only load-transient WinRM instability. The durable bug was that the relay agent
+> stopped after the first failed candidate credential/path and did not continue to the next
+> authorized credential. The correct model is: try every applicable scoped credential
+> across the supported Windows transport ladder, then derive final state from the full
+> attempt set plus durable success evidence.
+
 A subsequent **real hotel-subnets scan** (1500+ hosts) showed `.106`/`.119` failing again —
 proving the #6 "all managed" was a low-load fluke and the "load-transient" story was wrong.
 Live forensics pinned the actual cause:
