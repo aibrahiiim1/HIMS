@@ -160,3 +160,51 @@ FROM agent_jobs ORDER BY created_at DESC LIMIT $1;
 -- name: CountFailedAgentJobs :one
 -- Failed jobs for one agent (for the agent detail page + Data Quality count).
 SELECT count(*) FROM agent_jobs WHERE agent_id = $1 AND status = 'failed';
+
+-- name: CountAgentLoadBackoff :one
+-- Count of this agent's collect_os jobs currently waiting on a LOAD-INDUCED transient
+-- backoff (winrm negotiate / connect-timeout requeued, next_attempt_at in the future).
+-- A high count means the agent's WinRM listeners are saturated under a from-zero
+-- storm; the dispatcher uses it to throttle new work (shrink the poll budget) so the
+-- listeners recover instead of being fed more concurrent negotiations. As the backoff
+-- queue drains the count falls and the budget reopens — a self-regulating governor.
+SELECT count(*) FROM agent_jobs
+WHERE agent_id = $1 AND kind = 'collect_os' AND status = 'queued'
+  AND next_attempt_at > now()
+  AND category IN ('winrm_negotiate_error', 'winrm_connect_timeout');
+
+-- name: ListSelfHealCandidates :many
+-- Devices stranded in a TERMINAL transient collect_os failure that should be
+-- automatically re-collected once the storm that caused it has passed. A candidate's
+-- latest collect_os job failed with a load-induced transient category, it has no
+-- os_inventory evidence (was never successfully collected), no collect_os job is in
+-- flight, the failure is older than the cooldown ($1 minutes), and it has not already
+-- burned the self-heal round budget ($2 = max failed transient jobs in the last 24h).
+-- Auth/authz failures are EXCLUDED (operator must fix the credential) — self-heal
+-- never re-sprays a rejected credential or loops forever on a genuinely broken host.
+WITH latest AS (
+  SELECT DISTINCT ON (device_id) device_id, status, category, finished_at
+  FROM agent_jobs
+  WHERE kind = 'collect_os' AND device_id IS NOT NULL
+  ORDER BY device_id, created_at DESC
+)
+SELECT d.id, host(d.primary_ip)::text AS ip
+FROM devices d
+JOIN latest l ON l.device_id = d.id
+WHERE d.deleted_at IS NULL
+  AND l.status = 'failed'
+  AND l.category IN ('winrm_negotiate_error', 'winrm_connect_timeout', 'agent_no_result')
+  AND l.finished_at < now() - make_interval(mins => $1::int)
+  AND NOT EXISTS (
+    SELECT 1 FROM os_inventory oi WHERE oi.device_id = d.id AND oi.collection_method <> ''
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM agent_jobs aj WHERE aj.device_id = d.id AND aj.kind = 'collect_os'
+      AND aj.status IN ('queued', 'dispatched')
+  )
+  AND (
+    SELECT count(*) FROM agent_jobs aj2 WHERE aj2.device_id = d.id AND aj2.kind = 'collect_os'
+      AND aj2.status = 'failed' AND aj2.finished_at > now() - interval '24 hours'
+  ) < $2::int
+ORDER BY l.finished_at
+LIMIT 50;

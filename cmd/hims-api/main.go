@@ -219,6 +219,10 @@ func run(ctx context.Context, serviceMode, logPath string) error {
 	// mid-collection) so they never wedge the per-agent dispatch budget or block
 	// re-enqueue. Runs on startup, then every 2 minutes.
 	srv.StartAgentJobReaper(ctx, 2*time.Minute)
+	// Self-heal: re-collect hosts left in a terminal TRANSIENT collection failure once
+	// the storm that caused it has passed (never auth failures, never already-managed
+	// hosts, bounded rounds). Runs on startup, then every 5 minutes.
+	srv.StartCollectionSelfHeal(ctx, 5*time.Minute)
 	if err := srv.BootstrapAdmin(ctx, os.Getenv("HIMS_ADMIN_USER"), os.Getenv("HIMS_ADMIN_PASSWORD")); err != nil {
 		slog.Error("admin bootstrap failed", "error", err)
 	}

@@ -67,6 +67,13 @@ type Querier interface {
 	CountActiveDeviceAgentJobs(ctx context.Context, deviceID *uuid.UUID) (int64, error)
 	// Per-agent job rollup by status (queued / dispatched / done / failed).
 	CountAgentJobsByStatusForAgent(ctx context.Context, agentID uuid.UUID) ([]CountAgentJobsByStatusForAgentRow, error)
+	// Count of this agent's collect_os jobs currently waiting on a LOAD-INDUCED transient
+	// backoff (winrm negotiate / connect-timeout requeued, next_attempt_at in the future).
+	// A high count means the agent's WinRM listeners are saturated under a from-zero
+	// storm; the dispatcher uses it to throttle new work (shrink the poll budget) so the
+	// listeners recover instead of being fed more concurrent negotiations. As the backoff
+	// queue drains the count falls and the budget reopens — a self-regulating governor.
+	CountAgentLoadBackoff(ctx context.Context, agentID uuid.UUID) (int64, error)
 	// Overview KPIs: total versions, distinct devices backed up, and changes today.
 	CountConfigBackupStats(ctx context.Context) (CountConfigBackupStatsRow, error)
 	CountCredentialsNeedingReentry(ctx context.Context) (int64, error)
@@ -528,6 +535,15 @@ type Querier interface {
 	// without re-probing. Only the identity keys, not the full fact set.
 	ListSNMPIdentityFacts(ctx context.Context) ([]ListSNMPIdentityFactsRow, error)
 	ListSSHCliResults(ctx context.Context, deviceID uuid.UUID) ([]SshCliResult, error)
+	// Devices stranded in a TERMINAL transient collect_os failure that should be
+	// automatically re-collected once the storm that caused it has passed. A candidate's
+	// latest collect_os job failed with a load-induced transient category, it has no
+	// os_inventory evidence (was never successfully collected), no collect_os job is in
+	// flight, the failure is older than the cooldown ($1 minutes), and it has not already
+	// burned the self-heal round budget ($2 = max failed transient jobs in the last 24h).
+	// Auth/authz failures are EXCLUDED (operator must fix the credential) — self-heal
+	// never re-sprays a rejected credential or loops forever on a genuinely broken host.
+	ListSelfHealCandidates(ctx context.Context, arg ListSelfHealCandidatesParams) ([]ListSelfHealCandidatesRow, error)
 	// (channel_id, alert_id) pairs already delivered, so the dispatcher skips them.
 	ListSentNotificationPairs(ctx context.Context) ([]ListSentNotificationPairsRow, error)
 	ListServerStorage(ctx context.Context, deviceID uuid.UUID) ([]ServerStorage, error)

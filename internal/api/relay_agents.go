@@ -356,6 +356,34 @@ func agentPollBudget(inflight int) int {
 	return 0
 }
 
+// Adaptive load governor. The fixed dispatch cap bounds peak concurrency, but under a
+// large full-subnet scan even that ceiling of concurrent WinRM negotiations can
+// saturate weak listeners and produce load-induced transient 401s / connect timeouts
+// (the storm). When many of an agent's jobs are bouncing on that transient backoff,
+// feeding it MORE concurrent work makes the storm worse. So when the load-backoff
+// signal crosses a threshold, the governor trickles new work (a small throttled
+// budget) until the listeners recover and the backoff queue drains — then it reopens
+// to the full cap. This regulates pressure at the source instead of only retrying
+// after the damage; it composes with the retry envelope + self-heal.
+var (
+	// agentLoadThrottleAt: load-backoff count at/above which dispatch is throttled.
+	agentLoadThrottleAt = maxInt(3, agentDispatchCap/2)
+	// agentThrottledBudget: the trickle budget while throttled (still makes forward
+	// progress, but few enough concurrent negotiations for listeners to recover).
+	agentThrottledBudget = maxInt(2, agentDispatchCap/4)
+)
+
+// agentPollBudgetAdaptive applies the load governor on top of the in-flight budget:
+// when loadBackoff (jobs waiting on load-induced transient backoff) is high, clamp the
+// budget to a trickle so the agent's WinRM listeners can recover.
+func agentPollBudgetAdaptive(inflight, loadBackoff int) int {
+	budget := agentPollBudget(inflight)
+	if budget > agentThrottledBudget && loadBackoff >= agentLoadThrottleAt {
+		return agentThrottledBudget
+	}
+	return budget
+}
+
 // agentJobRetryable reports whether a failed collect job should be retried. Auth
 // and authorization rejections are terminal (the same credential keeps being
 // rejected); connection/timeout/RPC/WMI/transient errors are worth a bounded retry.
@@ -409,7 +437,11 @@ func (s *Server) agentPollJobs(w http.ResponseWriter, r *http.Request) {
 	// batches — this is the throttle that prevents the thundering herd. The reaper
 	// (RequeueStaleAgentJobs) frees the budget if an agent dies holding jobs.
 	inflight, _ := s.queries.CountDispatchedAgentJobs(r.Context(), a.ID)
-	budget := agentPollBudget(int(inflight))
+	// Load governor: throttle to a trickle when many of this agent's jobs are bouncing
+	// on load-induced transient backoff (the storm is saturating its WinRM listeners),
+	// then reopen to the full cap as that backoff queue drains.
+	loadBackoff, _ := s.queries.CountAgentLoadBackoff(r.Context(), a.ID)
+	budget := agentPollBudgetAdaptive(int(inflight), int(loadBackoff))
 	if budget <= 0 {
 		writeJSON(w, http.StatusOK, []agentJobOut{})
 		return

@@ -234,6 +234,37 @@ func TestAgentPollBudgetRespectsCap(t *testing.T) {
 	}
 }
 
+// Layer 2 — adaptive load governor. When load-induced transient backoff is high the
+// dispatch budget is clamped to a trickle (so concurrent WinRM negotiations drop and
+// listeners recover); when it is low the full in-flight budget is handed out. Never
+// negative, never above the cap.
+func TestAgentPollBudgetAdaptiveGovernor(t *testing.T) {
+	// Low backoff → identical to the plain in-flight budget (no throttle).
+	for inflight := 0; inflight <= agentDispatchCap; inflight++ {
+		if got, want := agentPollBudgetAdaptive(inflight, 0), agentPollBudget(inflight); got != want {
+			t.Errorf("no-load: adaptive(%d,0)=%d, want plain budget %d", inflight, got, want)
+		}
+	}
+	// High backoff with capacity free → clamped to the throttled trickle.
+	if got := agentPollBudgetAdaptive(0, agentLoadThrottleAt); got != agentThrottledBudget {
+		t.Errorf("storm with idle agent: adaptive(0,%d)=%d, want throttled %d", agentLoadThrottleAt, got, agentThrottledBudget)
+	}
+	// The governor never manufactures capacity: a full agent stays at 0 even under load.
+	if got := agentPollBudgetAdaptive(agentDispatchCap, agentLoadThrottleAt+10); got != 0 {
+		t.Errorf("full agent under load: adaptive=%d, want 0", got)
+	}
+	// Just below the throttle threshold → not throttled (full budget).
+	if agentLoadThrottleAt > 0 {
+		if got, want := agentPollBudgetAdaptive(0, agentLoadThrottleAt-1), agentPollBudget(0); got != want {
+			t.Errorf("below threshold: adaptive(0,%d)=%d, want %d", agentLoadThrottleAt-1, got, want)
+		}
+	}
+	// Throttled budget must be a real, bounded trickle.
+	if agentThrottledBudget < 1 || agentThrottledBudget > agentDispatchCap {
+		t.Errorf("agentThrottledBudget %d out of (0,%d]", agentThrottledBudget, agentDispatchCap)
+	}
+}
+
 // Class 12 — deriveManagement always returns a defined, non-empty state for every
 // representative input (a from-zero scan can never produce an "unknown reason").
 func TestDeriveManagementNeverEmpty(t *testing.T) {
