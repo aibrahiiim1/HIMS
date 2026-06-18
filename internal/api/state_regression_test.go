@@ -98,15 +98,17 @@ func TestRegression_TransientFailureAfterSuccessStaysManaged(t *testing.T) {
 	}
 }
 
-// 5) credential_failed only wins when there is NO success evidence at all.
+// 5) credential_failed only wins when a credential was CLEANLY rejected (wrong
+// username/password) and there is NO authenticated evidence at all. (access_denied is
+// "authenticated but not authorized" → not_authorized, covered separately.)
 func TestRegression_CredentialFailedOnlyWithoutEvidence(t *testing.T) {
 	id := uuid.New()
 	m := mgmtMaps(nil, map[uuid.UUID]*deviceTestStatus{
-		id: {tested: true, authFailed: true, failedKinds: map[string]bool{"wmi": true},
-			kindCategory: map[string]string{"wmi": "wmi_access_denied"}},
+		id: {tested: true, authFailed: true, failedKinds: map[string]bool{"winrm": true},
+			kindCategory: map[string]string{"winrm": "auth_failed"}},
 	})
 	if st, _ := m.deriveManagement(winEndpoint(id)); st != MgmtCredentialFailed {
-		t.Fatalf("no evidence + auth failure: got %s, want credential_failed", st)
+		t.Fatalf("no evidence + clean auth rejection: got %s, want credential_failed", st)
 	}
 }
 

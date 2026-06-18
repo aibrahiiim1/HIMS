@@ -11,15 +11,19 @@ import { ExportDevicesButton } from '../components/ExportDevicesButton'
 // Unmanaged = HIMS SEES the device (it's in inventory, often Online) but has NO
 // proven authenticated access/collection. Strict proven-only management model —
 // open ports never count. Distinct from Missing Classification (identity gap).
-const MGMT_STATES = ['unmanaged', 'credential_failed', 'needs_credential', 'needs_agent', 'agent_offline', 'collection_failed', 'partially_managed'] as const
+const MGMT_STATES = ['unmanaged', 'credential_failed', 'not_authorized', 'web_authenticated', 'needs_credential', 'needs_agent', 'agent_offline', 'collection_failed', 'partially_managed'] as const
 
-// next-action guidance per management state.
+// next-action guidance per management state. The remediation is class-specific — only a
+// TRUE credential_failed (every applicable credential cleanly rejected) says "fix the
+// rejected credential"; a host where a credential authenticated never does.
 const ACTION: Record<string, string> = {
   unmanaged: 'Bind & prove a credential, or assign an agent',
   needs_credential: 'Bind a credential for this device class, then test',
-  credential_failed: 'Fix the rejected credential (user/password) and re-test',
-  collection_failed: 'Credential bound but collection failed — re-test / fix access',
-  needs_agent: 'Install/assign a Relay Agent to the site (WMI/DCOM)',
+  credential_failed: 'Credential was rejected by the host (wrong username/password). Update or replace the credential.',
+  not_authorized: 'Credential authenticated but is NOT authorized on this host. Check local policy, UAC remote restrictions, WinRM/DCOM permissions or group membership, or use a credential authorized on this host — not a wrong password.',
+  web_authenticated: 'Web/identity credential works. Deep OS management is not available yet — add a Windows/Linux/SNMP management credential if deep inventory is required.',
+  collection_failed: 'Host/listener reachable issue or transient — credential not the cause. Check firewall/listener/power, then re-test.',
+  needs_agent: 'Credential authenticated but needs an agent/deep collector (legacy WSMan / WMI-DCOM). Install/assign a Relay Agent to the site.',
   agent_offline: "Bring the site's Relay Agent back online",
   partially_managed: 'Some methods work; add the missing one for full coverage',
 }

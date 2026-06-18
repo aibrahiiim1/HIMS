@@ -159,7 +159,7 @@ export interface Device {
   // "is it online" (monitoring); management is "can HIMS actually collect from it"
   // (proven working method) — never conflated, never inferred from open ports.
   reachability?: string // online | offline | warning | unknown
-  management?: string // managed | partially_managed | unmanaged | needs_credential | credential_failed | needs_agent | agent_offline | collection_failed
+  management?: string // managed | partially_managed | unmanaged | needs_credential | credential_failed | needs_agent | agent_offline | collection_failed | web_authenticated | not_authorized
   managed_by?: string[] // protocol tokens with a PROVEN working method
   previously_managed?: boolean // offline now, but has a working method on record
   // Operator-editable management attributes (Edit Device).
@@ -291,6 +291,12 @@ export const MGMT_BADGE: Record<string, { label: string; cls: string }> = {
   needs_agent: { label: 'Needs agent', cls: 'badge-warning' },
   agent_offline: { label: 'Agent offline', cls: 'badge-down' },
   collection_failed: { label: 'Collection failed', cls: 'badge-down' },
+  // A web/identity credential authenticated but no deep OS management exists — the
+  // credential WORKS, so this is NOT a credential failure.
+  web_authenticated: { label: 'Web authenticated', cls: 'badge-access' },
+  // A credential authenticated but the host denied access (UAC/policy) — valid credential,
+  // NOT a wrong password.
+  not_authorized: { label: 'Not authorized on host', cls: 'badge-warning' },
 }
 export function reachBadge(v?: string) { return REACH_BADGE[v ?? 'unknown'] ?? REACH_BADGE.unknown }
 export function mgmtBadge(v?: string) { return MGMT_BADGE[v ?? 'unmanaged'] ?? MGMT_BADGE.unmanaged }

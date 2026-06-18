@@ -388,14 +388,15 @@ func TestCategoryIsAuthFailure(t *testing.T) {
 	}
 }
 
-// Test: a device whose latest agent attempt was access-denied (all applicable
-// creds rejected) derives credential_failed, not collection_failed; a non-auth
-// (wmi_error) derives collection_failed. Mirrors deviceTestMap's authFailed wiring.
-func TestAccessDeniedDerivesCredentialFailed(t *testing.T) {
+// Test: classification of authenticated-but-denied vs wrong-password vs transport.
+// access_denied means the credential AUTHENTICATED but the host denied access (UAC /
+// DCOM / policy) → not_authorized (NOT credential_failed — it is not a wrong password).
+// A clean auth_failed → credential_failed. A non-auth wmi_error → collection_failed.
+func TestAccessDeniedDerivesNotAuthorized(t *testing.T) {
 	id := uuid.New()
 	mk := func(category string) *statusMaps {
 		return &statusMaps{
-			access: map[uuid.UUID]*deviceAccess{},
+			access: map[uuid.UUID]*deviceAccess{}, cred: map[uuid.UUID]credSignal{},
 			test: map[uuid.UUID]*deviceTestStatus{
 				id: {tested: true, authFailed: categoryIsAuthFailure(category),
 					failedKinds: map[string]bool{"wmi": true}, kindCategory: map[string]string{"wmi": category}},
@@ -404,8 +405,11 @@ func TestAccessDeniedDerivesCredentialFailed(t *testing.T) {
 		}
 	}
 	dev := db.Device{ID: id, OsFamily: "windows", Category: "endpoint"}
-	if st, _ := mk("wmi_access_denied").deriveManagement(dev); st != MgmtCredentialFailed {
-		t.Errorf("all-creds access_denied: got %s, want credential_failed", st)
+	if st, _ := mk("wmi_access_denied").deriveManagement(dev); st != MgmtNotAuthorized {
+		t.Errorf("all-creds access_denied: got %s, want not_authorized (authenticated, denied — not wrong password)", st)
+	}
+	if st, _ := mk("auth_failed").deriveManagement(dev); st != MgmtCredentialFailed {
+		t.Errorf("clean auth_failed: got %s, want credential_failed", st)
 	}
 	if st, _ := mk("wmi_error").deriveManagement(dev); st != MgmtCollectionFailed {
 		t.Errorf("non-auth wmi_error: got %s, want collection_failed", st)
