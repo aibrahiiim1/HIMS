@@ -1607,6 +1607,35 @@ type scanJobDTO struct {
 	Mode         string     `json:"mode"`
 	Targets      string     `json:"targets"`
 	Scope        string     `json:"scope"`
+	// Phase is the HONEST end-to-end state: a scan whose probe/enroll phase is
+	// 'completed' is reported as "collecting" (not "complete") while deep OS collection
+	// still drains async via the relay agent, and only "complete" once it settles.
+	Phase             string `json:"phase"`
+	CollectingPending int64  `json:"collecting_pending"`
+}
+
+// scanPhase derives the honest end-to-end scan phase from the probe-phase status and
+// the count of collect_os jobs still in flight for the job's devices. The DB `status`
+// only reflects the probe/enroll phase, which finishes BEFORE deep collection drains —
+// so the UI must show "collecting" until collection settles, never a premature
+// "complete". Single source of truth for the Scan Jobs list and the job detail header.
+func scanPhase(status string, collectionPending int64) string {
+	switch status {
+	case "pending":
+		return "queued"
+	case "running":
+		return "discovering"
+	case "failed":
+		return "failed"
+	case "cancelled":
+		return "cancelled"
+	case "completed", "":
+		if collectionPending > 0 {
+			return "collecting"
+		}
+		return "complete"
+	}
+	return status
 }
 
 // scanScopeLabel renders a human-readable "what was scanned" string from the
@@ -1632,6 +1661,14 @@ func (s *Server) listDiscoveryJobs(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	// One small query maps job_id → in-flight collection count so the list shows an
+	// honest "collecting" phase while deep collection drains after probe completion.
+	pending := map[uuid.UUID]int64{}
+	if rowsP, perr := s.queries.JobsWithPendingCollection(r.Context()); perr == nil {
+		for _, p := range rowsP {
+			pending[p.JobID] = p.Pending
+		}
+	}
 	out := make([]scanJobDTO, 0, len(rows))
 	for _, j := range rows {
 		d := scanJobDTO{
@@ -1650,6 +1687,8 @@ func (s *Server) listDiscoveryJobs(w http.ResponseWriter, r *http.Request) {
 		d.Mode = spec.Mode
 		d.Targets = spec.Targets
 		d.Scope = scanScopeLabel(j, spec)
+		d.CollectingPending = pending[j.ID]
+		d.Phase = scanPhase(j.Status, d.CollectingPending)
 		out = append(out, d)
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -1782,13 +1821,17 @@ func (s *Server) getDiscoveryJob(w http.ResponseWriter, r *http.Request) {
 	// operator-facing result is never shown as fully settled while collection drains:
 	// settled = queued + retry_waiting + running all 0.
 	collection := map[string]any{"queued": 0, "retry_waiting": 0, "running": 0, "done": 0, "failed": 0, "pending": 0, "settled": true}
+	var collectionPending int64
 	if cp, cerr := s.queries.CollectionProgressForJob(ctx, id); cerr == nil {
-		pending := cp.Queued + cp.RetryWaiting + cp.Running
+		collectionPending = cp.Queued + cp.RetryWaiting + cp.Running
 		collection = map[string]any{
 			"queued": cp.Queued, "retry_waiting": cp.RetryWaiting, "running": cp.Running,
-			"done": cp.Done, "failed": cp.Failed, "pending": pending,
-			"settled": pending == 0,
+			"done": cp.Done, "failed": cp.Failed, "pending": collectionPending,
+			"settled": collectionPending == 0,
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"job": job, "results": out, "counts": counts, "collection": collection})
+	// Honest end-to-end phase: "collecting" while deep collection drains, never a
+	// premature "complete" (single source of truth shared with the Scan Jobs list).
+	phase := scanPhase(job.Status, collectionPending)
+	writeJSON(w, http.StatusOK, map[string]any{"job": job, "results": out, "counts": counts, "collection": collection, "phase": phase})
 }

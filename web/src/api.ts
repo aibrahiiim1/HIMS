@@ -836,6 +836,11 @@ export interface DiscoveryJob {
   mode?: string // 'targets' | 'site_subnets' | ''
   targets?: string // raw target list (IP / range / CIDR / mixed) for target-mode scans
   scope?: string // human-readable scope label (targets || scope_cidr || 'site subnets' || 'import / manual')
+  // Honest end-to-end phase derived server-side: 'queued' | 'discovering' | 'collecting'
+  // | 'complete' | 'failed' | 'cancelled'. status only reflects the probe/enroll phase;
+  // phase stays 'collecting' until deep OS collection settles (never a premature complete).
+  phase?: string
+  collecting_pending?: number // collect_os jobs still in flight for this job's devices
 }
 
 export interface ScanCredAttempt { kind: string; protocol: string; category: string; detail: string; success: boolean; relevant?: boolean }

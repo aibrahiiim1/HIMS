@@ -161,6 +161,24 @@ FROM agent_jobs ORDER BY created_at DESC LIMIT $1;
 -- Failed jobs for one agent (for the agent detail page + Data Quality count).
 SELECT count(*) FROM agent_jobs WHERE agent_id = $1 AND status = 'failed';
 
+-- name: JobsWithPendingCollection :many
+-- Discovery jobs that still have collect_os jobs in flight (queued or dispatched) for
+-- the devices they enrolled — lets the Scan Jobs LIST show an honest "collecting"
+-- phase instead of a premature "completed" while deep collection drains. Each in-flight
+-- collection is attributed to the device's MOST RECENT scan job (a device has one row,
+-- reconciled by IP across re-scans), so an old job never shows "collecting". Returns
+-- only jobs with pending > 0 (small result set).
+WITH latest_result AS (
+  SELECT DISTINCT ON (device_id) device_id, job_id
+  FROM discovery_results WHERE device_id IS NOT NULL
+  ORDER BY device_id, probed_at DESC
+)
+SELECT lr.job_id, count(*)::bigint AS pending
+FROM agent_jobs aj
+JOIN latest_result lr ON lr.device_id = aj.device_id
+WHERE aj.kind = 'collect_os' AND aj.status IN ('queued', 'dispatched')
+GROUP BY lr.job_id;
+
 -- name: CountAgentLoadBackoff :one
 -- Count of this agent's collect_os jobs currently waiting on a LOAD-INDUCED transient
 -- backoff (winrm negotiate / connect-timeout requeued, next_attempt_at in the future).

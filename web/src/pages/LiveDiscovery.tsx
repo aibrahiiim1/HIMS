@@ -235,6 +235,16 @@ export function LiveDiscovery() {
         }
       }
     }
+    // 1.5) any IP currently emitting live SSE events (being probed RIGHT NOW) that has
+    //      no node yet — so a from-zero scan (no pre-existing device rows) still shows
+    //      every host as "probing" the moment work starts on it, instead of nothing
+    //      until each result row lands. Live nodes only while running; playback of a
+    //      finished job shows the persisted result rows, not ephemeral probe pulses.
+    if (running) {
+      for (const ip of liveByIP.keys()) {
+        if (!byIP.has(ip)) byIP.set(ip, deriveNode(ip, undefined, devByIP.get(ip), true))
+      }
+    }
     // 2) overlay result rows
     for (const r of results) {
       const d = r.device_id ? devMap.get(r.device_id) : devByIP.get(r.ip)
@@ -247,7 +257,7 @@ export function LiveDiscovery() {
       if (oa !== ob) return oa - ob
       return (ipToInt(a.ip) ?? 0) - (ipToInt(b.ip) ?? 0)
     })
-  }, [results, devices.data, devMap, devByIP, job, running])
+  }, [results, devices.data, devMap, devByIP, job, running, liveByIP])
 
   const counters = useMemo(() => {
     const c: Record<string, number> = { total: nodes.length, probing: 0, online: 0, managed: 0, unmanaged: 0, credFail: 0, needsAgent: 0, missed: 0 }

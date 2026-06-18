@@ -8,10 +8,10 @@ import { PageHeader, Panel, Kpi, EmptyState, ProgressBar, timeAgo } from '../com
 import { ReachabilityBadge, ManagementBadge } from '../components/StatusBadges'
 import { ClassificationEvidence } from '../components/ClassificationEvidence'
 import { EditDevice } from '../components/EditDevice'
-import { OnboardingActions, CollectedViaCell, CollectNowPanel, outcomeBadge, duration } from './Discovery'
+import { OnboardingActions, CollectedViaCell, CollectNowPanel, outcomeBadge, phaseMeta, duration } from './Discovery'
 
 type CollectionProgress = { queued: number; retry_waiting: number; running: number; done: number; failed: number; pending: number; settled: boolean }
-type JobDetail = { job: DiscoveryJob; results: DiscoveryResult[]; counts?: ScanJobCounts; collection?: CollectionProgress }
+type JobDetail = { job: DiscoveryJob; results: DiscoveryResult[]; counts?: ScanJobCounts; collection?: CollectionProgress; phase?: string }
 
 // Known-Device-Retry disposition → short badge label + tone. A known device that
 // the sweep missed never disappears: it shows as "Missed this run".
@@ -138,6 +138,7 @@ export function ScanJobResults() {
   const results = detail.data?.results ?? []
   const counts = detail.data?.counts
   const collection = detail.data?.collection
+  const phase = detail.data?.phase ?? (job ? job.status : undefined)
   const dev = (r: DiscoveryResult) => (r.device_id ? devMap.get(r.device_id) : undefined)
 
   // KPI rollup (joined to the live device for reachability/management).
@@ -204,7 +205,7 @@ export function ScanJobResults() {
   return (
     <div>
       <PageHeader title="Scan Job Results" icon={Radar}
-        subtitle={job ? `${job.scope_cidr ?? 'import'} · ${job.status}${collection && !collection.settled ? ` · collecting ${collection.pending}` : ''}${job.location_id ? ' · ' + (locPath[job.location_id] ?? '') : ''}` : 'Loading…'}
+        subtitle={job ? `${job.scope_cidr ?? 'import'} · ${phaseMeta(phase).label}${phase === 'collecting' && collection ? ` ${collection.pending}` : ''}${job.location_id ? ' · ' + (locPath[job.location_id] ?? '') : ''}` : 'Loading…'}
         actions={<>
           <Link className="btn btn-ghost btn-sm" to="/discovery/jobs"><ArrowLeft size={14} /> All jobs</Link>
           <Link className="btn btn-ghost btn-sm" to={`/discovery/jobs/${jobId}/live`}><Radar size={14} /> Visual View</Link>

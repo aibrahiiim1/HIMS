@@ -350,6 +350,13 @@ type Querier interface {
 	// (channel, alert) a no-op, so RETURNING yields a row only on a real insert.
 	InsertNotificationLog(ctx context.Context, arg InsertNotificationLogParams) (NotificationLog, error)
 	InsertWirelessEvent(ctx context.Context, arg InsertWirelessEventParams) error
+	// Discovery jobs that still have collect_os jobs in flight (queued or dispatched) for
+	// the devices they enrolled — lets the Scan Jobs LIST show an honest "collecting"
+	// phase instead of a premature "completed" while deep collection drains. Each in-flight
+	// collection is attributed to the device's MOST RECENT scan job (a device has one row,
+	// reconciled by IP across re-scans), so an old job never shows "collecting". Returns
+	// only jobs with pending > 0 (small result set).
+	JobsWithPendingCollection(ctx context.Context) ([]JobsWithPendingCollectionRow, error)
 	LastSuccessfulBackup(ctx context.Context) (BackupRun, error)
 	// The most recent ONVIF/ISAPI credential-test outcome for a device — the CCTV
 	// fleet skip-guard reads this to avoid re-attempting a device that recently

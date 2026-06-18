@@ -24,6 +24,22 @@ const CTRL_KINDS = ['unifi', 'ruckus', 'omada', 'extreme', 'vsphere', 'hyperv', 
 
 // eslint-disable-next-line react-refresh/only-export-components -- shared helper reused by the standalone Scan Jobs pages
 export const jobBadge = (s: string) => (s === 'running' ? 'warning' : s === 'completed' ? 'up' : s === 'failed' || s === 'cancelled' ? 'down' : 'unknown')
+// phaseMeta maps the HONEST end-to-end scan phase (server-derived) to a badge tone +
+// label. Unlike jobBadge (probe-phase status only), this distinguishes "collecting"
+// (deep OS collection still draining after discovery) from a settled "complete" — so
+// the UI never shows a premature "completed" while the relay agent is still collecting.
+// eslint-disable-next-line react-refresh/only-export-components -- shared helper reused by the standalone Scan Jobs pages
+export const phaseMeta = (p?: string): { tone: string; label: string } => {
+  switch (p) {
+    case 'queued': return { tone: 'unknown', label: 'Queued' }
+    case 'discovering': return { tone: 'warning', label: 'Discovering' }
+    case 'collecting': return { tone: 'access', label: 'Collecting' }
+    case 'complete': return { tone: 'up', label: 'Complete' }
+    case 'failed': return { tone: 'down', label: 'Failed' }
+    case 'cancelled': return { tone: 'down', label: 'Cancelled' }
+    default: return { tone: 'unknown', label: p || '—' }
+  }
+}
 // eslint-disable-next-line react-refresh/only-export-components -- shared helper reused by the standalone Scan Jobs pages
 export const outcomeBadge = (o: string) => (o === 'enrolled' ? 'up' : o === 'failed' ? 'down' : o === 'classified' ? 'access' : 'unknown')
 

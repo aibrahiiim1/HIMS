@@ -376,6 +376,50 @@ func (q *Queries) GetRelayAgentByToken(ctx context.Context, tokenHash string) (R
 	return i, err
 }
 
+const jobsWithPendingCollection = `-- name: JobsWithPendingCollection :many
+WITH latest_result AS (
+  SELECT DISTINCT ON (device_id) device_id, job_id
+  FROM discovery_results WHERE device_id IS NOT NULL
+  ORDER BY device_id, probed_at DESC
+)
+SELECT lr.job_id, count(*)::bigint AS pending
+FROM agent_jobs aj
+JOIN latest_result lr ON lr.device_id = aj.device_id
+WHERE aj.kind = 'collect_os' AND aj.status IN ('queued', 'dispatched')
+GROUP BY lr.job_id
+`
+
+type JobsWithPendingCollectionRow struct {
+	JobID   uuid.UUID `json:"job_id"`
+	Pending int64     `json:"pending"`
+}
+
+// Discovery jobs that still have collect_os jobs in flight (queued or dispatched) for
+// the devices they enrolled — lets the Scan Jobs LIST show an honest "collecting"
+// phase instead of a premature "completed" while deep collection drains. Each in-flight
+// collection is attributed to the device's MOST RECENT scan job (a device has one row,
+// reconciled by IP across re-scans), so an old job never shows "collecting". Returns
+// only jobs with pending > 0 (small result set).
+func (q *Queries) JobsWithPendingCollection(ctx context.Context) ([]JobsWithPendingCollectionRow, error) {
+	rows, err := q.db.Query(ctx, jobsWithPendingCollection)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []JobsWithPendingCollectionRow{}
+	for rows.Next() {
+		var i JobsWithPendingCollectionRow
+		if err := rows.Scan(&i.JobID, &i.Pending); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAgentJobs = `-- name: ListAgentJobs :many
 SELECT id, agent_id, device_id, kind, protocol, target, status, category, error, created_at, dispatched_at, finished_at
 FROM agent_jobs WHERE agent_id = $1 ORDER BY created_at DESC LIMIT $2
