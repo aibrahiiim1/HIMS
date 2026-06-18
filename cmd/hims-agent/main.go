@@ -39,7 +39,7 @@ import (
 	"github.com/coralsearesorts/hims/internal/osinv"
 )
 
-const agentVersion = "1.2.0"
+const agentVersion = "1.2.1"
 
 // agentMaxConcurrent bounds how many collection jobs the agent runs in parallel
 // per poll. The HIMS server already caps how many jobs it dispatches to one agent
@@ -329,12 +329,18 @@ func collectWindows(ctx context.Context, j job) (*osinv.Report, string, error) {
 	if werr == nil {
 		return rep, "success", nil
 	}
-	// If WinRM definitively REJECTED the credential, the same credential will not fare
-	// better over WMI — return the auth verdict without a second auth attempt, so we do
-	// not double account-lockout pressure on the host. Fall back to WMI only when WinRM
-	// was unavailable (port filtered/disabled), where DCOM may still be open. The WMI
-	// PowerShell collector needs a Windows host; elsewhere the WinRM result stands.
-	if wcat == "auth_failed" || runtime.GOOS != "windows" {
+	// Do NOT fall through to the WMI rung when:
+	//   - auth_failed: the same credential will be rejected by WMI too — a second auth
+	//     attempt only adds account-lockout pressure.
+	//   - winrm_connect_timeout: WinRM/5985 did not answer in time (the host still
+	//     answers ping) — a TRANSIENT transport blip. Trying WMI here would run a logon
+	//     attempt for EVERY candidate credential (incl. domain creds that don't belong to
+	//     a non-domain host) and risk locking out a domain account, and would let a
+	//     UAC-blocked wmi_access_denied mask the timeout and turn a retryable blip into a
+	//     terminal credential_failed. Return the timeout so the server retries WinRM.
+	// Fall through to WMI/DCOM only when WinRM is genuinely unavailable (refused/closed).
+	// The WMI PowerShell collector needs a Windows host; elsewhere the WinRM result stands.
+	if wcat == "auth_failed" || wcat == osinv.WinRMConnectTimeout || runtime.GOOS != "windows" {
 		return nil, wcat, werr
 	}
 	rep, mcat, merr := collectWMI(ctx, j)
@@ -354,6 +360,14 @@ func collectWindows(ctx context.Context, j job) (*osinv.Report, string, error) {
 // rung's category therefore carries the more informative signal (e.g. wmi_access_denied
 // means the host WAS reached over DCOM and the credential was rejected), so prefer it.
 func pickWindowsFailCat(winrmCat, wmiCat string) string {
+	// A WinRM connect-timeout is a transient, retryable transport miss and must remain
+	// the headline even if the WMI rung returned a verdict — a UAC-blocked
+	// wmi_access_denied must not mask it into a terminal credential_failed. (collectWindows
+	// already short-circuits this category before WMI; this guard keeps the contract if a
+	// future caller reaches here with both set.)
+	if winrmCat == osinv.WinRMConnectTimeout {
+		return winrmCat
+	}
 	if wmiCat != "" {
 		return wmiCat
 	}

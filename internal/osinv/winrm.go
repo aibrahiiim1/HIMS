@@ -17,6 +17,13 @@ import (
 // even though the credential is valid. It must NOT be reported as a wrong password.
 const WinRMOperationFault = "auth_ok_operation_fault"
 
+// WinRMConnectTimeout is the credential-test category for "WinRM/5985 did not respond
+// in time" — a transient transport failure (the host usually still answers ping), NOT a
+// closed port and NOT an auth rejection. It is retryable with backoff and must never be
+// reported as credential_failed. Kept as an exported constant so the relay agent and the
+// server's retry/classification logic reference one token.
+const WinRMConnectTimeout = "winrm_connect_timeout"
+
 // ClassifyWinRMError maps a WinRM error to a credential-test category + detail +
 // (optional) WSMan fault code. The key distinction: a *winrm.ExecuteCommandError
 // means HTTP/NTLM auth already SUCCEEDED (HTTP 200) and the failure is a WSMan
@@ -42,10 +49,20 @@ func ClassifyWinRMError(err error) (category, detail, faultCode string) {
 	case strings.Contains(e, "401") || strings.Contains(e, "unauthorized") ||
 		strings.Contains(e, "the user name or password is incorrect") || strings.Contains(e, "access is denied"):
 		return "auth_failed", "authentication rejected", ""
+	case strings.Contains(e, "did not properly respond") || strings.Contains(e, "failed to respond") ||
+		strings.Contains(e, "timed out") || strings.Contains(e, "i/o timeout") ||
+		strings.Contains(e, "timeout") || strings.Contains(e, "deadline"):
+		// WinRM/5985 accepted no answer in time. The host commonly still answers ping,
+		// so this is a TRANSIENT transport failure (busy host, momentary packet loss, a
+		// firewall that drops rather than refuses) — RETRYABLE with backoff, NOT a closed
+		// port and NOT an auth rejection. Kept DISTINCT from "unreachable" (actively
+		// refused/reset) so the agent can retry WinRM instead of falling through to a WMI
+		// logon attempt (which, during a WinRM blip, would try every candidate credential
+		// against WMI and risk locking out a domain account).
+		return WinRMConnectTimeout, "WinRM/5985 did not respond in time (transient) — will retry", ""
 	case strings.Contains(e, "refused") || strings.Contains(e, "reset") ||
-		strings.Contains(e, "timeout") || strings.Contains(e, "deadline") ||
 		strings.Contains(e, "no route") || strings.Contains(e, "no such host") || strings.Contains(e, "unreachable"):
-		return "unreachable", "could not connect (WinRM/5985 unreachable or filtered)", ""
+		return "unreachable", "could not connect (WinRM/5985 refused or filtered)", ""
 	default:
 		return "error", strings.TrimSpace(err.Error()), ""
 	}

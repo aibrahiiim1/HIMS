@@ -18,6 +18,11 @@ func TestPickWindowsFailCat(t *testing.T) {
 		{"wmi transport when both transport", "unreachable", "rpc_unreachable", "rpc_unreachable"},
 		{"falls back to winrm when wmi empty", "error", "", "error"},
 		{"wmi error reported", "unreachable", "wmi_error", "wmi_error"},
+		// A WinRM connect-timeout is retryable transport and must stay the headline even
+		// when WMI returned a (UAC-blocked) access-denied — never masked into a terminal
+		// credential_failed. This is the .49/.50 storm case.
+		{"winrm timeout outranks wmi access-denied", "winrm_connect_timeout", "wmi_access_denied", "winrm_connect_timeout"},
+		{"winrm timeout outranks wmi error", "winrm_connect_timeout", "wmi_error", "winrm_connect_timeout"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
