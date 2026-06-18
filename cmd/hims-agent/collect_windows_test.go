@@ -25,6 +25,29 @@ func TestWinRMShortCircuitsWMI(t *testing.T) {
 	}
 }
 
+// TestClassifyNativeWinRMErr pins the native PowerShell-Remoting (New-PSSession) error
+// mapping. The critical case: a native "Access is denied" is an AUTHORIZATION refusal
+// (authenticated, host policy/UAC denied the session) — its own non-auth category, NEVER
+// auth_failed (no false credential_failed). A clean logon failure IS auth_failed.
+func TestClassifyNativeWinRMErr(t *testing.T) {
+	cases := map[string]string{
+		"New-PSSession : Access is denied.":                                                    "winrm_native_access_denied",
+		"Connecting to remote server failed: Logon failure: unknown user name or bad password": "auth_failed",
+		"The user name or password is incorrect":                                               "auth_failed",
+		"WinRM cannot complete the operation ... timed out":                                    osinv.WinRMConnectTimeout,
+		"The client cannot connect ... connection was refused":                                 "unreachable",
+		"some unrecognized WSMan negotiation glitch":                                           osinv.WinRMNegotiateError,
+	}
+	for stderr, want := range cases {
+		if got := classifyNativeWinRMErr(stderr); got != want {
+			t.Errorf("classifyNativeWinRMErr(%q) = %q, want %q", stderr, got, want)
+		}
+	}
+	if classifyNativeWinRMErr("New-PSSession : Access is denied.") == "auth_failed" {
+		t.Fatal("native Access-is-denied (authorization) must NEVER classify as auth_failed")
+	}
+}
+
 // TestPickWindowsFailCat documents the headline-category contract for the two-rung
 // Windows ladder when BOTH rungs fail. The WinRM rung runs first and only reaches the
 // WMI fallback (and hence this merge) when it was UNREACHABLE — a definitive auth_failed

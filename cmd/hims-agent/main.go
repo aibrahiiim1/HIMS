@@ -39,7 +39,7 @@ import (
 	"github.com/coralsearesorts/hims/internal/osinv"
 )
 
-const agentVersion = "1.2.5"
+const agentVersion = "1.2.6"
 
 // agentMaxConcurrent bounds how many collection jobs the agent runs in parallel
 // per poll. The HIMS server already caps how many jobs it dispatches to one agent
@@ -310,10 +310,11 @@ func (a *agent) post(jobID string, res map[string]any) {
 
 // collect runs one device collection locally and returns an osinv.Report.
 func collect(j job) (*osinv.Report, string, error) {
-	// 4 min: the WMI/CIM identity+services+disks+nics pass is quick, but the
-	// installed-software registry walk (StdRegProv EnumKey + per-value GetStringValue
-	// across the Uninstall keys) is many small round-trips and dominates the time.
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	// 6 min: a healthy host collects fast on the first rung, but a fully-failing host may
+	// run all three Windows rungs sequentially (native PSRP → Go WinRM shell → WMI/DCOM),
+	// and the installed-software registry walk is many small round-trips. Kept under the
+	// server's 8-min stale-dispatch reaper so a slow-but-progressing job is never reaped.
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	defer cancel()
 	switch j.Protocol {
 	case "winrm", "wmi":
@@ -325,14 +326,31 @@ func collect(j job) (*osinv.Report, string, error) {
 	}
 }
 
-// collectWindows runs the two-rung Windows ladder, preferring the WinRM command-shell
-// collector and falling back to WMI/DCOM. WinRM-first is what makes the agent path
-// equivalent to the server's proven direct path: a non-domain host managed by a LOCAL
-// admin blocks remote WMI/CIM via UAC (LocalAccountTokenFilterPolicy → "Access is
-// denied"), but the WinRM-shell collector runs its Get-CimInstance/registry reads
-// LOCALLY on the target inside the shell session, so the local-admin logon succeeds.
-// WMI/DCOM remains as the fallback for hosts that have WinRM disabled but RPC/DCOM open.
+// collectWindows runs the Windows collection ladder, in robustness order:
+//
+//	Rung 0 — NATIVE PowerShell Remoting (collectWinRMNative): Windows' own WinRM/PSRP
+//	         client, inventory run locally in-session. Most robust negotiation (no Go-lib
+//	         401 under load) AND bypasses remote UAC filtering (full token in-session).
+//	         This is the primary path and what makes from-zero discovery reliable for the
+//	         hard hosts (.106/.119) under production scan-storm load.
+//	Rung 1 — Go WinRM command shell (collectWinRM): the original pure-Go path; kept as a
+//	         fallback (e.g. if PowerShell/PSRP is unavailable on the agent host).
+//	Rung 2 — WMI/DCOM (collectWMI): for hosts with WinRM disabled but RPC/DCOM open.
+//
+// A clean WinRM auth rejection short-circuits the WMI rung (the same credential would be
+// rejected over DCOM too — avoids lockout); every other failure falls through, because
+// WMI/DCOM is a different transport (RPC/135) and a WinRM problem says nothing about it.
 func collectWindows(ctx context.Context, j job) (*osinv.Report, string, error) {
+	// Rung 0: native PowerShell Remoting — the robust primary path.
+	var nerr error
+	if runtime.GOOS == "windows" {
+		rep, _, err := collectWinRMNative(ctx, j)
+		if err == nil {
+			return rep, "success", nil
+		}
+		nerr = err // fold into the combined error if every rung fails
+	}
+	// Rung 1: Go WinRM command shell.
 	rep, wcat, werr := collectWinRM(ctx, j)
 	if werr == nil {
 		return rep, "success", nil
@@ -352,16 +370,22 @@ func collectWindows(ctx context.Context, j job) (*osinv.Report, string, error) {
 	// transient as the headline when WMI ALSO can't reach the host, so a genuine
 	// double-transport miss still retries rather than settling a terminal verdict.
 	if winRMShortCircuitsWMI(wcat) || runtime.GOOS != "windows" {
+		if nerr != nil {
+			return nil, wcat, fmt.Errorf("native: %v | winrm: %v", nerr, werr)
+		}
 		return nil, wcat, werr
 	}
 	rep, mcat, merr := collectWMI(ctx, j)
 	if merr == nil {
 		return rep, "success", nil
 	}
-	// Both rungs failed: WinRM was unreachable, so surface the WMI category (the rung
-	// that may have reached the host over DCOM) as the headline — falling back to the
-	// WinRM category only if WMI produced none — so the server classifies
-	// credential_failed vs collection_failed honestly.
+	// Every rung failed: surface the WMI category (the rung that may have reached the host
+	// over DCOM) as the headline — falling back to the WinRM category if WMI produced none
+	// — so the server classifies credential_failed vs collection_failed honestly. The
+	// combined error keeps each rung's precise reason for diagnostics (native PSRP first).
+	if nerr != nil {
+		return nil, pickWindowsFailCat(wcat, mcat), fmt.Errorf("native: %v | winrm: %v | wmi: %v", nerr, werr, merr)
+	}
 	return nil, pickWindowsFailCat(wcat, mcat), fmt.Errorf("winrm: %v | wmi: %v", werr, merr)
 }
 
@@ -412,6 +436,107 @@ func isTransientWinRM(cat string) bool {
 // short-circuit on the transient category meant that path was never tried.
 func winRMShortCircuitsWMI(cat string) bool {
 	return cat == "auth_failed"
+}
+
+// collectWinRMNative gathers inventory using WINDOWS' OWN PowerShell Remoting client
+// (New-PSSession + Invoke-Command over WinRM/5985, Negotiate auth), NOT the third-party
+// Go winrm library. This is the most robust Windows rung and the primary path:
+//
+//   - Microsoft's WinRM/PSRP client does NTLM/Kerberos (SPNEGO) negotiation + WSMan
+//     message encryption CORRECTLY. The Go masterzen/winrm library, by contrast, emits
+//     "http response error: 401 - invalid content type" on some hosts under scan-storm
+//     load (it receives an HTML error page mid-negotiation and cannot parse it). Hosts
+//     .106/.119 hit exactly that and could only ever be collected in a lucky low-load
+//     window — native PSRP removes that fragility.
+//   - The inventory script runs LOCALLY inside the remote runspace via Invoke-Command,
+//     so it executes with the caller's FULL token on the target — bypassing the UAC
+//     remote-token filter (LocalAccountTokenFilterPolicy) that makes remote WMI/CIM
+//     return "Access is denied" for a local-admin account. Same advantage as the WinRM
+//     command shell, but over Microsoft's robust client.
+//
+// Writes collection_method = "winrm-native". Requires the agent to run on Windows.
+func collectWinRMNative(ctx context.Context, j job) (*osinv.Report, string, error) {
+	if runtime.GOOS != "windows" {
+		return nil, "unsupported", fmt.Errorf("native PowerShell remoting requires the agent to run on Windows")
+	}
+	// The script opens a PSSession with Microsoft's WinRM client and runs the inventory
+	// gather LOCALLY in the remote runspace (full-token; bypasses remote UAC filtering).
+	script := `$ErrorActionPreference='Stop'
+$u=$env:HIMS_J_USER; $p=ConvertTo-SecureString $env:HIMS_J_PASS -AsPlainText -Force
+$c=New-Object System.Management.Automation.PSCredential($u,$p); $t=$env:HIMS_J_TARGET
+$so=New-PSSessionOption -OpenTimeout 30000 -OperationTimeout 180000 -CancelTimeout 8000 -IdleTimeout 120000
+$s=New-PSSession -ComputerName $t -Credential $c -Authentication Negotiate -SessionOption $so -ErrorAction Stop
+try {
+  $out=Invoke-Command -Session $s -ScriptBlock {
+    # Runs LOCALLY on the target with the full admin token (bypasses remote UAC filtering).
+    $os=Get-CimInstance Win32_OperatingSystem; $cs=Get-CimInstance Win32_ComputerSystem; $bios=Get-CimInstance Win32_BIOS
+    $cpu=@(Get-CimInstance Win32_Processor)
+    $cores=($cpu|Measure-Object NumberOfCores -Sum).Sum; if(-not $cores){$cores=($cpu|Measure-Object NumberOfLogicalProcessors -Sum).Sum}
+    $disks=@(Get-CimInstance Win32_LogicalDisk|?{$_.DriveType -eq 3}|%{@{name=$_.DeviceID;filesystem=$_.FileSystem;total_bytes=[int64]$_.Size;free_bytes=[int64]$_.FreeSpace;size_bytes=[int64]$_.Size}})
+    $nics=@(Get-CimInstance Win32_NetworkAdapterConfiguration|?{$_.IPEnabled}|%{@{name=$_.Description;mac=$_.MACAddress;ip_addresses=(@($_.IPAddress)-join',');gateway=(@($_.DefaultIPGateway)-join',');dns_servers=(@($_.DNSServerSearchOrder)-join',');dhcp_enabled=[bool]$_.DHCPEnabled}})
+    $svc=@(Get-CimInstance Win32_Service|%{@{name=$_.Name;display_name=$_.DisplayName;status=$_.State;start_type=$_.StartMode;account=$_.StartName}})
+    $procs=@(); try { $procs=@(Get-Process|Sort-Object WS -Descending|Select-Object -First 50|%{@{name=$_.ProcessName;pid=[int]$_.Id;mem_bytes=[int64]$_.WS}}) } catch {}
+    $sw=@(); $swnote=''
+    try {
+      $items=Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*','HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue|Where-Object{$_.DisplayName}
+      $sw=@($items|%{@{name=[string]$_.DisplayName;version=[string]$_.DisplayVersion;publisher=[string]$_.Publisher;install_date=[string]$_.InstallDate}})
+      if($sw.Count -gt 0){$swnote='collected via winrm_native_local'} else {$swnote='no_software_found'}
+    } catch { $swnote=('software_failed: '+$_.Exception.Message) }
+    @{ method='winrm-native';
+       identity=@{hostname=$os.CSName;fqdn=("{0}.{1}" -f $cs.Name,$cs.Domain).TrimEnd('.');domain=$cs.Domain;workgroup=$cs.Workgroup;logged_on_user=$cs.UserName};
+       os=@{caption=$os.Caption;version=$os.Version;build="$($os.BuildNumber)";arch=$os.OSArchitecture;install_date="$($os.InstallDate)";last_boot="$($os.LastBootUpTime)"};
+       hardware=@{manufacturer=$cs.Manufacturer;model=$cs.Model;serial=$bios.SerialNumber;bios_version=(@($bios.SMBIOSBIOSVersion)-join' ');cpu_model=$cpu[0].Name;cpu_sockets=$cpu.Count;cpu_cores=[int]$cores;ram_total_bytes=[int64]$cs.TotalPhysicalMemory};
+       disks=$disks; nics=$nics; services=$svc; software=$sw; processes=$procs; roles=@(); events=$null; software_note=$swnote }
+  }
+  $out|ConvertTo-Json -Depth 8 -Compress
+} finally { if($s){ Remove-PSSession $s -ErrorAction SilentlyContinue } }`
+	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
+	base := os.Environ()
+	clean := base[:0]
+	for _, kv := range base {
+		if strings.HasPrefix(strings.ToUpper(kv), "PSMODULEPATH=") {
+			continue
+		}
+		clean = append(clean, kv)
+	}
+	cmd.Env = append(clean, "HIMS_J_USER="+j.Username, "HIMS_J_PASS="+j.Password, "HIMS_J_TARGET="+j.Target)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, classifyNativeWinRMErr(stderr.String()), fmt.Errorf("%s", strings.TrimSpace(stderr.String()))
+	}
+	var rep osinv.Report
+	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &rep); err != nil {
+		return nil, "winrm_native_error", fmt.Errorf("could not parse native WinRM inventory JSON")
+	}
+	rep.Method = "winrm-native"
+	return &rep, "success", nil
+}
+
+// classifyNativeWinRMErr maps a native PowerShell-Remoting (New-PSSession/Invoke-Command)
+// stderr to a credential-test category. "Access is denied" from native PSRP is an
+// AUTHORIZATION refusal (the credential authenticated but the host policy/UAC denied the
+// session) — operator-fixable host config, NEVER a wrong password — so it is its own
+// non-auth category and the ladder falls through to the other rungs. A clean logon
+// failure is auth_failed; connect/negotiate problems are retryable transients.
+func classifyNativeWinRMErr(stderr string) string {
+	e := strings.ToLower(stderr)
+	switch {
+	case strings.Contains(e, "logon failure") || strings.Contains(e, "user name or password") ||
+		strings.Contains(e, "bad username or password"):
+		return "auth_failed"
+	case strings.Contains(e, "access is denied") || strings.Contains(e, "access denied"):
+		return "winrm_native_access_denied"
+	case strings.Contains(e, "cannot connect") || strings.Contains(e, "refused") ||
+		strings.Contains(e, "no such host") || strings.Contains(e, "unreachable"):
+		return "unreachable"
+	case strings.Contains(e, "timed out") || strings.Contains(e, "timeout") ||
+		strings.Contains(e, "cannot complete the operation") || strings.Contains(e, "operation timed out"):
+		return osinv.WinRMConnectTimeout
+	default:
+		// Unknown WinRM/WSMan negotiation problem — treat as a retryable transient.
+		return osinv.WinRMNegotiateError
+	}
 }
 
 // collectWinRM gathers inventory over a WinRM command shell (Go-winrm) — the same
