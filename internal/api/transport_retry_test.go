@@ -12,12 +12,18 @@ import (
 // classified credential_failed, and — once retries are exhausted — must settle as
 // collection_failed (operator-fixable transport), not credential_failed.
 
-const winTimeout = osinv.WinRMConnectTimeout // "winrm_connect_timeout"
+const (
+	winTimeout   = osinv.WinRMConnectTimeout // "winrm_connect_timeout"
+	winNegotiate = osinv.WinRMNegotiateError // "winrm_negotiate_error"
+)
 
-// 1) WinRM TCP dial timeout is retryable; auth/authz rejections are not.
+//  1. WinRM TCP dial timeout AND a WinRM/NTLM negotiation 401 are retryable transport;
+//     auth/authz rejections are not.
 func TestTransport_WinRMTimeoutIsRetryable(t *testing.T) {
-	if !agentJobRetryable(winTimeout) {
-		t.Fatal("winrm_connect_timeout must be retryable")
+	for _, transient := range []string{winTimeout, winNegotiate} {
+		if !agentJobRetryable(transient) {
+			t.Fatalf("%s must be retryable", transient)
+		}
 	}
 	for _, terminal := range []string{"auth_failed", "wmi_access_denied", "access_denied"} {
 		if agentJobRetryable(terminal) {
@@ -26,10 +32,13 @@ func TestTransport_WinRMTimeoutIsRetryable(t *testing.T) {
 	}
 }
 
-// 3) A WinRM timeout is transport, never an auth failure → never drives credential_failed.
+//  3. A WinRM timeout / negotiation error is transport, never an auth failure → never
+//     drives credential_failed.
 func TestTransport_WinRMTimeoutNotAuthFailure(t *testing.T) {
-	if categoryIsAuthFailure(winTimeout) {
-		t.Fatal("winrm_connect_timeout must not be an auth failure")
+	for _, transient := range []string{winTimeout, winNegotiate} {
+		if categoryIsAuthFailure(transient) {
+			t.Fatalf("%s must not be an auth failure", transient)
+		}
 	}
 }
 

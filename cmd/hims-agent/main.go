@@ -39,7 +39,7 @@ import (
 	"github.com/coralsearesorts/hims/internal/osinv"
 )
 
-const agentVersion = "1.2.1"
+const agentVersion = "1.2.2"
 
 // agentMaxConcurrent bounds how many collection jobs the agent runs in parallel
 // per poll. The HIMS server already caps how many jobs it dispatches to one agent
@@ -275,6 +275,14 @@ func (a *agent) runJob(j job) {
 		att["category"] = cat
 		att["detail"] = sanitize(err.Error(), c.Password)
 		attempts = append(attempts, att)
+		// A transient WinRM transport/negotiation miss is NOT credential-specific (it
+		// happens before auth completes). Stop trying the remaining candidates against a
+		// momentarily-overloaded/unreachable WinRM listener — that only adds load and, for
+		// a connect-timeout, N×120s of waiting. Report the transient so the server retries
+		// the whole host with backoff (where the right credential then succeeds).
+		if isTransientWinRM(cat) {
+			break
+		}
 	}
 
 	// All candidates failed — report the most-significant failure (last attempt) plus
@@ -340,7 +348,7 @@ func collectWindows(ctx context.Context, j job) (*osinv.Report, string, error) {
 	//     terminal credential_failed. Return the timeout so the server retries WinRM.
 	// Fall through to WMI/DCOM only when WinRM is genuinely unavailable (refused/closed).
 	// The WMI PowerShell collector needs a Windows host; elsewhere the WinRM result stands.
-	if wcat == "auth_failed" || wcat == osinv.WinRMConnectTimeout || runtime.GOOS != "windows" {
+	if wcat == "auth_failed" || isTransientWinRM(wcat) || runtime.GOOS != "windows" {
 		return nil, wcat, werr
 	}
 	rep, mcat, merr := collectWMI(ctx, j)
@@ -365,13 +373,23 @@ func pickWindowsFailCat(winrmCat, wmiCat string) string {
 	// wmi_access_denied must not mask it into a terminal credential_failed. (collectWindows
 	// already short-circuits this category before WMI; this guard keeps the contract if a
 	// future caller reaches here with both set.)
-	if winrmCat == osinv.WinRMConnectTimeout {
+	if isTransientWinRM(winrmCat) {
 		return winrmCat
 	}
 	if wmiCat != "" {
 		return wmiCat
 	}
 	return winrmCat
+}
+
+// isTransientWinRM reports whether a WinRM failure category is a transient TRANSPORT /
+// negotiation miss (the host is reachable; WinRM did not answer or the NTLM handshake
+// glitched, typically under scan-storm load) rather than a definitive auth/closed-port
+// verdict. Such failures are not credential-specific, so the per-credential loop stops
+// at the first one instead of hammering the host with every remaining candidate over a
+// momentarily-overloaded WinRM listener — and the server retries the whole host later.
+func isTransientWinRM(cat string) bool {
+	return cat == osinv.WinRMConnectTimeout || cat == osinv.WinRMNegotiateError
 }
 
 // collectWinRM gathers inventory over a WinRM command shell (Go-winrm) — the same

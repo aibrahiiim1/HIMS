@@ -23,6 +23,9 @@ func TestPickWindowsFailCat(t *testing.T) {
 		// credential_failed. This is the .49/.50 storm case.
 		{"winrm timeout outranks wmi access-denied", "winrm_connect_timeout", "wmi_access_denied", "winrm_connect_timeout"},
 		{"winrm timeout outranks wmi error", "winrm_connect_timeout", "wmi_error", "winrm_connect_timeout"},
+		// A WinRM/NTLM negotiation 401 (overloaded listener) is also retryable transport
+		// and must not be masked by the WMI verdict.
+		{"winrm negotiate-error outranks wmi access-denied", "winrm_negotiate_error", "wmi_access_denied", "winrm_negotiate_error"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -24,6 +24,28 @@ func TestClassifyWinRMError_ConnectTimeout(t *testing.T) {
 	}
 }
 
+// TestClassifyWinRMError_NegotiateError locks that a WinRM 401 whose body is not the
+// expected SOAP/NTLM continuation ("invalid content type") — the signature of a WinRM
+// listener overloaded during a scan storm — is the RETRYABLE WinRMNegotiateError, NOT
+// auth_failed. Critically, the error string contains "401", so the negotiate case must
+// be matched BEFORE the generic 401→auth_failed case. The exact text is the one seen
+// live on .12/.119/.120/.130 during the 82-host from-zero.
+func TestClassifyWinRMError_NegotiateError(t *testing.T) {
+	negotiate := []error{
+		fmt.Errorf(`winrm collect: http response error: 401 - invalid content type`),
+		fmt.Errorf(`http response error: 401 - invalid content-type "text/html"`),
+	}
+	for _, err := range negotiate {
+		if cat, _, _ := ClassifyWinRMError(err); cat != WinRMNegotiateError {
+			t.Errorf("ClassifyWinRMError(%q) = %q, want %q (must NOT be auth_failed)", err, cat, WinRMNegotiateError)
+		}
+	}
+	// A clean credential rejection is still auth_failed (terminal).
+	if cat, _, _ := ClassifyWinRMError(fmt.Errorf(`http error 401: unauthorized`)); cat != "auth_failed" {
+		t.Errorf("clean 401: got %q, want auth_failed", cat)
+	}
+}
+
 // TestClassifyWinRMError_RefusedVsAuth keeps the neighbouring categories distinct: an
 // actively refused/closed port is "unreachable" (WinRM genuinely not listening → the
 // agent may fall through to WMI), while a rejected credential is "auth_failed".

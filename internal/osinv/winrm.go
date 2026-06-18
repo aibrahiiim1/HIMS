@@ -24,6 +24,14 @@ const WinRMOperationFault = "auth_ok_operation_fault"
 // server's retry/classification logic reference one token.
 const WinRMConnectTimeout = "winrm_connect_timeout"
 
+// WinRMNegotiateError is the credential-test category for a WinRM/NTLM negotiation that
+// failed at the HTTP layer (e.g. a 401 with a non-SOAP body — "invalid content type")
+// before the credential could be validated. It is the signature of a WinRM listener
+// under load (connection/operation limits) during a scan storm, NOT a wrong password —
+// so it is RETRYABLE with backoff and must never be reported as credential_failed. A
+// genuine credential rejection has a clean 401/unauthorized signature → auth_failed.
+const WinRMNegotiateError = "winrm_negotiate_error"
+
 // ClassifyWinRMError maps a WinRM error to a credential-test category + detail +
 // (optional) WSMan fault code. The key distinction: a *winrm.ExecuteCommandError
 // means HTTP/NTLM auth already SUCCEEDED (HTTP 200) and the failure is a WSMan
@@ -46,6 +54,15 @@ func ClassifyWinRMError(err error) (category, detail, faultCode string) {
 	}
 	e := strings.ToLower(err.Error())
 	switch {
+	case strings.Contains(e, "invalid content type") || strings.Contains(e, "invalid content-type"):
+		// A 401 whose response body/headers are NOT the expected SOAP/NTLM continuation:
+		// the WinRM listener rejected at the HTTP layer before NTLM completed (it returned
+		// an HTML error page, not application/soap+xml). This is the classic symptom of an
+		// OVERLOADED WinRM service (MaxConcurrentOperationsPerUser / connection limits)
+		// during a scan storm — NOT a wrong password. It is RETRYABLE with backoff; a real
+		// credential rejection has the clean 401/unauthorized signature handled below.
+		// Checked BEFORE the generic "401" case because this string also contains "401".
+		return WinRMNegotiateError, "WinRM/NTLM negotiation failed (transient, likely WinRM under load) — will retry", ""
 	case strings.Contains(e, "401") || strings.Contains(e, "unauthorized") ||
 		strings.Contains(e, "the user name or password is incorrect") || strings.Contains(e, "access is denied"):
 		return "auth_failed", "authentication rejected", ""
