@@ -39,7 +39,7 @@ import (
 	"github.com/coralsearesorts/hims/internal/osinv"
 )
 
-const agentVersion = "1.2.3"
+const agentVersion = "1.2.4"
 
 // agentMaxConcurrent bounds how many collection jobs the agent runs in parallel
 // per poll. The HIMS server already caps how many jobs it dispatches to one agent
@@ -373,6 +373,24 @@ func collectWindows(ctx context.Context, j job) (*osinv.Report, string, error) {
 // wmi_access_denied means the host WAS reached over DCOM and the credential was
 // rejected), so it wins when present.
 func pickWindowsFailCat(winrmCat, wmiCat string) string {
+	// Host refuses ALL supported transports at the policy layer: the WinRM listener
+	// rejected the session NEGOTIATION (persistent "401 invalid content type" — answered
+	// but won't establish, the AllowUnencrypted=false signature) AND WMI/DCOM was REACHED
+	// but returned access-denied (UAC remote local-admin block). This is a TERMINAL,
+	// operator-fixable host-config wall — not transient, not a credential rejection — so
+	// emit the distinct category instead of the retryable WinRM transient (which would
+	// loop retry + self-heal forever) or the WMI access-denied (which would mis-read as
+	// credential_failed). Only the negotiate-error (listener answered) qualifies; a
+	// connect-timeout (listener silent) stays a retryable transient (the .49/.50 storm
+	// guard: a local-admin host's WinRM-shell may well succeed on a later retry).
+	if winrmCat == osinv.WinRMNegotiateError && (wmiCat == osinv.WMIAccessDenied || wmiCat == osinv.WMIAuthFailed) {
+		return osinv.TransportPolicyBlocked
+	}
+	// A retryable WinRM transport/negotiation transient otherwise stays the headline (so
+	// the server retries the host with backoff and self-heal stays eligible — never
+	// masked into a terminal verdict by a UAC-blocked wmi_access_denied; the .49/.50
+	// storm guard). A genuine storm makes WMI transport-fail too (rpc/dcom unreachable),
+	// so this never settles a false terminal.
 	if isTransientWinRM(winrmCat) {
 		return winrmCat
 	}

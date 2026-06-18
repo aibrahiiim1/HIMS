@@ -390,7 +390,12 @@ func agentPollBudgetAdaptive(inflight, loadBackoff int) int {
 func agentJobRetryable(category string) bool {
 	switch category {
 	case credtest.CatAuthFailed, credtest.CatUnsupported,
-		"wmi_access_denied", "access_denied", "lockout_suspected":
+		"wmi_access_denied", "access_denied", "lockout_suspected",
+		// transport_policy_blocked = host reachable but refuses every supported transport
+		// at the policy layer (WinRM negotiation rejected + WMI access-denied). Persistent
+		// host config — retrying never changes it, so it settles terminally (and it is NOT
+		// in the self-heal-eligible category set either). Operator-fixable, never auth.
+		osinv.TransportPolicyBlocked:
 		return false
 	}
 	return true

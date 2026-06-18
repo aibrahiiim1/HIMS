@@ -32,6 +32,21 @@ const WinRMConnectTimeout = "winrm_connect_timeout"
 // genuine credential rejection has a clean 401/unauthorized signature → auth_failed.
 const WinRMNegotiateError = "winrm_negotiate_error"
 
+// TransportPolicyBlocked is the TERMINAL category for a host that is reachable but
+// refuses EVERY supported management transport at the policy layer: the WinRM listener
+// rejected the session negotiation (a persistent "401 invalid content type" — the
+// signature of AllowUnencrypted=false / a required encryption or auth mode the client
+// cannot satisfy) AND the WMI/DCOM rung was REACHED but returned access-denied (the
+// signature of UAC LocalAccountTokenFilterPolicy blocking remote local-admin WMI). This
+// is NOT transient (so it is NOT retried and NOT self-heal-eligible — retrying never
+// changes a host policy) and NOT a credential rejection (so it is NEVER credential_failed
+// — the same credential collects other hosts on the subnet). It is an operator-fixable
+// HOST configuration: enable WinRM HTTPS/5986 or the required encryption mode, set
+// LocalAccountTokenFilterPolicy for remote local-admin WMI, or supply a credential the
+// host's policy allows. (Future HIMS enhancement: WinRM message encryption / NTLM-sealed
+// SOAP over 5985 would let the WinRM-shell path collect such hosts directly.)
+const TransportPolicyBlocked = "transport_policy_blocked"
+
 // ClassifyWinRMError maps a WinRM error to a credential-test category + detail +
 // (optional) WSMan fault code. The key distinction: a *winrm.ExecuteCommandError
 // means HTTP/NTLM auth already SUCCEEDED (HTTP 200) and the failure is a WSMan

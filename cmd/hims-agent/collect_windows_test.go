@@ -46,9 +46,19 @@ func TestPickWindowsFailCat(t *testing.T) {
 		// credential_failed. This is the .49/.50 storm case.
 		{"winrm timeout outranks wmi access-denied", "winrm_connect_timeout", "wmi_access_denied", "winrm_connect_timeout"},
 		{"winrm timeout outranks wmi error", "winrm_connect_timeout", "wmi_error", "winrm_connect_timeout"},
-		// A WinRM/NTLM negotiation 401 (overloaded listener) is also retryable transport
-		// and must not be masked by the WMI verdict.
-		{"winrm negotiate-error outranks wmi access-denied", "winrm_negotiate_error", "wmi_access_denied", "winrm_negotiate_error"},
+		// Host refuses ALL transports: WinRM negotiation rejected (listener answered but
+		// won't establish — encryption required) AND WMI/DCOM REACHED but access-denied
+		// (UAC). This is the terminal, operator-fixable wall (.106/.119) — a distinct
+		// category, never the retryable transient (would loop) nor wmi_access_denied
+		// (would mis-read as credential_failed).
+		{"negotiate + wmi access-denied = terminal policy block", "winrm_negotiate_error", "wmi_access_denied", "transport_policy_blocked"},
+		{"negotiate + wmi auth-failed = terminal policy block", "winrm_negotiate_error", "wmi_auth_failed", "transport_policy_blocked"},
+		// But negotiate + WMI ALSO unreachable (neither transport reached) stays the
+		// retryable transient — a genuine storm, not a policy wall.
+		{"negotiate + wmi unreachable stays retryable", "winrm_negotiate_error", "rpc_unreachable", "winrm_negotiate_error"},
+		// And a connect-timeout (listener SILENT, not answered) stays retryable even with a
+		// WMI access-denied — the .49/.50 storm guard (WinRM-shell may succeed on retry).
+		{"connect-timeout + wmi access-denied stays retryable", "winrm_connect_timeout", "wmi_access_denied", "winrm_connect_timeout"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

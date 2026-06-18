@@ -63,6 +63,20 @@ const BUCKET_META: Record<Bucket, { label: string; tone: string }> = {
   offline: { label: 'Offline', tone: 'unknown' },
 }
 
+// Precise, operator-actionable remediation text per failure category — so a host is
+// never left with a raw token or the misleading "fix the rejected credential" when the
+// real cause is host policy. transport_policy_blocked is the terminal "host refuses all
+// supported transports" wall (.106/.119): reachable, but WinRM negotiation refused +
+// WMI/DCOM access-denied — never a wrong password.
+const CATEGORY_HINT: Record<string, string> = {
+  transport_policy_blocked:
+    'Host reachable but refuses every supported transport: WinRM rejected the session (needs encrypted WinRM — enable HTTPS/5986 or the required encryption mode) AND WMI/DCOM access was denied (UAC — set LocalAccountTokenFilterPolicy for remote local-admin WMI). Or supply a domain/host credential the host policy allows. Not a wrong password.',
+  winrm_negotiate_error: 'WinRM listener rejected the session negotiation (often AllowUnencrypted=false). Retried automatically; if persistent, enable encrypted WinRM or use WMI/DCOM.',
+  winrm_connect_timeout: 'WinRM/5985 did not respond (transient or WinRM disabled). Retried automatically; if persistent, enable WinRM or rely on the WMI/DCOM fallback.',
+}
+// catLabel renders a failure category as readable text (underscores → spaces).
+const catLabel = (c?: string) => (c ?? '').replace(/_/g, ' ')
+
 function bucketOf(r: DiscoveryResult, d?: Device): Bucket {
   const p = r.probe_data ?? {}
   const na = (p.next_action ?? '').toLowerCase()
@@ -336,7 +350,7 @@ export function ScanJobResults() {
                         <td style={{ fontSize: 11 }}>{(p.opportunistic_protocols ?? []).join(', ').toUpperCase() || '—'}</td>
                         <td className="muted" style={{ fontSize: 11 }} title="Not applicable to this device type — intentionally not tried (by design, not a failure).">{(p.skipped_protocols ?? []).join(', ') || '—'}</td>
                         <td style={{ fontSize: 11 }}>{(p.cred_attempts ?? []).length === 0 ? <span className="muted">none</span> : (p.cred_attempts ?? []).map((a, i) => (
-                          <div key={i}><span className={`badge badge-${a.success ? 'up' : a.category === 'auth_failed' ? 'down' : 'unknown'}`}>{a.kind}</span> <span className="muted">{a.success ? 'ok' : a.category}</span></div>
+                          <div key={i} title={!a.success && a.category ? (CATEGORY_HINT[a.category] ?? '') : ''}><span className={`badge badge-${a.success ? 'up' : a.category === 'auth_failed' ? 'down' : 'unknown'}`}>{a.kind}</span> <span className="muted">{a.success ? 'ok' : catLabel(a.category)}</span></div>
                         ))}</td>
                         <td>{p.bound_cred ? <span className="badge badge-up">{p.bound_cred}</span> : <span className="muted">—</span>}</td>
                         <td style={{ fontSize: 11 }}>
@@ -352,7 +366,13 @@ export function ScanJobResults() {
                             </div>
                           )}
                         </td>
-                        <td style={{ fontSize: 12 }}>{r.error ? <span className="error-msg">{r.error}</span> : (p.next_action ?? '—')}</td>
+                        <td style={{ fontSize: 12 }}>{(() => {
+                          // A terminal transport-policy-blocked attempt gets the precise host-config
+                          // remediation (never "fix the rejected credential").
+                          const blocked = (p.cred_attempts ?? []).find((a) => !a.success && a.category && CATEGORY_HINT[a.category])
+                          if (blocked) return <span style={{ color: '#d97706' }}>{CATEGORY_HINT[blocked.category!]}</span>
+                          return r.error ? <span className="error-msg">{r.error}</span> : (p.next_action ?? '—')
+                        })()}</td>
                         <td style={{ whiteSpace: 'nowrap' }}>
                           {d && <Link className="btn btn-ghost btn-xs" to={`/devices/${d.id}`} title="Open device (test credential / bind / repair)">Open</Link>}{' '}
                           {d && <button className="btn btn-ghost btn-xs" onClick={() => setEditDev(d)} title="Edit / Lock classification"><Pencil size={12} /></button>}{' '}
