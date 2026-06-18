@@ -46,18 +46,18 @@ func TestPickWindowsFailCat(t *testing.T) {
 		// credential_failed. This is the .49/.50 storm case.
 		{"winrm timeout outranks wmi access-denied", "winrm_connect_timeout", "wmi_access_denied", "winrm_connect_timeout"},
 		{"winrm timeout outranks wmi error", "winrm_connect_timeout", "wmi_error", "winrm_connect_timeout"},
-		// Host refuses ALL transports: WinRM negotiation rejected (listener answered but
-		// won't establish — encryption required) AND WMI/DCOM REACHED but access-denied
-		// (UAC). This is the terminal, operator-fixable wall (.106/.119) — a distinct
-		// category, never the retryable transient (would loop) nor wmi_access_denied
-		// (would mis-read as credential_failed).
-		{"negotiate + wmi access-denied = terminal policy block", "winrm_negotiate_error", "wmi_access_denied", "transport_policy_blocked"},
-		{"negotiate + wmi auth-failed = terminal policy block", "winrm_negotiate_error", "wmi_auth_failed", "transport_policy_blocked"},
-		// But negotiate + WMI ALSO unreachable (neither transport reached) stays the
-		// retryable transient — a genuine storm, not a policy wall.
+		// A WinRM NEGOTIATION 401 ("invalid content type") stays a RETRYABLE transient even
+		// when WMI was reached and access-denied — it must NOT become a premature terminal
+		// verdict. from-zero #6 proved this combo was load/timing-sensitive on .106/.119
+		// (no host-side change, yet they later collected via winrm-agent). No single WinRM
+		// 401 pattern is terminal by itself; governed retry + WMI fallback + self-heal
+		// decide the outcome, and host-policy-blocked is an operator diagnosis only AFTER
+		// the automatic budget is exhausted (which the self-heal round budget bounds).
+		{"negotiate + wmi access-denied stays retryable", "winrm_negotiate_error", "wmi_access_denied", "winrm_negotiate_error"},
+		{"negotiate + wmi auth-failed stays retryable", "winrm_negotiate_error", "wmi_auth_failed", "winrm_negotiate_error"},
 		{"negotiate + wmi unreachable stays retryable", "winrm_negotiate_error", "rpc_unreachable", "winrm_negotiate_error"},
-		// And a connect-timeout (listener SILENT, not answered) stays retryable even with a
-		// WMI access-denied — the .49/.50 storm guard (WinRM-shell may succeed on retry).
+		// A connect-timeout (listener SILENT) likewise stays retryable even with a WMI
+		// access-denied — the .49/.50 storm guard (WinRM-shell may succeed on a later retry).
 		{"connect-timeout + wmi access-denied stays retryable", "winrm_connect_timeout", "wmi_access_denied", "winrm_connect_timeout"},
 	}
 	for _, c := range cases {

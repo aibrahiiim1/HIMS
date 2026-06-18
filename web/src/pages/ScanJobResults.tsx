@@ -64,15 +64,13 @@ const BUCKET_META: Record<Bucket, { label: string; tone: string }> = {
 }
 
 // Precise, operator-actionable remediation text per failure category — so a host is
-// never left with a raw token or the misleading "fix the rejected credential" when the
-// real cause is host policy. transport_policy_blocked is the terminal "host refuses all
-// supported transports" wall (.106/.119): reachable, but WinRM negotiation refused +
-// WMI/DCOM access-denied — never a wrong password.
+// never left with a raw token or the misleading "fix the rejected credential" for a
+// transient/transport cause. These are RETRYABLE transients (the pipeline keeps trying,
+// falls back to WMI/DCOM, and self-heals); the text explains the symptom without
+// implying a wrong password or a terminal verdict.
 const CATEGORY_HINT: Record<string, string> = {
-  transport_policy_blocked:
-    'Host reachable but refuses every supported transport: WinRM rejected the session (needs encrypted WinRM — enable HTTPS/5986 or the required encryption mode) AND WMI/DCOM access was denied (UAC — set LocalAccountTokenFilterPolicy for remote local-admin WMI). Or supply a domain/host credential the host policy allows. Not a wrong password.',
-  winrm_negotiate_error: 'WinRM listener rejected the session negotiation (often AllowUnencrypted=false). Retried automatically; if persistent, enable encrypted WinRM or use WMI/DCOM.',
-  winrm_connect_timeout: 'WinRM/5985 did not respond (transient or WinRM disabled). Retried automatically; if persistent, enable WinRM or rely on the WMI/DCOM fallback.',
+  winrm_negotiate_error: 'WinRM negotiation rejected mid-handshake (typically the listener under scan-storm load returning a non-SOAP 401). Retried automatically with backoff and falls back to WMI/DCOM — not a wrong password. Settles collection_failed only after every automatic option is exhausted.',
+  winrm_connect_timeout: 'WinRM/5985 did not respond in time (transient, or WinRM disabled). Retried automatically and falls back to WMI/DCOM — not a wrong password. Settles collection_failed only after the retry + self-heal budget is exhausted.',
 }
 // catLabel renders a failure category as readable text (underscores → spaces).
 const catLabel = (c?: string) => (c ?? '').replace(/_/g, ' ')

@@ -32,20 +32,15 @@ const WinRMConnectTimeout = "winrm_connect_timeout"
 // genuine credential rejection has a clean 401/unauthorized signature → auth_failed.
 const WinRMNegotiateError = "winrm_negotiate_error"
 
-// TransportPolicyBlocked is the TERMINAL category for a host that is reachable but
-// refuses EVERY supported management transport at the policy layer: the WinRM listener
-// rejected the session negotiation (a persistent "401 invalid content type" — the
-// signature of AllowUnencrypted=false / a required encryption or auth mode the client
-// cannot satisfy) AND the WMI/DCOM rung was REACHED but returned access-denied (the
-// signature of UAC LocalAccountTokenFilterPolicy blocking remote local-admin WMI). This
-// is NOT transient (so it is NOT retried and NOT self-heal-eligible — retrying never
-// changes a host policy) and NOT a credential rejection (so it is NEVER credential_failed
-// — the same credential collects other hosts on the subnet). It is an operator-fixable
-// HOST configuration: enable WinRM HTTPS/5986 or the required encryption mode, set
-// LocalAccountTokenFilterPolicy for remote local-admin WMI, or supply a credential the
-// host's policy allows. (Future HIMS enhancement: WinRM message encryption / NTLM-sealed
-// SOAP over 5985 would let the WinRM-shell path collect such hosts directly.)
-const TransportPolicyBlocked = "transport_policy_blocked"
+// NOTE: a persistent-looking "401 invalid content type" + WMI access-denied combo is
+// deliberately NOT given a dedicated TERMINAL category. from-zero #6 proved that pattern
+// can be load/timing-sensitive (hosts that looked permanently blocked collected later
+// with NO host-side change), so no single WinRM 401 pattern is terminal by itself —
+// governed retry + WMI fallback + self-heal decide the outcome, and "host policy blocked"
+// is an operator-facing diagnosis only AFTER the automatic budget is exhausted. (The
+// client below already does NTLM with WSMan message encryption, so the 401 is NOT an
+// AllowUnencrypted gap; it is the overloaded listener returning an HTML error page mid-
+// negotiation — exactly the load signature this category is meant to retry through.)
 
 // ClassifyWinRMError maps a WinRM error to a credential-test category + detail +
 // (optional) WSMan fault code. The key distinction: a *winrm.ExecuteCommandError
