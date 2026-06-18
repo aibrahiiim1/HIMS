@@ -39,7 +39,7 @@ import (
 	"github.com/coralsearesorts/hims/internal/osinv"
 )
 
-const agentVersion = "1.2.6"
+const agentVersion = "1.2.7"
 
 // agentMaxConcurrent bounds how many collection jobs the agent runs in parallel
 // per poll. The HIMS server already caps how many jobs it dispatches to one agent
@@ -275,12 +275,16 @@ func (a *agent) runJob(j job) {
 		att["category"] = cat
 		att["detail"] = sanitize(err.Error(), c.Password)
 		attempts = append(attempts, att)
-		// A transient WinRM transport/negotiation miss is NOT credential-specific (it
-		// happens before auth completes). Stop trying the remaining candidates against a
-		// momentarily-overloaded/unreachable WinRM listener — that only adds load and, for
-		// a connect-timeout, N×120s of waiting. Report the transient so the server retries
-		// the whole host with backoff (where the right credential then succeeds).
-		if isTransientWinRM(cat) {
+		// Stop trying more candidates ONLY when the WinRM listener is SILENT
+		// (connect-timeout): each further candidate would wait the full dial timeout and
+		// the miss is not credential-specific, so report the transient and let the server
+		// retry the whole host with backoff. A NEGOTIATE error (the listener ANSWERED) must
+		// NOT stop the loop — the next candidate may be the credential that works. This was
+		// the .106/.119 bug: `.\administrator` (a local admin) hit negotiate/access-denied
+		// (UAC remote-token filtering), the loop broke, and the `dpm` DOMAIN credential —
+		// which is not subject to local-account filtering — was never tried. "Given the
+		// credentials, connect any way" means every applicable candidate is attempted.
+		if cat == osinv.WinRMConnectTimeout {
 			break
 		}
 	}
