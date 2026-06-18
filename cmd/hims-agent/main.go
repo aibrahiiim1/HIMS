@@ -39,7 +39,7 @@ import (
 	"github.com/coralsearesorts/hims/internal/osinv"
 )
 
-const agentVersion = "1.2.2"
+const agentVersion = "1.2.3"
 
 // agentMaxConcurrent bounds how many collection jobs the agent runs in parallel
 // per poll. The HIMS server already caps how many jobs it dispatches to one agent
@@ -337,18 +337,21 @@ func collectWindows(ctx context.Context, j job) (*osinv.Report, string, error) {
 	if werr == nil {
 		return rep, "success", nil
 	}
-	// Do NOT fall through to the WMI rung when:
-	//   - auth_failed: the same credential will be rejected by WMI too — a second auth
-	//     attempt only adds account-lockout pressure.
-	//   - winrm_connect_timeout: WinRM/5985 did not answer in time (the host still
-	//     answers ping) — a TRANSIENT transport blip. Trying WMI here would run a logon
-	//     attempt for EVERY candidate credential (incl. domain creds that don't belong to
-	//     a non-domain host) and risk locking out a domain account, and would let a
-	//     UAC-blocked wmi_access_denied mask the timeout and turn a retryable blip into a
-	//     terminal credential_failed. Return the timeout so the server retries WinRM.
-	// Fall through to WMI/DCOM only when WinRM is genuinely unavailable (refused/closed).
-	// The WMI PowerShell collector needs a Windows host; elsewhere the WinRM result stands.
-	if wcat == "auth_failed" || isTransientWinRM(wcat) || runtime.GOOS != "windows" {
+	// Short-circuit the WMI/DCOM rung ONLY for a clean WinRM auth rejection (the same
+	// credential will be rejected over DCOM too, so a second logon adds nothing but
+	// account-lockout pressure) or when the agent isn't on Windows. Everything else —
+	// INCLUDING a WinRM transport/negotiation failure (connect-timeout, or a persistent
+	// "401 invalid content type" when the listener requires message encryption) — MUST
+	// fall through to WMI/DCOM: it is a different transport (RPC/135), so a WinRM
+	// transport problem says nothing about DCOM reachability. On this very subnet the
+	// single most successful method is WMI/DCOM, and the .106/.119/.161/.194 acceptance
+	// failures were exactly hosts whose WinRM was unusable (401/timeout) while RPC/135
+	// was open — they can ONLY be collected over WMI, and the old short-circuit on the
+	// transient category meant that path was never tried (retry + self-heal just re-ran
+	// the same dead WinRM rung forever). pickWindowsFailCat keeps the retryable WinRM
+	// transient as the headline when WMI ALSO can't reach the host, so a genuine
+	// double-transport miss still retries rather than settling a terminal verdict.
+	if winRMShortCircuitsWMI(wcat) || runtime.GOOS != "windows" {
 		return nil, wcat, werr
 	}
 	rep, mcat, merr := collectWMI(ctx, j)
@@ -362,17 +365,14 @@ func collectWindows(ctx context.Context, j job) (*osinv.Report, string, error) {
 	return nil, pickWindowsFailCat(wcat, mcat), fmt.Errorf("winrm: %v | wmi: %v", werr, merr)
 }
 
-// pickWindowsFailCat chooses the headline category when BOTH Windows rungs fail. The
-// WinRM rung ran first and (since a definitive auth_failed short-circuits before the WMI
-// fallback) reached here only as "unreachable"/"error" — a pure transport miss. The WMI
-// rung's category therefore carries the more informative signal (e.g. wmi_access_denied
-// means the host WAS reached over DCOM and the credential was rejected), so prefer it.
+// pickWindowsFailCat chooses the headline category when BOTH Windows rungs fail. A
+// retryable WinRM transport/negotiation transient stays the headline (so the server
+// retries the host with backoff and self-heal stays eligible — never masked into a
+// terminal verdict by a UAC-blocked wmi_access_denied; this is the .49/.50 storm
+// guard). Otherwise the WMI rung's category is the more informative signal (e.g.
+// wmi_access_denied means the host WAS reached over DCOM and the credential was
+// rejected), so it wins when present.
 func pickWindowsFailCat(winrmCat, wmiCat string) string {
-	// A WinRM connect-timeout is a transient, retryable transport miss and must remain
-	// the headline even if the WMI rung returned a verdict — a UAC-blocked
-	// wmi_access_denied must not mask it into a terminal credential_failed. (collectWindows
-	// already short-circuits this category before WMI; this guard keeps the contract if a
-	// future caller reaches here with both set.)
 	if isTransientWinRM(winrmCat) {
 		return winrmCat
 	}
@@ -390,6 +390,19 @@ func pickWindowsFailCat(winrmCat, wmiCat string) string {
 // momentarily-overloaded WinRM listener — and the server retries the whole host later.
 func isTransientWinRM(cat string) bool {
 	return cat == osinv.WinRMConnectTimeout || cat == osinv.WinRMNegotiateError
+}
+
+// winRMShortCircuitsWMI reports whether a FAILED WinRM rung should skip the WMI/DCOM
+// fallback. ONLY a clean auth rejection short-circuits: the same credential will be
+// rejected over DCOM too, and a second logon adds nothing but account-lockout pressure.
+// Every other WinRM failure — connect-timeout, the persistent "401 invalid content
+// type" negotiation error, refused/closed — MUST fall through to WMI/DCOM, which is a
+// different transport (RPC/135) and is frequently the ONLY path that reaches such a
+// host. The 172.21.60.0/24 acceptance failures (.106/.119: WinRM 401; .161/.194: WinRM
+// 5985 closed) all had RPC/135 open and were collectable only over WMI — the old
+// short-circuit on the transient category meant that path was never tried.
+func winRMShortCircuitsWMI(cat string) bool {
+	return cat == "auth_failed"
 }
 
 // collectWinRM gathers inventory over a WinRM command shell (Go-winrm) — the same

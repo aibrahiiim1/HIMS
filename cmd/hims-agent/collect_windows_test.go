@@ -1,6 +1,29 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/coralsearesorts/hims/internal/osinv"
+)
+
+// TestWinRMShortCircuitsWMI pins the reliability rule that fixed the .106/.119/.161/.194
+// acceptance failures: ONLY a clean WinRM auth rejection skips the WMI/DCOM fallback.
+// Every transport/negotiation failure (connect-timeout, the persistent 401 "invalid
+// content type", refused/closed) MUST fall through to WMI — a different transport
+// (RPC/135) that is often the only path to the host. Regression guard: a transient must
+// never again short-circuit WMI (the old bug that left those hosts permanently stuck).
+func TestWinRMShortCircuitsWMI(t *testing.T) {
+	if !winRMShortCircuitsWMI("auth_failed") {
+		t.Error("a clean auth rejection MUST short-circuit WMI (same cred → WMI auth-fails + lockout)")
+	}
+	for _, cat := range []string{
+		osinv.WinRMConnectTimeout, osinv.WinRMNegotiateError, "unreachable", "error", "",
+	} {
+		if winRMShortCircuitsWMI(cat) {
+			t.Errorf("%q must NOT short-circuit WMI — it must fall through to the DCOM rung", cat)
+		}
+	}
+}
 
 // TestPickWindowsFailCat documents the headline-category contract for the two-rung
 // Windows ladder when BOTH rungs fail. The WinRM rung runs first and only reaches the
