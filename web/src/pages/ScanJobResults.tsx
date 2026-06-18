@@ -75,6 +75,52 @@ const CATEGORY_HINT: Record<string, string> = {
 // catLabel renders a failure category as readable text (underscores → spaces).
 const catLabel = (c?: string) => (c ?? '').replace(/_/g, ' ')
 
+type CredAttemptLike = { category?: string; success?: boolean; kind?: string }
+// failureClass is the Check-#10 final-reason aggregator: from the FULL set of credential
+// attempts (every credential × every transport the agent tried) it derives ONE
+// operator-facing failure class + precise remediation — never collapsing a mixed outcome
+// into a misleading "wrong password". Returns null when a credential succeeded (managed)
+// or nothing was attempted.
+function failureClass(attempts: CredAttemptLike[] | undefined): { cls: string; text: string } | null {
+  const a = attempts ?? []
+  if (a.length === 0) return null
+  if (a.some((x) => x.success)) return null // a credential worked → managed, no remediation
+  const cats = a.filter((x) => !x.success).map((x) => x.category || '')
+  if (cats.length === 0) return null
+  const has = (...c: string[]) => cats.some((x) => c.includes(x))
+  const all = (pred: (c: string) => boolean) => cats.every(pred)
+  const n = new Set(a.map((x) => x.kind)).size // credentials/methods tried
+  const tried = `${a.length} credential attempt(s) across ${n} method(s)`
+  const isTransport = (c: string) => ['unreachable', 'rpc_unreachable', 'dcom_unreachable', 'firewall_blocked', 'namespace_unavailable'].includes(c)
+  const isTransient = (c: string) => ['winrm_negotiate_error', 'winrm_connect_timeout'].includes(c)
+  const isAuthReject = (c: string) => ['auth_failed', 'wmi_auth_failed'].includes(c)
+  const isNotAuth = (c: string) => ['access_denied', 'wmi_access_denied'].includes(c)
+  // 2. NOT AUTHORIZED — the credential authenticated but the host denied it (UAC /
+  //    LocalAccountTokenFilterPolicy / group / WinRM policy). Distinct from a wrong password.
+  if (has('access_denied', 'wmi_access_denied')) {
+    return { cls: 'not_authorized', text: `Credential authenticated but is NOT authorized on this host (UAC LocalAccountTokenFilterPolicy / not a local admin / WinRM RootSDDL). Use a domain or host-authorized credential, or grant remote rights — this is NOT a wrong password. (${tried}.)` }
+  }
+  // 1. WRONG CREDENTIAL — every applicable credential was cleanly rejected.
+  if (cats.length > 0 && all((c) => isAuthReject(c))) {
+    return { cls: 'auth_rejected', text: `Credential rejected (wrong username/password) on this host — every applicable credential was tried and cleanly rejected. Update the credential. (${tried}.)` }
+  }
+  // 4. TRANSIENT — a retryable WinRM negotiation/transport issue is still in the mix.
+  if (has('winrm_negotiate_error', 'winrm_connect_timeout') && !has('auth_failed', 'wmi_auth_failed')) {
+    return { cls: 'transient', text: `Retryable WinRM negotiation/transport issue (listener busy or not responding). Retried automatically with backoff + WMI/DCOM fallback + self-heal — NOT a credential problem. Settles collection_failed only after the budget is exhausted. (${tried}.)` }
+  }
+  // 3. TRANSPORT UNREACHABLE — no listener answered on any transport.
+  if (cats.length > 0 && all((c) => isTransport(c))) {
+    return { cls: 'transport_unreachable', text: `Transport unreachable — WinRM/RPC port closed/filtered or host not responding (firewall / listener disabled). NOT a credential problem. (${tried}.)` }
+  }
+  // 5. MIXED / EXHAUSTED — all applicable credentials & methods tried, no supported path.
+  const parts: string[] = []
+  if (cats.some(isAuthReject)) parts.push('some credentials cleanly rejected')
+  if (cats.some(isNotAuth)) parts.push('some not authorized (policy/UAC)')
+  if (cats.some(isTransient)) parts.push('some transient WinRM negotiation')
+  if (cats.some(isTransport)) parts.push('some transport unreachable')
+  return { cls: 'mixed', text: `All applicable credentials/methods tried, no supported path succeeded: ${parts.join('; ') || cats.join(', ')}. (${tried}.)` }
+}
+
 function bucketOf(r: DiscoveryResult, d?: Device): Bucket {
   const p = r.probe_data ?? {}
   const na = (p.next_action ?? '').toLowerCase()
@@ -365,10 +411,11 @@ export function ScanJobResults() {
                           )}
                         </td>
                         <td style={{ fontSize: 12 }}>{(() => {
-                          // A terminal transport-policy-blocked attempt gets the precise host-config
-                          // remediation (never "fix the rejected credential").
-                          const blocked = (p.cred_attempts ?? []).find((a) => !a.success && a.category && CATEGORY_HINT[a.category])
-                          if (blocked) return <span style={{ color: '#d97706' }}>{CATEGORY_HINT[blocked.category!]}</span>
+                          // Check #10: derive ONE precise operator-facing remediation from the full
+                          // attempt set (wrong-cred / not-authorized / transport / transient / mixed)
+                          // — never the misleading "fix the rejected credential" for a non-auth cause.
+                          const fc = d?.management === 'managed' ? null : failureClass(p.cred_attempts)
+                          if (fc) return <span style={{ color: fc.cls === 'auth_rejected' ? 'var(--crit)' : fc.cls === 'transient' ? 'var(--text-muted)' : '#d97706' }} title={`failure class: ${fc.cls}`}>{fc.text}</span>
                           return r.error ? <span className="error-msg">{r.error}</span> : (p.next_action ?? '—')
                         })()}</td>
                         <td style={{ whiteSpace: 'nowrap' }}>

@@ -39,7 +39,7 @@ import (
 	"github.com/coralsearesorts/hims/internal/osinv"
 )
 
-const agentVersion = "1.2.7"
+const agentVersion = "1.2.8"
 
 // agentMaxConcurrent bounds how many collection jobs the agent runs in parallel
 // per poll. The HIMS server already caps how many jobs it dispatches to one agent
@@ -347,12 +347,13 @@ func collect(j job) (*osinv.Report, string, error) {
 func collectWindows(ctx context.Context, j job) (*osinv.Report, string, error) {
 	// Rung 0: native PowerShell Remoting — the robust primary path.
 	var nerr error
+	var ncat string
 	if runtime.GOOS == "windows" {
-		rep, _, err := collectWinRMNative(ctx, j)
+		rep, nc, err := collectWinRMNative(ctx, j)
 		if err == nil {
 			return rep, "success", nil
 		}
-		nerr = err // fold into the combined error if every rung fails
+		nerr, ncat = err, nc // fold into the combined error + final-cat aggregation
 	}
 	// Rung 1: Go WinRM command shell.
 	rep, wcat, werr := collectWinRM(ctx, j)
@@ -375,48 +376,82 @@ func collectWindows(ctx context.Context, j job) (*osinv.Report, string, error) {
 	// double-transport miss still retries rather than settling a terminal verdict.
 	if winRMShortCircuitsWMI(wcat) || runtime.GOOS != "windows" {
 		if nerr != nil {
-			return nil, wcat, fmt.Errorf("native: %v | winrm: %v", nerr, werr)
+			return nil, windowsFinalCat(ncat, wcat, ""), fmt.Errorf("native: %v | winrm: %v", nerr, werr)
 		}
-		return nil, wcat, werr
+		return nil, windowsFinalCat(ncat, wcat, ""), werr
 	}
 	rep, mcat, merr := collectWMI(ctx, j)
 	if merr == nil {
 		return rep, "success", nil
 	}
-	// Every rung failed: surface the WMI category (the rung that may have reached the host
-	// over DCOM) as the headline — falling back to the WinRM category if WMI produced none
-	// — so the server classifies credential_failed vs collection_failed honestly. The
-	// combined error keeps each rung's precise reason for diagnostics (native PSRP first).
+	// Every rung failed: the headline is the MOST INFORMATIVE reached-host verdict across
+	// all three rungs (windowsFinalCat) — so an authorization denial from the native/WMI
+	// path is never hidden behind a transient WinRM negotiate error. The combined error
+	// keeps each rung's precise reason for the operator-facing final-reason aggregator.
 	if nerr != nil {
-		return nil, pickWindowsFailCat(wcat, mcat), fmt.Errorf("native: %v | winrm: %v | wmi: %v", nerr, werr, merr)
+		return nil, windowsFinalCat(ncat, wcat, mcat), fmt.Errorf("native: %v | winrm: %v | wmi: %v", nerr, werr, merr)
 	}
-	return nil, pickWindowsFailCat(wcat, mcat), fmt.Errorf("winrm: %v | wmi: %v", werr, merr)
+	return nil, windowsFinalCat(ncat, wcat, mcat), fmt.Errorf("winrm: %v | wmi: %v", werr, merr)
 }
 
-// pickWindowsFailCat chooses the headline category when BOTH Windows rungs fail. A
-// retryable WinRM transport/negotiation transient stays the headline (so the server
-// retries the host with backoff and self-heal stays eligible — never masked into a
-// terminal verdict by a UAC-blocked wmi_access_denied; this is the .49/.50 storm guard).
-// Otherwise the WMI rung's category is the more informative signal (e.g. wmi_access_denied
-// means the host WAS reached over DCOM and the credential was rejected), so it wins when
-// present.
+// isReachedVerdict reports whether a category proves the host was CONTACTED and the
+// credential was EVALUATED (not a transport/negotiation miss): a clean rejection
+// (auth_failed / wmi_auth_failed = WRONG credential) or an authorization denial
+// (access_denied / wmi_access_denied = valid credential but NOT authorized — UAC /
+// LocalAccountTokenFilterPolicy / group membership / WinRM RootSDDL). These are durable,
+// not load artifacts.
+func isReachedVerdict(cat string) bool {
+	switch cat {
+	case "auth_failed", "access_denied", osinv.WMIAccessDenied, osinv.WMIAuthFailed:
+		return true
+	}
+	return false
+}
+
+// windowsFinalCat chooses the headline category when every Windows rung fails, WITHOUT
+// collapsing a mixed outcome into a misleading single token (Check #10). Order:
 //
-// IMPORTANT (from-zero #6): no single WinRM 401/"invalid content type" pattern is
-// terminal by itself. .106/.119 looked like a permanent "host refuses all transports"
-// wall (WinRM-401 + WMI-access-denied) yet collected via winrm-agent on a later run with
-// NO host-side change — the failures were load/timing-sensitive negotiation instability
-// during the subnet storm. So that combo stays a RETRYABLE transient here; governed
-// retry + WMI fallback + self-heal decide the outcome, and host-policy-blocked is an
-// operator-facing diagnosis ONLY after the automatic budget is exhausted (never a
-// premature terminal short-circuit, which the self-heal round budget already bounds).
-func pickWindowsFailCat(winrmCat, wmiCat string) string {
+//  1. A reached-host verdict from the NATIVE PSRP path (Windows' authoritative client) is
+//     the headline — it proves the credential was evaluated, so an authorization denial
+//     (access_denied = not authorized) or a clean rejection (auth_failed = wrong cred)
+//     must NOT be hidden behind a transient negotiate error from the Go library.
+//  2. Otherwise a retryable WinRM transport/negotiation transient stays the headline so
+//     the host retries + self-heals. This is the .49/.50 storm guard: a UAC
+//     wmi_access_denied (remote WMI is UAC-blocked anyway) must NOT terminalize a host the
+//     authoritative native / WinRM-shell path would collect once load clears — that path
+//     was only transient here, not a definitive denial.
+//  3. Else the most informative remaining reached verdict (WMI reached over RPC/DCOM),
+//     then any non-empty category.
+//
+// The full per-rung history is preserved in the combined error string; the server's
+// final-reason aggregator derives the operator-facing class from the attempt set.
+func windowsFinalCat(nativeCat, winrmCat, wmiCat string) string {
+	if isReachedVerdict(nativeCat) {
+		return nativeCat
+	}
+	if isTransientWinRM(nativeCat) {
+		return nativeCat
+	}
 	if isTransientWinRM(winrmCat) {
+		return winrmCat
+	}
+	for _, c := range []string{wmiCat, winrmCat, nativeCat} {
+		if isReachedVerdict(c) {
+			return c
+		}
+	}
+	for _, c := range []string{winrmCat, wmiCat, nativeCat} {
+		if c != "" && c != "error" {
+			return c
+		}
+	}
+	if winrmCat != "" {
 		return winrmCat
 	}
 	if wmiCat != "" {
 		return wmiCat
 	}
-	return winrmCat
+	return nativeCat
 }
 
 // isTransientWinRM reports whether a WinRM failure category is a transient TRANSPORT /
@@ -530,7 +565,11 @@ func classifyNativeWinRMErr(stderr string) string {
 		strings.Contains(e, "bad username or password"):
 		return "auth_failed"
 	case strings.Contains(e, "access is denied") || strings.Contains(e, "access denied"):
-		return "winrm_native_access_denied"
+		// Authenticated but NOT authorized (UAC LocalAccountTokenFilterPolicy / not a local
+		// admin / WinRM RootSDDL). Canonical "access_denied" so the server recognizes it
+		// (categoryIsAuthFailure) and the final-reason aggregator can say "not authorized on
+		// host" — distinct from auth_failed (wrong credential).
+		return "access_denied"
 	case strings.Contains(e, "cannot connect") || strings.Contains(e, "refused") ||
 		strings.Contains(e, "no such host") || strings.Contains(e, "unreachable"):
 		return "unreachable"

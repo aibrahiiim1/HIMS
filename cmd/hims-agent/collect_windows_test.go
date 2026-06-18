@@ -31,7 +31,7 @@ func TestWinRMShortCircuitsWMI(t *testing.T) {
 // auth_failed (no false credential_failed). A clean logon failure IS auth_failed.
 func TestClassifyNativeWinRMErr(t *testing.T) {
 	cases := map[string]string{
-		"New-PSSession : Access is denied.":                                                    "winrm_native_access_denied",
+		"New-PSSession : Access is denied.":                                                    "access_denied",
 		"Connecting to remote server failed: Logon failure: unknown user name or bad password": "auth_failed",
 		"The user name or password is incorrect":                                               "auth_failed",
 		"WinRM cannot complete the operation ... timed out":                                    osinv.WinRMConnectTimeout,
@@ -43,50 +43,39 @@ func TestClassifyNativeWinRMErr(t *testing.T) {
 			t.Errorf("classifyNativeWinRMErr(%q) = %q, want %q", stderr, got, want)
 		}
 	}
+	// "Access is denied" = NOT authorized (canonical access_denied), never auth_failed.
 	if classifyNativeWinRMErr("New-PSSession : Access is denied.") == "auth_failed" {
 		t.Fatal("native Access-is-denied (authorization) must NEVER classify as auth_failed")
 	}
 }
 
-// TestPickWindowsFailCat documents the headline-category contract for the two-rung
-// Windows ladder when BOTH rungs fail. The WinRM rung runs first and only reaches the
-// WMI fallback (and hence this merge) when it was UNREACHABLE — a definitive auth_failed
-// short-circuits earlier — so the WMI rung's category is the more informative signal and
-// must win whenever it is present. This keeps the server's credential_failed (host
-// reached, creds rejected) vs collection_failed (transport miss) classification honest.
-func TestPickWindowsFailCat(t *testing.T) {
+// TestWindowsFinalCat pins the Check-#10 final-reason aggregator across the three rungs
+// (native PSRP, Go WinRM, WMI). It must NOT collapse a mixed outcome into a misleading
+// token: a definitive NATIVE reached-host verdict (access_denied / auth_failed) wins over
+// a transient; but when the native path was only transient (storm), a retryable transient
+// stays the headline so the host retries — even if WMI returned a UAC access-denied.
+func TestWindowsFinalCat(t *testing.T) {
 	cases := []struct {
-		name             string
-		winrmCat, wmiCat string
-		want             string
+		name                        string
+		nativeCat, winrmCat, wmiCat string
+		want                        string
 	}{
-		{"wmi access-denied outranks winrm unreachable", "unreachable", "wmi_access_denied", "wmi_access_denied"},
-		{"wmi transport when both transport", "unreachable", "rpc_unreachable", "rpc_unreachable"},
-		{"falls back to winrm when wmi empty", "error", "", "error"},
-		{"wmi error reported", "unreachable", "wmi_error", "wmi_error"},
-		// A WinRM connect-timeout is retryable transport and must stay the headline even
-		// when WMI returned a (UAC-blocked) access-denied — never masked into a terminal
-		// credential_failed. This is the .49/.50 storm case.
-		{"winrm timeout outranks wmi access-denied", "winrm_connect_timeout", "wmi_access_denied", "winrm_connect_timeout"},
-		{"winrm timeout outranks wmi error", "winrm_connect_timeout", "wmi_error", "winrm_connect_timeout"},
-		// A WinRM NEGOTIATION 401 ("invalid content type") stays a RETRYABLE transient even
-		// when WMI was reached and access-denied — it must NOT become a premature terminal
-		// verdict. from-zero #6 proved this combo was load/timing-sensitive on .106/.119
-		// (no host-side change, yet they later collected via winrm-agent). No single WinRM
-		// 401 pattern is terminal by itself; governed retry + WMI fallback + self-heal
-		// decide the outcome, and host-policy-blocked is an operator diagnosis only AFTER
-		// the automatic budget is exhausted (which the self-heal round budget bounds).
-		{"negotiate + wmi access-denied stays retryable", "winrm_negotiate_error", "wmi_access_denied", "winrm_negotiate_error"},
-		{"negotiate + wmi auth-failed stays retryable", "winrm_negotiate_error", "wmi_auth_failed", "winrm_negotiate_error"},
-		{"negotiate + wmi unreachable stays retryable", "winrm_negotiate_error", "rpc_unreachable", "winrm_negotiate_error"},
-		// A connect-timeout (listener SILENT) likewise stays retryable even with a WMI
-		// access-denied — the .49/.50 storm guard (WinRM-shell may succeed on a later retry).
-		{"connect-timeout + wmi access-denied stays retryable", "winrm_connect_timeout", "wmi_access_denied", "winrm_connect_timeout"},
+		// Native reached the host: its verdict is authoritative, never hidden by a transient.
+		{"native access-denied wins over go-winrm negotiate", "access_denied", "winrm_negotiate_error", "wmi_access_denied", "access_denied"},
+		{"native auth-failed (wrong cred) wins", "auth_failed", "winrm_negotiate_error", "", "auth_failed"},
+		// Native only transient (storm) → retryable transient stays headline even if WMI got
+		// a UAC access-denied (the .49/.50 storm guard — native/WinRM-shell would collect later).
+		{"native timeout + wmi access-denied stays retryable", "winrm_connect_timeout", "winrm_negotiate_error", "wmi_access_denied", "winrm_connect_timeout"},
+		{"native negotiate + wmi access-denied stays retryable", "winrm_negotiate_error", "winrm_negotiate_error", "wmi_access_denied", "winrm_negotiate_error"},
+		// Native unreachable/empty, no transient → WMI reached verdict is the informative one.
+		{"wmi access-denied when native unreachable", "unreachable", "unreachable", "wmi_access_denied", "wmi_access_denied"},
+		{"all transport unreachable (any transport token ok)", "unreachable", "unreachable", "rpc_unreachable", "unreachable"},
+		{"non-windows: only winrm cat present", "", "winrm_connect_timeout", "", "winrm_connect_timeout"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := pickWindowsFailCat(c.winrmCat, c.wmiCat); got != c.want {
-				t.Fatalf("pickWindowsFailCat(%q,%q)=%q want %q", c.winrmCat, c.wmiCat, got, c.want)
+			if got := windowsFinalCat(c.nativeCat, c.winrmCat, c.wmiCat); got != c.want {
+				t.Fatalf("windowsFinalCat(%q,%q,%q)=%q want %q", c.nativeCat, c.winrmCat, c.wmiCat, got, c.want)
 			}
 		})
 	}
