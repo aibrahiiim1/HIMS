@@ -235,14 +235,24 @@ export function LiveDiscovery() {
         }
       }
     }
-    // 1.5) any IP currently emitting live SSE events (being probed RIGHT NOW) that has
-    //      no node yet — so a from-zero scan (no pre-existing device rows) still shows
-    //      every host as "probing" the moment work starts on it, instead of nothing
-    //      until each result row lands. Live nodes only while running; playback of a
-    //      finished job shows the persisted result rows, not ephemeral probe pulses.
+    // 1.5) any IP that has SHOWN SIGNS OF LIFE in the live stream (responded to the port
+    //      scan or a protocol attempt) but has no node yet — so a from-zero scan still
+    //      shows every responsive host as "probing" the moment work starts on it, instead
+    //      of nothing until each result row lands. Live nodes only while running; playback
+    //      of a finished job shows the persisted result rows, not ephemeral probe pulses.
+    //
+    //      CRITICAL: a DEAD IP in the scanned range emits ONLY "target_probe_started"
+    //      (the scan probes the whole CIDR, e.g. all 254 of a /24, most of which are
+    //      dead) and never anything else. Carding those would flood the board with
+    //      ~170 phantom "probing" tiles for non-existent hosts on a sparse /24. So a bare
+    //      probe-start (target_probe_started / target_queued) is NOT a node — only an IP
+    //      whose latest event proves it answered (tcp_port_found, a *_attempt/_success,
+    //      credential_bound, collection_*, etc.) becomes a live card.
     if (running) {
-      for (const ip of liveByIP.keys()) {
-        if (!byIP.has(ip)) byIP.set(ip, deriveNode(ip, undefined, devByIP.get(ip), true))
+      for (const [ip, ev] of liveByIP.entries()) {
+        if (byIP.has(ip)) continue
+        if (ev.stage === 'target_probe_started' || ev.stage === 'target_queued') continue // dead/unprobed IP — no signs of life
+        byIP.set(ip, deriveNode(ip, undefined, devByIP.get(ip), true))
       }
     }
     // 2) overlay result rows
