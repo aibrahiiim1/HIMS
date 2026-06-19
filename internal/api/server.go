@@ -118,6 +118,11 @@ func (s *Server) StartMonitoring(ctx context.Context, tick time.Duration) {
 		} else if n > 0 {
 			slog.Info("monitoring seeded default checks", "count", n)
 		}
+		if n, err := s.seedDefaultAlertRules(ctx); err != nil {
+			slog.Warn("alert-rule seed failed", "error", err)
+		} else if n > 0 {
+			slog.Info("seeded default alert rules", "count", n)
+		}
 		if err := s.mon.Loop(ctx, tick); err != nil && ctx.Err() == nil {
 			slog.Error("monitoring loop exited", "error", err)
 		}
