@@ -151,6 +151,7 @@ func (s *Server) runVSphereCollection(ctx context.Context, d db.Device) vsphereR
 			_, _ = s.queries.UpsertVM(ctx, db.UpsertVMParams{
 				HostDeviceID: d.ID, Name: vm.Name, PowerState: vm.PowerState,
 				Vcpu: vcpu, MemMb: mem, GuestOs: gos, PrimaryIp: vmIP,
+				VmDeviceID: s.resolveVMDevice(ctx, vmIP),
 			})
 		}
 		cid := cd.id
@@ -250,6 +251,7 @@ func (s *Server) collectVSphereProfile(ctx context.Context, p db.VendorConnectio
 		_, _ = s.queries.UpsertVM(ctx, db.UpsertVMParams{
 			HostDeviceID: d.ID, Name: vm.Name, PowerState: vm.PowerState,
 			Vcpu: vcpu, MemMb: mem, GuestOs: gos, PrimaryIp: vmIP,
+			VmDeviceID: s.resolveVMDevice(ctx, vmIP),
 		})
 	}
 	if p.CredentialID != nil {
@@ -326,4 +328,21 @@ func (s *Server) collectVSphere(w http.ResponseWriter, r *http.Request) {
 		"collected": res.ok(), "reason": res.Reason, "detail": res.Detail,
 		"credential_used": res.CredentialUsed, "hosts": res.Hosts, "vms": res.VMs, "datastores": res.Datastores,
 	})
+}
+
+// resolveVMDevice links a hosted VM to an EXISTING discovered device when the VM's
+// guest IP already belongs to one — so a VM is never duplicated as a second fake device
+// and the VM↔device cross-link works both ways (host→VM→device, device→its VM record).
+// It deliberately does NOT link to a virtual_host (a hypervisor is not its own guest) and
+// never invents a device: an unmatched VM stays a host-child VM record with vm_device_id NULL.
+func (s *Server) resolveVMDevice(ctx context.Context, vmIP *netip.Addr) *uuid.UUID {
+	if vmIP == nil {
+		return nil
+	}
+	dev, err := s.queries.LiveDeviceByIP(ctx, vmIP)
+	if err != nil || dev.IsVirtual || dev.Category == string(domain.CatVirtualHost) {
+		return nil
+	}
+	id := dev.ID
+	return &id
 }
