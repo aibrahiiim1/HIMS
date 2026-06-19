@@ -67,6 +67,14 @@ func TestWindowsFinalCat(t *testing.T) {
 		// a UAC access-denied (the .49/.50 storm guard — native/WinRM-shell would collect later).
 		{"native timeout + wmi access-denied stays retryable", "winrm_connect_timeout", "winrm_negotiate_error", "wmi_access_denied", "winrm_connect_timeout"},
 		{"native negotiate + wmi access-denied stays retryable", "winrm_negotiate_error", "winrm_negotiate_error", "wmi_access_denied", "winrm_negotiate_error"},
+		// Broken WMI repository is DEFINITIVE/terminal — it must outrank a transient WinRM
+		// negotiate/timeout (the .10 case: WinRM legacy-negotiates AND WMI is broken → settle
+		// terminal namespace_unavailable, never loop on the transient). Distinct from the UAC
+		// wmi_access_denied storm-guard cases above, which deliberately stay retryable.
+		{"wmi namespace broken wins over winrm negotiate transient", "winrm_negotiate_error", "winrm_negotiate_error", "namespace_unavailable", "namespace_unavailable"},
+		{"wmi namespace broken wins over native timeout transient", "winrm_connect_timeout", "", "namespace_unavailable", "namespace_unavailable"},
+		// ...but a native reached-verdict (wrong cred) still outranks broken WMI.
+		{"native auth-failed still wins over wmi namespace broken", "auth_failed", "", "namespace_unavailable", "auth_failed"},
 		// Native unreachable/empty, no transient → WMI reached verdict is the informative one.
 		{"wmi access-denied when native unreachable", "unreachable", "unreachable", "wmi_access_denied", "wmi_access_denied"},
 		{"all transport unreachable (any transport token ok)", "unreachable", "unreachable", "rpc_unreachable", "unreachable"},
