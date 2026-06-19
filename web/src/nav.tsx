@@ -138,6 +138,7 @@ export const NAV: NavGroup[] = [
       { label: 'Discovery Reports', icon: FileSearch, to: '/reports/discovery' },
       { label: 'Availability Reports', icon: ChartLine, to: '/reports/availability' },
       { label: 'Vendor Reports', icon: Tag, to: '/reports/vendors' },
+      { label: 'Connectivity', icon: Plug, to: '/reports/connectivity' },
       { label: 'Export Center', icon: Download, to: '/reports/export' },
     ],
   },

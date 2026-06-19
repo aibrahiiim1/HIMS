@@ -54,6 +54,25 @@ func (s *Server) getClassification(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, toClassificationDTO(d))
 }
 
+// getClassificationEvidence returns the device's most recent scan probe_data — the
+// Phase-3 explainable record (classification_detail: matched/rejected fingerprints
+// + evidence channels + likely-type) plus the surrounding scan signals (protocols,
+// bound cred, next action). Powers the Device Detail "Classification Evidence"
+// panel. Read-only; { "detail": null } when the device has no recorded scan yet so
+// the panel renders a polite empty state rather than erroring.
+func (s *Server) getClassificationEvidence(w http.ResponseWriter, r *http.Request) {
+	ctx, id, ok := pathDevice(w, r)
+	if !ok {
+		return
+	}
+	blob, err := s.queries.LatestDeviceProbeData(ctx, &id)
+	if err != nil || len(blob) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{"detail": nil})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"detail": json.RawMessage(blob)})
+}
+
 // reclassifyDevice probes the device live, runs the evidence-based classifier,
 // and persists the result — unless the device is classification-locked, in which
 // case it returns the current classification untouched.

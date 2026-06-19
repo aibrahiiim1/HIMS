@@ -154,14 +154,25 @@ func testSNMP(ctx context.Context, kind, secret, host string, timeout time.Durat
 	if err != nil {
 		return Outcome{Category: CatError, Detail: "bad host"}
 	}
-	tgt := snmp.Target{Addr: addr, Version: snmp.V2c, Community: secret, Timeout: timeout}
 	if strings.Contains(strings.ToLower(kind), "v3") {
 		v3, err := snmp.ParseV3JSON([]byte(secret))
 		if err != nil {
 			return Outcome{Category: CatError, Detail: "bad SNMPv3 parameters"}
 		}
-		tgt = snmp.Target{Addr: addr, Version: snmp.V3, V3: v3, Timeout: timeout}
+		return snmpGetOK(ctx, snmp.Target{Addr: addr, Version: snmp.V3, V3: v3, Timeout: timeout}, "v3")
 	}
+	// Community-based: try v2c, then fall back to v1 with the SAME community. The
+	// community is version-agnostic, and many printers / older devices answer ONLY
+	// SNMPv1 — without this they read as auth_failed despite SNMP being enabled.
+	if oc := snmpGetOK(ctx, snmp.Target{Addr: addr, Version: snmp.V2c, Community: secret, Timeout: timeout}, "v2c"); oc.Category == CatSuccess {
+		return oc
+	}
+	return snmpGetOK(ctx, snmp.Target{Addr: addr, Version: snmp.V1, Community: secret, Timeout: timeout}, "v1")
+}
+
+// snmpGetOK runs the sysDescr.0 read for one target and maps the result to an
+// Outcome. label notes which SNMP version answered on success.
+func snmpGetOK(ctx context.Context, tgt snmp.Target, label string) Outcome {
 	cl, err := snmp.NewClient(tgt.WithDefaults())
 	if err != nil {
 		return Outcome{Category: CatError, Detail: "snmp init failed"}
@@ -174,13 +185,13 @@ func testSNMP(ctx context.Context, kind, secret, host string, timeout time.Durat
 	// sysDescr.0 — a read that any SNMP agent answers when the community is right.
 	pdus, err := cl.Get(ctx, "1.3.6.1.2.1.1.1.0")
 	if err != nil {
-		// A wrong community times out (no authenticated error in SNMP v2c).
+		// A wrong community times out (no authenticated error in SNMP v1/v2c).
 		return Outcome{Category: CatAuthFailed, Detail: "no response (wrong community or no access)"}
 	}
 	if len(pdus) == 0 {
 		return Outcome{Category: CatAuthFailed, Detail: "empty response"}
 	}
-	return Outcome{Category: CatSuccess, Detail: "sysDescr read"}
+	return Outcome{Category: CatSuccess, Detail: "sysDescr read (" + label + ")"}
 }
 
 func testSSH(ctx context.Context, secret, host string, opts Options) Outcome {

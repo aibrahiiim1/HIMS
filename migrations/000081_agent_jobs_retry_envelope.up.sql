@@ -1,0 +1,20 @@
+-- Widen the relay-agent collect_os retry envelope so a LOAD-INDUCED transient WinRM
+-- failure (winrm_negotiate_error / winrm_connect_timeout) gets a retry that lands
+-- AFTER a from-zero collection storm drains.
+--
+-- With the old 3-attempt / ~2.5-min window (backoff 30s, 2m), every retry for an
+-- early-storm host was consumed while the storm that CAUSED the 401-invalid-content-
+-- type / connect-timeout was still at peak load; the job then went terminal 'failed'
+-- with no post-storm attempt (and there is no self-heal loop that re-collects a
+-- terminally-failed host), stranding a reachable, correctly-credentialed host as
+-- collection_failed. Observed on 172.21.60.106 / .119 in from-zero acceptance: both
+-- were winrm-agent-managed with the same creds a run earlier, yet exhausted all
+-- retries inside the storm and settled collection_failed.
+--
+-- Raising the default to 5 attempts, paired with the longer schedule in
+-- agentRetryBackoff (30s, 2m, 5m, 10m), pushes the final retry to ~17.5 min after the
+-- first failure — comfortably past a ~12-min subnet drain — so a host that only failed
+-- under load is collected once load clears. Auth/authz rejections stay non-retryable
+-- (agentJobRetryable), so this widens ONLY the transient/transport retry budget, never
+-- a clean credential rejection.
+ALTER TABLE agent_jobs ALTER COLUMN max_attempts SET DEFAULT 5;

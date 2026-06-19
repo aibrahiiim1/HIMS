@@ -19,11 +19,28 @@ const input: React.CSSProperties = { padding: '8px 10px', border: '1px solid #cc
 const TABS = ['Network scan', 'Import', 'Controllers', 'Active Directory'] as const
 type Tab = typeof TABS[number]
 
-const CATEGORIES =['unknown', 'switch', 'router', 'firewall', 'access_point', 'wireless_controller', 'server', 'virtual_host', 'virtual_machine', 'storage', 'nvr', 'camera', 'printer', 'ip_phone', 'pbx', 'voice_gateway', 'database', 'directory', 'dns', 'dhcp', 'fingerprint', 'endpoint', 'ups', 'isp_router', 'application']
+const CATEGORIES =['unknown', 'switch', 'router', 'firewall', 'load_balancer', 'access_point', 'wireless_controller', 'server', 'virtual_host', 'virtual_machine', 'storage', 'nvr', 'camera', 'printer', 'ip_phone', 'pbx', 'voice_gateway', 'database', 'directory', 'dns', 'dhcp', 'fingerprint', 'endpoint', 'ups', 'pdu', 'isp_router', 'application']
 const CTRL_KINDS = ['unifi', 'ruckus', 'omada', 'extreme', 'vsphere', 'hyperv', 'redfish', 'onvif', 'cucm']
 
 // eslint-disable-next-line react-refresh/only-export-components -- shared helper reused by the standalone Scan Jobs pages
 export const jobBadge = (s: string) => (s === 'running' ? 'warning' : s === 'completed' ? 'up' : s === 'failed' || s === 'cancelled' ? 'down' : 'unknown')
+// phaseMeta maps the HONEST end-to-end scan phase (server-derived) to a badge tone +
+// label. Unlike jobBadge (probe-phase status only), this distinguishes "collecting"
+// (deep OS collection still draining after discovery) from a settled "complete" — so
+// the UI never shows a premature "completed" while the relay agent is still collecting.
+// eslint-disable-next-line react-refresh/only-export-components -- shared helper reused by the standalone Scan Jobs pages
+export const phaseMeta = (p?: string): { tone: string; label: string } => {
+  switch (p) {
+    case 'queued': return { tone: 'unknown', label: 'Queued' }
+    case 'discovering': return { tone: 'warning', label: 'Discovering' }
+    case 'collecting': return { tone: 'access', label: 'Collecting' }
+    case 'self_healing': return { tone: 'warning', label: 'Self-heal' }
+    case 'complete': return { tone: 'up', label: 'Complete' }
+    case 'failed': return { tone: 'down', label: 'Failed' }
+    case 'cancelled': return { tone: 'down', label: 'Cancelled' }
+    default: return { tone: 'unknown', label: p || '—' }
+  }
+}
 // eslint-disable-next-line react-refresh/only-export-components -- shared helper reused by the standalone Scan Jobs pages
 export const outcomeBadge = (o: string) => (o === 'enrolled' ? 'up' : o === 'failed' ? 'down' : o === 'classified' ? 'access' : 'unknown')
 
@@ -64,6 +81,87 @@ export function CollectedViaCell({ via, agent }: { via?: string; agent?: string 
   }
 }
 
+// STATE_LABEL maps the backend's professional collection states to a badge.
+const STATE_LABEL: Record<string, { label: string; cls: string }> = {
+  managed_direct: { label: 'Managed direct', cls: 'badge-up' },
+  credential_kind_mismatch: { label: 'Credential kind mismatch', cls: 'badge-warning' },
+  auth_rejected: { label: 'Auth rejected', cls: 'badge-down' },
+  transport_blocked: { label: 'Transport blocked', cls: 'badge-warning' },
+  api_unavailable: { label: 'API endpoint unavailable', cls: 'badge-warning' },
+  config_required: { label: 'Setup needed', cls: 'badge-warning' },
+  deep_inventory_failed: { label: 'Deep inventory failed', cls: 'badge-down' },
+}
+
+type CollectResult = {
+  collected: boolean; state?: string; detail: string
+  required_kind?: string; candidates?: { id: string; name: string; kind: string }[]
+  aps?: number; ssids?: number; clients?: number; profile_created?: boolean
+}
+
+// CollectNowPanel runs the universal profile-free collect on a device and, when
+// it fails on a credential-kind mismatch (or auth rejection where a wrong-kind
+// secret exists), offers a one-click "Duplicate the existing secret as the
+// required login kind & retry" — the operator never re-types a password.
+// eslint-disable-next-line react-refresh/only-export-components -- shared by the standalone Scan Job Results page
+export function CollectNowPanel({ deviceID, qc, jobID }: { deviceID: string; qc: ReturnType<typeof useQueryClient>; jobID: string | null }) {
+  const [busy, setBusy] = useState(false)
+  const [res, setRes] = useState<CollectResult | null>(null)
+  const [candId, setCandId] = useState('')
+  const [user, setUser] = useState('root')
+  const link: React.CSSProperties = { color: '#90caf9', fontSize: 11, cursor: 'pointer', textDecoration: 'underline' }
+  const invalidate = () => { if (jobID) qc.invalidateQueries({ queryKey: ['discovery-job', jobID] }) }
+
+  const collect = async () => {
+    setBusy(true)
+    try {
+      const r = await api.post<CollectResult>(`/devices/${deviceID}/collect`, {})
+      setRes(r); if (!candId && r.candidates?.length) setCandId(r.candidates[0].id); invalidate()
+    } catch (e) { setRes({ collected: false, detail: (e as Error).message }) } finally { setBusy(false) }
+  }
+  const duplicateAndRetry = async () => {
+    if (!candId || !res?.required_kind) return
+    setBusy(true)
+    try {
+      await api.post(`/credentials/${candId}/duplicate`, { new_kind: res.required_kind, username: user })
+      const r = await api.post<CollectResult>(`/devices/${deviceID}/collect`, {})
+      setRes(r); invalidate()
+    } catch (e) { setRes({ ...(res as CollectResult), detail: (e as Error).message }) } finally { setBusy(false) }
+  }
+
+  const st = res?.state ? STATE_LABEL[res.state] : undefined
+  const showDup = !!res && !res.collected && (res.state === 'credential_kind_mismatch' || res.state === 'auth_rejected') && (res.candidates?.length ?? 0) > 0
+  return (
+    <div>
+      <span style={{ ...link, opacity: busy ? 0.5 : 1 }} onClick={() => !busy && collect()}>{busy ? 'Collecting…' : res ? 'Retry collect' : 'Collect now'}</span>
+      {res && (
+        <div style={{ fontSize: 11, marginTop: 3 }}>
+          {st && <span className={`badge ${st.cls}`}>{st.label}</span>} <span className="muted">{res.detail}</span>
+          {res.collected && (res.aps !== undefined || res.ssids !== undefined || res.clients !== undefined) && (
+            <div className="muted" style={{ marginTop: 2 }}>{res.aps ?? 0} AP · {res.ssids ?? 0} SSID · {res.clients ?? 0} client{res.profile_created ? ' · profile auto-created' : ''}</div>
+          )}
+        </div>
+      )}
+      {res?.state === 'config_required' && (
+        <div style={{ marginTop: 6 }}>
+          <Link to={`/vendor-profiles?create=1&device_id=${deviceID}`} style={link}>Set up wireless collection →</Link>
+        </div>
+      )}
+      {showDup && (
+        <div style={{ marginTop: 6, padding: 6, border: '1px solid #d6dee8', borderRadius: 6 }}>
+          <div className="muted" style={{ fontSize: 11, marginBottom: 4 }}>Reuse an existing secret as a <strong>{res!.required_kind}</strong> login — no re-typing:</div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+            <select style={{ ...input, fontSize: 11, padding: '3px 6px' }} value={candId} onChange={(e) => setCandId(e.target.value)}>
+              {res!.candidates!.map((c) => <option key={c.id} value={c.id}>{c.name} ({c.kind})</option>)}
+            </select>
+            <input style={{ ...input, fontSize: 11, padding: '3px 6px', width: 90 }} value={user} onChange={(e) => setUser(e.target.value)} placeholder="username" />
+            <span style={{ ...link, opacity: busy ? 0.5 : 1 }} onClick={() => !busy && duplicateAndRetry()}>Duplicate as {res!.required_kind} &amp; retry</span>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function ProfileCell({ r, qc, jobID }: { r: DiscoveryResult; qc: ReturnType<typeof useQueryClient>; jobID: string | null }) {
   const p = r.probe_data?.profile
   const [busy, setBusy] = useState(false)
@@ -84,25 +182,16 @@ export function ProfileCell({ r, qc, jobID }: { r: DiscoveryResult; qc: ReturnTy
     if (r.ip) params.set('target_url', r.ip)
     // Deep collection runs directly from stored creds with NO profile, via the
     // universal /devices/{id}/collect endpoint (kind inferred from the device's
-    // type/vendor — vSphere / ONVIF camera / Redfish BMC / wireless / CUCM).
-    const collectNow = async () => {
-      if (!r.device_id) return
-      setBusy(true); setMsg('')
-      try {
-        const res = await api.post<{ collected: boolean; detail: string }>(`/devices/${r.device_id}/collect`, {})
-        setMsg(res.detail)
-        if (jobID) qc.invalidateQueries({ queryKey: ['discovery-job', jobID] })
-      } catch (e) { setMsg((e as Error).message) } finally { setBusy(false) }
-    }
+    // type/vendor). CollectNowPanel surfaces credential-kind mismatch + the
+    // one-click Duplicate-as-required-kind & retry fix.
     return (
       <div>
         <span className="badge badge-up">Identified</span>
         <div className="muted" style={{ fontSize: 11, marginTop: 3 }}>Deep inventory is optional.</div>
-        <div style={{ display: 'flex', gap: 10, marginTop: 4, flexWrap: 'wrap' }}>
-          {r.device_id && <span style={{ ...linkCell, opacity: busy ? 0.5 : 1 }} onClick={() => !busy && collectNow()}>{busy ? 'Collecting…' : 'Collect now'}</span>}
+        {r.device_id && <div style={{ marginTop: 4 }}><CollectNowPanel deviceID={r.device_id} qc={qc} jobID={jobID} /></div>}
+        <div style={{ marginTop: 6 }}>
           <Link to={`/vendor-profiles?${params.toString()}`} style={linkCell}>Set up a profile (optional)</Link>
         </div>
-        {msg && <div className="muted" style={{ fontSize: 11, marginTop: 3 }}>{msg}</div>}
       </div>
     )
   }

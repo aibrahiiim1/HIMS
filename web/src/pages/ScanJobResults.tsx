@@ -1,15 +1,17 @@
-import { useMemo, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
-import { Radar, Boxes, Wifi, ShieldCheck, ShieldOff, HelpCircle, KeyRound, Bot, CircleX, RefreshCw, ArrowLeft, Sparkles, History, LifeBuoy, EyeOff } from 'lucide-react'
+import { Radar, Boxes, Wifi, ShieldCheck, ShieldOff, HelpCircle, KeyRound, Bot, CircleX, RefreshCw, ArrowLeft, Sparkles, History, LifeBuoy, EyeOff, Search } from 'lucide-react'
 import { Pencil } from 'lucide-react'
 import { api, locationPaths, type Device, type DiscoveryJob, type DiscoveryResult, type Location, type ScanJobCounts } from '../api'
 import { PageHeader, Panel, Kpi, EmptyState, ProgressBar, timeAgo } from '../components/ui'
 import { ReachabilityBadge, ManagementBadge } from '../components/StatusBadges'
+import { ClassificationEvidence } from '../components/ClassificationEvidence'
 import { EditDevice } from '../components/EditDevice'
-import { OnboardingActions, CollectedViaCell, outcomeBadge, duration } from './Discovery'
+import { OnboardingActions, CollectedViaCell, CollectNowPanel, outcomeBadge, phaseMeta, duration } from './Discovery'
 
-type JobDetail = { job: DiscoveryJob; results: DiscoveryResult[]; counts?: ScanJobCounts }
+type CollectionProgress = { queued: number; retry_waiting: number; running: number; done: number; failed: number; pending: number; settled: boolean; self_healing?: number }
+type JobDetail = { job: DiscoveryJob; results: DiscoveryResult[]; counts?: ScanJobCounts; collection?: CollectionProgress; phase?: string }
 
 // Known-Device-Retry disposition → short badge label + tone. A known device that
 // the sweep missed never disappears: it shows as "Missed this run".
@@ -40,6 +42,99 @@ const FILTER_LABEL: Record<Filter, string> = {
 function isMissingClassification(d?: Device): boolean {
   if (!d) return false
   return !d.category || d.category === 'unknown' || !d.vendor
+}
+
+// Management buckets — the Discovery Reliability vocabulary. Every reachable
+// result lands in exactly ONE bucket so the operator can answer "why isn't this
+// managed?" at a glance and click through to the exact devices + next action.
+// Derived from the live device management state + the (precise) scan next_action,
+// so the bucket and the per-row guidance never disagree.
+const BUCKETS = ['managed', 'needs_agent', 'auth_failed', 'needs_credential', 'transport_blocked', 'unsupported', 'unknown_evidence', 'identified_only', 'offline'] as const
+type Bucket = typeof BUCKETS[number]
+const BUCKET_META: Record<Bucket, { label: string; tone: string }> = {
+  managed: { label: 'Managed', tone: 'up' },
+  needs_agent: { label: 'Needs / offline agent', tone: 'warning' },
+  auth_failed: { label: 'Auth failed', tone: 'down' },
+  needs_credential: { label: 'Needs credential', tone: 'warning' },
+  transport_blocked: { label: 'Transport blocked', tone: 'down' },
+  unsupported: { label: 'Unsupported / Telnet-only', tone: 'unknown' },
+  unknown_evidence: { label: 'Unknown (has evidence)', tone: 'info' },
+  identified_only: { label: 'Identified only', tone: 'info' },
+  offline: { label: 'Offline', tone: 'unknown' },
+}
+
+// Precise, operator-actionable remediation text per failure category — so a host is
+// never left with a raw token or the misleading "fix the rejected credential" for a
+// transient/transport cause. These are RETRYABLE transients (the pipeline keeps trying,
+// falls back to WMI/DCOM, and self-heals); the text explains the symptom without
+// implying a wrong password or a terminal verdict.
+const CATEGORY_HINT: Record<string, string> = {
+  winrm_negotiate_error: 'WinRM negotiation rejected mid-handshake (typically the listener under scan-storm load returning a non-SOAP 401). Retried automatically with backoff and falls back to WMI/DCOM — not a wrong password. Settles collection_failed only after every automatic option is exhausted.',
+  winrm_connect_timeout: 'WinRM/5985 did not respond in time (transient, or WinRM disabled). Retried automatically and falls back to WMI/DCOM — not a wrong password. Settles collection_failed only after the retry + self-heal budget is exhausted.',
+}
+// catLabel renders a failure category as readable text (underscores → spaces).
+const catLabel = (c?: string) => (c ?? '').replace(/_/g, ' ')
+
+type CredAttemptLike = { category?: string; success?: boolean; kind?: string }
+// failureClass is the Check-#10 final-reason aggregator: from the FULL set of credential
+// attempts (every credential × every transport the agent tried) it derives ONE
+// operator-facing failure class + precise remediation — never collapsing a mixed outcome
+// into a misleading "wrong password". Returns null when a credential succeeded (managed)
+// or nothing was attempted.
+function failureClass(attempts: CredAttemptLike[] | undefined): { cls: string; text: string } | null {
+  const a = attempts ?? []
+  if (a.length === 0) return null
+  if (a.some((x) => x.success)) return null // a credential worked → managed, no remediation
+  const cats = a.filter((x) => !x.success).map((x) => x.category || '')
+  if (cats.length === 0) return null
+  const has = (...c: string[]) => cats.some((x) => c.includes(x))
+  const all = (pred: (c: string) => boolean) => cats.every(pred)
+  const n = new Set(a.map((x) => x.kind)).size // credentials/methods tried
+  const tried = `${a.length} credential attempt(s) across ${n} method(s)`
+  const isTransport = (c: string) => ['unreachable', 'rpc_unreachable', 'dcom_unreachable', 'firewall_blocked', 'namespace_unavailable'].includes(c)
+  const isTransient = (c: string) => ['winrm_negotiate_error', 'winrm_connect_timeout'].includes(c)
+  const isAuthReject = (c: string) => ['auth_failed', 'wmi_auth_failed'].includes(c)
+  const isNotAuth = (c: string) => ['access_denied', 'wmi_access_denied'].includes(c)
+  // 2. NOT AUTHORIZED — the credential authenticated but the host denied it (UAC /
+  //    LocalAccountTokenFilterPolicy / group / WinRM policy). Distinct from a wrong password.
+  if (has('access_denied', 'wmi_access_denied')) {
+    return { cls: 'not_authorized', text: `Credential authenticated but is NOT authorized on this host (UAC LocalAccountTokenFilterPolicy / not a local admin / WinRM RootSDDL). Use a domain or host-authorized credential, or grant remote rights — this is NOT a wrong password. (${tried}.)` }
+  }
+  // 1. WRONG CREDENTIAL — every applicable credential was cleanly rejected.
+  if (cats.length > 0 && all((c) => isAuthReject(c))) {
+    return { cls: 'auth_rejected', text: `Credential rejected (wrong username/password) on this host — every applicable credential was tried and cleanly rejected. Update the credential. (${tried}.)` }
+  }
+  // 4. TRANSIENT — a retryable WinRM negotiation/transport issue is still in the mix.
+  if (has('winrm_negotiate_error', 'winrm_connect_timeout') && !has('auth_failed', 'wmi_auth_failed')) {
+    return { cls: 'transient', text: `Retryable WinRM negotiation/transport issue (listener busy or not responding). Retried automatically with backoff + WMI/DCOM fallback + self-heal — NOT a credential problem. Settles collection_failed only after the budget is exhausted. (${tried}.)` }
+  }
+  // 3. TRANSPORT UNREACHABLE — no listener answered on any transport.
+  if (cats.length > 0 && all((c) => isTransport(c))) {
+    return { cls: 'transport_unreachable', text: `Transport unreachable — WinRM/RPC port closed/filtered or host not responding (firewall / listener disabled). NOT a credential problem. (${tried}.)` }
+  }
+  // 5. MIXED / EXHAUSTED — all applicable credentials & methods tried, no supported path.
+  const parts: string[] = []
+  if (cats.some(isAuthReject)) parts.push('some credentials cleanly rejected')
+  if (cats.some(isNotAuth)) parts.push('some not authorized (policy/UAC)')
+  if (cats.some(isTransient)) parts.push('some transient WinRM negotiation')
+  if (cats.some(isTransport)) parts.push('some transport unreachable')
+  return { cls: 'mixed', text: `All applicable credentials/methods tried, no supported path succeeded: ${parts.join('; ') || cats.join(', ')}. (${tried}.)` }
+}
+
+function bucketOf(r: DiscoveryResult, d?: Device): Bucket {
+  const p = r.probe_data ?? {}
+  const na = (p.next_action ?? '').toLowerCase()
+  const via = p.collected_via
+  if (via === 'direct' || via === 'relay_agent' || d?.management === 'managed' || na.startsWith('managed via')) return 'managed'
+  if (r.outcome === 'failed' || r.outcome === 'missed' || d?.reachability === 'offline') return 'offline'
+  if (d?.management === 'needs_agent' || d?.management === 'agent_offline' || via === 'agent_offline' || via === 'agent_missing' || na.includes('relay agent')) return 'needs_agent'
+  if (d?.management === 'credential_failed' || na.includes('auth_failed') || na.includes('authentication rejected') || na.includes('auth failed')) return 'auth_failed'
+  if (na.includes('telnet-only') || na.includes('unsupported')) return 'unsupported'
+  if (na.includes('http-only') || na.includes('open its web ui') || na.includes('classify it') || na.includes('classify the device') || na.includes('classify manually')) return 'unknown_evidence'
+  if (na.includes('add a') || na.includes('add an') || na.includes('needs ') || na.includes('onboard')) return 'needs_credential'
+  if (na.includes('unreachable') || na.includes('enable ') || na.includes('open 5985') || na.includes('open port') || na.includes('not responding') || na.includes('timed out')) return 'transport_blocked'
+  if (d?.category && d.category !== 'unknown') return 'identified_only'
+  return 'unknown_evidence'
 }
 
 // Progress stages — highlighted from the job status + what the results show.
@@ -77,9 +172,11 @@ function Timeline({ job, results }: { job: DiscoveryJob; results: DiscoveryResul
 export function ScanJobResults() {
   const { jobId } = useParams()
   const qc = useQueryClient()
-  const [filter, setFilter] = useState<Filter>('all')
+  const [filter, setFilter] = useState<Filter | Bucket>('all')
   const [editDev, setEditDev] = useState<Device | null>(null)
   const [msg, setMsg] = useState('')
+  const [whyOpen, setWhyOpen] = useState<Set<string>>(new Set()) // result ids with the evidence panel expanded
+  const toggleWhy = (id: string) => setWhyOpen((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n })
 
   const detail = useQuery({
     queryKey: ['discovery-job', jobId],
@@ -98,6 +195,8 @@ export function ScanJobResults() {
   const job = detail.data?.job
   const results = detail.data?.results ?? []
   const counts = detail.data?.counts
+  const collection = detail.data?.collection
+  const phase = detail.data?.phase ?? (job ? job.status : undefined)
   const dev = (r: DiscoveryResult) => (r.device_id ? devMap.get(r.device_id) : undefined)
 
   // KPI rollup (joined to the live device for reachability/management).
@@ -127,8 +226,18 @@ export function ScanJobResults() {
   const progressPct = done ? 100 : total > 0 ? (scanned / total) * 100 : 0
   const managedPct = k.pingable > 0 ? (k.managed / k.pingable) * 100 : 0
 
+  // Per-result management bucket (computed once) + counts for the summary strip.
+  const bucketCounts = useMemo(() => {
+    const c = {} as Record<Bucket, number>
+    for (const b of BUCKETS) c[b] = 0
+    for (const r of results) { if (r.outcome === 'skipped') continue; c[bucketOf(r, dev(r))]++ }
+    return c
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [results, devMap])
+
   const filtered = useMemo(() => results.filter((r) => {
     const d = dev(r)
+    if ((BUCKETS as readonly string[]).includes(filter)) return bucketOf(r, d) === filter
     switch (filter) {
       case 'all': return true
       case 'newly_discovered': return r.disposition === 'newly_discovered'
@@ -154,7 +263,7 @@ export function ScanJobResults() {
   return (
     <div>
       <PageHeader title="Scan Job Results" icon={Radar}
-        subtitle={job ? `${job.scope_cidr ?? 'import'} · ${job.status}${job.location_id ? ' · ' + (locPath[job.location_id] ?? '') : ''}` : 'Loading…'}
+        subtitle={job ? `${job.scope_cidr ?? 'import'} · ${phaseMeta(phase).label}${phase === 'collecting' && collection ? ` ${collection.pending}` : ''}${job.location_id ? ' · ' + (locPath[job.location_id] ?? '') : ''}` : 'Loading…'}
         actions={<>
           <Link className="btn btn-ghost btn-sm" to="/discovery/jobs"><ArrowLeft size={14} /> All jobs</Link>
           <Link className="btn btn-ghost btn-sm" to={`/discovery/jobs/${jobId}/live`}><Radar size={14} /> Visual View</Link>
@@ -173,6 +282,34 @@ export function ScanJobResults() {
             <ProgressBar value={managedPct} tone="#16a34a"
               label="Managed of reachable" sublabel={`${k.managed} of ${k.pingable} reachable managed`} />
           </div>
+          {/* Collection progress — deep OS collection runs ASYNC after discovery, so the
+              job can be "completed" while devices are still being collected. Show it so the
+              operator never reads the result as fully settled while the queue drains. */}
+          {collection && (phase === 'collecting' || phase === 'self_healing') && (
+            <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderLeft: '3px solid #d97706', borderRadius: 8, padding: '10px 14px', marginBottom: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600 }}>
+                <RefreshCw size={14} /> {phase === 'self_healing'
+                  ? `Discovery complete · self-heal pending ${collection.self_healing ?? 0}`
+                  : `${job.status === 'completed' ? 'Discovery complete · collecting' : 'Collecting'} ${collection.pending}`}
+              </div>
+              <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 6, fontSize: 13, color: 'var(--text-muted)' }}>
+                <span>Queued {collection.queued}</span>
+                <span>Running {collection.running}</span>
+                <span>Retry-waiting {collection.retry_waiting}</span>
+                <span>Done {collection.done}</span>
+                <span>Failed {collection.failed}</span>
+                {(collection.self_healing ?? 0) > 0 && <span>Self-heal eligible {collection.self_healing}</span>}
+              </div>
+              <div style={{ marginTop: 6, fontSize: 12, color: 'var(--text-muted)' }}>
+                {phase === 'self_healing'
+                  ? 'Transient collection failures are awaiting automatic self-heal (re-collected after a short cooldown) — not yet settled.'
+                  : 'Deep OS collection runs after discovery via the site relay agent — the managed count may still be increasing.'}
+              </div>
+            </div>
+          )}
+          {collection && phase === 'complete' && collection.done + collection.failed > 0 && (
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>✓ Collection settled — {collection.done} collected{collection.failed > 0 ? `, ${collection.failed} failed` : ''}.</div>
+          )}
           {/* A. Scan stability — separated, honest counts (NOT a stable inventory total). */}
           <div className="kpi-grid">
             <Kpi label="Targets probed" value={counts?.targets_probed ?? job.host_count} icon={Boxes} tone="info" sub={`duration ${duration(job.started_at, job.finished_at)}`} />
@@ -202,6 +339,22 @@ export function ScanJobResults() {
           {/* D. Onboarding Actions */}
           {results.length > 0 && <OnboardingActions results={results} qc={qc} setMsg={setMsg} onRescan={() => rerun.mutate()} rescanning={rerun.isPending} />}
 
+          {/* Management buckets — every reachable device in exactly one bucket, with
+              its precise reason. Click a bucket to filter the table to those devices. */}
+          {results.length > 0 && (
+            <Panel title="Management buckets" subtitle="Why each reachable device is or isn't managed — click to filter">
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {BUCKETS.filter((b) => bucketCounts[b] > 0).map((b) => (
+                  <button key={b} onClick={() => setFilter(filter === b ? 'all' : b)}
+                    className={`badge badge-${BUCKET_META[b].tone}`}
+                    style={{ cursor: 'pointer', fontSize: 12, padding: '6px 10px', border: filter === b ? '2px solid var(--brand)' : '1px solid var(--border)', display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                    <strong style={{ fontSize: 14 }}>{bucketCounts[b]}</strong> {BUCKET_META[b].label}
+                  </button>
+                ))}
+              </div>
+            </Panel>
+          )}
+
           {/* E. Filters + C. Results table */}
           <Panel title="Results" subtitle={`${filtered.length} of ${results.length} device(s)`} pad={false}>
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', padding: '8px 10px', position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 1 }}>
@@ -221,8 +374,10 @@ export function ScanJobResults() {
                   {filtered.map((r) => {
                     const d = dev(r)
                     const p = r.probe_data ?? {}
+                    const open = whyOpen.has(r.id)
                     return (
-                      <tr key={r.id}>
+                      <Fragment key={r.id}>
+                      <tr>
                         <td className="mono" style={{ fontSize: 12 }}>{r.ip} <span className={`badge badge-${outcomeBadge(r.outcome)}`}>{r.outcome}</span></td>
                         <td>{d ? <Link className="cell-name" to={`/devices/${d.id}`}>{d.name}</Link> : <span className="muted">not enrolled</span>}{d?.hostname && <small style={{ display: 'block' }}>{d.hostname}</small>}
                           {r.disposition && DISPOSITION[r.disposition] && (
@@ -239,7 +394,7 @@ export function ScanJobResults() {
                         <td style={{ fontSize: 11 }}>{(p.opportunistic_protocols ?? []).join(', ').toUpperCase() || '—'}</td>
                         <td className="muted" style={{ fontSize: 11 }} title="Not applicable to this device type — intentionally not tried (by design, not a failure).">{(p.skipped_protocols ?? []).join(', ') || '—'}</td>
                         <td style={{ fontSize: 11 }}>{(p.cred_attempts ?? []).length === 0 ? <span className="muted">none</span> : (p.cred_attempts ?? []).map((a, i) => (
-                          <div key={i}><span className={`badge badge-${a.success ? 'up' : a.category === 'auth_failed' ? 'down' : 'unknown'}`}>{a.kind}</span> <span className="muted">{a.success ? 'ok' : a.category}</span></div>
+                          <div key={i} title={!a.success && a.category ? (CATEGORY_HINT[a.category] ?? '') : ''}><span className={`badge badge-${a.success ? 'up' : a.category === 'auth_failed' ? 'down' : 'unknown'}`}>{a.kind}</span> <span className="muted">{a.success ? 'ok' : catLabel(a.category)}</span></div>
                         ))}</td>
                         <td>{p.bound_cred ? <span className="badge badge-up">{p.bound_cred}</span> : <span className="muted">—</span>}</td>
                         <td style={{ fontSize: 11 }}>
@@ -255,14 +410,31 @@ export function ScanJobResults() {
                             </div>
                           )}
                         </td>
-                        <td style={{ fontSize: 12 }}>{r.error ? <span className="error-msg">{r.error}</span> : (p.next_action ?? '—')}</td>
+                        <td style={{ fontSize: 12 }}>{(() => {
+                          // Check #10: derive ONE precise operator-facing remediation from the full
+                          // attempt set (wrong-cred / not-authorized / transport / transient / mixed)
+                          // — never the misleading "fix the rejected credential" for a non-auth cause.
+                          const fc = d?.management === 'managed' ? null : failureClass(p.cred_attempts)
+                          if (fc) return <span style={{ color: fc.cls === 'auth_rejected' ? 'var(--crit)' : fc.cls === 'transient' ? 'var(--text-muted)' : '#d97706' }} title={`failure class: ${fc.cls}`}>{fc.text}</span>
+                          return r.error ? <span className="error-msg">{r.error}</span> : (p.next_action ?? '—')
+                        })()}</td>
                         <td style={{ whiteSpace: 'nowrap' }}>
                           {d && <Link className="btn btn-ghost btn-xs" to={`/devices/${d.id}`} title="Open device (test credential / bind / repair)">Open</Link>}{' '}
                           {d && <button className="btn btn-ghost btn-xs" onClick={() => setEditDev(d)} title="Edit / Lock classification"><Pencil size={12} /></button>}{' '}
                           {d && <button className="btn btn-ghost btn-xs" disabled={reclassify.isPending} onClick={() => reclassify.mutate(d.id)} title="Reclassify from evidence">RC</button>}{' '}
                           <button className="btn btn-ghost btn-xs" disabled={rescanIP.isPending} onClick={() => rescanIP.mutate(r.ip)} title="Re-scan this device"><RefreshCw size={12} /></button>
+                          <button className={'btn btn-ghost btn-xs' + (open ? ' active' : '')} onClick={() => toggleWhy(r.id)} title="Why this classification? Show evidence, matched + rejected fingerprints"><Search size={12} /> Why</button>
+                          {d && <div style={{ marginTop: 4 }}><CollectNowPanel deviceID={d.id} qc={qc} jobID={job?.id ?? null} /></div>}
                         </td>
                       </tr>
+                      {open && (
+                        <tr className="evidence-row">
+                          <td colSpan={14} style={{ background: 'var(--surface-2, rgba(255,255,255,0.02))', borderTop: '2px solid var(--accent, #4a7dff)' }}>
+                            <ClassificationEvidence detail={p} />
+                          </td>
+                        </tr>
+                      )}
+                      </Fragment>
                     )
                   })}
                 </tbody>

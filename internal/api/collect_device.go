@@ -70,27 +70,135 @@ func (s *Server) collectDevice(w http.ResponseWriter, r *http.Request) {
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
 	defer cancel()
 
+	// Wireless controllers (Extreme XCC / Ruckus ZD / UniFi / Omada) use on-prem
+	// collectors that need a small vendor profile. collectWirelessAuto builds it
+	// from the discovered IP + a subnet-scoped credential automatically, so the
+	// operator never authors a profile to get AP/SSID/client data.
+	if isWirelessController(dev) {
+		writeJSON(w, http.StatusOK, s.collectWirelessAuto(cctx, dev))
+		return
+	}
+
 	// vSphere/ESXi has a dedicated collector that also accepts ssh-kind root
 	// credentials (the common ESXi case) — prefer it over the generic core.
 	if kind == "vsphere" {
 		vr := s.runVSphereCollection(cctx, dev)
 		if !vr.ok() {
-			writeJSON(w, http.StatusOK, map[string]any{"collected": false, "kind": kind, "detail": nz(vr.Detail, vr.Reason)})
+			writeJSON(w, http.StatusOK, s.collectFailure(ctx, kind, nz(vr.Detail, vr.Reason)))
 			return
 		}
 		s.audit(r, "inventory", "device.collect", "device", id.String(), "Collected vsphere for "+dev.Name, map[string]any{"kind": kind})
-		writeJSON(w, http.StatusOK, map[string]any{"collected": true, "kind": kind, "detail": vr.Detail, "device_id": dev.ID.String()})
+		writeJSON(w, http.StatusOK, map[string]any{"collected": true, "state": "managed_direct", "kind": kind, "detail": vr.Detail, "device_id": dev.ID.String()})
+		return
+	}
+
+	// CCTV (camera / NVR / DVR) has a dedicated collector with the ISAPI-over-HTTPS
+	// ladder + subnet-scoped credential handling — far richer than plain ONVIF on
+	// port 80, which fails on recorders that only expose 443/8000+octet.
+	if kind == "onvif" {
+		cr := s.runCCTVCollection(cctx, dev, nil, "manual")
+		if !cr.ok() {
+			writeJSON(w, http.StatusOK, s.collectFailure(ctx, kind, nz(cr.Detail, cr.Reason)))
+			return
+		}
+		s.audit(r, "inventory", "device.collect", "device", id.String(), "Collected CCTV for "+dev.Name, map[string]any{"kind": kind})
+		writeJSON(w, http.StatusOK, map[string]any{"collected": true, "state": "managed_direct", "kind": kind, "detail": nz(cr.Detail, "collected via ONVIF/ISAPI"), "device_id": dev.ID.String()})
 		return
 	}
 
 	opts := collect.ControllerOpts{OmadaCID: req.OmadaCID, CUCMVersion: req.CUCMVersion, ExtremeBase: req.ExtremeBase}
 	res, cerr := collect.Controller(cctx, s.collectDeps(cctx), kind, *dev.PrimaryIp, dev.LocationID, opts)
 	if cerr != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"collected": false, "kind": kind, "detail": "collection via " + kind + " failed: " + shortErr(cerr)})
+		writeJSON(w, http.StatusOK, s.collectFailure(ctx, kind, "collection via "+kind+" failed: "+shortErr(cerr)))
 		return
 	}
 	s.audit(r, "inventory", "device.collect", "device", id.String(), "Collected "+kind+" for "+dev.Name, map[string]any{"kind": kind})
-	writeJSON(w, http.StatusOK, map[string]any{"collected": true, "kind": kind, "detail": nz(res.Summary, "collected via "+kind), "device_id": res.DeviceID.String()})
+	writeJSON(w, http.StatusOK, map[string]any{"collected": true, "state": "managed_direct", "kind": kind, "detail": nz(res.Summary, "collected via "+kind), "device_id": res.DeviceID.String()})
+}
+
+// loginKindsFor lists the credential kinds that authenticate a given collector
+// kind. Used to detect the "credential exists but wrong kind" case.
+func loginKindsFor(kind string) []string {
+	switch kind {
+	case "hyperv":
+		return []string{"winrm", "wmi"}
+	case "onvif":
+		return []string{"onvif", "http_basic"}
+	default: // vsphere / redfish / unifi / omada / ruckus / extreme / cucm
+		return []string{"vendor_api", "http_basic", "ssh", "onvif"}
+	}
+}
+
+// primaryLoginKind is the credential kind we suggest creating for a collector.
+func primaryLoginKind(kind string) string {
+	switch kind {
+	case "hyperv":
+		return "winrm"
+	case "onvif":
+		return "onvif"
+	default:
+		return "vendor_api"
+	}
+}
+
+// collectFailure builds a structured, professional failure response: a first-
+// class `state` (credential_kind_mismatch / auth_rejected / transport_blocked /
+// deep_inventory_failed) plus, for auth failures, the wrong-kind credential
+// candidates that could be duplicated into the required login kind. No secret is
+// ever read or returned — only credential names/kinds (metadata).
+func (s *Server) collectFailure(ctx context.Context, kind, detail string) map[string]any {
+	out := map[string]any{"collected": false, "kind": kind, "detail": detail}
+	low := strings.ToLower(detail)
+	// API/firmware issues first: the credential may have authenticated but the
+	// device's API path/firmware doesn't expose what we need — NOT an auth failure.
+	apiIssue := strings.Contains(low, "no json api") || strings.Contains(low, "api root") || strings.Contains(low, "api path") ||
+		strings.Contains(low, "non-standard") || strings.Contains(low, "not implemented") || strings.Contains(low, "unsupported")
+	authish := !apiIssue && (strings.Contains(low, "password") || strings.Contains(low, "login") || strings.Contains(low, "rejected") ||
+		strings.Contains(low, "denied") || strings.Contains(low, "401") || strings.Contains(low, "403") || strings.Contains(low, "incorrect user"))
+	transport := strings.Contains(low, "not exposed") || strings.Contains(low, "refused") || strings.Contains(low, "timeout") ||
+		strings.Contains(low, "no route") || strings.Contains(low, "unreachable") || strings.Contains(low, "deadline") || strings.Contains(low, "connection")
+
+	switch {
+	case apiIssue:
+		out["state"] = "api_unavailable"
+	case authish:
+		login := loginKindsFor(kind)
+		isLogin := func(k string) bool {
+			for _, x := range login {
+				if x == k {
+					return true
+				}
+			}
+			return false
+		}
+		haveLogin := false
+		var cands []map[string]any
+		if all, err := s.queries.ListCredentials(ctx); err == nil {
+			for _, c := range all {
+				if isLogin(c.Kind) {
+					haveLogin = true
+					continue
+				}
+				if len(cands) < 8 { // wrong-kind candidates the operator could duplicate
+					cands = append(cands, map[string]any{"id": c.ID.String(), "name": c.Name, "kind": c.Kind})
+				}
+			}
+		}
+		out["required_kind"] = primaryLoginKind(kind)
+		out["candidates"] = cands
+		if !haveLogin && len(cands) > 0 {
+			out["state"] = "credential_kind_mismatch"
+			out["detail"] = "Credential exists but wrong kind. This device needs a " + kind + " login (" +
+				primaryLoginKind(kind) + "), but the matching secret is stored under a different kind (e.g. SNMP). Duplicate it as a login credential and retry."
+		} else {
+			out["state"] = "auth_rejected"
+		}
+	case transport:
+		out["state"] = "transport_blocked"
+	default:
+		out["state"] = "deep_inventory_failed"
+	}
+	return out
 }
 
 // collectViaController runs a profile's deep collection through the

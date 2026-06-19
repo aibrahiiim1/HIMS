@@ -159,7 +159,7 @@ export interface Device {
   // "is it online" (monitoring); management is "can HIMS actually collect from it"
   // (proven working method) — never conflated, never inferred from open ports.
   reachability?: string // online | offline | warning | unknown
-  management?: string // managed | partially_managed | unmanaged | needs_credential | credential_failed | needs_agent | agent_offline | collection_failed
+  management?: string // managed | partially_managed | unmanaged | needs_credential | credential_failed | needs_agent | agent_offline | collection_failed | web_authenticated | not_authorized
   managed_by?: string[] // protocol tokens with a PROVEN working method
   previously_managed?: boolean // offline now, but has a working method on record
   // Operator-editable management attributes (Edit Device).
@@ -291,6 +291,12 @@ export const MGMT_BADGE: Record<string, { label: string; cls: string }> = {
   needs_agent: { label: 'Needs agent', cls: 'badge-warning' },
   agent_offline: { label: 'Agent offline', cls: 'badge-down' },
   collection_failed: { label: 'Collection failed', cls: 'badge-down' },
+  // A web/identity credential authenticated but no deep OS management exists — the
+  // credential WORKS, so this is NOT a credential failure.
+  web_authenticated: { label: 'Web authenticated', cls: 'badge-access' },
+  // A credential authenticated but the host denied access (UAC/policy) — valid credential,
+  // NOT a wrong password.
+  not_authorized: { label: 'Not authorized on host', cls: 'badge-warning' },
 }
 export function reachBadge(v?: string) { return REACH_BADGE[v ?? 'unknown'] ?? REACH_BADGE.unknown }
 export function mgmtBadge(v?: string) { return MGMT_BADGE[v ?? 'unmanaged'] ?? MGMT_BADGE.unmanaged }
@@ -836,6 +842,12 @@ export interface DiscoveryJob {
   mode?: string // 'targets' | 'site_subnets' | ''
   targets?: string // raw target list (IP / range / CIDR / mixed) for target-mode scans
   scope?: string // human-readable scope label (targets || scope_cidr || 'site subnets' || 'import / manual')
+  // Honest end-to-end phase derived server-side: 'queued' | 'discovering' | 'collecting'
+  // | 'complete' | 'failed' | 'cancelled'. status only reflects the probe/enroll phase;
+  // phase stays 'collecting' until deep OS collection settles (never a premature complete).
+  phase?: string
+  collecting_pending?: number // collect_os jobs still in flight for this job's devices
+  self_healing?: number // terminal transient failures still eligible for automatic self-heal
 }
 
 export interface ScanCredAttempt { kind: string; protocol: string; category: string; detail: string; success: boolean; relevant?: boolean }
@@ -850,11 +862,44 @@ export interface ScanProfileResult {
   collection_ok?: boolean
   detail?: string
 }
+// Phase 3/5 explainable-classification record (probe_data.classification_detail).
+export interface ClassificationEvidenceChannels {
+  sysobjectid?: string
+  sysdescr?: string
+  sysname?: string
+  http_server?: string
+  ssh_banner?: string
+  ports?: number[]
+}
+export interface FingerprintMatch {
+  vendor: string
+  device_type: string
+  confidence: number
+  kind: string // oid | service | http | ssh | sysname | port
+  pattern: string
+  model?: string
+}
+export interface RejectedCandidate {
+  vendor: string
+  device_type: string
+  confidence: number
+  kind: string
+  pattern: string
+  reason: string // "excluded by …" | "lower confidence (N) than chosen …"
+}
+export interface ClassificationDetail {
+  evidence: ClassificationEvidenceChannels
+  final_source: string // fingerprint | driver | plan | none
+  winners?: FingerprintMatch[]
+  rejected?: RejectedCandidate[]
+  likely_type?: string // best guess for an otherwise-unknown device
+}
 export interface ScanDetail {
   open_ports?: number[]
   classification?: string
   confidence?: number
   evidence?: string[]
+  classification_detail?: ClassificationDetail | null
   candidate?: string
   expected_protocols?: string[]
   opportunistic_protocols?: string[] // not expected by the plan but probed anyway (e.g. SNMP)
@@ -1566,6 +1611,12 @@ export interface ApplyTemplateResult {
   alerts_skipped: number
   warnings: string[]
 }
+// A negative condition on a fingerprint: when the evidence matches it, the rule
+// does NOT fire (e.g. HP .11=switch EXCEPT the JetDirect printer subtree).
+export interface FingerprintExclusion {
+  kind: string // oid | service | http | ssh | sysname | port
+  pattern: string
+}
 export interface VendorFingerprint {
   id: string
   kind: string
@@ -1577,6 +1628,7 @@ export interface VendorFingerprint {
   priority: number
   source: string // 'builtin' | 'user'
   enabled: boolean
+  exclusions?: FingerprintExclusion[]
   created_at: string
   updated_at?: string
 }

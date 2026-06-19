@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -42,41 +43,87 @@ func (s *Server) routeViaSiteAgent(ctx context.Context, d db.Device, ip, protoco
 		return res, false
 	}
 
-	// Is there an online agent for this site? ResolveSiteAgent returns the newest
-	// enabled+online row, but DB status can be stale, so re-check heartbeat.
-	online, ok := s.onlineSiteAgent(ctx, *d.LocationID)
+	// Enqueuing an agent job is a quick DB write that MUST complete even when the
+	// caller's per-host scan budget is already exhausted — the direct WinRM attempt
+	// against a filtered 5985 port can burn the whole budget before we get here, so
+	// using the caller's ctx made ResolveSiteAgent / CreateAgentJob fail on a dead
+	// context and the host silently fell back to a misleading auth_failed instead of
+	// being dispatched to the online agent. Resolve + enqueue on a FRESH, independent
+	// context so routing always completes. Mirrors the enroll-on-fresh-ctx fix.
+	actx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	// Resolve the agent to QUEUE for. Prefer an online agent; but if the site's
+	// assigned agent is only momentarily offline (its heartbeat lagged while it was
+	// busy collecting under a from-zero scan), STILL queue the job for it — the agent
+	// picks it up when it next polls. Refusing to enqueue while the agent was briefly
+	// behind silently DROPPED the work and left hosts "not_attempted" (the exact
+	// from-zero gap). Only a site with NO assigned agent is a hard gate.
+	target, ok := s.onlineSiteAgent(actx, *d.LocationID)
 	if !ok {
-		// Distinguish "an agent is assigned but offline" from "no agent at all".
-		if s.siteHasAnyAgent(ctx, *d.LocationID) {
-			res.Reason, res.Detail = "agent_offline", "the Relay Agent assigned to this site is offline (no recent heartbeat) — start/repair it, or assign another"
-		} else {
+		assigned, has := s.assignedSiteAgent(actx, *d.LocationID)
+		if !has {
 			res.Reason, res.Detail = "agent_missing", "no Relay Agent is assigned to this site — install or assign one to collect legacy/local Windows hosts"
+			return res, false
 		}
-		return res, false
+		target = assigned // assigned but offline → queue anyway; it drains when the agent returns
 	}
 
 	// Avoid piling up duplicate jobs when the same device is re-scanned before its
 	// previous job ran.
-	if n, _ := s.queries.CountActiveDeviceAgentJobs(ctx, &d.ID); n > 0 {
+	if n, _ := s.queries.CountActiveDeviceAgentJobs(actx, &d.ID); n > 0 {
 		res.Status, res.Method = "queued", "relay-agent"
-		res.Reason, res.AgentName = "via_agent", online.Name
-		res.Detail = "collection already queued for site agent " + online.Name + " — awaiting agent poll"
+		res.Reason, res.AgentName = "via_agent", target.Name
+		res.Detail = "collection already queued for site agent " + target.Name + " — awaiting agent poll"
 		return res, true
 	}
 
-	credID := s.pickAgentCredID(ctx, d, protocol)
-	job, err := s.queries.CreateAgentJob(ctx, db.CreateAgentJobParams{
-		AgentID: online.ID, DeviceID: &d.ID, CredentialID: credID,
+	credID := s.pickAgentCredID(actx, d, protocol)
+	job, err := s.queries.CreateAgentJob(actx, db.CreateAgentJobParams{
+		AgentID: target.ID, DeviceID: &d.ID, CredentialID: credID,
 		Kind: "collect_os", Protocol: protocol, Target: ip, Request: []byte("{}"),
 	})
 	if err != nil {
-		res.Reason, res.Detail = "agent_enqueue_failed", "could not queue a job for site agent "+online.Name+": "+err.Error()
+		res.Reason, res.Detail = "agent_enqueue_failed", "could not queue a job for site agent "+target.Name+": "+err.Error()
 		return res, false
 	}
 	res.Status, res.Method = "queued", "relay-agent"
-	res.Reason, res.AgentName = "via_agent", online.Name
-	res.Detail = "dispatched to site agent " + online.Name + " via " + protocol + " (job " + job.ID.String() + ") — inventory will appear when the agent reports back"
+	res.Reason, res.AgentName = "via_agent", target.Name
+	res.Detail = "queued for site agent " + target.Name + " via " + protocol + " (job " + job.ID.String() + ") — inventory appears when the agent reports back"
 	return res, true
+}
+
+// assignedSiteAgent returns the site's assigned, ENABLED agent regardless of its
+// current online status (newest heartbeat wins). Used to queue collection for an
+// agent that is only momentarily offline instead of dropping the work — the job
+// waits in the queue and the agent collects it when it next polls.
+func (s *Server) assignedSiteAgent(ctx context.Context, loc uuid.UUID) (db.RelayAgent, bool) {
+	all, err := s.queries.ListRelayAgents(ctx)
+	if err != nil {
+		return db.RelayAgent{}, false
+	}
+	var best db.RelayAgent
+	found := false
+	for _, a := range all {
+		if a.LocationID == nil || *a.LocationID != loc || !a.Enabled {
+			continue
+		}
+		if !found || hbAfter(a.LastHeartbeat, best.LastHeartbeat) {
+			best, found = a, true
+		}
+	}
+	return best, found
+}
+
+// hbAfter reports whether heartbeat a is later than b (nil = never).
+func hbAfter(a, b *time.Time) bool {
+	if a == nil {
+		return false
+	}
+	if b == nil {
+		return true
+	}
+	return a.After(*b)
 }
 
 // onlineSiteAgent returns the freshest online agent assigned to a location.

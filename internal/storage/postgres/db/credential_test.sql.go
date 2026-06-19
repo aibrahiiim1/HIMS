@@ -12,6 +12,69 @@ import (
 	"github.com/google/uuid"
 )
 
+const deviceCredentialSignals = `-- name: DeviceCredentialSignals :many
+SELECT device_id,
+  bool_or(success)                                                       AS any_success,
+  bool_or(success AND kind IN ('http_basic','http'))                    AS web_success,
+  bool_or(category = 'auth_ok_operation_fault')                         AS legacy_authok,
+  bool_or(category IN ('access_denied','wmi_access_denied'))            AS not_authorized,
+  bool_or(category = 'auth_failed')                                     AS auth_rejected
+FROM credential_test_results
+WHERE device_id IS NOT NULL AND kind <> ''
+GROUP BY device_id
+`
+
+type DeviceCredentialSignalsRow struct {
+	DeviceID      uuid.UUID `json:"device_id"`
+	AnySuccess    bool      `json:"any_success"`
+	WebSuccess    bool      `json:"web_success"`
+	LegacyAuthok  bool      `json:"legacy_authok"`
+	NotAuthorized bool      `json:"not_authorized"`
+	AuthRejected  bool      `json:"auth_rejected"`
+}
+
+// Per-device aggregate over ALL credential-test outcomes (every credential, every kind),
+// so management classification NEVER loses a signal to latest-per-kind masking (e.g. a
+// legacy WSMan auth_ok_operation_fault hidden behind a sibling .\administrator auth_failed,
+// or an http_basic success hidden behind a winrm auth_failed). This is the read model for
+// the classification rule: a host is credential_failed ONLY if some credential was cleanly
+// auth-rejected AND nothing authenticated by any supported method. Booleans:
+//
+//	any_success   — any credential succeeded (deep OR web)
+//	web_success   — a WEB/identity login succeeded (http_basic/http) — authenticates but is
+//	                not deep management
+//	legacy_authok — a credential AUTHENTICATED but the WSMan op faulted (legacy WSMan 2.0)
+//	                — valid cred, needs an agent/deep collector
+//	not_authorized— a credential AUTHENTICATED but the host denied access (UAC / DCOM /
+//	                policy) — distinct from a wrong password
+//	auth_rejected — a credential was cleanly rejected (wrong username/password)
+func (q *Queries) DeviceCredentialSignals(ctx context.Context) ([]DeviceCredentialSignalsRow, error) {
+	rows, err := q.db.Query(ctx, deviceCredentialSignals)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DeviceCredentialSignalsRow{}
+	for rows.Next() {
+		var i DeviceCredentialSignalsRow
+		if err := rows.Scan(
+			&i.DeviceID,
+			&i.AnySuccess,
+			&i.WebSuccess,
+			&i.LegacyAuthok,
+			&i.NotAuthorized,
+			&i.AuthRejected,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const insertCredentialTestResult = `-- name: InsertCredentialTestResult :exec
 INSERT INTO credential_test_results
   (run_id, device_id, credential_id, credential_name, kind, protocol, category, success, detail, latency_ms, actor, relevant, source)

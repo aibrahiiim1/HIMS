@@ -4,6 +4,7 @@ import { HardDrive, Cpu, MemoryStick, Server, Database } from 'lucide-react'
 import { api, type DeviceFact, type ServerStorage, type VirtualMachine } from '../api'
 import { DeviceOps } from '../components/DeviceOps'
 import { DeviceHeader } from '../components/DeviceHeader'
+import { ClassificationEvidencePanel } from '../components/ClassificationEvidence'
 import { Panel, Kpi, DefList, EmptyState, StatusPill, Meter } from '../components/ui'
 
 function fmtBytes(n?: number | null): string {
@@ -47,6 +48,7 @@ export function VirtualHostDetail() {
   return (
     <div>
       <DeviceHeader deviceId={id!} icon={HardDrive} />
+      <ClassificationEvidencePanel deviceId={id!} />
 
       <div className="kpi-grid">
         <Kpi label="Hypervisor" value={f.get('hypervisor.type') || '—'} icon={Server} tone="info" />

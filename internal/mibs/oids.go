@@ -108,6 +108,10 @@ const (
 	// prtMarkerLifeCount (col 4 of prtMarkerEntry): total page count.
 	PrtMarkerLifeCountEntry = "1.3.6.1.2.1.43.10.2.1.4"
 	PrinterMIBRoot          = "1.3.6.1.2.1.43" // presence ⇒ a printer
+	// prtGeneralEntry identity columns (per hrDeviceIndex): the standard,
+	// vendor-neutral way to read a printer's model name + serial number.
+	PrtGeneralPrinterNameEntry  = "1.3.6.1.2.1.43.5.1.1.16" // prtGeneralPrinterName (model/name)
+	PrtGeneralSerialNumberEntry = "1.3.6.1.2.1.43.5.1.1.17" // prtGeneralSerialNumber
 
 	// --- UPS-MIB (RFC 1628), root 1.3.6.1.2.1.33 -------------------------
 	UpsMIBRoot              = "1.3.6.1.2.1.33"

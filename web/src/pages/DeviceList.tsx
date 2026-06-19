@@ -6,6 +6,7 @@ import { api, type Device } from '../api'
 import { PageHeader, Panel, Kpi, StatusPill, EmptyState, colorFor, usePaged, Pager } from '../components/ui'
 import { DeleteAllToggle } from '../components/DeleteAllToggle'
 import { EditDevice } from '../components/EditDevice'
+import { ExportDevicesButton } from '../components/ExportDevicesButton'
 
 interface Props {
   category: string
@@ -50,6 +51,7 @@ export function DeviceList({ category, title, detailBase, headerExtra, preConten
       <PageHeader title={title} subtitle={`Managed ${title.toLowerCase()} across the fleet`} icon={Boxes}
         actions={
           <>
+            <ExportDevicesButton devices={filtered} filename={title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')} />
             {headerExtra}
             <DeleteAllToggle ids={filtered.map((d) => d.id)} fullInventory={false}
               scope={q.trim() ? `filtered ${title.toLowerCase()}` : `all ${title.toLowerCase()}`}

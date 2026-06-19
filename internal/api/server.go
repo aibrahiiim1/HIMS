@@ -238,6 +238,7 @@ func (s *Server) routes() {
 		r.Patch("/devices/{id}", s.updateDevice)
 		r.Delete("/devices/{id}", s.deleteDevice)
 		r.Get("/devices/{id}/classification", s.getClassification)
+		r.Get("/devices/{id}/classification-evidence", s.getClassificationEvidence) // latest scan probe_data (classification_detail) for the evidence panel
 		r.Post("/devices/{id}/reclassify", s.reclassifyDevice)
 		r.Get("/devices/{id}/os-inventory", s.getOSInventory)
 		r.Post("/devices/{id}/collect-os", s.collectOSInventory)
@@ -350,7 +351,9 @@ func (s *Server) routes() {
 
 		// --- Operations: work orders + systems/licenses --------------
 		// --- Reports Pro (#21): server-side multi-format export -------
-		r.Get("/reports/{type}/export", s.exportReport) // ?format=xlsx|csv
+		r.Get("/reports/{type}/export", s.exportReport)               // ?format=xlsx|csv
+		r.Get("/reports/credential-attempts", s.connectivityAttempts) // Connectivity report: per-device cred outcomes
+		r.Get("/reports/collection-queue", s.collectionQueueSummary)  // Agent collect-job queue rollup (queued/dispatched/done/failed)
 		r.Get("/report-schedules", s.listReportSchedules)
 		r.Post("/report-schedules", s.createReportSchedule)
 		r.Patch("/report-schedules/{id}", s.setReportScheduleEnabled)
@@ -421,6 +424,7 @@ func (s *Server) routes() {
 		r.Get("/credentials/{id}/credential-tests", s.credentialCredentialTests)
 		r.Get("/credentials/{id}/devices", s.credentialDevices)
 		r.Post("/credentials/{id}/apply-to-scope", s.applyCredentialToScope)
+		r.Post("/credentials/{id}/duplicate", s.duplicateCredential) // reuse a secret under a different kind (fix kind mismatch)
 		r.Get("/credential-tests/runs", s.listCredentialTestRuns)
 		r.Get("/credential-tests/runs/{id}/results", s.listCredentialTestRunResults)
 		r.Get("/vendor-profiles", s.listVendorProfiles)

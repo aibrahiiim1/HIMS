@@ -126,6 +126,13 @@ func WebVendorMarkers(server, title, body string) []domain.ClassificationEvidenc
 		return []domain.ClassificationEvidence{ev(domain.EvidenceSourceHTTP, "Alcatel OmniSwitch web marker", string(domain.CatSwitch), domain.OSFamilyNetwork, "alcatel_omniswitch", 60)}
 	case strings.Contains(s, "omnipcx") || strings.Contains(s, "omnivista"):
 		return []domain.ClassificationEvidence{ev(domain.EvidenceSourceHTTP, "Alcatel OmniPCX/OmniVista voice web marker", string(domain.CatPBX), "", "alcatel_voice", 50)}
+	// Web-managed L2 switches that answer ONLY on HTTP (no SNMP/SSH): the page
+	// title carries the vendor + "switch". Ruijie Easy-Smart and similar SOHO/
+	// unmanaged-plus switches expose a web UI only — classify them as switch so
+	// they leave the "unknown" bucket. Deep SNMP/SSH management may still not be
+	// available (the scan reports that honestly), but the device type is known.
+	case strings.Contains(s, "ruijie") || (strings.Contains(s, "easy-smart") && strings.Contains(s, "switch")):
+		return []domain.ClassificationEvidence{ev(domain.EvidenceSourceHTTP, "Ruijie/Easy-Smart web-managed switch marker", string(domain.CatSwitch), domain.OSFamilyNetwork, "", 55)}
 	// Wireless controllers. "unifi" is guarded against "unified" (Cisco Unified) —
 	// already handled above, but the guard keeps any other "unified…" string out.
 	case (strings.Contains(s, "unifi") && !strings.Contains(s, "unified")) || strings.Contains(s, "aruba") || strings.Contains(s, "ruckus") ||

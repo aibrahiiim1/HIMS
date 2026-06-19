@@ -61,6 +61,7 @@ export function Credentials() {
   const [tab, setTab] = useState('creds')
   const [show, setShow] = useState(false)
   const [editCred, setEditCred] = useState<Credential | null>(null)
+  const [dupCred, setDupCred] = useState<Credential | null>(null)
   const [hist, setHist] = useState<{ id: string; name: string } | null>(null)
   const [usage, setUsage] = useState<{ id: string; name: string } | null>(null)
   const list = useQuery({ queryKey: ['credentials'], queryFn: () => api.get<Credential[]>('/credentials') })
@@ -95,6 +96,7 @@ export function Credentials() {
       key: 'actions', label: '', render: (c) => (
         <span style={{ whiteSpace: 'nowrap' }}>
           <button style={ghost} onClick={() => setHist(hist?.id === c.id ? null : { id: c.id, name: c.name })}>History</button>{' '}
+          <button style={ghost} onClick={() => { setShow(false); setEditCred(null); setDupCred(c) }} title="Reuse this secret under a different kind (e.g. an SNMP community as an SSH/vendor login) — no re-typing">Duplicate as…</button>{' '}
           <button style={ghost} onClick={() => { setShow(false); setEditCred(c) }}>Edit</button>{' '}
           <button style={danger} onClick={() => { if (confirm(`Delete credential "${c.name}"? It will be unbound from any devices.`)) del.mutate(c.id) }}>Delete</button>
         </span>
@@ -127,6 +129,7 @@ export function Credentials() {
         <>
           {show && <CreateForm onDone={() => { setShow(false); refresh() }} onCancel={() => setShow(false)} />}
           {editCred && <EditForm cred={editCred} onDone={() => { setEditCred(null); refresh() }} onCancel={() => setEditCred(null)} />}
+          {dupCred && <DuplicateForm cred={dupCred} onDone={() => { setDupCred(null); refresh() }} onCancel={() => setDupCred(null)} />}
 
           <Panel title={`Stored credentials (${creds.length})`} icon={KeyRound} className="mt12">
             {list.isLoading && <div className="muted">Loading…</div>}
@@ -214,6 +217,47 @@ function EditForm({ cred, onDone, onCancel }: { cred: Credential; onDone: () => 
         <button style={btn} disabled={!name.trim() || save.isPending} onClick={() => save.mutate()}>{save.isPending ? 'Saving…' : 'Save changes'}</button>{' '}
         <button style={ghost} onClick={onCancel}>Cancel</button>
         {save.error && <span className="badge badge-down" style={{ marginLeft: 12 }}>{(save.error as Error).message}</span>}
+      </div>
+    </Panel>
+  )
+}
+
+// DuplicateForm reuses an existing credential's secret under a different kind
+// without re-typing it (server-side decrypt + re-seal). The classic fix: a
+// password saved only as an SNMP community needs to become an SSH / vendor_api
+// login. When the target is a user:password kind and the source is secret-only,
+// the operator supplies just the username (not a secret).
+function DuplicateForm({ cred, onDone, onCancel }: { cred: Credential; onDone: () => void; onCancel: () => void }) {
+  const DUP_KINDS = ['vendor_api', 'ssh', 'winrm', 'wmi', 'http_basic', 'onvif', 'snmp_v2c']
+  const USERPASS = ['ssh', 'winrm', 'wmi', 'http_basic', 'onvif', 'vendor_api', 'ldap']
+  const [newKind, setNewKind] = useState('vendor_api')
+  const [username, setUsername] = useState('root')
+  const [name, setName] = useState(`${cred.name} (as vendor_api)`)
+  // Username needed only when reusing a secret-only source as a user:password login.
+  const needsUser = USERPASS.includes(newKind) && !USERPASS.includes(cred.kind)
+  const m = useMutation({
+    mutationFn: () => api.post<Credential>(`/credentials/${cred.id}/duplicate`, { new_kind: newKind, username: needsUser ? username : '', name }),
+    onSuccess: onDone,
+  })
+  return (
+    <Panel title={`Duplicate “${cred.name}” as another kind`} icon={KeyRound} className="mt12">
+      <div className="muted" style={{ fontSize: 12, marginBottom: 10 }}>
+        Reuses this credential’s stored secret under a new kind — the secret is never re-typed or shown.
+        Use this when the right password exists but under the wrong kind (e.g. an SNMP community that is also a device’s login password).
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(220px,1fr))', gap: 12 }}>
+        <label>New kind
+          <select style={input} value={newKind} onChange={(e) => { setNewKind(e.target.value); setName(`${cred.name} (as ${e.target.value})`) }}>
+            {DUP_KINDS.filter((k) => k !== cred.kind).map((k) => <option key={k} value={k}>{kindLabel(k)}</option>)}
+          </select>
+        </label>
+        {needsUser && <label>Username<input style={input} placeholder="root / admin / administrator" value={username} onChange={(e) => setUsername(e.target.value)} /></label>}
+        <label>New credential name<input style={input} value={name} onChange={(e) => setName(e.target.value)} /></label>
+      </div>
+      <div style={{ marginTop: 12 }}>
+        <button style={btn} disabled={(needsUser && !username.trim()) || !name.trim() || m.isPending} onClick={() => m.mutate()}>{m.isPending ? 'Creating…' : 'Create duplicate'}</button>{' '}
+        <button style={ghost} onClick={onCancel}>Cancel</button>
+        {m.error && <span className="badge badge-down" style={{ marginLeft: 12 }}>{(m.error as Error).message}</span>}
       </div>
     </Panel>
   )

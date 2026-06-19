@@ -12,6 +12,75 @@ import (
 	"github.com/google/uuid"
 )
 
+const agentJobStatusCounts = `-- name: AgentJobStatusCounts :many
+SELECT status::text AS status, count(*) AS n FROM agent_jobs GROUP BY status
+`
+
+type AgentJobStatusCountsRow struct {
+	Status string `json:"status"`
+	N      int64  `json:"n"`
+}
+
+// Fleet-wide collect-job rollup by status (acceptance / queue-visibility report).
+func (q *Queries) AgentJobStatusCounts(ctx context.Context) ([]AgentJobStatusCountsRow, error) {
+	rows, err := q.db.Query(ctx, agentJobStatusCounts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AgentJobStatusCountsRow{}
+	for rows.Next() {
+		var i AgentJobStatusCountsRow
+		if err := rows.Scan(&i.Status, &i.N); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const collectionProgressForJob = `-- name: CollectionProgressForJob :one
+SELECT
+  count(*) FILTER (WHERE status = 'queued' AND (next_attempt_at IS NULL OR next_attempt_at <= now()))::bigint AS queued,
+  count(*) FILTER (WHERE status = 'queued' AND next_attempt_at > now())::bigint               AS retry_waiting,
+  count(*) FILTER (WHERE status = 'dispatched')::bigint                                        AS running,
+  count(*) FILTER (WHERE status = 'done')::bigint                                              AS done,
+  count(*) FILTER (WHERE status = 'failed')::bigint                                            AS failed
+FROM agent_jobs
+WHERE kind = 'collect_os' AND device_id IN (
+  SELECT device_id FROM discovery_results WHERE job_id = $1 AND device_id IS NOT NULL
+)
+`
+
+type CollectionProgressForJobRow struct {
+	Queued       int64 `json:"queued"`
+	RetryWaiting int64 `json:"retry_waiting"`
+	Running      int64 `json:"running"`
+	Done         int64 `json:"done"`
+	Failed       int64 `json:"failed"`
+}
+
+// Collect-job rollup for the devices a discovery job enrolled — lets the UI/API show
+// "Discovery complete · collecting N" while deep collection drains AFTER the scan's
+// probe/enroll phase finishes. retry_waiting (backoff) is split from queued so the
+// operator sees jobs that are waiting vs ready. The scan is "settled" when
+// queued + retry_waiting + running all reach 0.
+func (q *Queries) CollectionProgressForJob(ctx context.Context, jobID uuid.UUID) (CollectionProgressForJobRow, error) {
+	row := q.db.QueryRow(ctx, collectionProgressForJob, jobID)
+	var i CollectionProgressForJobRow
+	err := row.Scan(
+		&i.Queued,
+		&i.RetryWaiting,
+		&i.Running,
+		&i.Done,
+		&i.Failed,
+	)
+	return i, err
+}
+
 const completeAgentJob = `-- name: CompleteAgentJob :exec
 UPDATE agent_jobs
 SET status = $2, result = $3, category = $4, error = $5, finished_at = now()
@@ -51,6 +120,69 @@ func (q *Queries) CountActiveDeviceAgentJobs(ctx context.Context, deviceID *uuid
 	return count, err
 }
 
+const countAgentJobsByStatusForAgent = `-- name: CountAgentJobsByStatusForAgent :many
+SELECT status::text AS status, count(*) AS n FROM agent_jobs WHERE agent_id = $1 GROUP BY status
+`
+
+type CountAgentJobsByStatusForAgentRow struct {
+	Status string `json:"status"`
+	N      int64  `json:"n"`
+}
+
+// Per-agent job rollup by status (queued / dispatched / done / failed).
+func (q *Queries) CountAgentJobsByStatusForAgent(ctx context.Context, agentID uuid.UUID) ([]CountAgentJobsByStatusForAgentRow, error) {
+	rows, err := q.db.Query(ctx, countAgentJobsByStatusForAgent, agentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CountAgentJobsByStatusForAgentRow{}
+	for rows.Next() {
+		var i CountAgentJobsByStatusForAgentRow
+		if err := rows.Scan(&i.Status, &i.N); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const countAgentLoadBackoff = `-- name: CountAgentLoadBackoff :one
+SELECT count(*) FROM agent_jobs
+WHERE agent_id = $1 AND kind = 'collect_os' AND status = 'queued'
+  AND next_attempt_at > now()
+  AND category IN ('winrm_negotiate_error', 'winrm_connect_timeout')
+`
+
+// Count of this agent's collect_os jobs currently waiting on a LOAD-INDUCED transient
+// backoff (winrm negotiate / connect-timeout requeued, next_attempt_at in the future).
+// A high count means the agent's WinRM listeners are saturated under a from-zero
+// storm; the dispatcher uses it to throttle new work (shrink the poll budget) so the
+// listeners recover instead of being fed more concurrent negotiations. As the backoff
+// queue drains the count falls and the budget reopens — a self-regulating governor.
+func (q *Queries) CountAgentLoadBackoff(ctx context.Context, agentID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countAgentLoadBackoff, agentID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countDispatchedAgentJobs = `-- name: CountDispatchedAgentJobs :one
+SELECT count(*) FROM agent_jobs WHERE agent_id = $1 AND status = 'dispatched'
+`
+
+// Jobs currently handed to the agent and not yet reported back — the in-flight
+// count subtracted from the dispatch cap to compute the poll budget.
+func (q *Queries) CountDispatchedAgentJobs(ctx context.Context, agentID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countDispatchedAgentJobs, agentID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countFailedAgentJobs = `-- name: CountFailedAgentJobs :one
 SELECT count(*) FROM agent_jobs WHERE agent_id = $1 AND status = 'failed'
 `
@@ -63,10 +195,36 @@ func (q *Queries) CountFailedAgentJobs(ctx context.Context, agentID uuid.UUID) (
 	return count, err
 }
 
+const countSelfHealEligibleForJob = `-- name: CountSelfHealEligibleForJob :one
+WITH latest_job AS (
+  SELECT DISTINCT ON (device_id) device_id, status, category
+  FROM agent_jobs WHERE kind = 'collect_os' AND device_id IS NOT NULL
+  ORDER BY device_id, created_at DESC
+)
+SELECT count(*)::bigint FROM latest_job lj
+WHERE lj.device_id IN (SELECT device_id FROM discovery_results WHERE job_id = $1 AND device_id IS NOT NULL)
+  AND lj.status = 'failed'
+  AND lj.category IN ('winrm_negotiate_error', 'winrm_connect_timeout', 'agent_no_result')
+  AND NOT EXISTS (SELECT 1 FROM os_inventory oi WHERE oi.device_id = lj.device_id AND oi.collection_method <> '')
+  AND (SELECT count(*) FROM agent_jobs a2 WHERE a2.device_id = lj.device_id AND a2.kind = 'collect_os'
+         AND a2.status = 'failed' AND a2.finished_at > now() - interval '24 hours') < 4
+`
+
+// Count of a job's enrolled devices still eligible for automatic self-heal (terminal
+// load-induced transient failure, no evidence, round budget remaining). Drives the
+// job-detail phase: > 0 keeps the job "self-heal" (not "complete") even while no
+// collect_os job is in flight (the self-heal cooldown window).
+func (q *Queries) CountSelfHealEligibleForJob(ctx context.Context, jobID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countSelfHealEligibleForJob, jobID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const createAgentJob = `-- name: CreateAgentJob :one
 INSERT INTO agent_jobs (agent_id, device_id, credential_id, kind, protocol, target, request)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, agent_id, device_id, credential_id, kind, protocol, target, status, request, result, category, error, created_at, dispatched_at, finished_at
+RETURNING id, agent_id, device_id, credential_id, kind, protocol, target, status, request, result, category, error, created_at, dispatched_at, finished_at, attempt, max_attempts, next_attempt_at
 `
 
 type CreateAgentJobParams struct {
@@ -106,6 +264,9 @@ func (q *Queries) CreateAgentJob(ctx context.Context, arg CreateAgentJobParams) 
 		&i.CreatedAt,
 		&i.DispatchedAt,
 		&i.FinishedAt,
+		&i.Attempt,
+		&i.MaxAttempts,
+		&i.NextAttemptAt,
 	)
 	return i, err
 }
@@ -158,7 +319,7 @@ func (q *Queries) DeleteRelayAgent(ctx context.Context, id uuid.UUID) error {
 }
 
 const getAgentJob = `-- name: GetAgentJob :one
-SELECT id, agent_id, device_id, credential_id, kind, protocol, target, status, request, result, category, error, created_at, dispatched_at, finished_at FROM agent_jobs WHERE id = $1
+SELECT id, agent_id, device_id, credential_id, kind, protocol, target, status, request, result, category, error, created_at, dispatched_at, finished_at, attempt, max_attempts, next_attempt_at FROM agent_jobs WHERE id = $1
 `
 
 func (q *Queries) GetAgentJob(ctx context.Context, id uuid.UUID) (AgentJob, error) {
@@ -180,6 +341,9 @@ func (q *Queries) GetAgentJob(ctx context.Context, id uuid.UUID) (AgentJob, erro
 		&i.CreatedAt,
 		&i.DispatchedAt,
 		&i.FinishedAt,
+		&i.Attempt,
+		&i.MaxAttempts,
+		&i.NextAttemptAt,
 	)
 	return i, err
 }
@@ -236,6 +400,73 @@ func (q *Queries) GetRelayAgentByToken(ctx context.Context, tokenHash string) (R
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const jobsCollectionState = `-- name: JobsCollectionState :many
+WITH latest_result AS (
+  SELECT DISTINCT ON (device_id) device_id, job_id
+  FROM discovery_results WHERE device_id IS NOT NULL
+  ORDER BY device_id, probed_at DESC
+),
+latest_job AS (
+  SELECT DISTINCT ON (device_id) device_id, status, category
+  FROM agent_jobs WHERE kind = 'collect_os' AND device_id IS NOT NULL
+  ORDER BY device_id, created_at DESC
+),
+per_dev AS (
+  SELECT lr.job_id,
+    (lj.status IN ('queued', 'dispatched')) AS in_flight,
+    (lj.status = 'failed'
+       AND lj.category IN ('winrm_negotiate_error', 'winrm_connect_timeout', 'agent_no_result')
+       AND NOT EXISTS (SELECT 1 FROM os_inventory oi WHERE oi.device_id = lr.device_id AND oi.collection_method <> '')
+       AND (SELECT count(*) FROM agent_jobs a2 WHERE a2.device_id = lr.device_id AND a2.kind = 'collect_os'
+              AND a2.status = 'failed' AND a2.finished_at > now() - interval '24 hours') < 4
+    ) AS healing
+  FROM latest_result lr
+  JOIN latest_job lj ON lj.device_id = lr.device_id
+)
+SELECT job_id,
+  count(*) FILTER (WHERE in_flight)::bigint AS pending,
+  count(*) FILTER (WHERE healing)::bigint   AS healing
+FROM per_dev
+GROUP BY job_id
+HAVING count(*) FILTER (WHERE in_flight) > 0 OR count(*) FILTER (WHERE healing) > 0
+`
+
+type JobsCollectionStateRow struct {
+	JobID   uuid.UUID `json:"job_id"`
+	Pending int64     `json:"pending"`
+	Healing int64     `json:"healing"`
+}
+
+// Per discovery job: how many of its devices still have a collect_os job IN FLIGHT
+// (pending) and how many are still ELIGIBLE for automatic self-heal (healing). A job is
+// NOT fully settled while either is > 0 — so the Scan Jobs LIST shows "collecting" or
+// "self-heal" instead of a premature "complete", honestly reflecting that the self-heal
+// sweep will still re-collect terminal transient failures. Each device is attributed to
+// its MOST RECENT scan job (a device has one row, reconciled by IP across re-scans).
+// Self-heal eligible = latest collect_os job failed with a load-induced transient
+// category, no os_inventory evidence, and the 4-round/24h budget is not yet burned
+// (mirrors ListSelfHealCandidates without the cooldown — the job is unsettled for the
+// whole window, not only after the cooldown elapses). Returns only unsettled jobs.
+func (q *Queries) JobsCollectionState(ctx context.Context) ([]JobsCollectionStateRow, error) {
+	rows, err := q.db.Query(ctx, jobsCollectionState)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []JobsCollectionStateRow{}
+	for rows.Next() {
+		var i JobsCollectionStateRow
+		if err := rows.Scan(&i.JobID, &i.Pending, &i.Healing); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listAgentJobs = `-- name: ListAgentJobs :many
@@ -296,39 +527,27 @@ func (q *Queries) ListAgentJobs(ctx context.Context, arg ListAgentJobsParams) ([
 	return items, nil
 }
 
-const listQueuedAgentJobs = `-- name: ListQueuedAgentJobs :many
-SELECT id, agent_id, device_id, credential_id, kind, protocol, target, status, request, result, category, error, created_at, dispatched_at, finished_at FROM agent_jobs WHERE agent_id = $1 AND status = 'queued' ORDER BY created_at LIMIT 20
+const listDevicesWithActiveAgentJobs = `-- name: ListDevicesWithActiveAgentJobs :many
+SELECT DISTINCT device_id FROM agent_jobs
+WHERE kind = 'collect_os' AND status IN ('queued', 'dispatched') AND device_id IS NOT NULL
 `
 
-func (q *Queries) ListQueuedAgentJobs(ctx context.Context, agentID uuid.UUID) ([]AgentJob, error) {
-	rows, err := q.db.Query(ctx, listQueuedAgentJobs, agentID)
+// Device ids with an in-flight collect_os job (queued or dispatched). Feeds the
+// pending_collection management state so an in-flight host is not misreported as a
+// terminal failure from its stale direct-probe attempt.
+func (q *Queries) ListDevicesWithActiveAgentJobs(ctx context.Context) ([]*uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listDevicesWithActiveAgentJobs)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []AgentJob{}
+	items := []*uuid.UUID{}
 	for rows.Next() {
-		var i AgentJob
-		if err := rows.Scan(
-			&i.ID,
-			&i.AgentID,
-			&i.DeviceID,
-			&i.CredentialID,
-			&i.Kind,
-			&i.Protocol,
-			&i.Target,
-			&i.Status,
-			&i.Request,
-			&i.Result,
-			&i.Category,
-			&i.Error,
-			&i.CreatedAt,
-			&i.DispatchedAt,
-			&i.FinishedAt,
-		); err != nil {
+		var device_id *uuid.UUID
+		if err := rows.Scan(&device_id); err != nil {
 			return nil, err
 		}
-		items = append(items, i)
+		items = append(items, device_id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -430,6 +649,129 @@ func (q *Queries) ListRelayAgents(ctx context.Context) ([]RelayAgent, error) {
 	return items, nil
 }
 
+const listRunnableAgentJobs = `-- name: ListRunnableAgentJobs :many
+SELECT id, agent_id, device_id, credential_id, kind, protocol, target, status, request, result, category, error, created_at, dispatched_at, finished_at, attempt, max_attempts, next_attempt_at FROM agent_jobs
+WHERE agent_id = $1 AND status = 'queued'
+  AND (next_attempt_at IS NULL OR next_attempt_at <= now())
+ORDER BY created_at
+LIMIT $2
+`
+
+type ListRunnableAgentJobsParams struct {
+	AgentID uuid.UUID `json:"agent_id"`
+	Limit   int32     `json:"limit"`
+}
+
+// The next queued jobs for an agent that are ready to run now (backoff elapsed),
+// capped by $2 = the per-agent dispatch budget (cap - in-flight dispatched). This
+// is what bounds the thundering herd: the server never hands one agent more than
+// the cap of concurrent collect jobs.
+func (q *Queries) ListRunnableAgentJobs(ctx context.Context, arg ListRunnableAgentJobsParams) ([]AgentJob, error) {
+	rows, err := q.db.Query(ctx, listRunnableAgentJobs, arg.AgentID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AgentJob{}
+	for rows.Next() {
+		var i AgentJob
+		if err := rows.Scan(
+			&i.ID,
+			&i.AgentID,
+			&i.DeviceID,
+			&i.CredentialID,
+			&i.Kind,
+			&i.Protocol,
+			&i.Target,
+			&i.Status,
+			&i.Request,
+			&i.Result,
+			&i.Category,
+			&i.Error,
+			&i.CreatedAt,
+			&i.DispatchedAt,
+			&i.FinishedAt,
+			&i.Attempt,
+			&i.MaxAttempts,
+			&i.NextAttemptAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSelfHealCandidates = `-- name: ListSelfHealCandidates :many
+WITH latest AS (
+  SELECT DISTINCT ON (device_id) device_id, status, category, finished_at
+  FROM agent_jobs
+  WHERE kind = 'collect_os' AND device_id IS NOT NULL
+  ORDER BY device_id, created_at DESC
+)
+SELECT d.id, host(d.primary_ip)::text AS ip
+FROM devices d
+JOIN latest l ON l.device_id = d.id
+WHERE d.deleted_at IS NULL
+  AND l.status = 'failed'
+  AND l.category IN ('winrm_negotiate_error', 'winrm_connect_timeout', 'agent_no_result')
+  AND l.finished_at < now() - make_interval(mins => $1::int)
+  AND NOT EXISTS (
+    SELECT 1 FROM os_inventory oi WHERE oi.device_id = d.id AND oi.collection_method <> ''
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM agent_jobs aj WHERE aj.device_id = d.id AND aj.kind = 'collect_os'
+      AND aj.status IN ('queued', 'dispatched')
+  )
+  AND (
+    SELECT count(*) FROM agent_jobs aj2 WHERE aj2.device_id = d.id AND aj2.kind = 'collect_os'
+      AND aj2.status = 'failed' AND aj2.finished_at > now() - interval '24 hours'
+  ) < $2::int
+ORDER BY l.finished_at
+LIMIT 50
+`
+
+type ListSelfHealCandidatesParams struct {
+	Column1 int32 `json:"column_1"`
+	Column2 int32 `json:"column_2"`
+}
+
+type ListSelfHealCandidatesRow struct {
+	ID uuid.UUID `json:"id"`
+	Ip string    `json:"ip"`
+}
+
+// Devices stranded in a TERMINAL transient collect_os failure that should be
+// automatically re-collected once the storm that caused it has passed. A candidate's
+// latest collect_os job failed with a load-induced transient category, it has no
+// os_inventory evidence (was never successfully collected), no collect_os job is in
+// flight, the failure is older than the cooldown ($1 minutes), and it has not already
+// burned the self-heal round budget ($2 = max failed transient jobs in the last 24h).
+// Auth/authz failures are EXCLUDED (operator must fix the credential) — self-heal
+// never re-sprays a rejected credential or loops forever on a genuinely broken host.
+func (q *Queries) ListSelfHealCandidates(ctx context.Context, arg ListSelfHealCandidatesParams) ([]ListSelfHealCandidatesRow, error) {
+	rows, err := q.db.Query(ctx, listSelfHealCandidates, arg.Column1, arg.Column2)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListSelfHealCandidatesRow{}
+	for rows.Next() {
+		var i ListSelfHealCandidatesRow
+		if err := rows.Scan(&i.ID, &i.Ip); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const markAgentJobDispatched = `-- name: MarkAgentJobDispatched :exec
 UPDATE agent_jobs SET status = 'dispatched', dispatched_at = now() WHERE id = $1
 `
@@ -456,6 +798,59 @@ type RelayAgentHeartbeatParams struct {
 func (q *Queries) RelayAgentHeartbeat(ctx context.Context, arg RelayAgentHeartbeatParams) error {
 	_, err := q.db.Exec(ctx, relayAgentHeartbeat, arg.ID, arg.Column2, arg.Column3)
 	return err
+}
+
+const requeueAgentJob = `-- name: RequeueAgentJob :exec
+UPDATE agent_jobs
+SET status = 'queued', attempt = attempt + 1, next_attempt_at = $2,
+    dispatched_at = NULL, error = $3, category = $4
+WHERE id = $1
+`
+
+type RequeueAgentJobParams struct {
+	ID            uuid.UUID  `json:"id"`
+	NextAttemptAt *time.Time `json:"next_attempt_at"`
+	Error         string     `json:"error"`
+	Category      string     `json:"category"`
+}
+
+// Return a transiently-failed job to the queue with an incremented attempt and a
+// backoff deadline ($2). Clears dispatched_at so it can be re-dispatched once the
+// backoff elapses. Used for retryable (non-auth) collection failures.
+func (q *Queries) RequeueAgentJob(ctx context.Context, arg RequeueAgentJobParams) error {
+	_, err := q.db.Exec(ctx, requeueAgentJob,
+		arg.ID,
+		arg.NextAttemptAt,
+		arg.Error,
+		arg.Category,
+	)
+	return err
+}
+
+const requeueStaleAgentJobs = `-- name: RequeueStaleAgentJobs :execrows
+UPDATE agent_jobs
+SET status          = CASE WHEN attempt + 1 >= max_attempts THEN 'failed' ELSE 'queued' END,
+    attempt         = attempt + 1,
+    dispatched_at   = NULL,
+    next_attempt_at = CASE WHEN attempt + 1 >= max_attempts THEN NULL ELSE now() END,
+    finished_at     = CASE WHEN attempt + 1 >= max_attempts THEN now() ELSE finished_at END,
+    error           = CASE WHEN attempt + 1 >= max_attempts
+                           THEN 'agent did not report a result (stale dispatched; gave up after max attempts)'
+                           ELSE error END,
+    category        = CASE WHEN attempt + 1 >= max_attempts THEN 'agent_no_result' ELSE category END
+WHERE kind = 'collect_os' AND status = 'dispatched'
+  AND dispatched_at IS NOT NULL AND dispatched_at < $1
+`
+
+// Recover jobs stuck 'dispatched' whose agent never reported back (agent crash /
+// dropped connection): requeue (bumped attempt) if attempts remain, else mark
+// failed so they never block re-enqueue forever. $1 = dispatched-before cutoff.
+func (q *Queries) RequeueStaleAgentJobs(ctx context.Context, dispatchedAt *time.Time) (int64, error) {
+	result, err := q.db.Exec(ctx, requeueStaleAgentJobs, dispatchedAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const resolveSiteAgent = `-- name: ResolveSiteAgent :one

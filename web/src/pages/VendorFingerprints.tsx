@@ -1,10 +1,16 @@
 import { useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ScanLine, Plus, DownloadCloud, FlaskConical, Trash2, Upload, Download, Pencil, X } from 'lucide-react'
-import { api, saveBlob, type VendorFingerprint, type FingerprintMatchResp, type FingerprintTestResp, type FingerprintImportResp, type Device } from '../api'
+import { api, saveBlob, type VendorFingerprint, type FingerprintExclusion, type FingerprintMatchResp, type FingerprintTestResp, type FingerprintImportResp, type Device } from '../api'
 import { PageHeader, Panel, Kpi, EmptyState, usePaged, Pager } from '../components/ui'
 
 const KINDS = ['oid', 'service', 'sysname', 'port', 'http', 'ssh']
+// What each exclusion-marker channel matches — shown in the editor so operators
+// understand what a marker means.
+const KIND_HELP: Record<string, string> = {
+  oid: 'SNMP sysObjectID subtree', service: 'sysDescr substring', sysname: 'sysName substring',
+  http: 'HTTP Server header', ssh: 'SSH banner', port: 'open TCP port',
+}
 const kindCls = (k: string) =>
   k === 'oid' ? 'badge-info'
     : k === 'service' ? 'badge-lldp'
@@ -13,8 +19,8 @@ const kindCls = (k: string) =>
           : k === 'ssh' ? 'badge-warning'
             : 'badge-unknown'
 
-type FpForm = { id?: string; kind: string; pattern: string; vendor: string; device_type: string; model: string; confidence: number; priority: number }
-const emptyForm: FpForm = { kind: 'oid', pattern: '', vendor: '', device_type: '', model: '', confidence: 60, priority: 100 }
+type FpForm = { id?: string; kind: string; pattern: string; vendor: string; device_type: string; model: string; confidence: number; priority: number; exclusions: FingerprintExclusion[] }
+const emptyForm: FpForm = { kind: 'oid', pattern: '', vendor: '', device_type: '', model: '', confidence: 60, priority: 100, exclusions: [] }
 
 export function VendorFingerprints() {
   const qc = useQueryClient()
@@ -28,9 +34,13 @@ export function VendorFingerprints() {
   const editing = !!form.id
 
   const save = useMutation({
-    mutationFn: () => editing
-      ? api.patch<VendorFingerprint>(`/vendor-fingerprints/${form.id}`, { ...form, enabled: true })
-      : api.post<VendorFingerprint>('/vendor-fingerprints', form),
+    mutationFn: () => {
+      // Drop half-filled exclusion rows (operator clicked "Add" but left it blank).
+      const payload = { ...form, exclusions: form.exclusions.filter((e) => e.pattern.trim() !== '') }
+      return editing
+        ? api.patch<VendorFingerprint>(`/vendor-fingerprints/${form.id}`, { ...payload, enabled: true })
+        : api.post<VendorFingerprint>('/vendor-fingerprints', payload)
+    },
     onSuccess: () => { setForm(emptyForm); setMsg(editing ? 'Fingerprint updated.' : 'Fingerprint added.'); inv() },
     onError: (e) => setMsg((e as Error).message),
   })
@@ -112,6 +122,7 @@ export function VendorFingerprints() {
           <input className="field" style={{ width: 84 }} type="number" min={1} value={form.priority} onChange={(e) => setForm({ ...form, priority: Number(e.target.value) })} title="priority (lower runs first)" />
           <button className="btn btn-primary" disabled={!form.pattern || save.isPending} onClick={() => save.mutate()}>{editing ? 'Save' : 'Add'}</button>
         </div>
+        <ExclusionsEditor value={form.exclusions} onChange={(ex) => setForm({ ...form, exclusions: ex })} />
         <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>User-defined rules outrank the built-in catalog at equal confidence. Lower priority runs first among ties.</p>
       </Panel>
 
@@ -132,7 +143,7 @@ export function VendorFingerprints() {
         {q.data && rows.length === 0 && <EmptyState icon={ScanLine} title="No fingerprints yet" message="Click “Import standard library” for a comprehensive starter set (real enterprise OIDs + banners), or add your own." action={<button className="btn btn-primary btn-sm" onClick={() => seed.mutate()}>Import standard library</button>} />}
         {shown.length > 0 && (
           <table className="data-table">
-            <thead><tr><th>Kind</th><th>Pattern</th><th>Vendor</th><th>Device type</th><th>Model</th><th>Conf</th><th>Prio</th><th>Source</th><th>Enabled</th><th></th></tr></thead>
+            <thead><tr><th>Kind</th><th>Pattern</th><th>Vendor</th><th>Device type</th><th>Model</th><th>Conf</th><th>Prio</th><th>Exclusions</th><th>Source</th><th>Enabled</th><th></th></tr></thead>
             <tbody>
               {paged.slice.map((f) => (
                 <tr key={f.id} className={form.id === f.id ? 'row-selected' : ''}>
@@ -143,10 +154,13 @@ export function VendorFingerprints() {
                   <td>{f.model || '—'}</td>
                   <td>{f.confidence}%</td>
                   <td>{f.priority}</td>
+                  <td>{(f.exclusions?.length ?? 0) > 0
+                    ? <span className="badge badge-warning" title={(f.exclusions ?? []).map((e) => `excludes ${e.kind}: ${e.pattern}`).join('\n')}>{f.exclusions!.length} excl.</span>
+                    : <span className="muted">—</span>}</td>
                   <td>{f.source === 'user' ? <span className="badge badge-up">user</span> : <span className="badge badge-unknown">built-in</span>}</td>
                   <td>{f.enabled ? <span className="badge badge-up">enabled</span> : <span className="badge badge-disabled">disabled</span>}</td>
                   <td className="cell-actions">
-                    <button className="btn btn-ghost btn-xs" onClick={() => setForm({ id: f.id, kind: f.kind, pattern: f.pattern, vendor: f.vendor, device_type: f.device_type, model: f.model || '', confidence: f.confidence, priority: f.priority })}><Pencil size={12} /></button>
+                    <button className="btn btn-ghost btn-xs" onClick={() => setForm({ id: f.id, kind: f.kind, pattern: f.pattern, vendor: f.vendor, device_type: f.device_type, model: f.model || '', confidence: f.confidence, priority: f.priority, exclusions: f.exclusions ?? [] })}><Pencil size={12} /></button>
                     <button className="btn btn-ghost btn-xs" onClick={() => toggle.mutate(f)}>{f.enabled ? 'Disable' : 'Enable'}</button>
                     <button className="btn btn-ghost btn-xs" style={{ color: 'var(--crit)' }} onClick={() => del.mutate(f.id)}><Trash2 size={12} /></button>
                   </td>
@@ -221,6 +235,40 @@ function TestAgainstDevice() {
         </div>
       )}
     </Panel>
+  )
+}
+
+// ExclusionsEditor lets an operator view/add/remove a fingerprint's exclusions —
+// negative markers that suppress the rule (e.g. "HP .11 = switch EXCEPT the
+// JetDirect printer subtree"). Tolerant of a null/empty list (renders "none").
+function ExclusionsEditor({ value, onChange }: { value: FingerprintExclusion[]; onChange: (ex: FingerprintExclusion[]) => void }) {
+  const list = value ?? []
+  const add = () => onChange([...list, { kind: 'oid', pattern: '' }])
+  const set = (i: number, patch: Partial<FingerprintExclusion>) => onChange(list.map((e, j) => (j === i ? { ...e, ...patch } : e)))
+  const remove = (i: number) => onChange(list.filter((_, j) => j !== i))
+  return (
+    <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border, #2a3042)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+        <span style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--muted, #8a93a6)' }}>Exclusions</span>
+        <button className="btn btn-ghost btn-xs" onClick={add}><Plus size={11} /> Add exclusion</button>
+      </div>
+      <p className="muted" style={{ fontSize: 11, marginTop: 0, marginBottom: 8 }}>
+        Negative markers — when the evidence matches ANY of these, this rule does <strong>not</strong> fire
+        (e.g. a broad vendor OID that should classify as a switch <em>except</em> a printer subtree). Empty = always applies.
+      </p>
+      {list.length === 0
+        ? <p className="muted" style={{ fontSize: 12 }}>No exclusions — this rule fires whenever its pattern matches.</p>
+        : list.map((e, i) => (
+          <div key={i} className="row" style={{ gap: 8, marginBottom: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+            <select className="field" style={{ width: 110 }} value={e.kind} onChange={(ev) => set(i, { kind: ev.target.value })}>
+              {KINDS.map((k) => <option key={k} value={k}>{k}</option>)}
+            </select>
+            <input className="field mono" style={{ flex: 1, minWidth: 200 }} placeholder="pattern to exclude" value={e.pattern} onChange={(ev) => set(i, { pattern: ev.target.value })} />
+            <span className="muted" style={{ fontSize: 11, minWidth: 150 }}>{KIND_HELP[e.kind]}</span>
+            <button className="btn btn-ghost btn-xs" style={{ color: 'var(--crit)' }} onClick={() => remove(i)} title="Remove exclusion"><X size={12} /></button>
+          </div>
+        ))}
+    </div>
   )
 }
 

@@ -18,15 +18,28 @@ SELECT device_id, protocol::text AS protocol, source::text AS source FROM (
     FROM devices d JOIN credentials c ON c.id = d.credential_id
     WHERE d.deleted_at IS NULL
 
-  -- 2) Deep OS inventory proves authenticated WinRM/SSH/WMI. winrm-native (the
-  --    Windows Native Collector helper) is still WinRM-family; wmi is its own.
+  -- 2) Deep OS inventory PROVES an authenticated collection succeeded — os_inventory
+  --    is only ever written on success, so EVERY row is durable management evidence,
+  --    independent of any later failed credential attempt (a host that collected once
+  --    must not regress to credential_failed because a subsequent probe was rejected or
+  --    the host was briefly unreachable). The protocol is normalised from
+  --    collection_method: 'wmi' → wmi, 'ssh' → ssh, every WinRM-family label
+  --    (winrm, winrm-native, winrm-agent, winrm-direct, …) → winrm.
+  --
+  --    Match on a NON-EMPTY collection_method rather than an enumerated IN-list: the
+  --    list previously omitted 'winrm-agent' (the relay-agent WinRM-shell collector),
+  --    so agent-collected hosts produced NO evidence signal — their managed state hung
+  --    on a fragile credential-test row and a later WMI/UAC failure flipped them to
+  --    credential_failed. Counting the inventory itself, with no label list to fall out
+  --    of, makes that regression class structurally impossible for any current or
+  --    future collection method.
   UNION ALL
   SELECT device_id,
          CASE WHEN collection_method = 'wmi' THEN 'wmi'
               WHEN collection_method = 'ssh' THEN 'ssh'
               ELSE 'winrm' END AS protocol,
          'evidence' AS source
-    FROM os_inventory WHERE collection_method IN ('winrm', 'ssh', 'winrm-native', 'wmi')
+    FROM os_inventory WHERE collection_method <> ''
 
   -- 3) Camera inventory (authenticated device-info / profiles). The PROTOCOL is
   --    the device's actual last-successful web protocol (web_last_proto: isapi vs

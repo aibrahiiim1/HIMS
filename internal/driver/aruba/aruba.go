@@ -43,6 +43,15 @@ var descrKeywords = []string{"aruba", "procurve", "hewlett", "hpe", "hp "}
 //	 0 — not ours
 func (*Driver) Fingerprint(p driver.Probe) driver.Match {
 	oid := strings.TrimPrefix(strings.TrimSpace(p.SNMPSysObjectID), ".")
+	// HP printers/JetDirect print servers live UNDER the same HP enterprise OID
+	// (.1.3.6.1.4.1.11) as HP ProCurve switches — the JetDirect subtree is
+	// .11.2.3.9.* — and present "HP ETHERNET MULTI-ENVIRONMENT" in sysDescr. They
+	// are PRINTERS, not switches, so the generic HP enterprise prefix / "hp " descr
+	// keyword must NOT claim them for the switch driver (that gave a printer the
+	// aruba_hpe switch template). Bail FIRST; the printer driver handles them.
+	if isHPPrinter(oid, strings.ToLower(p.SNMPSysDescr)) {
+		return driver.NoMatch
+	}
 	for _, pre := range enterprisePrefixes {
 		if strings.HasPrefix(oid, pre) {
 			return driver.Match{Confidence: 90, Category: domain.CatSwitch}
@@ -57,4 +66,20 @@ func (*Driver) Fingerprint(p driver.Probe) driver.Match {
 		}
 	}
 	return driver.NoMatch
+}
+
+// isHPPrinter reports whether the SNMP identity is an HP printer / JetDirect print
+// server rather than an HP/Aruba switch. JetDirect sits under the HP enterprise
+// OID subtree .11.2.3.9; the sysDescr markers below are printer-only (no HP/Aruba
+// switch reports them), so matching any one is a safe printer signal.
+func isHPPrinter(oid, lowerDescr string) bool {
+	if strings.HasPrefix(oid, "1.3.6.1.4.1.11.2.3.9") {
+		return true
+	}
+	for _, kw := range []string{"jetdirect", "laserjet", "officejet", "designjet", "ethernet multi-environment"} {
+		if strings.Contains(lowerDescr, kw) {
+			return true
+		}
+	}
+	return false
 }

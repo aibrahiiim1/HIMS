@@ -17,6 +17,31 @@ import (
 // even though the credential is valid. It must NOT be reported as a wrong password.
 const WinRMOperationFault = "auth_ok_operation_fault"
 
+// WinRMConnectTimeout is the credential-test category for "WinRM/5985 did not respond
+// in time" — a transient transport failure (the host usually still answers ping), NOT a
+// closed port and NOT an auth rejection. It is retryable with backoff and must never be
+// reported as credential_failed. Kept as an exported constant so the relay agent and the
+// server's retry/classification logic reference one token.
+const WinRMConnectTimeout = "winrm_connect_timeout"
+
+// WinRMNegotiateError is the credential-test category for a WinRM/NTLM negotiation that
+// failed at the HTTP layer (e.g. a 401 with a non-SOAP body — "invalid content type")
+// before the credential could be validated. It is the signature of a WinRM listener
+// under load (connection/operation limits) during a scan storm, NOT a wrong password —
+// so it is RETRYABLE with backoff and must never be reported as credential_failed. A
+// genuine credential rejection has a clean 401/unauthorized signature → auth_failed.
+const WinRMNegotiateError = "winrm_negotiate_error"
+
+// NOTE: a persistent-looking "401 invalid content type" + WMI access-denied combo is
+// deliberately NOT given a dedicated TERMINAL category. from-zero #6 proved that pattern
+// can be load/timing-sensitive (hosts that looked permanently blocked collected later
+// with NO host-side change), so no single WinRM 401 pattern is terminal by itself —
+// governed retry + WMI fallback + self-heal decide the outcome, and "host policy blocked"
+// is an operator-facing diagnosis only AFTER the automatic budget is exhausted. (The
+// client below already does NTLM with WSMan message encryption, so the 401 is NOT an
+// AllowUnencrypted gap; it is the overloaded listener returning an HTML error page mid-
+// negotiation — exactly the load signature this category is meant to retry through.)
+
 // ClassifyWinRMError maps a WinRM error to a credential-test category + detail +
 // (optional) WSMan fault code. The key distinction: a *winrm.ExecuteCommandError
 // means HTTP/NTLM auth already SUCCEEDED (HTTP 200) and the failure is a WSMan
@@ -39,13 +64,32 @@ func ClassifyWinRMError(err error) (category, detail, faultCode string) {
 	}
 	e := strings.ToLower(err.Error())
 	switch {
+	case strings.Contains(e, "invalid content type") || strings.Contains(e, "invalid content-type"):
+		// A 401 whose response body/headers are NOT the expected SOAP/NTLM continuation:
+		// the WinRM listener rejected at the HTTP layer before NTLM completed (it returned
+		// an HTML error page, not application/soap+xml). This is the classic symptom of an
+		// OVERLOADED WinRM service (MaxConcurrentOperationsPerUser / connection limits)
+		// during a scan storm — NOT a wrong password. It is RETRYABLE with backoff; a real
+		// credential rejection has the clean 401/unauthorized signature handled below.
+		// Checked BEFORE the generic "401" case because this string also contains "401".
+		return WinRMNegotiateError, "WinRM/NTLM negotiation failed (transient, likely WinRM under load) — will retry", ""
 	case strings.Contains(e, "401") || strings.Contains(e, "unauthorized") ||
 		strings.Contains(e, "the user name or password is incorrect") || strings.Contains(e, "access is denied"):
 		return "auth_failed", "authentication rejected", ""
+	case strings.Contains(e, "did not properly respond") || strings.Contains(e, "failed to respond") ||
+		strings.Contains(e, "timed out") || strings.Contains(e, "i/o timeout") ||
+		strings.Contains(e, "timeout") || strings.Contains(e, "deadline"):
+		// WinRM/5985 accepted no answer in time. The host commonly still answers ping,
+		// so this is a TRANSIENT transport failure (busy host, momentary packet loss, a
+		// firewall that drops rather than refuses) — RETRYABLE with backoff, NOT a closed
+		// port and NOT an auth rejection. Kept DISTINCT from "unreachable" (actively
+		// refused/reset) so the agent can retry WinRM instead of falling through to a WMI
+		// logon attempt (which, during a WinRM blip, would try every candidate credential
+		// against WMI and risk locking out a domain account).
+		return WinRMConnectTimeout, "WinRM/5985 did not respond in time (transient) — will retry", ""
 	case strings.Contains(e, "refused") || strings.Contains(e, "reset") ||
-		strings.Contains(e, "timeout") || strings.Contains(e, "deadline") ||
 		strings.Contains(e, "no route") || strings.Contains(e, "no such host") || strings.Contains(e, "unreachable"):
-		return "unreachable", "could not connect (WinRM/5985 unreachable or filtered)", ""
+		return "unreachable", "could not connect (WinRM/5985 refused or filtered)", ""
 	default:
 		return "error", strings.TrimSpace(err.Error()), ""
 	}

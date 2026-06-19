@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -119,7 +120,78 @@ func dbToPrints(rows []db.VendorFingerprint, enabledOnly bool) []fingerprint.Pri
 		out = append(out, fingerprint.Print{
 			Kind: r.Kind, Pattern: r.Pattern, Vendor: r.Vendor,
 			DeviceType: r.DeviceType, Confidence: int(r.Confidence), Model: r.Model,
+			Exclusions: fpExclusionsFromJSON(r.Exclusions),
 		})
+	}
+	return out
+}
+
+// fpExclusionsFromJSON decodes the vendor_fingerprints.exclusions JSONB column
+// into the matcher's exclusion slice. A malformed/empty blob yields no
+// exclusions (the rule fires unconditionally) so classification never breaks.
+func fpExclusionsFromJSON(b []byte) []fingerprint.Exclusion {
+	if len(b) == 0 {
+		return nil
+	}
+	var ex []fingerprint.Exclusion
+	if err := json.Unmarshal(b, &ex); err != nil {
+		return nil
+	}
+	return ex
+}
+
+// fpExclusionsJSON marshals exclusions for the JSONB column, normalising nil/empty
+// to "[]" so the NOT NULL DEFAULT is satisfied and round-trips cleanly.
+func fpExclusionsJSON(ex []fingerprint.Exclusion) []byte {
+	if len(ex) == 0 {
+		return []byte("[]")
+	}
+	b, err := json.Marshal(ex)
+	if err != nil {
+		return []byte("[]")
+	}
+	return b
+}
+
+// vendorFingerprintDTO is the operator-facing fingerprint row. It mirrors the
+// stored row but exposes exclusions as a STRUCTURED array — the raw db column is
+// []byte, which would JSON-encode as base64 and break the catalog UI. Used by the
+// list/create/update responses; export uses fingerprintExport (also structured).
+type vendorFingerprintDTO struct {
+	ID         uuid.UUID               `json:"id"`
+	Kind       string                  `json:"kind"`
+	Pattern    string                  `json:"pattern"`
+	Vendor     string                  `json:"vendor"`
+	DeviceType string                  `json:"device_type"`
+	Confidence int32                   `json:"confidence"`
+	Enabled    bool                    `json:"enabled"`
+	Model      string                  `json:"model"`
+	Priority   int32                   `json:"priority"`
+	Source     string                  `json:"source"`
+	CreatedAt  time.Time               `json:"created_at"`
+	UpdatedAt  time.Time               `json:"updated_at"`
+	Exclusions []fingerprint.Exclusion `json:"exclusions"`
+}
+
+// toVendorFingerprintDTO decodes the stored exclusions JSONB into a structured
+// array. A nil/empty/malformed blob yields an empty (non-nil) slice so the API
+// emits `[]` (not base64, not null) and the UI shows "no exclusions" cleanly.
+func toVendorFingerprintDTO(r db.VendorFingerprint) vendorFingerprintDTO {
+	ex := fpExclusionsFromJSON(r.Exclusions)
+	if ex == nil {
+		ex = []fingerprint.Exclusion{}
+	}
+	return vendorFingerprintDTO{
+		ID: r.ID, Kind: r.Kind, Pattern: r.Pattern, Vendor: r.Vendor, DeviceType: r.DeviceType,
+		Confidence: r.Confidence, Enabled: r.Enabled, Model: r.Model, Priority: r.Priority,
+		Source: r.Source, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt, Exclusions: ex,
+	}
+}
+
+func toVendorFingerprintDTOs(rows []db.VendorFingerprint) []vendorFingerprintDTO {
+	out := make([]vendorFingerprintDTO, len(rows))
+	for i, r := range rows {
+		out[i] = toVendorFingerprintDTO(r)
 	}
 	return out
 }
@@ -133,27 +205,120 @@ func (s *Server) seedVendorFingerprints(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, err)
 		return
 	}
-	have := make(map[string]bool, len(existing))
+	created, refreshed, preserved, upToDate := 0, 0, 0, 0
+	for _, a := range planBuiltinSeed(existing, fingerprint.Library()) {
+		p := a.Print
+		switch a.Action {
+		case seedCreate:
+			if _, err := s.queries.CreateVendorFingerprint(r.Context(), db.CreateVendorFingerprintParams{
+				Kind: p.Kind, Pattern: p.Pattern, Vendor: p.Vendor, DeviceType: p.DeviceType,
+				Confidence: int32(p.Confidence), Enabled: true, Model: p.Model, Priority: 100, Source: "builtin",
+				Exclusions: fpExclusionsJSON(p.Exclusions),
+			}); err != nil {
+				writeErr(w, err)
+				return
+			}
+			created++
+		case seedRefresh:
+			n, err := s.queries.RefreshBuiltinVendorFingerprint(r.Context(), db.RefreshBuiltinVendorFingerprintParams{
+				ID: a.ExistingID, Vendor: p.Vendor, DeviceType: p.DeviceType,
+				Confidence: int32(p.Confidence), Model: p.Model, Exclusions: fpExclusionsJSON(p.Exclusions),
+			})
+			if err != nil {
+				writeErr(w, err)
+				return
+			}
+			if n > 0 {
+				refreshed++
+			}
+		case seedPreserve:
+			preserved++
+		case seedUpToDate:
+			upToDate++
+		}
+	}
+	s.audit(r, "config", "fingerprint.seed", "vendor_fingerprint", "", "Seeded/refreshed built-in fingerprint library",
+		map[string]any{"created": created, "refreshed": refreshed, "preserved": preserved, "up_to_date": upToDate})
+	writeJSON(w, http.StatusOK, map[string]int{
+		"created": created, "refreshed": refreshed, "preserved": preserved,
+		"up_to_date": upToDate, "library_size": len(fingerprint.Library()),
+	})
+}
+
+// seedActionKind is the disposition the seed assigns to one built-in catalog
+// entry against the current DB state.
+type seedActionKind int
+
+const (
+	seedCreate   seedActionKind = iota // pattern absent from DB → INSERT a builtin row
+	seedRefresh                        // existing builtin row drifted → UPDATE metadata+exclusions (id preserved)
+	seedPreserve                       // operator ('user') row owns this pattern → leave it untouched
+	seedUpToDate                       // existing builtin row already matches the catalog → no write
+)
+
+// seedAction is one planned operation for a built-in catalog entry.
+type seedAction struct {
+	Print      fingerprint.Print
+	Action     seedActionKind
+	ExistingID uuid.UUID // set for refresh/preserve/uptodate (the matched row)
+}
+
+// planBuiltinSeed decides, per built-in catalog entry, what the seed should do
+// against the current DB rows — WITHOUT touching the DB, so the policy is unit
+// testable. Invariants this encodes:
+//   - never creates a row whose (kind,pattern) already exists (no duplicates);
+//   - operator-owned ('user') rows are PRESERVED even when they shadow a built-in
+//     pattern (the operator's rule wins);
+//   - existing built-in rows are REFRESHED only when their shipped metadata or
+//     exclusions drifted from the catalog (so a re-seed is idempotent once synced);
+//   - the row id is reused on refresh (caller updates in place).
+func planBuiltinSeed(existing []db.VendorFingerprint, lib []fingerprint.Print) []seedAction {
+	byKey := make(map[string]db.VendorFingerprint, len(existing))
 	for _, e := range existing {
-		have[e.Kind+"|"+e.Pattern] = true
+		byKey[e.Kind+"|"+e.Pattern] = e
 	}
-	created, skipped := 0, 0
-	for _, p := range fingerprint.Library() {
-		if have[p.Kind+"|"+p.Pattern] {
-			skipped++
-			continue
+	plan := make([]seedAction, 0, len(lib))
+	for _, p := range lib {
+		row, ok := byKey[p.Kind+"|"+p.Pattern]
+		switch {
+		case !ok:
+			plan = append(plan, seedAction{Print: p, Action: seedCreate})
+		case row.Source != "builtin":
+			plan = append(plan, seedAction{Print: p, Action: seedPreserve, ExistingID: row.ID})
+		case !builtinRowMatchesCatalog(row, p):
+			plan = append(plan, seedAction{Print: p, Action: seedRefresh, ExistingID: row.ID})
+		default:
+			plan = append(plan, seedAction{Print: p, Action: seedUpToDate, ExistingID: row.ID})
 		}
-		if _, err := s.queries.CreateVendorFingerprint(r.Context(), db.CreateVendorFingerprintParams{
-			Kind: p.Kind, Pattern: p.Pattern, Vendor: p.Vendor, DeviceType: p.DeviceType,
-			Confidence: int32(p.Confidence), Enabled: true, Model: "", Priority: 100, Source: "builtin",
-		}); err != nil {
-			writeErr(w, err)
-			return
-		}
-		created++
 	}
-	s.audit(r, "config", "fingerprint.seed", "vendor_fingerprint", "", "Seeded built-in fingerprint library", map[string]any{"created": created, "skipped": skipped})
-	writeJSON(w, http.StatusOK, map[string]int{"created": created, "skipped": skipped, "library_size": len(fingerprint.Library())})
+	return plan
+}
+
+// builtinRowMatchesCatalog reports whether a stored built-in row already carries
+// the shipped catalog metadata + exclusions, so the seed can skip a redundant
+// write. Operator knobs (enabled, priority) are intentionally NOT compared — they
+// are preserved across refreshes.
+func builtinRowMatchesCatalog(row db.VendorFingerprint, p fingerprint.Print) bool {
+	return row.Vendor == p.Vendor &&
+		row.DeviceType == p.DeviceType &&
+		int(row.Confidence) == p.Confidence &&
+		row.Model == p.Model &&
+		exclusionsEqual(fpExclusionsFromJSON(row.Exclusions), p.Exclusions)
+}
+
+// exclusionsEqual compares two exclusion sets by (kind,pattern) in order. Used to
+// detect drift between a stored row and the catalog without tripping on JSONB
+// whitespace/key-order differences (a raw []byte compare would).
+func exclusionsEqual(a, b []fingerprint.Exclusion) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Kind != b[i].Kind || a[i].Pattern != b[i].Pattern {
+			return false
+		}
+	}
+	return true
 }
 
 // matchVendorFingerprints handles POST /vendor-fingerprints/match — runs the
@@ -306,15 +471,16 @@ func (s *Server) testDeviceFingerprint(w http.ResponseWriter, r *http.Request) {
 // ---- Import / Export (req #4) ---------------------------------------------
 
 type fingerprintExport struct {
-	Kind       string `json:"kind"`
-	Pattern    string `json:"pattern"`
-	Vendor     string `json:"vendor"`
-	DeviceType string `json:"device_type"`
-	Model      string `json:"model"`
-	Confidence int    `json:"confidence"`
-	Priority   int    `json:"priority"`
-	Enabled    bool   `json:"enabled"`
-	Source     string `json:"source"`
+	Kind       string                  `json:"kind"`
+	Pattern    string                  `json:"pattern"`
+	Vendor     string                  `json:"vendor"`
+	DeviceType string                  `json:"device_type"`
+	Model      string                  `json:"model"`
+	Confidence int                     `json:"confidence"`
+	Priority   int                     `json:"priority"`
+	Enabled    bool                    `json:"enabled"`
+	Source     string                  `json:"source"`
+	Exclusions []fingerprint.Exclusion `json:"exclusions,omitempty"`
 }
 
 // exportVendorFingerprints handles GET /vendor-fingerprints/export?format=json|csv —
@@ -330,12 +496,16 @@ func (s *Server) exportVendorFingerprints(w http.ResponseWriter, r *http.Request
 		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 		w.Header().Set("Content-Disposition", "attachment; filename=\"vendor-fingerprints.csv\"")
 		cw := csv.NewWriter(w)
-		_ = cw.Write([]string{"kind", "pattern", "vendor", "device_type", "model", "confidence", "priority", "enabled", "source"})
+		_ = cw.Write([]string{"kind", "pattern", "vendor", "device_type", "model", "confidence", "priority", "enabled", "source", "exclusions"})
 		for _, r := range rows {
+			exc := strings.TrimSpace(string(r.Exclusions))
+			if exc == "" || exc == "[]" || exc == "null" {
+				exc = ""
+			}
 			_ = cw.Write([]string{
 				r.Kind, r.Pattern, r.Vendor, r.DeviceType, r.Model,
 				strconv.Itoa(int(r.Confidence)), strconv.Itoa(int(r.Priority)),
-				strconv.FormatBool(r.Enabled), r.Source,
+				strconv.FormatBool(r.Enabled), r.Source, exc,
 			})
 		}
 		cw.Flush()
@@ -346,7 +516,7 @@ func (s *Server) exportVendorFingerprints(w http.ResponseWriter, r *http.Request
 		out = append(out, fingerprintExport{
 			Kind: r.Kind, Pattern: r.Pattern, Vendor: r.Vendor, DeviceType: r.DeviceType,
 			Model: r.Model, Confidence: int(r.Confidence), Priority: int(r.Priority),
-			Enabled: r.Enabled, Source: r.Source,
+			Enabled: r.Enabled, Source: r.Source, Exclusions: fpExclusionsFromJSON(r.Exclusions),
 		})
 	}
 	w.Header().Set("Content-Disposition", "attachment; filename=\"vendor-fingerprints.json\"")
@@ -397,6 +567,7 @@ func (s *Server) importVendorFingerprints(w http.ResponseWriter, r *http.Request
 			Kind: it.Kind, Pattern: it.Pattern, Vendor: it.Vendor, DeviceType: it.DeviceType,
 			Confidence: conf, Enabled: it.Enabled || it.Source == "", Model: it.Model,
 			Priority: prio, Source: "user", // imported rules are operator-owned
+			Exclusions: fpExclusionsJSON(it.Exclusions),
 		}); err != nil {
 			failed++
 			if len(errs) < 10 {
@@ -444,11 +615,15 @@ func parseFingerprintCSV(body []byte) ([]fingerprintExport, error) {
 		if e := get(rec, "enabled"); e != "" {
 			enabled, _ = strconv.ParseBool(e)
 		}
+		var excl []fingerprint.Exclusion
+		if e := get(rec, "exclusions"); e != "" {
+			_ = json.Unmarshal([]byte(e), &excl) // best-effort; malformed → no exclusions
+		}
 		out = append(out, fingerprintExport{
 			Kind: strings.ToLower(get(rec, "kind")), Pattern: get(rec, "pattern"),
 			Vendor: get(rec, "vendor"), DeviceType: get(rec, "device_type"),
 			Model: get(rec, "model"), Confidence: conf, Priority: prio, Enabled: enabled,
-			Source: "user",
+			Source: "user", Exclusions: excl,
 		})
 	}
 	return out, nil

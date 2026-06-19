@@ -28,6 +28,44 @@ func (p ProtocolPlan) SNMPRelevant() bool {
 	return p.relevant[domain.CredSNMPv2c] || p.relevant[domain.CredSNMPv3]
 }
 
+// kindToken maps a credential kind to the protocol token used in Expected.
+func kindToken(k domain.CredentialKind) string {
+	switch k {
+	case domain.CredSNMPv2c, domain.CredSNMPv3:
+		return "snmp"
+	case domain.CredSSH:
+		return "ssh"
+	case domain.CredWinRM, domain.CredWMI:
+		return "winrm"
+	case domain.CredONVIF:
+		return "onvif"
+	case domain.CredHTTPBasic:
+		return "http"
+	case domain.CredVendorAPI:
+		return "vmware"
+	}
+	return ""
+}
+
+// Expects reports whether a credential kind is the host's PRIMARY expected
+// protocol (vs a relevant-but-opportunistic one). The pipeline tries expected
+// kinds before opportunistic ones so a host's main management protocol (e.g.
+// SSH on a Linux/appliance) is exhausted before secondary kinds (e.g. HTTP)
+// consume the per-host time budget — which is what lets a full-subnet scan reach
+// the working SSH credential the same way a single-IP scan does.
+func (p ProtocolPlan) Expects(k domain.CredentialKind) bool {
+	tok := kindToken(k)
+	if tok == "" {
+		return false
+	}
+	for _, e := range p.Expected {
+		if e == tok {
+			return true
+		}
+	}
+	return false
+}
+
 // containsAny reports whether haystack contains any of the (lowercase) needles.
 func containsAny(haystack string, needles ...string) bool {
 	for _, n := range needles {

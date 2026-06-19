@@ -8,6 +8,7 @@ import { ManagementBadge } from '../components/StatusBadges'
 import { DeleteAllToggle } from '../components/DeleteAllToggle'
 import { EditDevice } from '../components/EditDevice'
 import { AddVirtualButton } from '../components/AddVirtualButton'
+import { ExportDevicesButton } from '../components/ExportDevicesButton'
 
 const isOnline = (d: Device) => (d.status || '').toLowerCase() === 'up' || (d.reachability || '') === 'online'
 const isManaged = (d: Device) => d.management === 'managed'
@@ -88,6 +89,7 @@ export function Cameras() {
       <PageHeader title="Cameras" subtitle="Surveillance cameras across the fleet — status, management & credentials" icon={Video}
         actions={
           <>
+            <ExportDevicesButton devices={filtered} filename="cameras" />
             <AddVirtualButton type="camera" label="Camera" />
             <DeleteAllToggle ids={filtered.map((d) => d.id)} fullInventory={false}
               scope={(q.trim() || statusF !== 'all' || mgmtF !== 'all' || vendorF !== 'all') ? 'filtered cameras' : 'all cameras'}

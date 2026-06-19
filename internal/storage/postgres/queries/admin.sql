@@ -87,25 +87,36 @@ SELECT * FROM vendor_fingerprints
 ORDER BY (source='user') DESC, priority ASC, confidence DESC, kind, vendor, pattern;
 
 -- name: CreateVendorFingerprint :one
-INSERT INTO vendor_fingerprints (kind, pattern, vendor, device_type, confidence, enabled, model, priority, source)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *;
+INSERT INTO vendor_fingerprints (kind, pattern, vendor, device_type, confidence, enabled, model, priority, source, exclusions)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *;
 
 -- name: UpdateVendorFingerprint :one
 UPDATE vendor_fingerprints
 SET kind=$2, pattern=$3, vendor=$4, device_type=$5, confidence=$6, enabled=$7,
-    model=$8, priority=$9, updated_at=now()
+    model=$8, priority=$9, exclusions=$10, updated_at=now()
 WHERE id=$1 RETURNING *;
 
 -- name: UpsertVendorFingerprint :one
 -- Import path: idempotent by (kind, pattern). Re-importing updates the existing
--- rule's vendor/type/confidence/model/priority/source rather than duplicating it.
-INSERT INTO vendor_fingerprints (kind, pattern, vendor, device_type, confidence, enabled, model, priority, source)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+-- rule's vendor/type/confidence/model/priority/source/exclusions rather than duplicating it.
+INSERT INTO vendor_fingerprints (kind, pattern, vendor, device_type, confidence, enabled, model, priority, source, exclusions)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 ON CONFLICT (kind, pattern) DO UPDATE SET
     vendor=EXCLUDED.vendor, device_type=EXCLUDED.device_type, confidence=EXCLUDED.confidence,
     enabled=EXCLUDED.enabled, model=EXCLUDED.model, priority=EXCLUDED.priority,
-    source=EXCLUDED.source, updated_at=now()
+    source=EXCLUDED.source, exclusions=EXCLUDED.exclusions, updated_at=now()
 RETURNING *;
+
+-- name: RefreshBuiltinVendorFingerprint :execrows
+-- Refresh shipped catalog metadata onto an EXISTING built-in row so newer
+-- built-in knowledge (notably exclusions added after the row was first seeded)
+-- reaches the live DB the classifier reads. The `source='builtin'` guard makes
+-- this structurally unable to clobber an operator-created rule — even a user rule
+-- that happens to share (kind,pattern). Operator knobs (enabled, priority) are
+-- preserved; only descriptive metadata + exclusions are refreshed. Row id is kept.
+UPDATE vendor_fingerprints
+SET vendor=$2, device_type=$3, confidence=$4, model=$5, exclusions=$6, updated_at=now()
+WHERE id=$1 AND source='builtin';
 
 -- name: DeleteVendorFingerprint :exec
 DELETE FROM vendor_fingerprints WHERE id=$1;

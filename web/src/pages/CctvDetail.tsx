@@ -4,6 +4,7 @@ import { useParams, Link } from 'react-router-dom'
 import { Camera, Video, Film, HardDrive, Disc, Network, Activity, Wrench, Cpu, Globe, ShieldCheck, RefreshCw } from 'lucide-react'
 import { api, type CameraInfo, type NVRChannel, type NVRDetail, type Device, type DeviceWebAccess, type CredTestResult, type CameraRecorder } from '../api'
 import { DeviceHeader } from '../components/DeviceHeader'
+import { ClassificationEvidencePanel } from '../components/ClassificationEvidence'
 import { Panel, Kpi, DefList, EmptyState, StatusPill } from '../components/ui'
 
 const chStatus = (s: string) => (s === 'online' ? 'up' : s === 'offline' ? 'down' : 'unknown')
@@ -57,6 +58,7 @@ export function CctvDetail() {
     return (
       <div>
         <DeviceHeader deviceId={id!} icon={Camera} />
+        <ClassificationEvidencePanel deviceId={id!} />
         <div className="row-between" style={{ margin: '0 0 12px' }}>
           <span className="muted" style={{ fontSize: 13 }}>Identity &amp; network collected read-only via ONVIF / ISAPI. Reachability is monitored separately.</span>
           <ReCollect deviceId={id!} />

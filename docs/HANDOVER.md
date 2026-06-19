@@ -1,5 +1,10 @@
 # HIMS — Handover
 
+> **➡️ For the full, current, self-contained handover (architecture, the discovery/
+> collection pipeline, the management-state model, environment gotchas, the recent fix
+> chain, build/deploy, the in-flight acceptance test, and next steps) read
+> [`SYSTEM-HANDOVER.md`](SYSTEM-HANDOVER.md) first.** This file is a short quick-reference.
+
 > How to build, run, and continue HIMS. Read with `PLAN.md` (architecture)
 > and `PROGRESS.md` (what's done).
 

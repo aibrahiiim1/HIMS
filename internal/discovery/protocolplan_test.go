@@ -81,3 +81,24 @@ func TestPlanProtocols_HikvisionWebPort(t *testing.T) {
 		t.Errorf("8080-only host must not be classified camera")
 	}
 }
+
+// TestProtocolPlan_ExpectsPrioritizesExpectedKind locks the subnet-scan fix:
+// an SSH-managed appliance (ports 22 + mgmt web 8080) must mark SSH as an
+// EXPECTED credential kind and HTTP_basic as merely relevant — so the pipeline
+// tries the working SSH credential before opportunistic HTTP creds exhaust the
+// per-host budget (the single-IP-works / subnet-fails bug).
+func TestProtocolPlan_ExpectsPrioritizesExpectedKind(t *testing.T) {
+	p := planProtocols([]int{22, 80, 8080}, "SSH-2.0-OpenSSH_8.4", "", "", "")
+	if p.Candidate != "appliance" {
+		t.Fatalf("expected appliance candidate, got %q", p.Candidate)
+	}
+	if !p.Expects(domain.CredSSH) {
+		t.Error("SSH must be an expected kind for an SSH-managed appliance")
+	}
+	if p.Expects(domain.CredHTTPBasic) {
+		t.Error("HTTP_basic must be opportunistic (not expected) so SSH is tried first")
+	}
+	if !p.Relevant(domain.CredHTTPBasic) {
+		t.Error("HTTP_basic should still be relevant (tried after expected kinds)")
+	}
+}

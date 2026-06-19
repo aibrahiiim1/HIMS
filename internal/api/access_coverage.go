@@ -189,6 +189,21 @@ func (t *deviceTestStatus) winrmLegacy() bool {
 
 func (t *deviceTestStatus) anySuccess() bool { return t != nil && len(t.successKinds) > 0 }
 
+// categoryIsAuthFailure reports whether a credential-test category means the
+// credential reached the host and was REJECTED (authentication/authorization).
+// These drive credential_failed (never collection_failed). auth_ok_operation_fault
+// is deliberately excluded — the credential is valid; the WSMan op faulted.
+// access_denied / wmi_access_denied ARE auth/authz failures: WMI/DCOM rejected the
+// credential, so a host that fails one credential but succeeds on another (the agent
+// multi-credential path) is not mislabeled.
+func categoryIsAuthFailure(cat string) bool {
+	switch cat {
+	case "auth_failed", "access_denied", "wmi_access_denied":
+		return true
+	}
+	return false
+}
+
 // deviceTestMap indexes the latest per-(device,kind) credential-test outcome.
 func (s *Server) deviceTestMap(ctx context.Context) (map[uuid.UUID]*deviceTestStatus, error) {
 	rows, err := s.queries.LatestDeviceKindResults(ctx)
@@ -215,8 +230,7 @@ func (s *Server) deviceTestMap(ctx context.Context) (map[uuid.UUID]*deviceTestSt
 			t.successKinds[r.Kind] = true
 		} else {
 			t.failedKinds[r.Kind] = true
-			// auth_ok_operation_fault is NOT an auth failure — the credential is valid.
-			if r.Category == "auth_failed" {
+			if categoryIsAuthFailure(r.Category) {
 				t.authFailed = true
 			}
 		}

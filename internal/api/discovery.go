@@ -46,6 +46,31 @@ type scanReq struct {
 	Exclude string `json:"exclude"`
 }
 
+// osCollectionCandidate decides whether the discovery pipeline should attempt a
+// deep OS collection for an enrolled device. It deliberately takes NO open-port
+// list: a Windows host is ALWAYS worth an attempt — even if it bound no
+// WinRM/SSH credential this run and even if no Windows management port
+// (445/135/5985/5986) was observed in this run's port scan. runOSCollection
+// tries WinRM, then FALLS BACK to the site Relay Agent (WMI/DCOM), which works
+// where WinRM is off and regardless of which TCP ports the scan happened to
+// catch, and returns an HONEST reason (no_credential / agent_missing /
+// winrm_disabled / wmi_firewall_blocked) when nothing works — never a false auth
+// failure and never a silent skip.
+//
+// Gating on an OBSERVED management port was the bug that silently left
+// late/slow-probed Windows endpoints (port not seen this run) enrolled with ZERO
+// collection attempts, stuck at "needs_credential". Keeping ports OUT of this
+// signature makes that regression impossible to reintroduce. Specialized
+// appliances (wireless / VMware / voice / CCTV) have their own collection branch
+// and are excluded here.
+func osCollectionCandidate(d db.Device, boundOS, legacyWSMan, specialized bool) bool {
+	if specialized {
+		return false
+	}
+	winHost := d.OsFamily == domain.OSFamilyWindows || d.Category == string(domain.CatEndpoint)
+	return boundOS || legacyWSMan || winHost
+}
+
 // startScan launches a background subnet scan and returns the job immediately
 // (202). The scan runs in its own goroutine writing progress to the
 // discovery_jobs / discovery_results tables; the UI polls the job.
@@ -495,6 +520,14 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 	}
 	applier := apply.New(s.queries)
 
+	// Per-device site resolution. When the scan itself carries no site (a targets /
+	// CIDR scan, locID == nil), resolve each device's location from the configured
+	// subnet→site mappings so a device whose IP falls inside a site's subnet (e.g.
+	// 172.21.60.0/24 → CHR) is auto-assigned that site — and an EXISTING device left
+	// with a null location gets it filled on re-scan (reconcile COALESCEs the
+	// non-nil FillLocation). A site-scoped scan's explicit location always wins.
+	resolveLoc := s.subnetLocationResolver(ctx, locID)
+
 	// Web credentials selected for this scan (ONVIF / HTTP-Basic). CCTV collection
 	// tries EACH of these in turn on a camera/NVR/DVR — first success binds — so
 	// selecting several http_basic credentials actually tries all of them, not just
@@ -553,7 +586,7 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 		// Persist on a fresh budget from the job context so a discovered host is never
 		// lost just because its probe ran long.
 		actx, acancel := context.WithTimeout(ctx, 30*time.Second)
-		id, err := applier.Apply(actx, r, locID)
+		id, err := applier.Apply(actx, r, resolveLoc(ip))
 		acancel()
 		// Post-onboarding follow-ups for an enrolled host (best-effort).
 		enrichment := ""
@@ -617,25 +650,11 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 					}
 					return false
 				}(dev.Category)
-				// A Windows host that did NOT bind a WinRM/SSH credential this run —
-				// because WinRM is disabled/closed (connection refused) — is still worth a
-				// collection attempt: runOSCollection tries WinRM, then FALLS BACK to the
-				// site Relay Agent / WMI-DCOM, which works where WinRM is off. Gate on a
-				// real Windows management surface (SMB 445 / RPC 135 / WinRM 5985-6 open)
-				// so this only fires on actual Windows hosts, not every alive IP. This is
-				// what lets the legacy-WSMan + WinRM-disabled boxes route to WMI instead of
-				// silently staying unmanaged. Failures stay honestly categorized
-				// (winrm_disabled / wmi_firewall_blocked / agent_missing), never auth_failed.
-				winHost := dev.OsFamily == domain.OSFamilyWindows || dev.Category == string(domain.CatEndpoint)
-				winMgmtPort := false
-				for _, p := range r.OpenPorts {
-					if p == 445 || p == 135 || p == 5985 || p == 5986 {
-						winMgmtPort = true
-						break
-					}
-				}
-				windowsManageable := winHost && winMgmtPort
-				if s.cipher() != nil && (boundOS || legacyWSMan || windowsManageable) && !specialized {
+				// A Windows host is ALWAYS worth a deep OS collection attempt regardless
+				// of which ports the scan observed — see osCollectionCandidate, which
+				// owns this decision (and deliberately excludes ports so the
+				// "gated on an observed management port" regression can't return).
+				if s.cipher() != nil && osCollectionCandidate(dev, boundOS, legacyWSMan, specialized) {
 					s.publishScanEvent(jobID, ip, id, "collection_started", "", "started", "deep OS inventory")
 					cctx, ccancel := context.WithTimeout(ctx, 2*time.Minute)
 					oc := s.runOSCollection(cctx, dev)
@@ -887,7 +906,7 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 	// sweep is retried separately with slower, contention-free targeted probes
 	// (longer timeouts + its last-known open ports), up to 3 attempts. Recovered →
 	// "known_recovered"; still gone → a "missed" row so it never disappears. ---
-	s.retryMissedKnown(ctx, jobID, locID, cfg, applier, knownByIP, seenAlive, &recoveredCount, &missedCount)
+	s.retryMissedKnown(ctx, jobID, resolveLoc, cfg, applier, knownByIP, seenAlive, &recoveredCount, &missedCount)
 
 	status, errMsg := "completed", (*string)(nil)
 	if ctx.Err() != nil {
@@ -939,7 +958,42 @@ func (s *Server) bumpScanned(jobID uuid.UUID) {
 // no concurrency contention, its last-known open ports added — up to 3 attempts.
 // Recovered devices are applied + recorded "known_recovered"; the rest get a
 // "missed" row (recordMissed) so a known managed device is never silently absent.
-func (s *Server) retryMissedKnown(ctx context.Context, jobID uuid.UUID, locID *uuid.UUID, base discovery.PipelineConfig, applier *apply.Applier, knownByIP map[netip.Addr]db.Device, seenAlive map[netip.Addr]bool, recoveredCount, missedCount *int) {
+// subnetLocationResolver returns a per-IP site resolver for a scan. If the scan
+// carried an explicit site (jobLoc != nil) that always wins. Otherwise it matches
+// each IP against the configured subnet→site mappings (narrowest containing CIDR
+// wins) so an unscoped targets/CIDR scan still resolves a device to its site —
+// and reconcile fills the site on devices previously left with a null location
+// (e.g. 172.21.60.181 in 172.21.60.0/24 → CHR). Subnets are loaded ONCE per scan.
+func (s *Server) subnetLocationResolver(ctx context.Context, jobLoc *uuid.UUID) func(netip.Addr) *uuid.UUID {
+	if jobLoc != nil {
+		return func(netip.Addr) *uuid.UUID { return jobLoc }
+	}
+	subs, err := s.queries.ListSubnets(ctx)
+	if err != nil || len(subs) == 0 {
+		return func(netip.Addr) *uuid.UUID { return nil }
+	}
+	return func(ip netip.Addr) *uuid.UUID { return subnetLocationFor(subs, ip) }
+}
+
+// subnetLocationFor returns the site/location of the configured subnet that
+// contains ip, preferring the narrowest (longest-prefix) match so a /24 site
+// subnet outranks an overlapping /16. Returns nil when no configured subnet
+// contains the IP. Pure (no DB) so the reconcile rule is unit-testable.
+func subnetLocationFor(subs []db.Subnet, ip netip.Addr) *uuid.UUID {
+	var best *uuid.UUID
+	bestBits := -1
+	for i := range subs {
+		p := subs[i].Cidr
+		if p.IsValid() && p.Contains(ip) && p.Bits() > bestBits {
+			bestBits = p.Bits()
+			loc := subs[i].LocationID
+			best = &loc
+		}
+	}
+	return best
+}
+
+func (s *Server) retryMissedKnown(ctx context.Context, jobID uuid.UUID, resolveLoc func(netip.Addr) *uuid.UUID, base discovery.PipelineConfig, applier *apply.Applier, knownByIP map[netip.Addr]db.Device, seenAlive map[netip.Addr]bool, recoveredCount, missedCount *int) {
 	var missed []netip.Addr
 	for ip := range knownByIP {
 		if !seenAlive[ip] {
@@ -972,9 +1026,9 @@ func (s *Server) retryMissedKnown(ctx context.Context, jobID uuid.UUID, locID *u
 				return
 			}
 			actx, acancel := context.WithTimeout(ctx, 40*time.Second)
-			rr := discovery.Run(actx, ip, locID, rcfg)
+			rr := discovery.Run(actx, ip, resolveLoc(ip), rcfg)
 			if rr.Alive {
-				id, aerr := applier.Apply(actx, rr, locID)
+				id, aerr := applier.Apply(actx, rr, resolveLoc(ip))
 				if aerr == nil && id != uuid.Nil {
 					if d2, e := s.queries.GetDevice(actx, id); e == nil {
 						s.persistScanCredAttempts(actx, d2, rr.CredAttempts, "")
@@ -1050,6 +1104,11 @@ type scanDetail struct {
 	// EXCLUSIVE set tried for this host (subnet-scoped credentials). Empty ⇒ normal
 	// global/scope resolution was used.
 	CredScope string `json:"cred_scope,omitempty"`
+	// ClassDetail is the Phase-3 explainable-classification record: the evidence
+	// channels, the fingerprint(s) that won, and the candidates that were considered
+	// but rejected (with reasons). Powers the UI evidence panel and the "likely type"
+	// hint for unknowns. Nil when no classification stage ran (e.g. dead host).
+	ClassDetail *discovery.ClassificationDetail `json:"classification_detail,omitempty"`
 }
 
 // scanSSHSummary is the per-result SSH CLI collection rollup shown in Job Results.
@@ -1126,6 +1185,50 @@ func scanNextAction(category string, bound bool, boundKind string) string {
 		return "Insufficient evidence — add a matching credential or re-scan"
 	}
 	return "Add a matching credential to onboard"
+}
+
+// unknownNextAction builds a precise, evidence-bearing next action for a host
+// that stayed unclassified or unmanaged — never the vague "insufficient evidence
+// — re-scan". It names the open ports and any unauthenticated banner so the
+// operator can act (or classify by hand) instead of re-scanning blindly. This is
+// the Discovery Reliability rule made concrete: if HIMS knows the ports and the
+// banner, it must SAY what it knows and why management didn't complete.
+func unknownNextAction(ports []int, httpServer, httpTitle, sshBanner string) string {
+	parts := make([]string, 0, len(ports))
+	for _, p := range ports {
+		parts = append(parts, strconv.Itoa(p))
+	}
+	portList := strings.Join(parts, ", ")
+	has := func(p int) bool {
+		for _, x := range ports {
+			if x == p {
+				return true
+			}
+		}
+		return false
+	}
+	webOpen := has(80) || has(443) || has(8080) || has(8443) || has(8000)
+	web := strings.TrimSpace(httpServer)
+	if httpTitle != "" {
+		if web != "" {
+			web += " — "
+		}
+		web += httpTitle
+	}
+	switch {
+	case len(ports) == 1 && has(23):
+		return "Only Telnet (23) is open — HIMS manages via SNMP/SSH/WinRM/HTTP, not Telnet. This device is Telnet-only (unsupported); enable SSH/SNMP on it, or classify it manually."
+	case webOpen && web != "":
+		return "HTTP-only device — banner \"" + truncate(web, 80) + "\" (open ports " + portList + "). No SNMP/SSH/WinRM authenticated; classify it from this banner, add a matching credential, or manage it via its web UI."
+	case webOpen:
+		return "HTTP/HTTPS open (ports " + portList + ") with no recognizable banner and no SNMP/SSH/WinRM. Open its web UI to identify it, then classify manually."
+	case has(22) && sshBanner != "":
+		return "SSH open (banner \"" + truncate(sshBanner, 60) + "\") but no stored credential authenticated — add or fix an SSH credential."
+	case has(22):
+		return "SSH (22) open but no credential authenticated — add an SSH credential to manage this host."
+	default:
+		return "No supported management protocol answered on open ports [" + portList + "]. Add a matching SNMP/SSH/WinRM credential, or classify the device manually."
+	}
 }
 
 // scanNextActionWithProfile refines the next action for the profile-driven
@@ -1356,7 +1459,8 @@ func (s *Server) recordResult(ctx context.Context, jobID uuid.UUID, ip netip.Add
 		Enrichment: enrichment, Profile: profRes,
 		NextAction:   scanNextActionWithPlan(category, bound, boundKind, profRes, r.Plan, attempts),
 		CollectedVia: collectedVia, AgentName: agentName, SSH: sshSum, ClassNote: classNote,
-		CredScope: r.CredScope,
+		CredScope:   r.CredScope,
+		ClassDetail: r.Classification,
 	}
 	// Sharpen the next action for agent-routed Windows hosts.
 	switch collectedVia {
@@ -1366,6 +1470,15 @@ func (s *Server) recordResult(ctx context.Context, jobID uuid.UUID, ip netip.Add
 		detail.NextAction = "This host needs the site Relay Agent, which is offline — start/repair it (Discovery → Relay Agents)"
 	case "agent_missing":
 		detail.NextAction = "This host needs a Relay Agent — install or assign one to this site (Discovery → Relay Agents)"
+	}
+	// No vague dead-ends: when nothing managed the host and it stayed unclassified,
+	// replace the generic "insufficient evidence — re-scan" line with the concrete
+	// reason derived from the open ports + unauthenticated banners (Discovery
+	// Reliability rule: never show a vague unmanaged state when the precise reason
+	// is known). Classified-but-unmanaged hosts keep their category-specific gate.
+	if !bound && collectedVia == "" &&
+		(category == "" || category == string(domain.CatUnknown) || strings.HasPrefix(detail.NextAction, "Insufficient evidence")) {
+		detail.NextAction = unknownNextAction(r.OpenPorts, r.Probe.HTTPServer, r.Probe.Hints["http_title"], r.Probe.Hints["ssh_banner"])
 	}
 	blob, merr := json.Marshal(detail)
 	if merr != nil {
@@ -1494,6 +1607,45 @@ type scanJobDTO struct {
 	Mode         string     `json:"mode"`
 	Targets      string     `json:"targets"`
 	Scope        string     `json:"scope"`
+	// Phase is the HONEST end-to-end state: a scan whose probe/enroll phase is
+	// 'completed' is reported as "collecting" while deep OS collection drains, then
+	// "self_healing" while terminal transient failures are still awaiting automatic
+	// re-collection, and only "complete" once ALL automatic collection is actually done.
+	Phase             string `json:"phase"`
+	CollectingPending int64  `json:"collecting_pending"`
+	SelfHealing       int64  `json:"self_healing"`
+}
+
+// scanPhase derives the honest end-to-end scan phase. The DB `status` only reflects the
+// probe/enroll phase, which finishes BEFORE deep collection drains — and self-heal will
+// keep re-collecting terminal transient failures AFTER that. So the UI must not show
+// "complete" while any automatic collection remains:
+//   - collectionPending > 0 (collect_os jobs queued/retry-waiting/dispatched) -> "collecting"
+//   - else healing > 0 (terminal transient failures self-heal will still retry, including
+//     the cooldown window where no job is in flight) -> "self_healing"
+//   - else -> "complete"
+//
+// Single source of truth for the Scan Jobs list and the job detail header.
+func scanPhase(status string, collectionPending, healing int64) string {
+	switch status {
+	case "pending":
+		return "queued"
+	case "running":
+		return "discovering"
+	case "failed":
+		return "failed"
+	case "cancelled":
+		return "cancelled"
+	case "completed", "":
+		if collectionPending > 0 {
+			return "collecting"
+		}
+		if healing > 0 {
+			return "self_healing"
+		}
+		return "complete"
+	}
+	return status
 }
 
 // scanScopeLabel renders a human-readable "what was scanned" string from the
@@ -1519,6 +1671,17 @@ func (s *Server) listDiscoveryJobs(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	// One small query maps job_id → (in-flight collection, self-heal-eligible) counts so
+	// the list shows an honest "collecting" / "self-heal" phase (never a premature
+	// "complete") while deep collection drains AND while self-heal will still re-collect.
+	pending := map[uuid.UUID]int64{}
+	healing := map[uuid.UUID]int64{}
+	if rowsP, perr := s.queries.JobsCollectionState(r.Context()); perr == nil {
+		for _, p := range rowsP {
+			pending[p.JobID] = p.Pending
+			healing[p.JobID] = p.Healing
+		}
+	}
 	out := make([]scanJobDTO, 0, len(rows))
 	for _, j := range rows {
 		d := scanJobDTO{
@@ -1537,6 +1700,9 @@ func (s *Server) listDiscoveryJobs(w http.ResponseWriter, r *http.Request) {
 		d.Mode = spec.Mode
 		d.Targets = spec.Targets
 		d.Scope = scanScopeLabel(j, spec)
+		d.CollectingPending = pending[j.ID]
+		d.SelfHealing = healing[j.ID]
+		d.Phase = scanPhase(j.Status, d.CollectingPending, d.SelfHealing)
 		out = append(out, d)
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -1663,5 +1829,26 @@ func (s *Server) getDiscoveryJob(w http.ResponseWriter, r *http.Request) {
 		"known_missed_this_run":    knownMissed,
 		"enrolled_updated":         enrolledUpdated,
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"job": job, "results": out, "counts": counts})
+	// Deep OS collection runs ASYNC through the site relay agent AFTER the scan's
+	// probe/enroll phase completes, so the job can be "completed" while devices are
+	// still being collected (managed count climbing). Surface that explicitly so the
+	// operator-facing result is never shown as fully settled while collection drains:
+	// settled = queued + retry_waiting + running all 0.
+	collection := map[string]any{"queued": 0, "retry_waiting": 0, "running": 0, "done": 0, "failed": 0, "pending": 0, "settled": true}
+	var collectionPending int64
+	if cp, cerr := s.queries.CollectionProgressForJob(ctx, id); cerr == nil {
+		collectionPending = cp.Queued + cp.RetryWaiting + cp.Running
+		collection = map[string]any{
+			"queued": cp.Queued, "retry_waiting": cp.RetryWaiting, "running": cp.Running,
+			"done": cp.Done, "failed": cp.Failed, "pending": collectionPending,
+			"settled": collectionPending == 0,
+		}
+	}
+	// Honest end-to-end phase: "collecting" while collection drains, "self_healing" while
+	// terminal transient failures still await automatic re-collection (incl. the cooldown
+	// window), never a premature "complete". Single source of truth with the jobs list.
+	healing, _ := s.queries.CountSelfHealEligibleForJob(ctx, id)
+	phase := scanPhase(job.Status, collectionPending, healing)
+	collection["self_healing"] = healing
+	writeJSON(w, http.StatusOK, map[string]any{"job": job, "results": out, "counts": counts, "collection": collection, "phase": phase})
 }

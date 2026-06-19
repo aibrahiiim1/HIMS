@@ -4,7 +4,7 @@ import { Link, Navigate } from 'react-router-dom'
 import { Radar, Boxes, CircleX, Clock, ListChecks, RefreshCw, Trash2 } from 'lucide-react'
 import { api, locationPaths, type DiscoveryJob, type Location } from '../api'
 import { PageHeader, Panel, Kpi, EmptyState } from '../components/ui'
-import { jobBadge, duration } from './Discovery'
+import { phaseMeta, duration } from './Discovery'
 
 // ScanResultsRedirect powers the "Scan Results" nav item: it opens the newest
 // job's full Results page directly, or falls back to the jobs list if none exist.
@@ -48,6 +48,7 @@ export function ScanJobs() {
   const toggleAll = () => setSel(allSelected ? new Set<string>() : new Set(list.map((j) => j.id)))
   const doDeleteSelected = () => { if (sel.size === 0) return; if (confirm(`Delete ${sel.size} job(s) and their results? This cannot be undone.`)) bulkDel.mutate([...sel]) }
   const running = list.filter((j) => j.status === 'running').length
+  const collecting = list.filter((j) => j.phase === 'collecting').length
   const failed = list.filter((j) => j.status === 'failed').length
   const found = list.reduce((a, j) => a + j.found_count, 0)
 
@@ -58,6 +59,7 @@ export function ScanJobs() {
       <div className="kpi-grid">
         <Kpi label="Total jobs" value={list.length} icon={ListChecks} tone="info" />
         <Kpi label="Running" value={running} icon={Radar} tone={running > 0 ? 'warn' : 'default'} />
+        <Kpi label="Collecting" value={collecting} icon={RefreshCw} tone={collecting > 0 ? 'warn' : 'default'} sub="after discovery" />
         <Kpi label="Failed" value={failed} icon={CircleX} tone={failed > 0 ? 'crit' : 'default'} />
         <Kpi label="Devices found" value={found} icon={Boxes} tone="default" sub="all jobs" />
       </div>
@@ -87,7 +89,7 @@ export function ScanJobs() {
                 <tr key={j.id} className={sel.has(j.id) ? 'row-selected' : undefined}>
                   <td><input type="checkbox" checked={sel.has(j.id)} onChange={() => toggle(j.id)} aria-label={`Select job ${j.id}`} /></td>
                   <td className="mono" style={{ fontSize: 12, maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={j.scope ?? j.targets ?? j.scope_cidr ?? ''}><Link className="cell-name" to={`/discovery/jobs/${j.id}/results`}>{j.scope ?? j.scope_cidr ?? 'import / manual'}</Link></td>
-                  <td><span className={`badge badge-${jobBadge(j.status)}`}>{j.status}</span></td>
+                  <td>{(() => { const m = phaseMeta(j.phase ?? j.status); return <span className={`badge badge-${m.tone}`}>{m.label}{j.phase === 'collecting' && j.collecting_pending ? ` ${j.collecting_pending}` : ''}</span> })()}</td>
                   <td>{j.location_id ? (locPath[j.location_id] ?? '—') : '—'}</td>
                   <td>{j.started_at ? new Date(j.started_at).toLocaleString() : '—'}</td>
                   <td>{j.finished_at ? new Date(j.finished_at).toLocaleTimeString() : (j.status === 'running' ? <span className="muted">running…</span> : '—')}</td>

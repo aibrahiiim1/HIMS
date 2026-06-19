@@ -28,6 +28,8 @@ type Querier interface {
 	// Absolute set of on-hand quantity (a stock count / receiving correction).
 	// The CHECK (quantity >= 0) constraint rejects negative results.
 	AdjustSparePartStock(ctx context.Context, arg AdjustSparePartStockParams) (SparePart, error)
+	// Fleet-wide collect-job rollup by status (acceptance / queue-visibility report).
+	AgentJobStatusCounts(ctx context.Context) ([]AgentJobStatusCountsRow, error)
 	// Alert volume + responsiveness over the window. MTTA/MTTR are NULL until alerts
 	// with acknowledged/resolved timestamps exist (honest empty state). $1 = window.
 	AlertAnalyticsSummary(ctx context.Context, dollar_1 string) (AlertAnalyticsSummaryRow, error)
@@ -46,6 +48,12 @@ type Querier interface {
 	ClearAllCredentialSecrets(ctx context.Context) error
 	ClearReentryFlag(ctx context.Context, id uuid.UUID) error
 	ClearSubnetCredentials(ctx context.Context, subnetID uuid.UUID) error
+	// Collect-job rollup for the devices a discovery job enrolled — lets the UI/API show
+	// "Discovery complete · collecting N" while deep collection drains AFTER the scan's
+	// probe/enroll phase finishes. retry_waiting (backoff) is split from queued so the
+	// operator sees jobs that are waiting vs ready. The scan is "settled" when
+	// queued + retry_waiting + running all reach 0.
+	CollectionProgressForJob(ctx context.Context, jobID uuid.UUID) (CollectionProgressForJobRow, error)
 	CompleteAgentJob(ctx context.Context, arg CompleteAgentJobParams) error
 	// ---- Work-order parts (stock consumption) ---------------------------------
 	// Atomic: decrement stock AND record the consumption in ONE statement. The
@@ -57,12 +65,24 @@ type Querier interface {
 	// In-flight collection jobs for a device (queued or dispatched) — used to avoid
 	// enqueuing a duplicate when a scan re-routes the same device to its site agent.
 	CountActiveDeviceAgentJobs(ctx context.Context, deviceID *uuid.UUID) (int64, error)
+	// Per-agent job rollup by status (queued / dispatched / done / failed).
+	CountAgentJobsByStatusForAgent(ctx context.Context, agentID uuid.UUID) ([]CountAgentJobsByStatusForAgentRow, error)
+	// Count of this agent's collect_os jobs currently waiting on a LOAD-INDUCED transient
+	// backoff (winrm negotiate / connect-timeout requeued, next_attempt_at in the future).
+	// A high count means the agent's WinRM listeners are saturated under a from-zero
+	// storm; the dispatcher uses it to throttle new work (shrink the poll budget) so the
+	// listeners recover instead of being fed more concurrent negotiations. As the backoff
+	// queue drains the count falls and the budget reopens — a self-regulating governor.
+	CountAgentLoadBackoff(ctx context.Context, agentID uuid.UUID) (int64, error)
 	// Overview KPIs: total versions, distinct devices backed up, and changes today.
 	CountConfigBackupStats(ctx context.Context) (CountConfigBackupStatsRow, error)
 	CountCredentialsNeedingReentry(ctx context.Context) (int64, error)
 	// Total live devices (for the dashboard total / discovered split).
 	CountDevices(ctx context.Context) (int64, error)
 	CountDevicesNeedingAttention(ctx context.Context) (int64, error)
+	// Jobs currently handed to the agent and not yet reported back — the in-flight
+	// count subtracted from the dispatch cap to compute the poll budget.
+	CountDispatchedAgentJobs(ctx context.Context, agentID uuid.UUID) (int64, error)
 	// ===== Credential secret accounting / recovery =============================
 	CountEncryptedCredentials(ctx context.Context) (int64, error)
 	// Systems whose license OR support expires within 90 days (or already has).
@@ -80,6 +100,11 @@ type Querier interface {
 	CountOpenAlerts(ctx context.Context) (int64, error)
 	CountOpenWorkOrders(ctx context.Context) (int64, error)
 	CountSSHCliBySource(ctx context.Context, deviceID uuid.UUID) ([]CountSSHCliBySourceRow, error)
+	// Count of a job's enrolled devices still eligible for automatic self-heal (terminal
+	// load-induced transient failure, no evidence, round budget remaining). Drives the
+	// job-detail phase: > 0 keeps the job "self-heal" (not "complete") even while no
+	// collect_os job is in flight (the self-heal cooldown window).
+	CountSelfHealEligibleForJob(ctx context.Context, jobID uuid.UUID) (int64, error)
 	// Blobs sealed under a key id other than the one currently loaded.
 	CountUndecryptableCredentials(ctx context.Context, keyID string) (int64, error)
 	CountUsersWithPassword(ctx context.Context) (int64, error)
@@ -205,6 +230,21 @@ type Querier interface {
 	DeleteWirelessEventsForSource(ctx context.Context, arg DeleteWirelessEventsForSourceParams) error
 	DeviceCountByCategory(ctx context.Context) ([]DeviceCountByCategoryRow, error)
 	DeviceCountByStatus(ctx context.Context) ([]DeviceCountByStatusRow, error)
+	// Per-device aggregate over ALL credential-test outcomes (every credential, every kind),
+	// so management classification NEVER loses a signal to latest-per-kind masking (e.g. a
+	// legacy WSMan auth_ok_operation_fault hidden behind a sibling .\administrator auth_failed,
+	// or an http_basic success hidden behind a winrm auth_failed). This is the read model for
+	// the classification rule: a host is credential_failed ONLY if some credential was cleanly
+	// auth-rejected AND nothing authenticated by any supported method. Booleans:
+	//   any_success   — any credential succeeded (deep OR web)
+	//   web_success   — a WEB/identity login succeeded (http_basic/http) — authenticates but is
+	//                   not deep management
+	//   legacy_authok — a credential AUTHENTICATED but the WSMan op faulted (legacy WSMan 2.0)
+	//                   — valid cred, needs an agent/deep collector
+	//   not_authorized— a credential AUTHENTICATED but the host denied access (UAC / DCOM /
+	//                   policy) — distinct from a wrong password
+	//   auth_rejected — a credential was cleanly rejected (wrong username/password)
+	DeviceCredentialSignals(ctx context.Context) ([]DeviceCredentialSignalsRow, error)
 	// Per-device availability over the window: sample/up counts (for uptime %),
 	// latency, and flap count (status transitions). Ordered worst-first so the UI can
 	// show "worst performers" and a flapping list. $1 = window (e.g. '24 hours').
@@ -330,6 +370,17 @@ type Querier interface {
 	// (channel, alert) a no-op, so RETURNING yields a row only on a real insert.
 	InsertNotificationLog(ctx context.Context, arg InsertNotificationLogParams) (NotificationLog, error)
 	InsertWirelessEvent(ctx context.Context, arg InsertWirelessEventParams) error
+	// Per discovery job: how many of its devices still have a collect_os job IN FLIGHT
+	// (pending) and how many are still ELIGIBLE for automatic self-heal (healing). A job is
+	// NOT fully settled while either is > 0 — so the Scan Jobs LIST shows "collecting" or
+	// "self-heal" instead of a premature "complete", honestly reflecting that the self-heal
+	// sweep will still re-collect terminal transient failures. Each device is attributed to
+	// its MOST RECENT scan job (a device has one row, reconciled by IP across re-scans).
+	// Self-heal eligible = latest collect_os job failed with a load-induced transient
+	// category, no os_inventory evidence, and the 4-round/24h budget is not yet burned
+	// (mirrors ListSelfHealCandidates without the cooldown — the job is unsettled for the
+	// whole window, not only after the cooldown elapses). Returns only unsettled jobs.
+	JobsCollectionState(ctx context.Context) ([]JobsCollectionStateRow, error)
 	LastSuccessfulBackup(ctx context.Context) (BackupRun, error)
 	// The most recent ONVIF/ISAPI credential-test outcome for a device — the CCTV
 	// fleet skip-guard reads this to avoid re-attempting a device that recently
@@ -416,6 +467,10 @@ type Querier interface {
 	// Devices with a reachable IP but no monitoring check yet — the seeder turns
 	// each into a default TCP check (port chosen by category + os_family).
 	ListDevicesNeedingDefaultCheck(ctx context.Context) ([]ListDevicesNeedingDefaultCheckRow, error)
+	// Device ids with an in-flight collect_os job (queued or dispatched). Feeds the
+	// pending_collection management state so an in-flight host is not misreported as a
+	// terminal failure from its stale direct-probe attempt.
+	ListDevicesWithActiveAgentJobs(ctx context.Context) ([]*uuid.UUID, error)
 	// Credentialed device classes (server/endpoint) that have never been OS-inventoried.
 	ListDevicesWithoutOSInventory(ctx context.Context) ([]ListDevicesWithoutOSInventoryRow, error)
 	ListDiscoveryJobEvents(ctx context.Context, jobID uuid.UUID) ([]ListDiscoveryJobEventsRow, error)
@@ -493,7 +548,6 @@ type Querier interface {
 	ListPortVlans(ctx context.Context, deviceID uuid.UUID) ([]PortVlan, error)
 	ListPrinterSupplies(ctx context.Context, deviceID uuid.UUID) ([]PrinterSupply, error)
 	ListPurchases(ctx context.Context) ([]Purchase, error)
-	ListQueuedAgentJobs(ctx context.Context, agentID uuid.UUID) ([]AgentJob, error)
 	// Recent jobs across all agents (fleet-wide failed-job / Data Quality views).
 	ListRecentAgentJobsAll(ctx context.Context, limit int32) ([]ListRecentAgentJobsAllRow, error)
 	// Fleet activity feed for the Config page: recent captures with device name.
@@ -502,11 +556,25 @@ type Querier interface {
 	ListReportSchedules(ctx context.Context) ([]ReportSchedule, error)
 	ListRoles(ctx context.Context) ([]Role, error)
 	ListRootLocations(ctx context.Context) ([]Location, error)
+	// The next queued jobs for an agent that are ready to run now (backoff elapsed),
+	// capped by $2 = the per-agent dispatch budget (cap - in-flight dispatched). This
+	// is what bounds the thundering herd: the server never hands one agent more than
+	// the cap of concurrent collect jobs.
+	ListRunnableAgentJobs(ctx context.Context, arg ListRunnableAgentJobsParams) ([]AgentJob, error)
 	// Bulk fetch of the raw SNMP system-group identity facts across ALL devices, for
 	// Data Quality checks that re-evaluate fingerprints against stored evidence
 	// without re-probing. Only the identity keys, not the full fact set.
 	ListSNMPIdentityFacts(ctx context.Context) ([]ListSNMPIdentityFactsRow, error)
 	ListSSHCliResults(ctx context.Context, deviceID uuid.UUID) ([]SshCliResult, error)
+	// Devices stranded in a TERMINAL transient collect_os failure that should be
+	// automatically re-collected once the storm that caused it has passed. A candidate's
+	// latest collect_os job failed with a load-induced transient category, it has no
+	// os_inventory evidence (was never successfully collected), no collect_os job is in
+	// flight, the failure is older than the cooldown ($1 minutes), and it has not already
+	// burned the self-heal round budget ($2 = max failed transient jobs in the last 24h).
+	// Auth/authz failures are EXCLUDED (operator must fix the credential) — self-heal
+	// never re-sprays a rejected credential or loops forever on a genuinely broken host.
+	ListSelfHealCandidates(ctx context.Context, arg ListSelfHealCandidatesParams) ([]ListSelfHealCandidatesRow, error)
 	// (channel_id, alert_id) pairs already delivered, so the dispatcher skips them.
 	ListSentNotificationPairs(ctx context.Context) ([]ListSentNotificationPairsRow, error)
 	ListServerStorage(ctx context.Context, deviceID uuid.UUID) ([]ServerStorage, error)
@@ -592,7 +660,22 @@ type Querier interface {
 	RecordReportScheduleRun(ctx context.Context, arg RecordReportScheduleRunParams) error
 	// Bump version + stamp the rotation; sets the new key's fingerprint.
 	RecordRotation(ctx context.Context, arg RecordRotationParams) error
+	// Refresh shipped catalog metadata onto an EXISTING built-in row so newer
+	// built-in knowledge (notably exclusions added after the row was first seeded)
+	// reaches the live DB the classifier reads. The `source='builtin'` guard makes
+	// this structurally unable to clobber an operator-created rule — even a user rule
+	// that happens to share (kind,pattern). Operator knobs (enabled, priority) are
+	// preserved; only descriptive metadata + exclusions are refreshed. Row id is kept.
+	RefreshBuiltinVendorFingerprint(ctx context.Context, arg RefreshBuiltinVendorFingerprintParams) (int64, error)
 	RelayAgentHeartbeat(ctx context.Context, arg RelayAgentHeartbeatParams) error
+	// Return a transiently-failed job to the queue with an incremented attempt and a
+	// backoff deadline ($2). Clears dispatched_at so it can be re-dispatched once the
+	// backoff elapses. Used for retryable (non-auth) collection failures.
+	RequeueAgentJob(ctx context.Context, arg RequeueAgentJobParams) error
+	// Recover jobs stuck 'dispatched' whose agent never reported back (agent crash /
+	// dropped connection): requeue (bumped attempt) if attempts remain, else mark
+	// failed so they never block re-enqueue forever. $1 = dispatched-before cutoff.
+	RequeueStaleAgentJobs(ctx context.Context, dispatchedAt *time.Time) (int64, error)
 	ResolveAlert(ctx context.Context, id uuid.UUID) (Alert, error)
 	// The resolver-assembly query: for a device IP, return every credential in a
 	// group bound to either a subnet that contains the IP (more specific) or a
@@ -798,7 +881,7 @@ type Querier interface {
 	// Upsert keyed on (host, name): re-collecting refreshes state without dups.
 	UpsertVM(ctx context.Context, arg UpsertVMParams) (VirtualMachine, error)
 	// Import path: idempotent by (kind, pattern). Re-importing updates the existing
-	// rule's vendor/type/confidence/model/priority/source rather than duplicating it.
+	// rule's vendor/type/confidence/model/priority/source/exclusions rather than duplicating it.
 	UpsertVendorFingerprint(ctx context.Context, arg UpsertVendorFingerprintParams) (VendorFingerprint, error)
 	// ---- VLANs ----------------------------------------------------------------
 	UpsertVlan(ctx context.Context, arg UpsertVlanParams) (Vlan, error)

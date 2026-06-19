@@ -1088,3 +1088,116 @@ auth_failed appears in coverage (i.e. a device in a scoped subnet whose assigned
 is wrong) — that's the moment the at-a-glance coverage view earns its keep over the
 per-row badges. **Referenced-from:** subnet-scoped credentials feature (this turn);
 related to Management Access Coverage + Data Quality credential issues.
+
+---
+
+## BACKLOG-XCC-REST-PATH-DISCOVERY — Extreme XCC on-prem REST API path discovery
+
+**Status:** deferred / non-blocking (accepted as backlog at the close of the
+Discovery Professionalization Acceptance Pass).
+
+**Context:** the profile-free wireless collect (`collectWirelessAuto`,
+`internal/api/collect_wireless_auto.go`) auto-creates an `extreme_xcc` profile and
+runs `exploreXCC` → `collectXCCProfile` against Extreme XCC on-prem controllers
+(:5825). On `172.21.96.100` the stored credential **authenticates** (the admin GUI
+at `/Admin/` is reachable), but `exploreXCC` finds **no JSON API root** among the
+probed paths — this firmware exposes the REST API at a **non-standard path**. The
+universal collect therefore returns the honest state **`api_unavailable`** (not
+`auth_rejected`).
+
+**Why non-blocking:** the controller is **already managed** and its wireless
+inventory is **already collected via the SSH-CLI source** (`wlan_controller_info`:
+123 APs / 4 SSIDs / 310 clients, `source=extreme_xcc_ssh`). The UI reports the REST
+gap honestly. No data is lost; only the REST collection path is unavailable on this
+firmware.
+
+**Scope when resumed:** extend `internal/extremexcc` API-base discovery
+(`exploreXCC`) to probe the additional REST path(s) this firmware uses (capture the
+firmware/version on `172.21.96.100`, identify its real API base, add it to the
+candidate path ladder), then confirm `collectXCCProfile` returns AP/SSID/client over
+REST. No schema change expected.
+
+**Trigger:** only on explicit operator request (the operator deferred this and asked
+not to chase XCC REST further for now). **Referenced-from:** Discovery
+Professionalization Acceptance Pass — wireless profile-free collection (branch
+`feat/discovery-acceptance-credkind`).
+
+---
+
+## Discovery Reliability Closure Pass ✅ (production-verified on commit `f1dafbf`)
+
+**Branch:** `feat/discovery-acceptance-credkind` — **local only, NOT pushed.**
+**Production:** HIMS API Windows service running commit `f1dafbf`, `/healthz` 200,
+web `/` 200. Each closure below was reset to its broken pre-fix state and
+**re-derived from scratch by a normal production scan**, not by per-device cleanup.
+
+### Commit ladder (this pass)
+- `dfd1e2f` — expected-protocol credentials tried before opportunistic (Linux/SSH).
+- `483b825` — uncollected Windows routed to site Relay Agent; evidence-bearing
+  next-actions; web-managed-switch (Ruijie) classifier; Scan-Results bucket panel.
+- `4319778` — site-agent enqueue on a FRESH context (scan-budget starvation fix).
+- `3bee249` — honest Needs-agent reason for unroutable Windows; WinRM closed-port
+  categorized as `winrm_disabled`, not `auth_failed`.
+- `f7eb6de` — SNMPv1 fallback (try v2c then v1 with the same community).
+- `a61e60a` — printer driver populates vendor/model/serial (prtGeneral* OIDs +
+  sysDescr vendor).
+- `f1dafbf` — HP JetDirect printers no longer matched as Aruba/HPE switches;
+  auto-resolve device site from configured subnet mappings on scan.
+
+### A) Windows subnet closure — ACCEPTED (172.21.60.0/24)
+- Root cause: site-agent routing skipped `auth_failed`, and the enqueue ran on the
+  exhausted per-host scan budget; WinRM-closed hosts were mislabeled `auth_failed`.
+- Result: **81 / 84 managed.** Zero misleading "add a WinRM credential" / "bind a
+  credential" dead-ends. Remaining 3 endpoints each in an exact bucket:
+  - `172.21.60.49` — transport blocked; agent reached it, host-side WinRM/WMI
+    disabled → **requires host-side GPO / WinRM-WMI repair**.
+  - `172.21.60.50` — same; **requires host-side GPO / WinRM-WMI repair**.
+  - `172.21.60.181` — was "needs site/agent"; resolved by closure (B) below.
+- The API service runs as LocalSystem (no domain identity); domain workstations are
+  collected via the in-domain CHR Relay Agent (WMI), which is the durable path.
+
+### B) Printer/MFP classification — ACCEPTED (172.21.60.0/24)
+- Root cause: the aruba driver matched the HP enterprise OID prefix
+  `1.3.6.1.4.1.11.*` (shared by ProCurve switches AND HP JetDirect printers, which
+  live under `.11.2.3.9.*`) at confidence 90 + the generic `"hp "` descr keyword.
+- Fix: aruba `Fingerprint` excludes HP printers (OID `.11.2.3.9` or printer-only
+  sysDescr markers) BEFORE the switch match; printer driver wins for JetDirect/
+  LaserJet/ethernet-multi-environment and reads vendor/model/serial.
+- Production re-derived (after reset to wrong switch/aruba_hpe state):
+  - `172.21.60.42` ACC-hp-photocopier → printer / printer_snmp / HP / HP LaserJet MFP M630 / CNBVH1P17Q
+  - `172.21.60.39` CHV-IT-MFP → printer / printer_snmp / HP / CHV-IT-MFP / CNCRS5F013
+  - `172.21.60.73` NPIB76CAA → printer / printer_snmp / HP / HP LaserJet Pro MFP M521dn / CNB7G3PCQ7
+  - `172.21.60.159` NPIEDEDAF → printer / printer_snmp / HP / HP LaserJet Pro MFP M521dn / CNB7G1K93T
+- Counts: **printer/MFP = 14, fake switch = 0, printers on `aruba_hpe` = 0.**
+- Control `172.21.96.2` (CHV-CORE) remains **switch / aruba_hpe** — no regression.
+- SNMPv1 fallback proven on real v1-only printers (e.g. `172.21.60.40` Canon
+  answers v1, times out on v2c).
+
+### C) Site/subnet reconciliation — ACCEPTED
+- Root cause: unscoped scans passed a nil location into apply/reconcile, so an
+  existing device with `location_id = null` was never resolved from configured
+  subnet→site mappings.
+- Fix: `subnetLocationResolver` resolves each device's site from the subnet
+  mappings (narrowest-prefix wins) when the scan carries no site; reconcile's
+  COALESCE `FillLocation` fills null locations on re-scan and drives agent routing.
+- Production: `172.21.60.181` (reset to null) re-resolved automatically to the CHR
+  site — no manual selection. All CHR-site devices sit within CHR-mapped subnets;
+  no foreign-subnet device misassigned. Unit-tested (narrowest / other-site /
+  unmatched-stays-null).
+
+### Gates (all green)
+- backend build / vet / tests; regression tests added: aruba printer-exclusion +
+  still-matches-ProCurve, printer fingerprint (HP/Canon/UTAX), `subnetLocationFor`,
+  `categorizeCollectErr` closed-port-≠-auth_failed, `unknownNextAction`.
+- API `/healthz` 200; web `/` 200; working tree clean (only untracked scratch).
+- Commits **local only — not pushed.**
+
+### Known remaining endpoint actions (host-side / operator, not HIMS bugs)
+- `172.21.60.49`, `172.21.60.50` — Windows hosts reachable by the agent but with
+  WinRM/WMI disabled at the host; require **host-side GPO / WinRM-WMI repair** to
+  collect. HIMS reports them honestly (transport blocked / dispatched-to-agent).
+
+### Frozen
+State is frozen on `f1dafbf`. Do not reopen Windows discovery, printer
+classification, or site/subnet reconciliation unless a real regression appears.
+Do not push.

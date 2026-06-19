@@ -43,8 +43,50 @@ const (
 	MgmtNeedsAgent       = "needs_agent"
 	MgmtAgentOffline     = "agent_offline"
 	MgmtCollectionFailed = "collection_failed"
-	MgmtVirtual          = "virtual" // operator-entered placeholder; not probed/monitored
+	// MgmtPendingCollection: a collect_os agent job is queued or dispatched right
+	// now — collection is actively in progress, not settled. Transient/healthy, NOT
+	// a failure: it outranks the stale direct-probe failure so an in-flight host is
+	// never misreported as credential_failed/collection_failed/needs_agent while its
+	// agent job is still mid-flight.
+	MgmtPendingCollection = "pending_collection"
+	// MgmtNotAttempted: a reachable Windows-like host that was enrolled but for which
+	// NO collection was attempted (no in-flight job, no evidence, no auth attempt, no
+	// binding). This is "not attempted yet", NOT "needs a credential" — surfacing
+	// needs_credential here would wrongly blame the operator's credentials when
+	// collection simply never ran (an enqueue gap). After the hardening this should
+	// be 0 for a settled from-zero scan.
+	MgmtNotAttempted = "not_attempted"
+	MgmtVirtual      = "virtual" // operator-entered placeholder; not probed/monitored
+	// MgmtWebAuthenticated: a WEB/identity credential (http_basic/http) authenticated, but
+	// no DEEP OS/endpoint management exists (winrm/wmi/ssh/snmp did not collect). The
+	// credential WORKS — so this is NEVER credential_failed; the operator may add a deep
+	// management credential if full inventory is required.
+	MgmtWebAuthenticated = "web_authenticated"
+	// MgmtNotAuthorized: a credential AUTHENTICATED but the host denied access (UAC
+	// LocalAccountTokenFilterPolicy, remote-logon rights, group membership, WinRM/DCOM
+	// policy). The credential is valid — NOT a wrong password, so NOT credential_failed;
+	// the fix is host policy or a host-authorized credential.
+	MgmtNotAuthorized = "not_authorized"
 )
+
+// credSignal is the per-device aggregate of ALL credential-test outcomes (every
+// credential, every kind) — the masking-proof read model behind the management
+// classification rule (a host is credential_failed ONLY if some credential was cleanly
+// rejected AND nothing authenticated by any supported method).
+type credSignal struct {
+	anySuccess    bool // any credential succeeded (deep OR web)
+	webSuccess    bool // an http_basic/http login authenticated (not deep management)
+	legacyAuthOK  bool // a credential authenticated but the WSMan op faulted (legacy WSMan)
+	notAuthorized bool // a credential authenticated but the host denied access (UAC/policy)
+	authRejected  bool // a credential was cleanly rejected (wrong username/password)
+}
+
+// authenticatedAny reports whether ANY credential authenticated by ANY supported method
+// (deep or web success, legacy auth-ok, or authenticated-but-access-denied). When true,
+// the host must NEVER be reported credential_failed.
+func (c credSignal) authenticatedAny() bool {
+	return c.anySuccess || c.legacyAuthOK || c.notAuthorized
+}
 
 // reachabilityFromStatus maps the honest backend device.status to a reachability
 // value. (The 4-state device-status vocabulary stays intact underneath.)
@@ -66,12 +108,17 @@ func reachabilityFromStatus(status string) string {
 type statusMaps struct {
 	access      map[uuid.UUID]*deviceAccess
 	test        map[uuid.UUID]*deviceTestStatus
-	onlineSites map[uuid.UUID]bool // location → has an online relay agent
-	anySites    map[uuid.UUID]bool // location → has any relay agent (online or not)
+	cred        map[uuid.UUID]credSignal // masking-proof per-device credential-outcome aggregate
+	onlineSites map[uuid.UUID]bool       // location → has an online relay agent
+	anySites    map[uuid.UUID]bool       // location → has any relay agent (online or not)
 	// nvrChannelCams are camera device_ids that are a channel on an NVR/DVR — they
 	// are managed VIA the recorder, so an RTSP-only feed (no web/ONVIF to
 	// authenticate) must not be reported as credential_failed.
 	nvrChannelCams map[uuid.UUID]bool
+	// activeCollect are device_ids with an in-flight collect_os agent job (queued or
+	// dispatched). Drives MgmtPendingCollection so an in-flight host is not
+	// misreported with its stale direct-probe failure.
+	activeCollect map[uuid.UUID]bool
 }
 
 func (s *Server) buildStatusMaps(ctx context.Context) (*statusMaps, error) {
@@ -82,6 +129,15 @@ func (s *Server) buildStatusMaps(ctx context.Context) (*statusMaps, error) {
 	tm, err := s.deviceTestMap(ctx)
 	if err != nil {
 		return nil, err
+	}
+	cm := map[uuid.UUID]credSignal{}
+	if rows, cerr := s.queries.DeviceCredentialSignals(ctx); cerr == nil {
+		for _, r := range rows {
+			cm[r.DeviceID] = credSignal{
+				anySuccess: r.AnySuccess, webSuccess: r.WebSuccess, legacyAuthOK: r.LegacyAuthok,
+				notAuthorized: r.NotAuthorized, authRejected: r.AuthRejected,
+			}
+		}
 	}
 	onlineSites, anySites := map[uuid.UUID]bool{}, map[uuid.UUID]bool{}
 	if agents, aerr := s.queries.ListRelayAgents(ctx); aerr == nil {
@@ -103,7 +159,15 @@ func (s *Server) buildStatusMaps(ctx context.Context) (*statusMaps, error) {
 			}
 		}
 	}
-	return &statusMaps{access: am, test: tm, onlineSites: onlineSites, anySites: anySites, nvrChannelCams: nvrCams}, nil
+	activeCollect := map[uuid.UUID]bool{}
+	if ids, perr := s.queries.ListDevicesWithActiveAgentJobs(ctx); perr == nil {
+		for _, id := range ids {
+			if id != nil {
+				activeCollect[*id] = true
+			}
+		}
+	}
+	return &statusMaps{access: am, test: tm, cred: cm, onlineSites: onlineSites, anySites: anySites, nvrChannelCams: nvrCams, activeCollect: activeCollect}, nil
 }
 
 // windowsLike reports whether a device is (or is most likely) a Windows host even
@@ -136,24 +200,108 @@ func (m *statusMaps) deriveManagement(d db.Device) (state string, managedBy []st
 		return MgmtManaged, []string{"nvr"}
 	}
 
-	// Not managed — classify the gap so the operator knows the next action.
-	legacy := ts.winrmLegacy()
-	if windowsLike(d) && legacy {
-		// Legacy WSMan-2.0: auth works but Go WinRM can't drive it → needs the
-		// Relay Agent (WMI/DCOM). Distinguish a present-but-offline site agent.
+	cs, hasCS := m.cred[d.ID]
+	if !hasCS && ts != nil {
+		// Fallback when the masking-proof aggregate is unavailable (e.g. unit tests, or a
+		// device with test rows but no aggregate yet): synthesize the signals from the
+		// latest-per-kind test status. ts.authFailed conflates wrong-credential and
+		// not-authorized, so split by category where known; an authFailed with no category
+		// is treated as a clean wrong-credential rejection.
+		cs.anySuccess = ts.anySuccess()
+		for k := range ts.successKinds {
+			if k == "http_basic" || k == "http" {
+				cs.webSuccess = true
+			}
+		}
+		cs.legacyAuthOK = ts.winrmLegacy()
+		for _, cat := range ts.kindCategory {
+			switch cat {
+			case "access_denied", "wmi_access_denied":
+				cs.notAuthorized = true
+			case "auth_failed":
+				cs.authRejected = true
+			}
+		}
+		if ts.authFailed && !cs.notAuthorized && !cs.authRejected {
+			cs.authRejected = true
+		}
+	}
+
+	// === Precedence below the proven-managed/NVR checks. The ROOT RULE: any credential
+	// that AUTHENTICATED by any supported method outranks a sibling auth failure — so a
+	// host is NEVER reported credential_failed when a credential actually worked. The
+	// cred-signal aggregate is masking-proof (a sibling .\administrator auth_failed can't
+	// hide a legacy auth-ok or an http_basic success). ===
+
+	// (3) Authenticated but the WSMan operation faulted (legacy WSMan 2.0): the credential
+	// is valid; Go WinRM can't drive it → needs the Relay Agent (WMI/DCOM). Above web so a
+	// Windows host with a usable deep path (via agent) is steered there, not to web-only.
+	// (legacyAuthOK is itself proof of a Windows WSMan host, so it is not windowsLike-gated
+	// — a host enrolled as "server" with a blank os_family still routes to the agent.)
+	if cs.legacyAuthOK || (windowsLike(d) && ts.winrmLegacy()) {
 		if d.LocationID != nil && m.anySites[*d.LocationID] && !m.onlineSites[*d.LocationID] {
 			return MgmtAgentOffline, nil
 		}
 		return MgmtNeedsAgent, nil
 	}
-	if ts != nil && ts.authFailed {
+	// (2) A WEB/identity credential authenticated (http_basic/http) but no DEEP management
+	// exists (hasProven is deep-only, above). The credential WORKS → web_authenticated,
+	// NEVER credential_failed. Operator adds a deep mgmt credential if inventory is needed.
+	if cs.webSuccess {
+		return MgmtWebAuthenticated, []string{"http"}
+	}
+	// (3b) A credential AUTHENTICATED but the host denied access (UAC / DCOM / WinRM policy
+	// / group) and nothing else succeeded — valid credential, not a wrong password.
+	if cs.notAuthorized && !cs.anySuccess {
+		return MgmtNotAuthorized, nil
+	}
+
+	// (4) A collect_os job is in flight RIGHT NOW — deep collection actively in progress
+	// (typically routed to the site Relay Agent during a scan). Outranks the not-yet-settled
+	// failure signals below so an in-flight host is never misreported as a terminal failure.
+	if m.activeCollect[d.ID] {
+		if d.LocationID != nil && m.anySites[*d.LocationID] && !m.onlineSites[*d.LocationID] {
+			return MgmtAgentOffline, nil
+		}
+		return MgmtPendingCollection, nil
+	}
+
+	// (6) TRUE credential_failed: a credential was cleanly rejected (wrong username/password)
+	// AND nothing authenticated by ANY supported method. Everything that authenticated is
+	// handled above, so this is reserved for "every applicable credential cleanly rejected,
+	// no authenticated evidence" — never a false credential_failed.
+	if cs.authRejected && !cs.authenticatedAny() {
 		return MgmtCredentialFailed, nil
 	}
 	if d.CredentialID != nil {
 		// A credential is bound but nothing successfully collected with it.
 		return MgmtCollectionFailed, nil
 	}
-	if credentialedCategories[d.Category] || windowsLike(d) || d.OsFamily == "linux" {
+	// A credential was actually TRIED (not merely bound) yet nothing succeeded and
+	// it was not a clean auth rejection (handled above): the attempt reached the
+	// host and failed for a non-credential reason — a WinRM/WMI firewall block
+	// (agent New-CimSession "firewall exception for the WinRM"), an RPC/DCOM
+	// error, an unreachable port, or a protocol fault. That is a COLLECTION
+	// failure, NOT "needs a credential": labeling it needs_credential points the
+	// operator at the wrong fix (supply a credential) when the real fix is the
+	// host firewall / GPO or access method. needs_credential is reserved below for
+	// a credentialed-class host that was NEVER attempted and has no binding.
+	if ts != nil && ts.tested {
+		return MgmtCollectionFailed, nil
+	}
+	// Reachable, enrolled, but NOTHING was attempted (no in-flight job — handled
+	// above; no evidence; no auth attempt; no binding) and nothing tested. For a
+	// Windows-like host the pipeline ALWAYS routes a collection attempt
+	// (osCollectionCandidate), so reaching here means collection never ran — an
+	// enqueue gap, NOT a credential problem. Report not_attempted (with the real
+	// reason surfaced elsewhere), never the misleading needs_credential. After the
+	// dispatch/retry hardening this should be 0 for a settled from-zero scan.
+	if windowsLike(d) {
+		return MgmtNotAttempted, nil
+	}
+	// Other credentialed classes (switch/server/SNMP/SSH appliances) genuinely need
+	// a credential of the right kind to be added before HIMS can even attempt them.
+	if credentialedCategories[d.Category] || d.OsFamily == "linux" {
 		return MgmtNeedsCredential, nil
 	}
 	return MgmtUnmanaged, nil
@@ -191,7 +339,8 @@ func (m *statusMaps) statusFor(d db.Device) deviceStatus {
 // (derived from monitoring status + proven access, never from open ports).
 func (m *statusMaps) statusDataQualityIssues(devs []db.Device, now time.Time) []dqIssue {
 	var onlineUnmanaged, reachableNoCred, credBoundNotWorking, needsAgentColl,
-		agentOfflineManaged, offlinePrevManaged, managedStale []db.Device
+		agentOfflineManaged, offlinePrevManaged, managedStale, notAttempted,
+		notAuthorized, webOnly []db.Device
 	staleBefore := now.Add(-reachStale)
 	for _, d := range devs {
 		st := m.statusFor(d)
@@ -215,12 +364,24 @@ func (m *statusMaps) statusDataQualityIssues(devs []db.Device, now time.Time) []
 			if st.Reachability == ReachOnline {
 				reachableNoCred = append(reachableNoCred, d)
 			}
+		case MgmtNotAttempted:
+			// Reachable + enrolled but collection never ran — an enqueue gap to fix
+			// (should be 0 once a from-zero scan settles). Distinct from "needs cred".
+			if st.Reachability == ReachOnline {
+				notAttempted = append(notAttempted, d)
+			}
 		case MgmtCollectionFailed, MgmtCredentialFailed:
 			credBoundNotWorking = append(credBoundNotWorking, d)
+		case MgmtNotAuthorized:
+			notAuthorized = append(notAuthorized, d)
+		case MgmtWebAuthenticated:
+			webOnly = append(webOnly, d)
 		case MgmtNeedsAgent:
 			needsAgentColl = append(needsAgentColl, d)
 		case MgmtAgentOffline:
 			agentOfflineManaged = append(agentOfflineManaged, d)
+			// MgmtPendingCollection is intentionally omitted: collection is actively in
+			// progress, not a data-quality issue.
 		}
 	}
 	out := []dqIssue{}
@@ -237,6 +398,9 @@ func (m *statusMaps) statusDataQualityIssues(devs []db.Device, now time.Time) []
 	add("agent_offline_for_managed_site", "Agent offline for managed site", "Hosts that depend on a site Relay Agent for collection, but that site's agent is currently offline. Bring the agent back online to resume management.", "critical", agentOfflineManaged)
 	add("offline_but_previously_managed", "Offline but previously Managed", "These devices have a proven working management method on record but are currently offline (unreachable). Check power/network — management resumes when they are reachable again.", "warning", offlinePrevManaged)
 	add("managed_device_collection_stale", "Managed device collection stale", "Devices that are Managed but whose last successful authenticated check is over 30 days old. Re-test the credential / re-collect to confirm management is still working.", "info", managedStale)
+	add("collection_not_attempted", "Collection not attempted", "Reachable Windows hosts that were enrolled but never had a collection attempt (no in-flight job, no recorded attempt). This should be 0 once a from-zero scan settles — a non-zero count is an enqueue gap, not a credential problem. Re-run a targeted collection.", "warning", notAttempted)
+	add("credential_not_authorized", "Credential not authorized on host", "A credential AUTHENTICATED but the host denied access (UAC LocalAccountTokenFilterPolicy, remote-logon rights, group membership, WinRM/DCOM policy). This is NOT a wrong password — fix host policy or use a credential authorized on this host.", "warning", notAuthorized)
+	add("web_authenticated_no_deep", "Web-authenticated, no deep management", "A web/identity credential (HTTP) authenticates, but no deep OS/endpoint management exists yet. The credential works — add a Windows/Linux/SNMP management credential if deep inventory is required.", "info", webOnly)
 	return out
 }
 

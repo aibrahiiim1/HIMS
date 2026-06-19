@@ -31,13 +31,32 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coralsearesorts/hims/internal/osinv"
 )
 
-const agentVersion = "1.0.0"
+const agentVersion = "1.2.8"
+
+// agentMaxConcurrent bounds how many collection jobs the agent runs in parallel
+// per poll. The HIMS server already caps how many jobs it dispatches to one agent
+// (agentDispatchCap), so the batch here is small; running it concurrently instead
+// of serially is what keeps a from-zero subnet scan draining in minutes rather
+// than one-host-at-a-time. Windows WMI/WinRM is safe to parallelize (unlike
+// lockout-prone appliances, which the server does not bulk-dispatch). Configurable
+// via HIMS_AGENT_MAX_CONCURRENT (default 8, clamped 1..32) so a weaker agent host
+// can be tuned down per environment.
+var agentMaxConcurrent = func() int {
+	if v := os.Getenv("HIMS_AGENT_MAX_CONCURRENT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= 32 {
+			return n
+		}
+	}
+	return 8
+}()
 
 // serviceName is the Windows Service name the installer registers under and the
 // agent answers to when launched by the Service Control Manager.
@@ -180,6 +199,18 @@ type job struct {
 	Target   string `json:"target"`
 	Username string `json:"username"`
 	Password string `json:"password"`
+	// Credentials is the ordered candidate list to try (multi-credential collection,
+	// mirroring the server's direct WinRM path). When present the agent tries each in
+	// order and STOPS at the first success; when empty it falls back to the single
+	// Username/Password (legacy). Secrets are never logged.
+	Credentials []agentCred `json:"credentials,omitempty"`
+}
+
+type agentCred struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Username string `json:"username"`
+	Password string `json:"password"`
 }
 
 func (a *agent) pollOnce() {
@@ -188,55 +219,385 @@ func (a *agent) pollOnce() {
 		logln("poll error:", err)
 		return
 	}
+	// Run the received batch concurrently (bounded). Serial processing made a
+	// from-zero subnet scan drain one host at a time over ~40 min; parallelizing the
+	// small server-throttled batch settles it in minutes.
+	sem := make(chan struct{}, agentMaxConcurrent)
+	var wg sync.WaitGroup
 	for _, j := range jobs {
-		a.runJob(j)
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(j job) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			a.runJob(j)
+		}(j)
 	}
+	wg.Wait()
 }
 
 func (a *agent) runJob(j job) {
-	// NEVER log the password. Log only target/protocol.
-	logf("job %s: kind=%s protocol=%s target=%s", j.ID, j.Kind, j.Protocol, j.Target)
-	res := map[string]any{}
+	// NEVER log the password. Log only target/protocol/cred-count.
+	logf("job %s: kind=%s protocol=%s target=%s creds=%d", j.ID, j.Kind, j.Protocol, j.Target, len(j.Credentials))
 	if j.Kind == "test" {
-		res = map[string]any{"success": true, "category": "success"}
-	} else {
-		rep, cat, err := collect(j)
-		if err != nil {
-			res = map[string]any{"success": false, "category": cat, "error": sanitize(err.Error(), j.Password)}
-		} else {
-			res = map[string]any{"success": true, "category": "success", "report": rep}
+		a.post(j.ID, map[string]any{"success": true, "category": "success"})
+		return
+	}
+
+	// Build the ordered candidate list. Multi-credential when the server supplied one,
+	// else the single legacy credential.
+	creds := j.Credentials
+	if len(creds) == 0 {
+		creds = []agentCred{{Username: j.Username, Password: j.Password}}
+	}
+
+	// Try each candidate in order; STOP at the first success. Record every attempt's
+	// outcome (success / auth / access-denied / transport / namespace / timeout) so the
+	// server can surface full history and bind the winner. Never spray: the server has
+	// already filtered to applicable Windows credentials and capped the count, and we
+	// never retry the same credential within this cycle.
+	attempts := make([]map[string]any, 0, len(creds))
+	for _, c := range creds {
+		jc := j
+		jc.Username, jc.Password = c.Username, c.Password
+		rep, cat, err := collect(jc)
+		ok := err == nil
+		att := map[string]any{"credential_id": c.ID, "success": ok}
+		if ok {
+			att["category"] = "success"
+			attempts = append(attempts, att)
+			a.post(j.ID, map[string]any{
+				"success": true, "category": "success", "report": rep,
+				"credential_id": c.ID, "attempts": attempts,
+			})
+			return
+		}
+		att["category"] = cat
+		att["detail"] = sanitize(err.Error(), c.Password)
+		attempts = append(attempts, att)
+		// Stop trying more candidates ONLY when the WinRM listener is SILENT
+		// (connect-timeout): each further candidate would wait the full dial timeout and
+		// the miss is not credential-specific, so report the transient and let the server
+		// retry the whole host with backoff. A NEGOTIATE error (the listener ANSWERED) must
+		// NOT stop the loop — the next candidate may be the credential that works. This was
+		// the .106/.119 bug: `.\administrator` (a local admin) hit negotiate/access-denied
+		// (UAC remote-token filtering), the loop broke, and the `dpm` DOMAIN credential —
+		// which is not subject to local-account filtering — was never tried. "Given the
+		// credentials, connect any way" means every applicable candidate is attempted.
+		if cat == osinv.WinRMConnectTimeout {
+			break
 		}
 	}
-	if err := a.do(http.MethodPost, "/api/v1/agent/jobs/"+j.ID+"/result", res, nil); err != nil {
+
+	// All candidates failed — report the most-significant failure (last attempt) plus
+	// the full per-credential history.
+	res := map[string]any{"success": false, "category": "error", "error": "no candidate credential succeeded", "attempts": attempts}
+	if n := len(attempts); n > 0 {
+		last := attempts[n-1]
+		if cat, ok := last["category"].(string); ok {
+			res["category"] = cat
+		}
+		if d, ok := last["detail"].(string); ok {
+			res["error"] = d
+		}
+		res["credential_id"] = last["credential_id"]
+	}
+	a.post(j.ID, res)
+}
+
+// post sends a job result back to HIMS (never logs secrets — res carries none).
+func (a *agent) post(jobID string, res map[string]any) {
+	if err := a.do(http.MethodPost, "/api/v1/agent/jobs/"+jobID+"/result", res, nil); err != nil {
 		logln("post result error:", err)
 	}
 }
 
 // collect runs one device collection locally and returns an osinv.Report.
 func collect(j job) (*osinv.Report, string, error) {
-	// 4 min: the WMI/CIM identity+services+disks+nics pass is quick, but the
-	// installed-software registry walk (StdRegProv EnumKey + per-value GetStringValue
-	// across the Uninstall keys) is many small round-trips and dominates the time.
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	// 6 min: a healthy host collects fast on the first rung, but a fully-failing host may
+	// run all three Windows rungs sequentially (native PSRP → Go WinRM shell → WMI/DCOM),
+	// and the installed-software registry walk is many small round-trips. Kept under the
+	// server's 8-min stale-dispatch reaper so a slow-but-progressing job is never reaped.
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	defer cancel()
 	switch j.Protocol {
-	case "winrm":
-		cl, err := osinv.NewWinRMClient(j.Target, j.Username, j.Password, 120*time.Second)
-		if err != nil {
-			return nil, "error", err
-		}
-		rep, err := osinv.CollectWindows(ctx, osinv.WinRMRunner{C: cl})
-		if err != nil {
-			cat, _, _ := osinv.ClassifyWinRMError(err)
-			return nil, cat, err
-		}
-		rep.Method = "winrm-agent"
-		return &rep, "success", nil
-	case "wmi":
-		return collectWMI(ctx, j)
+	case "winrm", "wmi":
+		// Both labels run the SAME Windows ladder so the agent path is equivalent to the
+		// server's direct collector regardless of which protocol the router picked.
+		return collectWindows(ctx, j)
 	default:
 		return nil, "unsupported", fmt.Errorf("protocol %q not implemented in this agent build", j.Protocol)
 	}
+}
+
+// collectWindows runs the Windows collection ladder, in robustness order:
+//
+//	Rung 0 — NATIVE PowerShell Remoting (collectWinRMNative): Windows' own WinRM/PSRP
+//	         client, inventory run locally in-session. Most robust negotiation (no Go-lib
+//	         401 under load) AND bypasses remote UAC filtering (full token in-session).
+//	         This is the primary path and what makes from-zero discovery reliable for the
+//	         hard hosts (.106/.119) under production scan-storm load.
+//	Rung 1 — Go WinRM command shell (collectWinRM): the original pure-Go path; kept as a
+//	         fallback (e.g. if PowerShell/PSRP is unavailable on the agent host).
+//	Rung 2 — WMI/DCOM (collectWMI): for hosts with WinRM disabled but RPC/DCOM open.
+//
+// A clean WinRM auth rejection short-circuits the WMI rung (the same credential would be
+// rejected over DCOM too — avoids lockout); every other failure falls through, because
+// WMI/DCOM is a different transport (RPC/135) and a WinRM problem says nothing about it.
+func collectWindows(ctx context.Context, j job) (*osinv.Report, string, error) {
+	// Rung 0: native PowerShell Remoting — the robust primary path.
+	var nerr error
+	var ncat string
+	if runtime.GOOS == "windows" {
+		rep, nc, err := collectWinRMNative(ctx, j)
+		if err == nil {
+			return rep, "success", nil
+		}
+		nerr, ncat = err, nc // fold into the combined error + final-cat aggregation
+	}
+	// Rung 1: Go WinRM command shell.
+	rep, wcat, werr := collectWinRM(ctx, j)
+	if werr == nil {
+		return rep, "success", nil
+	}
+	// Short-circuit the WMI/DCOM rung ONLY for a clean WinRM auth rejection (the same
+	// credential will be rejected over DCOM too, so a second logon adds nothing but
+	// account-lockout pressure) or when the agent isn't on Windows. Everything else —
+	// INCLUDING a WinRM transport/negotiation failure (connect-timeout, or a persistent
+	// "401 invalid content type" when the listener requires message encryption) — MUST
+	// fall through to WMI/DCOM: it is a different transport (RPC/135), so a WinRM
+	// transport problem says nothing about DCOM reachability. On this very subnet the
+	// single most successful method is WMI/DCOM, and the .106/.119/.161/.194 acceptance
+	// failures were exactly hosts whose WinRM was unusable (401/timeout) while RPC/135
+	// was open — they can ONLY be collected over WMI, and the old short-circuit on the
+	// transient category meant that path was never tried (retry + self-heal just re-ran
+	// the same dead WinRM rung forever). pickWindowsFailCat keeps the retryable WinRM
+	// transient as the headline when WMI ALSO can't reach the host, so a genuine
+	// double-transport miss still retries rather than settling a terminal verdict.
+	if winRMShortCircuitsWMI(wcat) || runtime.GOOS != "windows" {
+		if nerr != nil {
+			return nil, windowsFinalCat(ncat, wcat, ""), fmt.Errorf("native: %v | winrm: %v", nerr, werr)
+		}
+		return nil, windowsFinalCat(ncat, wcat, ""), werr
+	}
+	rep, mcat, merr := collectWMI(ctx, j)
+	if merr == nil {
+		return rep, "success", nil
+	}
+	// Every rung failed: the headline is the MOST INFORMATIVE reached-host verdict across
+	// all three rungs (windowsFinalCat) — so an authorization denial from the native/WMI
+	// path is never hidden behind a transient WinRM negotiate error. The combined error
+	// keeps each rung's precise reason for the operator-facing final-reason aggregator.
+	if nerr != nil {
+		return nil, windowsFinalCat(ncat, wcat, mcat), fmt.Errorf("native: %v | winrm: %v | wmi: %v", nerr, werr, merr)
+	}
+	return nil, windowsFinalCat(ncat, wcat, mcat), fmt.Errorf("winrm: %v | wmi: %v", werr, merr)
+}
+
+// isReachedVerdict reports whether a category proves the host was CONTACTED and the
+// credential was EVALUATED (not a transport/negotiation miss): a clean rejection
+// (auth_failed / wmi_auth_failed = WRONG credential) or an authorization denial
+// (access_denied / wmi_access_denied = valid credential but NOT authorized — UAC /
+// LocalAccountTokenFilterPolicy / group membership / WinRM RootSDDL). These are durable,
+// not load artifacts.
+func isReachedVerdict(cat string) bool {
+	switch cat {
+	case "auth_failed", "access_denied", osinv.WMIAccessDenied, osinv.WMIAuthFailed:
+		return true
+	}
+	return false
+}
+
+// windowsFinalCat chooses the headline category when every Windows rung fails, WITHOUT
+// collapsing a mixed outcome into a misleading single token (Check #10). Order:
+//
+//  1. A reached-host verdict from the NATIVE PSRP path (Windows' authoritative client) is
+//     the headline — it proves the credential was evaluated, so an authorization denial
+//     (access_denied = not authorized) or a clean rejection (auth_failed = wrong cred)
+//     must NOT be hidden behind a transient negotiate error from the Go library.
+//  2. Otherwise a retryable WinRM transport/negotiation transient stays the headline so
+//     the host retries + self-heals. This is the .49/.50 storm guard: a UAC
+//     wmi_access_denied (remote WMI is UAC-blocked anyway) must NOT terminalize a host the
+//     authoritative native / WinRM-shell path would collect once load clears — that path
+//     was only transient here, not a definitive denial.
+//  3. Else the most informative remaining reached verdict (WMI reached over RPC/DCOM),
+//     then any non-empty category.
+//
+// The full per-rung history is preserved in the combined error string; the server's
+// final-reason aggregator derives the operator-facing class from the attempt set.
+func windowsFinalCat(nativeCat, winrmCat, wmiCat string) string {
+	if isReachedVerdict(nativeCat) {
+		return nativeCat
+	}
+	if isTransientWinRM(nativeCat) {
+		return nativeCat
+	}
+	if isTransientWinRM(winrmCat) {
+		return winrmCat
+	}
+	for _, c := range []string{wmiCat, winrmCat, nativeCat} {
+		if isReachedVerdict(c) {
+			return c
+		}
+	}
+	for _, c := range []string{winrmCat, wmiCat, nativeCat} {
+		if c != "" && c != "error" {
+			return c
+		}
+	}
+	if winrmCat != "" {
+		return winrmCat
+	}
+	if wmiCat != "" {
+		return wmiCat
+	}
+	return nativeCat
+}
+
+// isTransientWinRM reports whether a WinRM failure category is a transient TRANSPORT /
+// negotiation miss (the host is reachable; WinRM did not answer or the NTLM handshake
+// glitched, typically under scan-storm load) rather than a definitive auth/closed-port
+// verdict. Such failures are not credential-specific, so the per-credential loop stops
+// at the first one instead of hammering the host with every remaining candidate over a
+// momentarily-overloaded WinRM listener — and the server retries the whole host later.
+func isTransientWinRM(cat string) bool {
+	return cat == osinv.WinRMConnectTimeout || cat == osinv.WinRMNegotiateError
+}
+
+// winRMShortCircuitsWMI reports whether a FAILED WinRM rung should skip the WMI/DCOM
+// fallback. ONLY a clean auth rejection short-circuits: the same credential will be
+// rejected over DCOM too, and a second logon adds nothing but account-lockout pressure.
+// Every other WinRM failure — connect-timeout, the persistent "401 invalid content
+// type" negotiation error, refused/closed — MUST fall through to WMI/DCOM, which is a
+// different transport (RPC/135) and is frequently the ONLY path that reaches such a
+// host. The 172.21.60.0/24 acceptance failures (.106/.119: WinRM 401; .161/.194: WinRM
+// 5985 closed) all had RPC/135 open and were collectable only over WMI — the old
+// short-circuit on the transient category meant that path was never tried.
+func winRMShortCircuitsWMI(cat string) bool {
+	return cat == "auth_failed"
+}
+
+// collectWinRMNative gathers inventory using WINDOWS' OWN PowerShell Remoting client
+// (New-PSSession + Invoke-Command over WinRM/5985, Negotiate auth), NOT the third-party
+// Go winrm library. This is the most robust Windows rung and the primary path:
+//
+//   - Microsoft's WinRM/PSRP client does NTLM/Kerberos (SPNEGO) negotiation + WSMan
+//     message encryption CORRECTLY. The Go masterzen/winrm library, by contrast, emits
+//     "http response error: 401 - invalid content type" on some hosts under scan-storm
+//     load (it receives an HTML error page mid-negotiation and cannot parse it). Hosts
+//     .106/.119 hit exactly that and could only ever be collected in a lucky low-load
+//     window — native PSRP removes that fragility.
+//   - The inventory script runs LOCALLY inside the remote runspace via Invoke-Command,
+//     so it executes with the caller's FULL token on the target — bypassing the UAC
+//     remote-token filter (LocalAccountTokenFilterPolicy) that makes remote WMI/CIM
+//     return "Access is denied" for a local-admin account. Same advantage as the WinRM
+//     command shell, but over Microsoft's robust client.
+//
+// Writes collection_method = "winrm-native". Requires the agent to run on Windows.
+func collectWinRMNative(ctx context.Context, j job) (*osinv.Report, string, error) {
+	if runtime.GOOS != "windows" {
+		return nil, "unsupported", fmt.Errorf("native PowerShell remoting requires the agent to run on Windows")
+	}
+	// The script opens a PSSession with Microsoft's WinRM client and runs the inventory
+	// gather LOCALLY in the remote runspace (full-token; bypasses remote UAC filtering).
+	script := `$ErrorActionPreference='Stop'
+$u=$env:HIMS_J_USER; $p=ConvertTo-SecureString $env:HIMS_J_PASS -AsPlainText -Force
+$c=New-Object System.Management.Automation.PSCredential($u,$p); $t=$env:HIMS_J_TARGET
+$so=New-PSSessionOption -OpenTimeout 30000 -OperationTimeout 180000 -CancelTimeout 8000 -IdleTimeout 120000
+$s=New-PSSession -ComputerName $t -Credential $c -Authentication Negotiate -SessionOption $so -ErrorAction Stop
+try {
+  $out=Invoke-Command -Session $s -ScriptBlock {
+    # Runs LOCALLY on the target with the full admin token (bypasses remote UAC filtering).
+    $os=Get-CimInstance Win32_OperatingSystem; $cs=Get-CimInstance Win32_ComputerSystem; $bios=Get-CimInstance Win32_BIOS
+    $cpu=@(Get-CimInstance Win32_Processor)
+    $cores=($cpu|Measure-Object NumberOfCores -Sum).Sum; if(-not $cores){$cores=($cpu|Measure-Object NumberOfLogicalProcessors -Sum).Sum}
+    $disks=@(Get-CimInstance Win32_LogicalDisk|?{$_.DriveType -eq 3}|%{@{name=$_.DeviceID;filesystem=$_.FileSystem;total_bytes=[int64]$_.Size;free_bytes=[int64]$_.FreeSpace;size_bytes=[int64]$_.Size}})
+    $nics=@(Get-CimInstance Win32_NetworkAdapterConfiguration|?{$_.IPEnabled}|%{@{name=$_.Description;mac=$_.MACAddress;ip_addresses=(@($_.IPAddress)-join',');gateway=(@($_.DefaultIPGateway)-join',');dns_servers=(@($_.DNSServerSearchOrder)-join',');dhcp_enabled=[bool]$_.DHCPEnabled}})
+    $svc=@(Get-CimInstance Win32_Service|%{@{name=$_.Name;display_name=$_.DisplayName;status=$_.State;start_type=$_.StartMode;account=$_.StartName}})
+    $procs=@(); try { $procs=@(Get-Process|Sort-Object WS -Descending|Select-Object -First 50|%{@{name=$_.ProcessName;pid=[int]$_.Id;mem_bytes=[int64]$_.WS}}) } catch {}
+    $sw=@(); $swnote=''
+    try {
+      $items=Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*','HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue|Where-Object{$_.DisplayName}
+      $sw=@($items|%{@{name=[string]$_.DisplayName;version=[string]$_.DisplayVersion;publisher=[string]$_.Publisher;install_date=[string]$_.InstallDate}})
+      if($sw.Count -gt 0){$swnote='collected via winrm_native_local'} else {$swnote='no_software_found'}
+    } catch { $swnote=('software_failed: '+$_.Exception.Message) }
+    @{ method='winrm-native';
+       identity=@{hostname=$os.CSName;fqdn=("{0}.{1}" -f $cs.Name,$cs.Domain).TrimEnd('.');domain=$cs.Domain;workgroup=$cs.Workgroup;logged_on_user=$cs.UserName};
+       os=@{caption=$os.Caption;version=$os.Version;build="$($os.BuildNumber)";arch=$os.OSArchitecture;install_date="$($os.InstallDate)";last_boot="$($os.LastBootUpTime)"};
+       hardware=@{manufacturer=$cs.Manufacturer;model=$cs.Model;serial=$bios.SerialNumber;bios_version=(@($bios.SMBIOSBIOSVersion)-join' ');cpu_model=$cpu[0].Name;cpu_sockets=$cpu.Count;cpu_cores=[int]$cores;ram_total_bytes=[int64]$cs.TotalPhysicalMemory};
+       disks=$disks; nics=$nics; services=$svc; software=$sw; processes=$procs; roles=@(); events=$null; software_note=$swnote }
+  }
+  $out|ConvertTo-Json -Depth 8 -Compress
+} finally { if($s){ Remove-PSSession $s -ErrorAction SilentlyContinue } }`
+	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
+	base := os.Environ()
+	clean := base[:0]
+	for _, kv := range base {
+		if strings.HasPrefix(strings.ToUpper(kv), "PSMODULEPATH=") {
+			continue
+		}
+		clean = append(clean, kv)
+	}
+	cmd.Env = append(clean, "HIMS_J_USER="+j.Username, "HIMS_J_PASS="+j.Password, "HIMS_J_TARGET="+j.Target)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, classifyNativeWinRMErr(stderr.String()), fmt.Errorf("%s", strings.TrimSpace(stderr.String()))
+	}
+	var rep osinv.Report
+	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &rep); err != nil {
+		return nil, "winrm_native_error", fmt.Errorf("could not parse native WinRM inventory JSON")
+	}
+	rep.Method = "winrm-native"
+	return &rep, "success", nil
+}
+
+// classifyNativeWinRMErr maps a native PowerShell-Remoting (New-PSSession/Invoke-Command)
+// stderr to a credential-test category. "Access is denied" from native PSRP is an
+// AUTHORIZATION refusal (the credential authenticated but the host policy/UAC denied the
+// session) — operator-fixable host config, NEVER a wrong password — so it is its own
+// non-auth category and the ladder falls through to the other rungs. A clean logon
+// failure is auth_failed; connect/negotiate problems are retryable transients.
+func classifyNativeWinRMErr(stderr string) string {
+	e := strings.ToLower(stderr)
+	switch {
+	case strings.Contains(e, "logon failure") || strings.Contains(e, "user name or password") ||
+		strings.Contains(e, "bad username or password"):
+		return "auth_failed"
+	case strings.Contains(e, "access is denied") || strings.Contains(e, "access denied"):
+		// Authenticated but NOT authorized (UAC LocalAccountTokenFilterPolicy / not a local
+		// admin / WinRM RootSDDL). Canonical "access_denied" so the server recognizes it
+		// (categoryIsAuthFailure) and the final-reason aggregator can say "not authorized on
+		// host" — distinct from auth_failed (wrong credential).
+		return "access_denied"
+	case strings.Contains(e, "cannot connect") || strings.Contains(e, "refused") ||
+		strings.Contains(e, "no such host") || strings.Contains(e, "unreachable"):
+		return "unreachable"
+	case strings.Contains(e, "timed out") || strings.Contains(e, "timeout") ||
+		strings.Contains(e, "cannot complete the operation") || strings.Contains(e, "operation timed out"):
+		return osinv.WinRMConnectTimeout
+	default:
+		// Unknown WinRM/WSMan negotiation problem — treat as a retryable transient.
+		return osinv.WinRMNegotiateError
+	}
+}
+
+// collectWinRM gathers inventory over a WinRM command shell (Go-winrm) — the same
+// collector the server's direct path uses. Its Get-CimInstance and Uninstall-registry
+// reads execute locally on the target inside the shell, so they succeed for a
+// local-admin account where remote WMI/CIM is UAC-blocked.
+func collectWinRM(ctx context.Context, j job) (*osinv.Report, string, error) {
+	cl, err := osinv.NewWinRMClient(j.Target, j.Username, j.Password, 120*time.Second)
+	if err != nil {
+		return nil, "error", err
+	}
+	rep, err := osinv.CollectWindows(ctx, osinv.WinRMRunner{C: cl})
+	if err != nil {
+		cat, _, _ := osinv.ClassifyWinRMError(err)
+		return nil, cat, err
+	}
+	rep.Method = "winrm-agent"
+	return &rep, "success", nil
 }
 
 // collectWMI gathers inventory via PowerShell Get-WmiObject over DCOM (Windows
