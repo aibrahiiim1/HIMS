@@ -148,3 +148,6 @@ FROM vh_datastores GROUP BY host_device_id;
 
 -- name: NetworkCountByHost :many
 SELECT host_device_id, count(*)::int AS n FROM vh_networks GROUP BY host_device_id;
+
+-- name: VMLinkSummary :one
+SELECT count(*)::int AS total, count(vm_device_id)::int AS linked FROM virtual_machines;

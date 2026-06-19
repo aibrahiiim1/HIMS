@@ -134,6 +134,7 @@ export const NAV: NavGroup[] = [
   {
     title: 'Reports',
     items: [
+      { label: 'Coverage', icon: FileChartColumn, to: '/coverage' },
       { label: 'Inventory Reports', icon: FileChartColumn, to: '/reports/inventory' },
       { label: 'Discovery Reports', icon: FileSearch, to: '/reports/discovery' },
       { label: 'Availability Reports', icon: ChartLine, to: '/reports/availability' },

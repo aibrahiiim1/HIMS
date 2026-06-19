@@ -916,3 +916,19 @@ func (q *Queries) VMCountsByHost(ctx context.Context) ([]VMCountsByHostRow, erro
 	}
 	return items, nil
 }
+
+const vMLinkSummary = `-- name: VMLinkSummary :one
+SELECT count(*)::int AS total, count(vm_device_id)::int AS linked FROM virtual_machines
+`
+
+type VMLinkSummaryRow struct {
+	Total  int32 `json:"total"`
+	Linked int32 `json:"linked"`
+}
+
+func (q *Queries) VMLinkSummary(ctx context.Context) (VMLinkSummaryRow, error) {
+	row := q.db.QueryRow(ctx, vMLinkSummary)
+	var i VMLinkSummaryRow
+	err := row.Scan(&i.Total, &i.Linked)
+	return i, err
+}

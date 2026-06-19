@@ -946,6 +946,7 @@ type Querier interface {
 	UpsertWirelessRadio(ctx context.Context, arg UpsertWirelessRadioParams) (WirelessRadioStatus, error)
 	UpsertWirelessSSID(ctx context.Context, arg UpsertWirelessSSIDParams) (WirelessSsid, error)
 	VMCountsByHost(ctx context.Context) ([]VMCountsByHostRow, error)
+	VMLinkSummary(ctx context.Context) (VMLinkSummaryRow, error)
 }
 
 var _ Querier = (*Queries)(nil)

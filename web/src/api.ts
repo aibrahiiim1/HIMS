@@ -1838,6 +1838,16 @@ export interface DataQualityDevice { id: string; name: string; primary_ip?: stri
 export interface DataQualityIssue { key: string; label: string; description: string; severity: string; count: number; devices: DataQualityDevice[] }
 export interface DataQualityReport { generated_at: string; total_devices: number; issue_count: number; clean: boolean; issues: DataQualityIssue[] }
 
+// --- Coverage report (Reporting & Coverage) ---
+export interface CovCount { name: string; total: number; managed: number; unmanaged: number }
+export interface CovRef { id?: string; name: string; ip?: string; detail?: string }
+export interface CoverageReport {
+  generated_at: string
+  management: { total: number; managed: number; by_state: Record<string, number>; by_category: CovCount[]; by_role: CovCount[]; by_site: CovCount[] }
+  alerts: { by_severity: Record<string, number>; by_kind: Record<string, number>; by_condition: Record<string, number>; stale: number; acked_unresolved: number; down_not_alerted: CovRef[] | null; flapping: CovRef[] | null; rules_enabled: number; rules_disabled: number }
+  virtualization: { esxi_hosts: number; hyperv_hosts: number; vms_total: number; vms_linked: number; vms_unlinked: number; datastores_warn: number; datastores_crit: number; stale_virt_hosts: number; hosts: { id: string; name: string; ip: string; type: string; vm_count: number; running: number; stopped: number; health: string }[] }
+}
+
 // Subnet-based site reconciliation (Data Quality quick-action).
 export interface ReconcileSiteCount { location_id: string; location_name: string; count: number }
 export interface ReconcileAssignment { device_id: string; name: string; ip: string; location_id: string; location_name: string }
