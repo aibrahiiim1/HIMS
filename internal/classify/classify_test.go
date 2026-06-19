@@ -92,6 +92,22 @@ func TestWindowsWorkstation_NotMislabeledServer(t *testing.T) {
 	}
 }
 
+// TestESXiPort902_ClassifiesVirtualHost: an ESXi host exposes 443 + 902 (the vpxa/authd
+// host-agent port) but its web banner may not advertise "vmware"/"esxi" — port 902 must
+// still classify virtual_host so vSphere/vendor_api collection runs automatically (the gap
+// that left .13/.14 as "server" and never tried with the ESXi credentials).
+func TestESXiPort902_ClassifiesVirtualHost(t *testing.T) {
+	if r := FromEvidence(OpenPorts([]int{443, 902})); r.Category != string(domain.CatVirtualHost) {
+		t.Errorf("443+902 (ESXi) → %q, want virtual_host", r.Category)
+	}
+	if r := FromEvidence(OpenPorts([]int{902})); r.Category != string(domain.CatVirtualHost) {
+		t.Errorf("902 alone → %q, want virtual_host", r.Category)
+	}
+	if r := FromEvidence(OpenPorts([]int{443})); r.Category == string(domain.CatVirtualHost) {
+		t.Errorf("443 alone must NOT be virtual_host: %+v", r)
+	}
+}
+
 // TestOSCaption_ClientVsServer verifies the authoritative deep-inventory caption
 // distinguishes Windows client (workstation) from Windows Server, and that it
 // dominates the weak open-port heuristic when both are present.

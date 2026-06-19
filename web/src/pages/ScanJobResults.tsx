@@ -91,10 +91,15 @@ function failureClass(attempts: CredAttemptLike[] | undefined): { cls: string; t
   const all = (pred: (c: string) => boolean) => cats.every(pred)
   const n = new Set(a.map((x) => x.kind)).size // credentials/methods tried
   const tried = `${a.length} credential attempt(s) across ${n} method(s)`
-  const isTransport = (c: string) => ['unreachable', 'rpc_unreachable', 'dcom_unreachable', 'firewall_blocked', 'namespace_unavailable'].includes(c)
+  const isTransport = (c: string) => ['unreachable', 'rpc_unreachable', 'dcom_unreachable', 'firewall_blocked'].includes(c)
   const isTransient = (c: string) => ['winrm_negotiate_error', 'winrm_connect_timeout'].includes(c)
   const isAuthReject = (c: string) => ['auth_failed', 'wmi_auth_failed'].includes(c)
   const isNotAuth = (c: string) => ['access_denied', 'wmi_access_denied'].includes(c)
+  // HOST WMI BROKEN — a credential reached WMI but root\cimv2 is unavailable/corrupt: a
+  // host-side defect (repair WMI or upgrade), NOT a credential or transport problem.
+  if (has('namespace_unavailable')) {
+    return { cls: 'host_wmi_broken', text: `Host WMI repository (root\\cimv2) is unavailable/corrupt — the agent reached the host but cannot collect. Repair WMI on the host (e.g. winmgmt /salvagerepository or /resetrepository), or the OS is too old for supported remoting. Not a credential problem. (${tried}.)` }
+  }
   // 2. NOT AUTHORIZED — the credential authenticated but the host denied it (UAC /
   //    LocalAccountTokenFilterPolicy / group / WinRM policy). Distinct from a wrong password.
   if (has('access_denied', 'wmi_access_denied')) {

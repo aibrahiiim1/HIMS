@@ -390,7 +390,12 @@ func agentPollBudgetAdaptive(inflight, loadBackoff int) int {
 func agentJobRetryable(category string) bool {
 	switch category {
 	case credtest.CatAuthFailed, credtest.CatUnsupported,
-		"wmi_access_denied", "access_denied", "lockout_suspected":
+		"wmi_access_denied", "access_denied", "lockout_suspected",
+		// namespace_unavailable = the host's WMI repository (root\cimv2) is missing/corrupt:
+		// a HOST-side defect that retrying never fixes. Terminal so a legacy host like .10
+		// (WinRM legacy + WMI namespace broken) settles to an honest collection_failed with
+		// a host-repair next-action instead of looping the agent forever.
+		osinv.WMINamespaceUnavailable:
 		return false
 	}
 	return true
