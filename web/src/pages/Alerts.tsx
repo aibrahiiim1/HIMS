@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Bell, TriangleAlert, CircleCheck, ListChecks, Play, Plus, Wrench, ArrowUpCircle, Clock, X, Trash2 } from 'lucide-react'
+import { Bell, TriangleAlert, CircleCheck, ListChecks, Play, Plus, Wrench, ArrowUpCircle, Clock, X, Trash2, ChevronDown, ChevronRight, Layers } from 'lucide-react'
 import { api, type Alert, type AlertRule, type AlertEvent, type MaintenanceWindow, type Device, type Location, locationPaths } from '../api'
-import { PageHeader, Panel, Kpi, EmptyState, StatusPill, TabBar, timeAgo, usePaged, Pager } from '../components/ui'
+import { PageHeader, Panel, Kpi, EmptyState, StatusPill, TabBar, timeAgo } from '../components/ui'
 
 const sevCls = (s: string) => (s === 'critical' ? 'badge-down' : s === 'warning' ? 'badge-warning' : 'badge-unknown')
 const SeverityBadge = ({ s }: { s: string }) => <span className={`badge ${sevCls(s)}`}>{s}</span>
@@ -13,7 +13,6 @@ export function Alerts() {
   const [tab, setTab] = useState<Tab>('alerts')
   const [showRule, setShowRule] = useState(false)
   const [timelineFor, setTimelineFor] = useState<Alert | null>(null)
-  const [statusF, setStatusF] = useState('active')
   const [now] = useState(() => Date.now())
 
   const alerts = useQuery({ queryKey: ['alerts'], queryFn: () => api.get<Alert[]>('/alerts'), refetchInterval: 15_000 })
@@ -26,8 +25,6 @@ export function Alerts() {
     qc.invalidateQueries({ queryKey: ['maintenance-windows'] })
   }
   const evaluate = useMutation({ mutationFn: () => api.post('/alerts/evaluate', {}), onSuccess: invalidate })
-  const ack = useMutation({ mutationFn: (id: string) => api.post(`/alerts/${id}/ack`, {}), onSuccess: invalidate })
-  const resolve = useMutation({ mutationFn: (id: string) => api.post(`/alerts/${id}/resolve`, {}), onSuccess: invalidate })
   const toggleRule = useMutation({ mutationFn: (r: AlertRule) => api.patch(`/alert-rules/${r.id}`, { enabled: !r.enabled }), onSuccess: invalidate })
   const delRule = useMutation({ mutationFn: (id: string) => api.del(`/alert-rules/${id}`), onSuccess: invalidate })
 
@@ -38,10 +35,6 @@ export function Alerts() {
   const escalated = list.filter((a) => a.escalated && a.status !== 'resolved').length
   const activeRules = (rules.data ?? []).filter((r) => r.enabled).length
   const activeWindows = (windows.data ?? []).filter((w) => Date.parse(w.ends_at) > now && Date.parse(w.starts_at) <= now).length
-
-  const shownAlerts = useMemo(() => list.filter((a) =>
-    statusF === 'all' ? true : statusF === 'active' ? a.status !== 'resolved' : a.status === statusF), [list, statusF])
-  const pagedAlerts = usePaged(shownAlerts, { pageSize: 10 })
 
   return (
     <div>
@@ -75,46 +68,7 @@ export function Alerts() {
         active={tab} onChange={(k) => setTab(k as Tab)}
       />
 
-      {tab === 'alerts' && (
-        <Panel title="Active & Recent Alerts" icon={Bell} subtitle={`${shownAlerts.length}`} pad={false}
-          actions={
-            <select className="field" style={{ width: 150 }} value={statusF} onChange={(e) => setStatusF(e.target.value)}>
-              <option value="active">Active (open+ack)</option>
-              <option value="open">Open</option>
-              <option value="acknowledged">Acknowledged</option>
-              <option value="resolved">Resolved</option>
-              <option value="all">All</option>
-            </select>
-          }>
-          {alerts.isLoading && <div className="loading">Loading…</div>}
-          {alerts.data && shownAlerts.length === 0 && <EmptyState icon={CircleCheck} title="No alerts" message="Nothing matches this filter — monitored devices are within their alerting thresholds." />}
-          {shownAlerts.length > 0 && (
-            <table className="data-table">
-              <thead><tr><th>Severity</th><th>Type</th><th>Status</th><th>Message</th><th>Opened</th><th>WO</th><th></th></tr></thead>
-              <tbody>
-                {pagedAlerts.slice.map((a) => (
-                  <tr key={a.id}>
-                    <td><SeverityBadge s={a.severity} />{a.escalated && <span className="badge badge-down" style={{ marginLeft: 6 }}><ArrowUpCircle size={11} /> esc</span>}</td>
-                    <td>{a.check_id
-                      ? <span className="badge" style={{ background: '#334155', color: '#fff' }} title="Reachability / monitoring-check alert">Check</span>
-                      : <span className="badge" style={{ background: '#7c3aed', color: '#fff' }} title="Device/system state alert (collection stale, agent offline, virtualization, datastore)">State</span>}</td>
-                    <td><StatusPill status={a.status === 'open' ? 'down' : a.status === 'acknowledged' ? 'warning' : 'up'} label={a.status} /></td>
-                    <td className="cell-name">{a.message}{a.acknowledged_by && <small className="muted"> · ack by {a.acknowledged_by}</small>}</td>
-                    <td className="muted">{timeAgo(a.opened_at)}</td>
-                    <td>{a.work_order_id ? '✓' : '—'}</td>
-                    <td className="cell-actions">
-                      <button className="btn btn-ghost btn-xs" onClick={() => setTimelineFor(a)}><Clock size={12} /> Timeline</button>
-                      {a.status === 'open' && <button className="btn btn-ghost btn-xs" onClick={() => ack.mutate(a.id)}>Ack</button>}
-                      {a.status !== 'resolved' && <button className="btn btn-ghost btn-xs" onClick={() => resolve.mutate(a.id)}>Resolve</button>}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-          {shownAlerts.length > 0 && <Pager page={pagedAlerts.page} pages={pagedAlerts.pages} total={pagedAlerts.total} pageSize={pagedAlerts.pageSize} onPage={pagedAlerts.setPage} />}
-        </Panel>
-      )}
+      {tab === 'alerts' && <AlertsTab list={list} loading={alerts.isLoading} onTimeline={setTimelineFor} onChange={invalidate} />}
 
       {tab === 'rules' && (
         <>
@@ -152,6 +106,182 @@ export function Alerts() {
 
       {timelineFor && <TimelineDrawer alert={timelineFor} onClose={() => setTimelineFor(null)} onChange={invalidate} />}
     </div>
+  )
+}
+
+const CONDITION_LABEL: Record<string, string> = {
+  check: 'Device down', collection_stale: 'Collection stale', datastore_low: 'Datastore low free',
+  agent_offline: 'Relay agent offline', virt_collection: 'Virtualization collection',
+}
+const REMEDIATION: Record<string, string> = {
+  check: 'Check device power / network / firewall, then re-test reachability.',
+  collection_stale: 'Re-run collection; verify the bound credential and host reachability.',
+  datastore_low: 'Free space or expand the datastore.',
+  agent_offline: 'Restart the site Relay Agent service so its devices can be collected.',
+  virt_collection: 'Re-run vSphere/Hyper-V collection; check the collector credentials.',
+}
+// urgent-first ordering: critical down → critical state → other critical → warning (non-stale) → stale.
+function alertRank(a: Alert): number {
+  if (a.condition === 'check' && a.severity === 'critical') return 0
+  if (a.kind === 'state' && a.severity === 'critical') return 1
+  if (a.severity === 'critical') return 2
+  if (a.severity === 'warning' && a.condition !== 'collection_stale') return 3
+  return 4
+}
+const TypeBadge = ({ a }: { a: Alert }) => (a.kind === 'check' || a.check_id
+  ? <span className="badge" style={{ background: '#334155', color: '#fff' }} title="Monitoring-check alert">Check</span>
+  : <span className="badge" style={{ background: '#7c3aed', color: '#fff' }} title="Device/system state alert">State</span>)
+
+function AlertsTab({ list, loading, onTimeline, onChange }: { list: Alert[]; loading: boolean; onTimeline: (a: Alert) => void; onChange: () => void }) {
+  const [sevF, setSevF] = useState('')
+  const [statusF, setStatusF] = useState('active')
+  const [typeF, setTypeF] = useState('')
+  const [condF, setCondF] = useState('')
+  const [roleF, setRoleF] = useState('')
+  const [ageF, setAgeF] = useState('')
+  const [sel, setSel] = useState<Set<string>>(new Set())
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+
+  const post = (action: 'ack' | 'resolve', ids: string[]) => api.post('/alerts/bulk', { action, ids })
+  const bulk = useMutation({ mutationFn: ({ action, ids }: { action: 'ack' | 'resolve'; ids: string[] }) => post(action, ids), onSuccess: () => { setSel(new Set()); onChange() } })
+  const ackOne = useMutation({ mutationFn: (id: string) => api.post(`/alerts/${id}/ack`, {}), onSuccess: onChange })
+  const resolveOne = useMutation({ mutationFn: (id: string) => api.post(`/alerts/${id}/resolve`, {}), onSuccess: onChange })
+
+  // Summary cards from all non-resolved alerts (stable counts, independent of filters).
+  const openAll = list.filter((a) => a.status !== 'resolved')
+  const sum = {
+    critical: openAll.filter((a) => a.severity === 'critical').length,
+    warning: openAll.filter((a) => a.severity === 'warning').length,
+    acked: openAll.filter((a) => a.status === 'acknowledged').length,
+    check: openAll.filter((a) => (a.kind ?? (a.check_id ? 'check' : 'state')) === 'check').length,
+    state: openAll.filter((a) => (a.kind ?? (a.check_id ? 'check' : 'state')) === 'state').length,
+    stale: openAll.filter((a) => a.condition === 'collection_stale').length,
+    down: openAll.filter((a) => a.condition === 'check').length,
+    datastore: openAll.filter((a) => a.condition === 'datastore_low').length,
+  }
+
+  const [nowMs] = useState(() => Date.now())
+  const ageOf = (a: Alert) => nowMs - Date.parse(a.opened_at)
+  const filtered = useMemo(() => list.filter((a) => {
+    if (statusF === 'active' ? a.status === 'resolved' : statusF !== 'all' && a.status !== statusF) return false
+    if (sevF && a.severity !== sevF) return false
+    if (typeF && (a.kind ?? (a.check_id ? 'check' : 'state')) !== typeF) return false
+    if (condF && a.condition !== condF) return false
+    if (roleF && a.server_role !== roleF) return false
+    if (ageF === 'hour' && ageOf(a) > 3600_000) return false
+    if (ageF === 'today' && ageOf(a) > 86400_000) return false
+    if (ageF === 'old' && ageOf(a) <= 86400_000) return false
+    return true
+  }), [list, statusF, sevF, typeF, condF, roleF, ageF])
+
+  // Group by condition+severity; collapse collection_stale or any large (>8) group by default.
+  const groups = useMemo(() => {
+    const m = new Map<string, Alert[]>()
+    for (const a of filtered) {
+      const k = `${a.condition}|${a.severity}`
+      ;(m.get(k) ?? m.set(k, []).get(k)!).push(a)
+    }
+    return m
+  }, [filtered])
+  const isCollapsed = (cond: string, n: number) => cond === 'collection_stale' || n > 8
+  const individual: Alert[] = []
+  const collapsed: { key: string; cond: string; sev: string; members: Alert[] }[] = []
+  for (const [k, members] of groups) {
+    const [cond, sev] = k.split('|')
+    if (isCollapsed(cond, members.length)) collapsed.push({ key: k, cond, sev, members })
+    else individual.push(...members)
+  }
+  individual.sort((a, b) => alertRank(a) - alertRank(b) || Date.parse(b.opened_at) - Date.parse(a.opened_at))
+  collapsed.sort((a, b) => (a.sev === 'critical' ? -1 : 1) - (b.sev === 'critical' ? -1 : 1) || b.members.length - a.members.length)
+
+  const toggle = (id: string) => setSel((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n })
+  const thresholdText = (a: Alert) => {
+    if (a.condition === 'datastore_low') return `warn <${a.warn_threshold ?? 20}% / crit <${a.crit_threshold ?? 10}%`
+    if (a.condition === 'collection_stale') return `warn >${a.warn_threshold ?? 24}h / crit >${a.crit_threshold ?? 72}h`
+    return ''
+  }
+  const Row = ({ a }: { a: Alert }) => (
+    <tr>
+      <td><input type="checkbox" checked={sel.has(a.id)} onChange={() => toggle(a.id)} disabled={a.status === 'resolved'} /></td>
+      <td><SeverityBadge s={a.severity} />{a.escalated && <span className="badge badge-down" style={{ marginLeft: 6 }}><ArrowUpCircle size={11} /> esc</span>}</td>
+      <td><TypeBadge a={a} /></td>
+      <td><StatusPill status={a.status === 'open' ? 'down' : a.status === 'acknowledged' ? 'warning' : 'up'} label={a.status} /></td>
+      <td className="cell-name">{a.device_name || a.device_ip || '—'}{a.server_role && <small className="muted"> · {a.server_role.replace(/_/g, ' ')}</small>}</td>
+      <td className="muted" style={{ fontSize: 12 }}>{a.message}{a.acknowledged_by && <small className="muted"> · ack by {a.acknowledged_by}</small>}{thresholdText(a) && <small className="muted"> · {thresholdText(a)}</small>}</td>
+      <td className="muted">{timeAgo(a.opened_at)}</td>
+      <td className="cell-actions">
+        <button className="btn btn-ghost btn-xs" onClick={() => onTimeline(a)}><Clock size={12} /></button>
+        {a.status === 'open' && <button className="btn btn-ghost btn-xs" onClick={() => ackOne.mutate(a.id)}>Ack</button>}
+        {a.status !== 'resolved' && <button className="btn btn-ghost btn-xs" onClick={() => resolveOne.mutate(a.id)}>Resolve</button>}
+      </td>
+    </tr>
+  )
+  const fieldStyle = { padding: '5px 8px', border: '1px solid #2a3a47', borderRadius: 6, fontSize: 12 }
+
+  return (
+    <>
+      <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(auto-fill,minmax(150px,1fr))' }}>
+        <Kpi label="Critical open" value={sum.critical} icon={TriangleAlert} tone={sum.critical ? 'crit' : 'default'} />
+        <Kpi label="Warning open" value={sum.warning} icon={Bell} tone={sum.warning ? 'warn' : 'default'} />
+        <Kpi label="Acknowledged" value={sum.acked} icon={CircleCheck} tone={sum.acked ? 'warn' : 'default'} sub="unresolved" />
+        <Kpi label="Down devices" value={sum.down} icon={TriangleAlert} tone={sum.down ? 'crit' : 'default'} />
+        <Kpi label="Datastore low" value={sum.datastore} icon={Bell} tone={sum.datastore ? 'warn' : 'default'} />
+        <Kpi label="Collection stale" value={sum.stale} icon={Clock} tone="default" />
+        <Kpi label="Check-based" value={sum.check} icon={Bell} tone="default" />
+        <Kpi label="State-based" value={sum.state} icon={Bell} tone="default" />
+      </div>
+
+      <Panel title="Alerts" icon={Bell} subtitle={`${filtered.filter((a) => a.status !== 'resolved').length} shown`} pad={false}
+        actions={
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            <select style={fieldStyle} value={statusF} onChange={(e) => setStatusF(e.target.value)}><option value="active">Active</option><option value="open">Open</option><option value="acknowledged">Ack</option><option value="resolved">Resolved</option><option value="all">All</option></select>
+            <select style={fieldStyle} value={sevF} onChange={(e) => setSevF(e.target.value)}><option value="">All sev</option><option value="critical">Critical</option><option value="warning">Warning</option><option value="info">Info</option></select>
+            <select style={fieldStyle} value={typeF} onChange={(e) => setTypeF(e.target.value)}><option value="">All types</option><option value="check">Check</option><option value="state">State</option></select>
+            <select style={fieldStyle} value={condF} onChange={(e) => setCondF(e.target.value)}><option value="">All rules</option><option value="check">Device down</option><option value="collection_stale">Collection stale</option><option value="datastore_low">Datastore low</option><option value="agent_offline">Agent offline</option><option value="virt_collection">Virtualization</option></select>
+            <select style={fieldStyle} value={roleF} onChange={(e) => setRoleF(e.target.value)}><option value="">All roles</option><option value="virtual_host_esxi">ESXi Host</option><option value="virtual_host_hyperv">Hyper-V Host</option><option value="virtual_machine">VM</option><option value="physical_server">Physical</option><option value="unknown_server">Unknown</option></select>
+            <select style={fieldStyle} value={ageF} onChange={(e) => setAgeF(e.target.value)}><option value="">Any age</option><option value="hour">Last hour</option><option value="today">Today</option><option value="old">&gt;24h</option></select>
+          </div>
+        }>
+        {sel.size > 0 && (
+          <div style={{ padding: '8px 10px', background: 'var(--surface-2)', display: 'flex', gap: 8, alignItems: 'center' }}>
+            <span style={{ fontSize: 13 }}>{sel.size} selected</span>
+            <button className="btn btn-sm" disabled={bulk.isPending} onClick={() => bulk.mutate({ action: 'ack', ids: [...sel] })}>Acknowledge selected</button>
+            <button className="btn btn-sm" disabled={bulk.isPending} onClick={() => bulk.mutate({ action: 'resolve', ids: [...sel] })}>Resolve selected</button>
+            <button className="btn btn-ghost btn-sm" onClick={() => setSel(new Set())}>Clear</button>
+          </div>
+        )}
+        {loading && <div className="loading">Loading…</div>}
+        {!loading && individual.length === 0 && collapsed.length === 0 && <EmptyState icon={CircleCheck} title="No alerts" message="Nothing matches these filters." />}
+        {(individual.length > 0 || collapsed.length > 0) && (
+          <table className="data-table">
+            <thead><tr><th style={{ width: 24 }}></th><th>Severity</th><th>Type</th><th>Status</th><th>Device</th><th>Reason</th><th>Age</th><th></th></tr></thead>
+            <tbody>
+              {individual.map((a) => <Row key={a.id} a={a} />)}
+              {collapsed.map((g) => {
+                const openMembers = g.members.filter((m) => m.status !== 'resolved')
+                const exp = expanded.has(g.key)
+                return (
+                  <>
+                    <tr key={g.key} style={{ background: 'var(--surface-2)', cursor: 'pointer' }} onClick={() => setExpanded((s) => { const n = new Set(s); if (n.has(g.key)) n.delete(g.key); else n.add(g.key); return n })}>
+                      <td>{exp ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</td>
+                      <td><SeverityBadge s={g.sev} /></td>
+                      <td><span className="badge" style={{ background: '#7c3aed', color: '#fff' }}>State</span></td>
+                      <td colSpan={2} className="cell-name"><Layers size={13} /> {g.members.length} {g.members.length === 1 ? 'device' : 'devices'} — {CONDITION_LABEL[g.cond] ?? g.cond}</td>
+                      <td className="muted" style={{ fontSize: 12 }}>{REMEDIATION[g.cond] ?? ''}</td>
+                      <td></td>
+                      <td className="cell-actions" onClick={(e) => e.stopPropagation()}>
+                        <button className="btn btn-ghost btn-xs" disabled={bulk.isPending || openMembers.length === 0} onClick={() => bulk.mutate({ action: 'ack', ids: openMembers.map((m) => m.id) })}>Ack group</button>
+                      </td>
+                    </tr>
+                    {exp && g.members.map((a) => <Row key={a.id} a={a} />)}
+                  </>
+                )
+              })}
+            </tbody>
+          </table>
+        )}
+      </Panel>
+    </>
   )
 }
 

@@ -1467,7 +1467,7 @@ export interface AlertRule {
 export interface Alert {
   id: string
   rule_id: string
-  device_id: string
+  device_id?: string
   check_id?: string | null
   severity: string
   status: string
@@ -1479,6 +1479,17 @@ export interface Alert {
   escalated: boolean
   escalated_at?: string | null
   resolved_at?: string | null
+  // Enriched (list endpoint) for grouping/filtering/summary:
+  rule_name?: string
+  condition?: string // check | collection_stale | agent_offline | virt_collection | datastore_low
+  kind?: string // check | state
+  device_name?: string
+  device_ip?: string
+  device_category?: string
+  server_role?: string
+  site_id?: string
+  warn_threshold?: number | null
+  crit_threshold?: number | null
 }
 
 export interface AlertEvent {

@@ -496,6 +496,93 @@ func (q *Queries) ListAlerts(ctx context.Context) ([]Alert, error) {
 	return items, nil
 }
 
+const listAlertsEnriched = `-- name: ListAlertsEnriched :many
+SELECT a.id, a.rule_id, a.device_id, a.check_id, a.severity, a.status, a.message,
+       a.fingerprint, a.work_order_id, a.opened_at, a.acknowledged_at, a.acknowledged_by,
+       a.escalated, a.escalated_at, a.resolved_at,
+       r.name AS rule_name, r.condition AS condition,
+       r.warn_threshold, r.crit_threshold,
+       d.name AS device_name, d.primary_ip AS device_ip, d.category AS device_category,
+       d.location_id AS device_location
+FROM alerts a
+JOIN alert_rules r ON r.id = a.rule_id
+LEFT JOIN devices d ON d.id = a.device_id
+ORDER BY CASE a.status WHEN 'open' THEN 0 WHEN 'acknowledged' THEN 1 ELSE 2 END, a.opened_at DESC
+LIMIT 2000
+`
+
+type ListAlertsEnrichedRow struct {
+	ID             uuid.UUID   `json:"id"`
+	RuleID         uuid.UUID   `json:"rule_id"`
+	DeviceID       *uuid.UUID  `json:"device_id"`
+	CheckID        *uuid.UUID  `json:"check_id"`
+	Severity       string      `json:"severity"`
+	Status         string      `json:"status"`
+	Message        string      `json:"message"`
+	Fingerprint    string      `json:"fingerprint"`
+	WorkOrderID    *uuid.UUID  `json:"work_order_id"`
+	OpenedAt       time.Time   `json:"opened_at"`
+	AcknowledgedAt *time.Time  `json:"acknowledged_at"`
+	AcknowledgedBy *string     `json:"acknowledged_by"`
+	Escalated      bool        `json:"escalated"`
+	EscalatedAt    *time.Time  `json:"escalated_at"`
+	ResolvedAt     *time.Time  `json:"resolved_at"`
+	RuleName       string      `json:"rule_name"`
+	Condition      string      `json:"condition"`
+	WarnThreshold  *int32      `json:"warn_threshold"`
+	CritThreshold  *int32      `json:"crit_threshold"`
+	DeviceName     *string     `json:"device_name"`
+	DeviceIp       *netip.Addr `json:"device_ip"`
+	DeviceCategory *string     `json:"device_category"`
+	DeviceLocation *uuid.UUID  `json:"device_location"`
+}
+
+// Alerts joined with their rule (name + condition) and device (name/ip/category/site) so the
+// Alerts page can group, filter, and show clear per-alert context without extra round-trips.
+func (q *Queries) ListAlertsEnriched(ctx context.Context) ([]ListAlertsEnrichedRow, error) {
+	rows, err := q.db.Query(ctx, listAlertsEnriched)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAlertsEnrichedRow{}
+	for rows.Next() {
+		var i ListAlertsEnrichedRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.RuleID,
+			&i.DeviceID,
+			&i.CheckID,
+			&i.Severity,
+			&i.Status,
+			&i.Message,
+			&i.Fingerprint,
+			&i.WorkOrderID,
+			&i.OpenedAt,
+			&i.AcknowledgedAt,
+			&i.AcknowledgedBy,
+			&i.Escalated,
+			&i.EscalatedAt,
+			&i.ResolvedAt,
+			&i.RuleName,
+			&i.Condition,
+			&i.WarnThreshold,
+			&i.CritThreshold,
+			&i.DeviceName,
+			&i.DeviceIp,
+			&i.DeviceCategory,
+			&i.DeviceLocation,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAllCollectionHealth = `-- name: ListAllCollectionHealth :many
 SELECT h.device_id, d.name, d.primary_ip, h.collector, h.status, h.detail, h.vm_count, h.collected_at
 FROM vh_collection_health h JOIN devices d ON d.id = h.device_id

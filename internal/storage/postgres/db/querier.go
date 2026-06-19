@@ -426,6 +426,9 @@ type Querier interface {
 	ListAlerts(ctx context.Context) ([]Alert, error)
 	// Alerts whose auto-bridge (or manual link) points at this work order.
 	ListAlertsByWorkOrder(ctx context.Context, workOrderID *uuid.UUID) ([]ListAlertsByWorkOrderRow, error)
+	// Alerts joined with their rule (name + condition) and device (name/ip/category/site) so the
+	// Alerts page can group, filter, and show clear per-alert context without extra round-trips.
+	ListAlertsEnriched(ctx context.Context) ([]ListAlertsEnrichedRow, error)
 	ListAllCollectionHealth(ctx context.Context) ([]ListAllCollectionHealthRow, error)
 	ListAllDatastores(ctx context.Context) ([]ListAllDatastoresRow, error)
 	// Every live device (the Inventory page), ordered for grouped display.

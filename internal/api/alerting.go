@@ -116,13 +116,124 @@ func (s *Server) deleteAlertRule(w http.ResponseWriter, r *http.Request) {
 
 // ---- Alerts ----------------------------------------------------------------
 
+// alertDTO is an alert enriched with rule + device context + derived server_role, so the
+// Alerts page can group/filter/summarize and show clear per-alert reasons.
+type alertDTO struct {
+	ID             string  `json:"id"`
+	RuleID         string  `json:"rule_id"`
+	RuleName       string  `json:"rule_name"`
+	Condition      string  `json:"condition"`
+	Kind           string  `json:"kind"` // check | state
+	Severity       string  `json:"severity"`
+	Status         string  `json:"status"`
+	Message        string  `json:"message"`
+	Fingerprint    string  `json:"fingerprint,omitempty"`
+	DeviceID       string  `json:"device_id,omitempty"`
+	DeviceName     string  `json:"device_name,omitempty"`
+	DeviceIP       string  `json:"device_ip,omitempty"`
+	DeviceCategory string  `json:"device_category,omitempty"`
+	ServerRole     string  `json:"server_role,omitempty"`
+	SiteID         string  `json:"site_id,omitempty"`
+	WarnThreshold  *int32  `json:"warn_threshold,omitempty"`
+	CritThreshold  *int32  `json:"crit_threshold,omitempty"`
+	WorkOrderID    string  `json:"work_order_id,omitempty"`
+	OpenedAt       string  `json:"opened_at"`
+	AcknowledgedBy string  `json:"acknowledged_by,omitempty"`
+	AcknowledgedAt *string `json:"acknowledged_at,omitempty"`
+	ResolvedAt     *string `json:"resolved_at,omitempty"`
+	Escalated      bool    `json:"escalated"`
+}
+
 func (s *Server) listAlerts(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.queries.ListAlerts(r.Context())
+	ctx := r.Context()
+	rows, err := s.queries.ListAlertsEnriched(ctx)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, rows)
+	// Derive server_role per device (ESXi/Hyper-V/VM/physical/unknown) via the status maps.
+	maps, _ := s.buildStatusMaps(ctx)
+	devByID := map[uuid.UUID]db.Device{}
+	if maps != nil {
+		if all, e := s.queries.ListAllDevices(ctx); e == nil {
+			for _, d := range all {
+				devByID[d.ID] = d
+			}
+		}
+	}
+	rfc := func(t *time.Time) *string {
+		if t == nil {
+			return nil
+		}
+		s := t.Format(time.RFC3339)
+		return &s
+	}
+	out := make([]alertDTO, 0, len(rows))
+	for _, a := range rows {
+		kind := "state"
+		if a.CheckID != nil {
+			kind = "check"
+		}
+		dto := alertDTO{
+			ID: a.ID.String(), RuleID: a.RuleID.String(), RuleName: a.RuleName, Condition: a.Condition,
+			Kind: kind, Severity: a.Severity, Status: a.Status, Message: a.Message, Fingerprint: a.Fingerprint,
+			DeviceName: derefStr(a.DeviceName), DeviceCategory: derefStr(a.DeviceCategory),
+			WarnThreshold: a.WarnThreshold, CritThreshold: a.CritThreshold,
+			OpenedAt: a.OpenedAt.Format(time.RFC3339), AcknowledgedBy: derefStr(a.AcknowledgedBy),
+			AcknowledgedAt: rfc(a.AcknowledgedAt), ResolvedAt: rfc(a.ResolvedAt), Escalated: a.Escalated,
+		}
+		if a.DeviceID != nil {
+			dto.DeviceID = a.DeviceID.String()
+			if d, ok := devByID[*a.DeviceID]; ok && maps != nil {
+				dto.ServerRole = maps.serverRole(d)
+			}
+		}
+		if a.DeviceIp != nil && a.DeviceIp.IsValid() {
+			dto.DeviceIP = a.DeviceIp.String()
+		}
+		if a.DeviceLocation != nil {
+			dto.SiteID = a.DeviceLocation.String()
+		}
+		if a.WorkOrderID != nil {
+			dto.WorkOrderID = a.WorkOrderID.String()
+		}
+		out = append(out, dto)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// bulkAlertAction acknowledges or resolves a set of alert ids (operator bulk action from the
+// grouped Alerts UI). Resolve is operator-initiated only — the auto-resolve path (condition
+// cleared) is separate; this never fabricates a "condition cleared".
+func (s *Server) bulkAlertAction(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		IDs    []string `json:"ids"`
+		Action string   `json:"action"` // ack | resolve
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	actor := alertActor(r)
+	n := 0
+	for _, idStr := range req.IDs {
+		id, perr := uuid.Parse(idStr)
+		if perr != nil {
+			continue
+		}
+		if req.Action == "resolve" {
+			if _, e := s.queries.ResolveAlert(r.Context(), id); e == nil {
+				_, _ = s.queries.AddAlertEvent(r.Context(), db.AddAlertEventParams{AlertID: id, Kind: "resolved", Actor: actor, Note: "Operator bulk resolve."})
+				n++
+			}
+		} else {
+			if _, e := s.queries.AcknowledgeAlertBy(r.Context(), db.AcknowledgeAlertByParams{ID: id, AcknowledgedBy: &actor}); e == nil {
+				_, _ = s.queries.AddAlertEvent(r.Context(), db.AddAlertEventParams{AlertID: id, Kind: "acknowledged", Actor: actor})
+				n++
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"action": req.Action, "affected": n})
 }
 
 func (s *Server) acknowledgeAlert(w http.ResponseWriter, r *http.Request) {

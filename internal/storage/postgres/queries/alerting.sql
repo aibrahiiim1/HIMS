@@ -157,3 +157,19 @@ FROM vh_collection_health h JOIN devices d ON d.id = h.device_id;
 -- name: ListAllDatastores :many
 SELECT ds.host_device_id, d.name AS host_name, d.primary_ip, ds.name, ds.capacity_bytes, ds.free_bytes
 FROM vh_datastores ds JOIN devices d ON d.id = ds.host_device_id WHERE ds.capacity_bytes > 0;
+
+-- name: ListAlertsEnriched :many
+-- Alerts joined with their rule (name + condition) and device (name/ip/category/site) so the
+-- Alerts page can group, filter, and show clear per-alert context without extra round-trips.
+SELECT a.id, a.rule_id, a.device_id, a.check_id, a.severity, a.status, a.message,
+       a.fingerprint, a.work_order_id, a.opened_at, a.acknowledged_at, a.acknowledged_by,
+       a.escalated, a.escalated_at, a.resolved_at,
+       r.name AS rule_name, r.condition AS condition,
+       r.warn_threshold, r.crit_threshold,
+       d.name AS device_name, d.primary_ip AS device_ip, d.category AS device_category,
+       d.location_id AS device_location
+FROM alerts a
+JOIN alert_rules r ON r.id = a.rule_id
+LEFT JOIN devices d ON d.id = a.device_id
+ORDER BY CASE a.status WHEN 'open' THEN 0 WHEN 'acknowledged' THEN 1 ELSE 2 END, a.opened_at DESC
+LIMIT 2000;

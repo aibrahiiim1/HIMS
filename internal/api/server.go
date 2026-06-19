@@ -409,6 +409,7 @@ func (s *Server) routes() {
 		r.Delete("/alert-rules/{id}", s.deleteAlertRule)
 		r.Get("/alerts", s.listAlerts)
 		r.Post("/alerts/evaluate", s.evaluateAlerts)
+		r.Post("/alerts/bulk", s.bulkAlertAction) // bulk ack/resolve selected or grouped alerts
 		r.Post("/alerts/{id}/ack", s.acknowledgeAlert)
 		r.Post("/alerts/{id}/resolve", s.resolveAlert)
 		r.Get("/alerts/{id}/timeline", s.alertTimeline)
