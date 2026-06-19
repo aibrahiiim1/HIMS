@@ -4,7 +4,7 @@ import {
   Boxes, Layers, Network, Flame, Wifi, Cpu, Server, HardDrive, MonitorSmartphone,
   Plug, BatteryCharging, ShieldAlert, Camera, Video, Phone, CircleHelp, Brain, Laptop,
   Map, Route as RouteIcon, Waypoints, ClipboardList, ListChecks, Wrench, Package, DollarSign, Building2,
-  FileChartColumn, FileSearch, ChartLine, Tag, Download, Unplug,
+  FileChartColumn, ChartLine, Unplug,
   Users, ShieldCheck, LayoutTemplate, ScanLine, Settings, FileClock, Lock, Activity, MonitorPlay, ClipboardCheck, Send, FileCode, BadgeCheck, DatabaseBackup,
 } from 'lucide-react'
 
@@ -38,6 +38,7 @@ export const NAV: NavGroup[] = [
       { label: 'Dashboard', icon: LayoutDashboard, to: '/dashboard' },
       { label: 'NOC Wallboard', icon: MonitorPlay, to: '/noc' },
       { label: 'Alerts', icon: Bell, to: '/alerts', badge: 'alerts' },
+      { label: 'Action Center', icon: Wrench, to: '/action-center' },
       { label: 'Global Search', icon: Search, to: '/search' },
     ],
   },
@@ -134,13 +135,10 @@ export const NAV: NavGroup[] = [
   {
     title: 'Reports',
     items: [
-      { label: 'Coverage', icon: FileChartColumn, to: '/coverage' },
-      { label: 'Inventory Reports', icon: FileChartColumn, to: '/reports/inventory' },
-      { label: 'Discovery Reports', icon: FileSearch, to: '/reports/discovery' },
-      { label: 'Availability Reports', icon: ChartLine, to: '/reports/availability' },
-      { label: 'Vendor Reports', icon: Tag, to: '/reports/vendors' },
-      { label: 'Connectivity', icon: Plug, to: '/reports/connectivity' },
-      { label: 'Export Center', icon: Download, to: '/reports/export' },
+      // Single enterprise reporting hub — all reports live as tabs inside /coverage
+      // (Management, Data Quality, Alerts, Virtualization, Detailed Reports, Export)
+      // instead of cluttering the sidebar with one link per report.
+      { label: 'Reporting', icon: FileChartColumn, to: '/coverage' },
     ],
   },
   {

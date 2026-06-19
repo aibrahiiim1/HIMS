@@ -193,6 +193,7 @@ type Querier interface {
 	DeleteRole(ctx context.Context, id uuid.UUID) error
 	DeleteSSHCliResultsForSource(ctx context.Context, arg DeleteSSHCliResultsForSourceParams) error
 	DeleteSession(ctx context.Context, tokenHash string) error
+	DeleteSnooze(ctx context.Context, arg DeleteSnoozeParams) error
 	DeleteSparePart(ctx context.Context, id uuid.UUID) error
 	DeleteStaleARP(ctx context.Context, arg DeleteStaleARPParams) error
 	// Prune APs for a controller not refreshed in the latest collection of a source.
@@ -406,6 +407,9 @@ type Querier interface {
 	// auth_failed row wins the tie, so a transport failure on one protocol never
 	// masks an auth rejection on the other. No rows ⇒ never tested ⇒ safe to attempt.
 	LatestCCTVCredTest(ctx context.Context, deviceID uuid.UUID) (LatestCCTVCredTestRow, error)
+	// Latest collect_os agent job per device (status/category/error/finished) — feeds the
+	// relay-job-failed queue + "superseded by later success" detection.
+	LatestCollectJobs(ctx context.Context) ([]LatestCollectJobsRow, error)
 	// The most recent result per (device, credential-kind). This is the read model
 	// behind Management Access Coverage's test-result source, the unmanaged reasons
 	// (failed / not-tested / stale), and the Inventory access filters. One row per
@@ -420,6 +424,7 @@ type Querier interface {
 	ListARPForDevice(ctx context.Context, deviceID uuid.UUID) ([]ListARPForDeviceRow, error)
 	ListAccessPoints(ctx context.Context, controllerDeviceID uuid.UUID) ([]AccessPoint, error)
 	ListActiveMaintenanceWindows(ctx context.Context) ([]MaintenanceWindow, error)
+	ListActiveSnoozes(ctx context.Context) ([]ListActiveSnoozesRow, error)
 	ListAgentJobs(ctx context.Context, arg ListAgentJobsParams) ([]ListAgentJobsRow, error)
 	ListAlertEvents(ctx context.Context, alertID uuid.UUID) ([]AlertEvent, error)
 	ListAlertRules(ctx context.Context) ([]AlertRule, error)
@@ -925,6 +930,7 @@ type Querier interface {
 	UpsertSSHCliResult(ctx context.Context, arg UpsertSSHCliResultParams) error
 	UpsertServerStorage(ctx context.Context, arg UpsertServerStorageParams) error
 	UpsertSetting(ctx context.Context, arg UpsertSettingParams) error
+	UpsertSnooze(ctx context.Context, arg UpsertSnoozeParams) error
 	// ---- Topology links ------------------------------------------------------
 	UpsertTopologyLink(ctx context.Context, arg UpsertTopologyLinkParams) error
 	UpsertUPSStatus(ctx context.Context, arg UpsertUPSStatusParams) error

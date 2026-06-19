@@ -47,6 +47,7 @@ import { UnmappedDevices } from './pages/UnmappedDevices'
 import { Locations } from './pages/Locations'
 import { Reports } from './pages/Reports'
 import { Coverage } from './pages/Coverage'
+import { ActionCenter } from './pages/ActionCenter'
 import { DeviceIntelligence } from './pages/DeviceIntelligence'
 import { AccessControl } from './pages/AccessControl'
 import { DeviceTemplates } from './pages/DeviceTemplates'
@@ -185,6 +186,7 @@ function Shell({ me, onLogout }: { me?: AuthMe; onLogout: () => void }) {
             <Route path="/inventory" element={<Inventory />} />
             <Route path="/locations" element={<Locations />} />
             <Route path="/coverage" element={<Coverage />} />
+            <Route path="/action-center" element={<ActionCenter />} />
             <Route path="/reports" element={<Reports />} />
             <Route path="/reports/:view" element={<Reports />} />
             <Route path="*" element={<Navigate to="/dashboard" replace />} />

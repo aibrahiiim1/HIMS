@@ -178,6 +178,8 @@ func (s *Server) routes() {
 		r.Get("/data-quality", s.dataQuality)
 		r.Post("/data-quality/reconcile-sites", s.reconcileSites)
 		r.Post("/data-quality/collect-os", s.bulkCollectOS)
+		r.Get("/action-center", s.actionCenter)              // remediation queues (active vs historical)
+		r.Post("/action-center/snooze", s.snoozeRemediation) // mute one device+issue (or unsnooze)
 
 		// --- Discovery (operator-launched subnet scans) --------------
 		r.Get("/discovery/jobs", s.listDiscoveryJobs)

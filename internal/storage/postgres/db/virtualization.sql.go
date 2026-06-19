@@ -51,6 +51,20 @@ func (q *Queries) DatastoreSummaryByHost(ctx context.Context) ([]DatastoreSummar
 	return items, nil
 }
 
+const deleteSnooze = `-- name: DeleteSnooze :exec
+DELETE FROM remediation_snoozes WHERE device_id=$1 AND issue_key=$2
+`
+
+type DeleteSnoozeParams struct {
+	DeviceID uuid.UUID `json:"device_id"`
+	IssueKey string    `json:"issue_key"`
+}
+
+func (q *Queries) DeleteSnooze(ctx context.Context, arg DeleteSnoozeParams) error {
+	_, err := q.db.Exec(ctx, deleteSnooze, arg.DeviceID, arg.IssueKey)
+	return err
+}
+
 const deleteStaleDatastores = `-- name: DeleteStaleDatastores :exec
 DELETE FROM vh_datastores WHERE host_device_id=$1 AND last_seen_at < $2
 `
@@ -202,6 +216,52 @@ func (q *Queries) GetCollectionHealth(ctx context.Context, deviceID uuid.UUID) (
 	return items, nil
 }
 
+const latestCollectJobs = `-- name: LatestCollectJobs :many
+SELECT DISTINCT ON (j.device_id)
+  j.device_id, j.status, j.category, j.error, j.finished_at, a.name AS agent_name
+FROM agent_jobs j LEFT JOIN relay_agents a ON a.id = j.agent_id
+WHERE j.kind='collect_os' AND j.device_id IS NOT NULL
+ORDER BY j.device_id, j.created_at DESC
+`
+
+type LatestCollectJobsRow struct {
+	DeviceID   *uuid.UUID `json:"device_id"`
+	Status     string     `json:"status"`
+	Category   string     `json:"category"`
+	Error      string     `json:"error"`
+	FinishedAt *time.Time `json:"finished_at"`
+	AgentName  *string    `json:"agent_name"`
+}
+
+// Latest collect_os agent job per device (status/category/error/finished) — feeds the
+// relay-job-failed queue + "superseded by later success" detection.
+func (q *Queries) LatestCollectJobs(ctx context.Context) ([]LatestCollectJobsRow, error) {
+	rows, err := q.db.Query(ctx, latestCollectJobs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []LatestCollectJobsRow{}
+	for rows.Next() {
+		var i LatestCollectJobsRow
+		if err := rows.Scan(
+			&i.DeviceID,
+			&i.Status,
+			&i.Category,
+			&i.Error,
+			&i.FinishedAt,
+			&i.AgentName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const linkedVMParents = `-- name: LinkedVMParents :many
 SELECT vm.vm_device_id, vm.host_device_id, h.name AS host_name, h.primary_ip AS host_ip
 FROM virtual_machines vm JOIN devices h ON h.id = vm.host_device_id
@@ -231,6 +291,42 @@ func (q *Queries) LinkedVMParents(ctx context.Context) ([]LinkedVMParentsRow, er
 			&i.HostDeviceID,
 			&i.HostName,
 			&i.HostIp,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listActiveSnoozes = `-- name: ListActiveSnoozes :many
+SELECT device_id, issue_key, reason, until FROM remediation_snoozes WHERE until > now()
+`
+
+type ListActiveSnoozesRow struct {
+	DeviceID uuid.UUID `json:"device_id"`
+	IssueKey string    `json:"issue_key"`
+	Reason   string    `json:"reason"`
+	Until    time.Time `json:"until"`
+}
+
+func (q *Queries) ListActiveSnoozes(ctx context.Context) ([]ListActiveSnoozesRow, error) {
+	rows, err := q.db.Query(ctx, listActiveSnoozes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListActiveSnoozesRow{}
+	for rows.Next() {
+		var i ListActiveSnoozesRow
+		if err := rows.Scan(
+			&i.DeviceID,
+			&i.IssueKey,
+			&i.Reason,
+			&i.Until,
 		); err != nil {
 			return nil, err
 		}
@@ -723,6 +819,31 @@ func (q *Queries) UpsertHostNic(ctx context.Context, arg UpsertHostNicParams) er
 		arg.Mac,
 		arg.LinkSpeedMbps,
 		arg.LinkUp,
+	)
+	return err
+}
+
+const upsertSnooze = `-- name: UpsertSnooze :exec
+INSERT INTO remediation_snoozes (device_id, issue_key, reason, until, created_by)
+VALUES ($1,$2,$3,$4,$5)
+ON CONFLICT (device_id, issue_key) DO UPDATE SET reason=EXCLUDED.reason, until=EXCLUDED.until, created_by=EXCLUDED.created_by, created_at=now()
+`
+
+type UpsertSnoozeParams struct {
+	DeviceID  uuid.UUID `json:"device_id"`
+	IssueKey  string    `json:"issue_key"`
+	Reason    string    `json:"reason"`
+	Until     time.Time `json:"until"`
+	CreatedBy string    `json:"created_by"`
+}
+
+func (q *Queries) UpsertSnooze(ctx context.Context, arg UpsertSnoozeParams) error {
+	_, err := q.db.Exec(ctx, upsertSnooze,
+		arg.DeviceID,
+		arg.IssueKey,
+		arg.Reason,
+		arg.Until,
+		arg.CreatedBy,
 	)
 	return err
 }

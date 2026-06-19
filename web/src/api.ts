@@ -1848,6 +1848,11 @@ export interface CoverageReport {
   virtualization: { esxi_hosts: number; hyperv_hosts: number; vms_total: number; vms_linked: number; vms_unlinked: number; datastores_warn: number; datastores_crit: number; stale_virt_hosts: number; hosts: { id: string; name: string; ip: string; type: string; vm_count: number; running: number; stopped: number; health: string }[] }
 }
 
+// --- Action Center (remediation queues) ---
+export interface AcRow { device_id: string; name: string; ip?: string; server_role?: string; category?: string; reason: string; recommended_action: string; last_success?: string; last_error?: string; superseded?: boolean }
+export interface AcQueue { key: string; label: string; description: string; action_kind: string; auto_actionable: boolean; severity: string; count: number; rows: AcRow[] | null }
+export interface ActionCenterReport { generated_at: string; queues: AcQueue[]; virtualization: { vms_unlinked: number; vms_total: number; datastores_warn: number; datastores_crit: number }; historical: Record<string, number> }
+
 // Subnet-based site reconciliation (Data Quality quick-action).
 export interface ReconcileSiteCount { location_id: string; location_name: string; count: number }
 export interface ReconcileAssignment { device_id: string; name: string; ip: string; location_id: string; location_name: string }

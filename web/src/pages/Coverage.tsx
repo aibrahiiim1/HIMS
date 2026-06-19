@@ -46,12 +46,21 @@ export function Coverage() {
     { key: 'dq', label: 'Data Quality', icon: ClipboardList, count: dq.data?.issue_count },
     { key: 'alerts', label: 'Alerts Coverage', icon: Bell },
     { key: 'virt', label: 'Virtualization', icon: HardDrive },
+    { key: 'detailed', label: 'Detailed Reports', icon: BarChart3 },
     { key: 'export', label: 'Export', icon: Download },
+  ]
+  const detailedReports = [
+    { to: '/reports/inventory', label: 'Inventory Reports', desc: 'Full device inventory by category, vendor, site, OS.' },
+    { to: '/reports/discovery', label: 'Discovery Reports', desc: 'Scan results, newly found, unresolved candidates.' },
+    { to: '/reports/availability', label: 'Availability Reports', desc: 'Uptime / reachability trends per device & site.' },
+    { to: '/reports/vendors', label: 'Vendor Reports', desc: 'Fleet breakdown by manufacturer & model.' },
+    { to: '/reports/connectivity', label: 'Connectivity Report', desc: 'Per-device credential & collection outcomes.' },
+    { to: '/reports/export', label: 'Export Center', desc: 'Build & download custom report exports.' },
   ]
 
   return (
     <div>
-      <PageHeader title="Reporting & Coverage" icon={BarChart3} subtitle="What is managed, what is not, why, and what needs action — live operational visibility" />
+      <PageHeader title="Reporting" icon={BarChart3} subtitle="Enterprise reporting hub — coverage, data quality, alerts, virtualization, detailed reports & export in one place" />
       {cov.isLoading && <div className="loading">Loading coverage…</div>}
       <TabBar tabs={tabs} active={tab} onChange={setTab} />
 
@@ -172,6 +181,17 @@ export function Coverage() {
             </table>
           </Panel>
         </>
+      )}
+
+      {tab === 'detailed' && (
+        <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(auto-fill,minmax(260px,1fr))' }}>
+          {detailedReports.map((r) => (
+            <Link key={r.to} to={r.to} className="panel" style={{ padding: 16, textDecoration: 'none', display: 'block' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600 }}><BarChart3 size={16} /> {r.label}</div>
+              <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>{r.desc}</p>
+            </Link>
+          ))}
+        </div>
       )}
 
       {tab === 'export' && (

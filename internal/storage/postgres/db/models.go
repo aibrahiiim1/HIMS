@@ -920,6 +920,16 @@ type RelayAgent struct {
 	UpdatedAt     time.Time  `json:"updated_at"`
 }
 
+type RemediationSnooze struct {
+	ID        uuid.UUID `json:"id"`
+	DeviceID  uuid.UUID `json:"device_id"`
+	IssueKey  string    `json:"issue_key"`
+	Reason    string    `json:"reason"`
+	Until     time.Time `json:"until"`
+	CreatedBy string    `json:"created_by"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 type ReportSchedule struct {
 	ID         uuid.UUID  `json:"id"`
 	Name       string     `json:"name"`

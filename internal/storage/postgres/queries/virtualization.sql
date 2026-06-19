@@ -151,3 +151,23 @@ SELECT host_device_id, count(*)::int AS n FROM vh_networks GROUP BY host_device_
 
 -- name: VMLinkSummary :one
 SELECT count(*)::int AS total, count(vm_device_id)::int AS linked FROM virtual_machines;
+
+-- name: UpsertSnooze :exec
+INSERT INTO remediation_snoozes (device_id, issue_key, reason, until, created_by)
+VALUES ($1,$2,$3,$4,$5)
+ON CONFLICT (device_id, issue_key) DO UPDATE SET reason=EXCLUDED.reason, until=EXCLUDED.until, created_by=EXCLUDED.created_by, created_at=now();
+
+-- name: DeleteSnooze :exec
+DELETE FROM remediation_snoozes WHERE device_id=$1 AND issue_key=$2;
+
+-- name: ListActiveSnoozes :many
+SELECT device_id, issue_key, reason, until FROM remediation_snoozes WHERE until > now();
+
+-- name: LatestCollectJobs :many
+-- Latest collect_os agent job per device (status/category/error/finished) — feeds the
+-- relay-job-failed queue + "superseded by later success" detection.
+SELECT DISTINCT ON (j.device_id)
+  j.device_id, j.status, j.category, j.error, j.finished_at, a.name AS agent_name
+FROM agent_jobs j LEFT JOIN relay_agents a ON a.id = j.agent_id
+WHERE j.kind='collect_os' AND j.device_id IS NOT NULL
+ORDER BY j.device_id, j.created_at DESC;
