@@ -137,12 +137,12 @@ LIMIT 500
 `
 
 type ListNotifiableAlertsRow struct {
-	ID        uuid.UUID `json:"id"`
-	Severity  string    `json:"severity"`
-	Message   string    `json:"message"`
-	Escalated bool      `json:"escalated"`
-	OpenedAt  time.Time `json:"opened_at"`
-	DeviceID  uuid.UUID `json:"device_id"`
+	ID        uuid.UUID  `json:"id"`
+	Severity  string     `json:"severity"`
+	Message   string     `json:"message"`
+	Escalated bool       `json:"escalated"`
+	OpenedAt  time.Time  `json:"opened_at"`
+	DeviceID  *uuid.UUID `json:"device_id"`
 }
 
 // Alerts worth notifying about: still open or escalated, opened recently.

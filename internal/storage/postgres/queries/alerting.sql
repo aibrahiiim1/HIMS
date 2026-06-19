@@ -1,15 +1,20 @@
 -- ---- Alert rules ----------------------------------------------------------
 
 -- name: CreateAlertRule :one
-INSERT INTO alert_rules (name, trigger_status, min_failures, device_category, severity, auto_work_order, work_order_priority, enabled, escalate_after_minutes)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+INSERT INTO alert_rules (name, trigger_status, min_failures, device_category, severity, auto_work_order, work_order_priority, enabled, escalate_after_minutes, condition, warn_threshold, crit_threshold)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 RETURNING *;
 
 -- name: ListAlertRules :many
 SELECT * FROM alert_rules ORDER BY created_at DESC;
 
 -- name: ListEnabledAlertRules :many
-SELECT * FROM alert_rules WHERE enabled ORDER BY created_at;
+-- Check-status rules only — the check engine matches these against monitoring checks.
+SELECT * FROM alert_rules WHERE enabled AND condition = 'check' ORDER BY created_at;
+
+-- name: ListEnabledStateRules :many
+-- State-based rules — evaluated by the device-state evaluator (api/alert_state.go), not checks.
+SELECT * FROM alert_rules WHERE enabled AND condition <> 'check' ORDER BY created_at;
 
 -- name: SetAlertRuleEnabled :one
 UPDATE alert_rules SET enabled = $2, updated_at = now() WHERE id = $1 RETURNING *;
@@ -117,3 +122,38 @@ DELETE FROM maintenance_windows WHERE id = $1;
 SELECT device_id, COUNT(*)::bigint AS n
 FROM alerts WHERE status <> 'resolved' AND device_id IS NOT NULL
 GROUP BY device_id;
+
+-- ---- State-based alerts (no check_id; dedup on rule_id + fingerprint) ------
+
+-- name: OpenStateAlert :one
+-- Opens a state alert. The evaluator checks existence first (single-threaded sweep), and the
+-- partial unique index (rule_id, fingerprint) WHERE check_id IS NULL is the race backstop.
+INSERT INTO alerts (rule_id, device_id, check_id, severity, status, message, fingerprint)
+VALUES ($1, $2, NULL, $3, 'open', $4, $5)
+RETURNING *;
+
+-- name: ListOpenStateAlertsByRule :many
+SELECT id, device_id, fingerprint FROM alerts
+WHERE rule_id = $1 AND check_id IS NULL AND status <> 'resolved';
+
+-- name: ResolveAlertByID :one
+UPDATE alerts SET status = 'resolved', resolved_at = now() WHERE id = $1 AND status <> 'resolved' RETURNING *;
+
+-- name: DeviceCollectionRecency :many
+-- Most recent successful collection signal per device (deep OS inventory, ok virtualization
+-- collection, or a successful credential test) — feeds the collection-stale state alert.
+SELECT d.id AS device_id, d.name, d.primary_ip,
+  GREATEST(
+    COALESCE((SELECT max(collected_at) FROM os_inventory oi WHERE oi.device_id = d.id), 'epoch'),
+    COALESCE((SELECT max(collected_at) FROM vh_collection_health h WHERE h.device_id = d.id AND h.status = 'ok'), 'epoch'),
+    COALESCE((SELECT max(tested_at) FROM credential_test_results c WHERE c.device_id = d.id AND c.success), 'epoch')
+  )::timestamptz AS last_success
+FROM devices d WHERE d.deleted_at IS NULL;
+
+-- name: ListAllCollectionHealth :many
+SELECT h.device_id, d.name, d.primary_ip, h.collector, h.status, h.detail, h.vm_count, h.collected_at
+FROM vh_collection_health h JOIN devices d ON d.id = h.device_id;
+
+-- name: ListAllDatastores :many
+SELECT ds.host_device_id, d.name AS host_name, d.primary_ip, ds.name, ds.capacity_bytes, ds.free_bytes
+FROM vh_datastores ds JOIN devices d ON d.id = ds.host_device_id WHERE ds.capacity_bytes > 0;

@@ -111,6 +111,10 @@ func (s *Server) StartMonitoring(ctx context.Context, tick time.Duration) {
 		if _, err := s.alerts.Evaluate(c); err != nil && c.Err() == nil {
 			slog.Warn("alert evaluation failed", "error", err)
 		}
+		// State-based alerts (collection stale / agent offline / virt collection / datastore low).
+		if c.Err() == nil {
+			s.evaluateStateAlerts(c)
+		}
 	}
 	go func() {
 		if n, err := s.mon.SeedDefaults(ctx); err != nil {

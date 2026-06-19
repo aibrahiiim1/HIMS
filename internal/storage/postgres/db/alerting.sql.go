@@ -16,7 +16,7 @@ import (
 const acknowledgeAlert = `-- name: AcknowledgeAlert :one
 UPDATE alerts SET status = 'acknowledged', acknowledged_at = now()
 WHERE id = $1 AND status = 'open'
-RETURNING id, rule_id, device_id, check_id, severity, status, message, work_order_id, opened_at, acknowledged_at, resolved_at, acknowledged_by, escalated, escalated_at
+RETURNING id, rule_id, device_id, check_id, severity, status, message, work_order_id, opened_at, acknowledged_at, resolved_at, acknowledged_by, escalated, escalated_at, fingerprint
 `
 
 func (q *Queries) AcknowledgeAlert(ctx context.Context, id uuid.UUID) (Alert, error) {
@@ -37,6 +37,7 @@ func (q *Queries) AcknowledgeAlert(ctx context.Context, id uuid.UUID) (Alert, er
 		&i.AcknowledgedBy,
 		&i.Escalated,
 		&i.EscalatedAt,
+		&i.Fingerprint,
 	)
 	return i, err
 }
@@ -44,7 +45,7 @@ func (q *Queries) AcknowledgeAlert(ctx context.Context, id uuid.UUID) (Alert, er
 const acknowledgeAlertBy = `-- name: AcknowledgeAlertBy :one
 UPDATE alerts SET status = 'acknowledged', acknowledged_at = now(), acknowledged_by = $2
 WHERE id = $1 AND status = 'open'
-RETURNING id, rule_id, device_id, check_id, severity, status, message, work_order_id, opened_at, acknowledged_at, resolved_at, acknowledged_by, escalated, escalated_at
+RETURNING id, rule_id, device_id, check_id, severity, status, message, work_order_id, opened_at, acknowledged_at, resolved_at, acknowledged_by, escalated, escalated_at, fingerprint
 `
 
 type AcknowledgeAlertByParams struct {
@@ -70,6 +71,7 @@ func (q *Queries) AcknowledgeAlertBy(ctx context.Context, arg AcknowledgeAlertBy
 		&i.AcknowledgedBy,
 		&i.Escalated,
 		&i.EscalatedAt,
+		&i.Fingerprint,
 	)
 	return i, err
 }
@@ -110,9 +112,9 @@ func (q *Queries) AddAlertEvent(ctx context.Context, arg AddAlertEventParams) (A
 
 const createAlertRule = `-- name: CreateAlertRule :one
 
-INSERT INTO alert_rules (name, trigger_status, min_failures, device_category, severity, auto_work_order, work_order_priority, enabled, escalate_after_minutes)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-RETURNING id, name, trigger_status, min_failures, device_category, severity, auto_work_order, work_order_priority, enabled, created_at, updated_at, escalate_after_minutes
+INSERT INTO alert_rules (name, trigger_status, min_failures, device_category, severity, auto_work_order, work_order_priority, enabled, escalate_after_minutes, condition, warn_threshold, crit_threshold)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+RETURNING id, name, trigger_status, min_failures, device_category, severity, auto_work_order, work_order_priority, enabled, created_at, updated_at, escalate_after_minutes, condition, warn_threshold, crit_threshold
 `
 
 type CreateAlertRuleParams struct {
@@ -125,6 +127,9 @@ type CreateAlertRuleParams struct {
 	WorkOrderPriority    string  `json:"work_order_priority"`
 	Enabled              bool    `json:"enabled"`
 	EscalateAfterMinutes int32   `json:"escalate_after_minutes"`
+	Condition            string  `json:"condition"`
+	WarnThreshold        *int32  `json:"warn_threshold"`
+	CritThreshold        *int32  `json:"crit_threshold"`
 }
 
 // ---- Alert rules ----------------------------------------------------------
@@ -139,6 +144,9 @@ func (q *Queries) CreateAlertRule(ctx context.Context, arg CreateAlertRuleParams
 		arg.WorkOrderPriority,
 		arg.Enabled,
 		arg.EscalateAfterMinutes,
+		arg.Condition,
+		arg.WarnThreshold,
+		arg.CritThreshold,
 	)
 	var i AlertRule
 	err := row.Scan(
@@ -154,6 +162,9 @@ func (q *Queries) CreateAlertRule(ctx context.Context, arg CreateAlertRuleParams
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.EscalateAfterMinutes,
+		&i.Condition,
+		&i.WarnThreshold,
+		&i.CritThreshold,
 	)
 	return i, err
 }
@@ -219,6 +230,50 @@ func (q *Queries) DeleteMaintenanceWindow(ctx context.Context, id uuid.UUID) err
 	return err
 }
 
+const deviceCollectionRecency = `-- name: DeviceCollectionRecency :many
+SELECT d.id AS device_id, d.name, d.primary_ip,
+  GREATEST(
+    COALESCE((SELECT max(collected_at) FROM os_inventory oi WHERE oi.device_id = d.id), 'epoch'),
+    COALESCE((SELECT max(collected_at) FROM vh_collection_health h WHERE h.device_id = d.id AND h.status = 'ok'), 'epoch'),
+    COALESCE((SELECT max(tested_at) FROM credential_test_results c WHERE c.device_id = d.id AND c.success), 'epoch')
+  )::timestamptz AS last_success
+FROM devices d WHERE d.deleted_at IS NULL
+`
+
+type DeviceCollectionRecencyRow struct {
+	DeviceID    uuid.UUID   `json:"device_id"`
+	Name        string      `json:"name"`
+	PrimaryIp   *netip.Addr `json:"primary_ip"`
+	LastSuccess time.Time   `json:"last_success"`
+}
+
+// Most recent successful collection signal per device (deep OS inventory, ok virtualization
+// collection, or a successful credential test) — feeds the collection-stale state alert.
+func (q *Queries) DeviceCollectionRecency(ctx context.Context) ([]DeviceCollectionRecencyRow, error) {
+	rows, err := q.db.Query(ctx, deviceCollectionRecency)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DeviceCollectionRecencyRow{}
+	for rows.Next() {
+		var i DeviceCollectionRecencyRow
+		if err := rows.Scan(
+			&i.DeviceID,
+			&i.Name,
+			&i.PrimaryIp,
+			&i.LastSuccess,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const escalateStaleAlerts = `-- name: EscalateStaleAlerts :many
 UPDATE alerts a SET escalated = true, escalated_at = now()
 FROM alert_rules r
@@ -232,7 +287,7 @@ RETURNING a.id, a.device_id, a.message, a.work_order_id, a.severity
 
 type EscalateStaleAlertsRow struct {
 	ID          uuid.UUID  `json:"id"`
-	DeviceID    uuid.UUID  `json:"device_id"`
+	DeviceID    *uuid.UUID `json:"device_id"`
 	Message     string     `json:"message"`
 	WorkOrderID *uuid.UUID `json:"work_order_id"`
 	Severity    string     `json:"severity"`
@@ -267,7 +322,7 @@ func (q *Queries) EscalateStaleAlerts(ctx context.Context) ([]EscalateStaleAlert
 }
 
 const getAlert = `-- name: GetAlert :one
-SELECT id, rule_id, device_id, check_id, severity, status, message, work_order_id, opened_at, acknowledged_at, resolved_at, acknowledged_by, escalated, escalated_at FROM alerts WHERE id = $1
+SELECT id, rule_id, device_id, check_id, severity, status, message, work_order_id, opened_at, acknowledged_at, resolved_at, acknowledged_by, escalated, escalated_at, fingerprint FROM alerts WHERE id = $1
 `
 
 func (q *Queries) GetAlert(ctx context.Context, id uuid.UUID) (Alert, error) {
@@ -288,6 +343,7 @@ func (q *Queries) GetAlert(ctx context.Context, id uuid.UUID) (Alert, error) {
 		&i.AcknowledgedBy,
 		&i.Escalated,
 		&i.EscalatedAt,
+		&i.Fingerprint,
 	)
 	return i, err
 }
@@ -358,7 +414,7 @@ func (q *Queries) ListAlertEvents(ctx context.Context, alertID uuid.UUID) ([]Ale
 }
 
 const listAlertRules = `-- name: ListAlertRules :many
-SELECT id, name, trigger_status, min_failures, device_category, severity, auto_work_order, work_order_priority, enabled, created_at, updated_at, escalate_after_minutes FROM alert_rules ORDER BY created_at DESC
+SELECT id, name, trigger_status, min_failures, device_category, severity, auto_work_order, work_order_priority, enabled, created_at, updated_at, escalate_after_minutes, condition, warn_threshold, crit_threshold FROM alert_rules ORDER BY created_at DESC
 `
 
 func (q *Queries) ListAlertRules(ctx context.Context) ([]AlertRule, error) {
@@ -383,6 +439,9 @@ func (q *Queries) ListAlertRules(ctx context.Context) ([]AlertRule, error) {
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.EscalateAfterMinutes,
+			&i.Condition,
+			&i.WarnThreshold,
+			&i.CritThreshold,
 		); err != nil {
 			return nil, err
 		}
@@ -395,7 +454,7 @@ func (q *Queries) ListAlertRules(ctx context.Context) ([]AlertRule, error) {
 }
 
 const listAlerts = `-- name: ListAlerts :many
-SELECT id, rule_id, device_id, check_id, severity, status, message, work_order_id, opened_at, acknowledged_at, resolved_at, acknowledged_by, escalated, escalated_at FROM alerts ORDER BY
+SELECT id, rule_id, device_id, check_id, severity, status, message, work_order_id, opened_at, acknowledged_at, resolved_at, acknowledged_by, escalated, escalated_at, fingerprint FROM alerts ORDER BY
     CASE status WHEN 'open' THEN 0 WHEN 'acknowledged' THEN 1 ELSE 2 END,
     opened_at DESC
 LIMIT 500
@@ -425,6 +484,93 @@ func (q *Queries) ListAlerts(ctx context.Context) ([]Alert, error) {
 			&i.AcknowledgedBy,
 			&i.Escalated,
 			&i.EscalatedAt,
+			&i.Fingerprint,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAllCollectionHealth = `-- name: ListAllCollectionHealth :many
+SELECT h.device_id, d.name, d.primary_ip, h.collector, h.status, h.detail, h.vm_count, h.collected_at
+FROM vh_collection_health h JOIN devices d ON d.id = h.device_id
+`
+
+type ListAllCollectionHealthRow struct {
+	DeviceID    uuid.UUID   `json:"device_id"`
+	Name        string      `json:"name"`
+	PrimaryIp   *netip.Addr `json:"primary_ip"`
+	Collector   string      `json:"collector"`
+	Status      string      `json:"status"`
+	Detail      *string     `json:"detail"`
+	VmCount     *int32      `json:"vm_count"`
+	CollectedAt time.Time   `json:"collected_at"`
+}
+
+func (q *Queries) ListAllCollectionHealth(ctx context.Context) ([]ListAllCollectionHealthRow, error) {
+	rows, err := q.db.Query(ctx, listAllCollectionHealth)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAllCollectionHealthRow{}
+	for rows.Next() {
+		var i ListAllCollectionHealthRow
+		if err := rows.Scan(
+			&i.DeviceID,
+			&i.Name,
+			&i.PrimaryIp,
+			&i.Collector,
+			&i.Status,
+			&i.Detail,
+			&i.VmCount,
+			&i.CollectedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAllDatastores = `-- name: ListAllDatastores :many
+SELECT ds.host_device_id, d.name AS host_name, d.primary_ip, ds.name, ds.capacity_bytes, ds.free_bytes
+FROM vh_datastores ds JOIN devices d ON d.id = ds.host_device_id WHERE ds.capacity_bytes > 0
+`
+
+type ListAllDatastoresRow struct {
+	HostDeviceID  uuid.UUID   `json:"host_device_id"`
+	HostName      string      `json:"host_name"`
+	PrimaryIp     *netip.Addr `json:"primary_ip"`
+	Name          string      `json:"name"`
+	CapacityBytes *int64      `json:"capacity_bytes"`
+	FreeBytes     *int64      `json:"free_bytes"`
+}
+
+func (q *Queries) ListAllDatastores(ctx context.Context) ([]ListAllDatastoresRow, error) {
+	rows, err := q.db.Query(ctx, listAllDatastores)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAllDatastoresRow{}
+	for rows.Next() {
+		var i ListAllDatastoresRow
+		if err := rows.Scan(
+			&i.HostDeviceID,
+			&i.HostName,
+			&i.PrimaryIp,
+			&i.Name,
+			&i.CapacityBytes,
+			&i.FreeBytes,
 		); err != nil {
 			return nil, err
 		}
@@ -437,9 +583,10 @@ func (q *Queries) ListAlerts(ctx context.Context) ([]Alert, error) {
 }
 
 const listEnabledAlertRules = `-- name: ListEnabledAlertRules :many
-SELECT id, name, trigger_status, min_failures, device_category, severity, auto_work_order, work_order_priority, enabled, created_at, updated_at, escalate_after_minutes FROM alert_rules WHERE enabled ORDER BY created_at
+SELECT id, name, trigger_status, min_failures, device_category, severity, auto_work_order, work_order_priority, enabled, created_at, updated_at, escalate_after_minutes, condition, warn_threshold, crit_threshold FROM alert_rules WHERE enabled AND condition = 'check' ORDER BY created_at
 `
 
+// Check-status rules only — the check engine matches these against monitoring checks.
 func (q *Queries) ListEnabledAlertRules(ctx context.Context) ([]AlertRule, error) {
 	rows, err := q.db.Query(ctx, listEnabledAlertRules)
 	if err != nil {
@@ -462,6 +609,9 @@ func (q *Queries) ListEnabledAlertRules(ctx context.Context) ([]AlertRule, error
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.EscalateAfterMinutes,
+			&i.Condition,
+			&i.WarnThreshold,
+			&i.CritThreshold,
 		); err != nil {
 			return nil, err
 		}
@@ -530,6 +680,47 @@ func (q *Queries) ListEnabledChecksWithDevice(ctx context.Context) ([]ListEnable
 	return items, nil
 }
 
+const listEnabledStateRules = `-- name: ListEnabledStateRules :many
+SELECT id, name, trigger_status, min_failures, device_category, severity, auto_work_order, work_order_priority, enabled, created_at, updated_at, escalate_after_minutes, condition, warn_threshold, crit_threshold FROM alert_rules WHERE enabled AND condition <> 'check' ORDER BY created_at
+`
+
+// State-based rules — evaluated by the device-state evaluator (api/alert_state.go), not checks.
+func (q *Queries) ListEnabledStateRules(ctx context.Context) ([]AlertRule, error) {
+	rows, err := q.db.Query(ctx, listEnabledStateRules)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AlertRule{}
+	for rows.Next() {
+		var i AlertRule
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.TriggerStatus,
+			&i.MinFailures,
+			&i.DeviceCategory,
+			&i.Severity,
+			&i.AutoWorkOrder,
+			&i.WorkOrderPriority,
+			&i.Enabled,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.EscalateAfterMinutes,
+			&i.Condition,
+			&i.WarnThreshold,
+			&i.CritThreshold,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listMaintenanceWindows = `-- name: ListMaintenanceWindows :many
 SELECT id, scope, device_id, location_id, reason, starts_at, ends_at, created_by, created_at FROM maintenance_windows ORDER BY starts_at DESC LIMIT 200
 `
@@ -564,17 +755,48 @@ func (q *Queries) ListMaintenanceWindows(ctx context.Context) ([]MaintenanceWind
 	return items, nil
 }
 
+const listOpenStateAlertsByRule = `-- name: ListOpenStateAlertsByRule :many
+SELECT id, device_id, fingerprint FROM alerts
+WHERE rule_id = $1 AND check_id IS NULL AND status <> 'resolved'
+`
+
+type ListOpenStateAlertsByRuleRow struct {
+	ID          uuid.UUID  `json:"id"`
+	DeviceID    *uuid.UUID `json:"device_id"`
+	Fingerprint string     `json:"fingerprint"`
+}
+
+func (q *Queries) ListOpenStateAlertsByRule(ctx context.Context, ruleID uuid.UUID) ([]ListOpenStateAlertsByRuleRow, error) {
+	rows, err := q.db.Query(ctx, listOpenStateAlertsByRule, ruleID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListOpenStateAlertsByRuleRow{}
+	for rows.Next() {
+		var i ListOpenStateAlertsByRuleRow
+		if err := rows.Scan(&i.ID, &i.DeviceID, &i.Fingerprint); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const openAlert = `-- name: OpenAlert :one
 
 INSERT INTO alerts (rule_id, device_id, check_id, severity, message)
 VALUES ($1,$2,$3,$4,$5)
 ON CONFLICT (rule_id, check_id) WHERE status <> 'resolved' DO NOTHING
-RETURNING id, rule_id, device_id, check_id, severity, status, message, work_order_id, opened_at, acknowledged_at, resolved_at, acknowledged_by, escalated, escalated_at
+RETURNING id, rule_id, device_id, check_id, severity, status, message, work_order_id, opened_at, acknowledged_at, resolved_at, acknowledged_by, escalated, escalated_at, fingerprint
 `
 
 type OpenAlertParams struct {
 	RuleID   uuid.UUID  `json:"rule_id"`
-	DeviceID uuid.UUID  `json:"device_id"`
+	DeviceID *uuid.UUID `json:"device_id"`
 	CheckID  *uuid.UUID `json:"check_id"`
 	Severity string     `json:"severity"`
 	Message  string     `json:"message"`
@@ -608,6 +830,7 @@ func (q *Queries) OpenAlert(ctx context.Context, arg OpenAlertParams) (Alert, er
 		&i.AcknowledgedBy,
 		&i.Escalated,
 		&i.EscalatedAt,
+		&i.Fingerprint,
 	)
 	return i, err
 }
@@ -619,8 +842,8 @@ GROUP BY device_id
 `
 
 type OpenAlertCountsByDeviceRow struct {
-	DeviceID uuid.UUID `json:"device_id"`
-	N        int64     `json:"n"`
+	DeviceID *uuid.UUID `json:"device_id"`
+	N        int64      `json:"n"`
 }
 
 // Open (unresolved) alert counts per device, for site rollups.
@@ -644,10 +867,57 @@ func (q *Queries) OpenAlertCountsByDevice(ctx context.Context) ([]OpenAlertCount
 	return items, nil
 }
 
+const openStateAlert = `-- name: OpenStateAlert :one
+
+INSERT INTO alerts (rule_id, device_id, check_id, severity, status, message, fingerprint)
+VALUES ($1, $2, NULL, $3, 'open', $4, $5)
+RETURNING id, rule_id, device_id, check_id, severity, status, message, work_order_id, opened_at, acknowledged_at, resolved_at, acknowledged_by, escalated, escalated_at, fingerprint
+`
+
+type OpenStateAlertParams struct {
+	RuleID      uuid.UUID  `json:"rule_id"`
+	DeviceID    *uuid.UUID `json:"device_id"`
+	Severity    string     `json:"severity"`
+	Message     string     `json:"message"`
+	Fingerprint string     `json:"fingerprint"`
+}
+
+// ---- State-based alerts (no check_id; dedup on rule_id + fingerprint) ------
+// Opens a state alert. The evaluator checks existence first (single-threaded sweep), and the
+// partial unique index (rule_id, fingerprint) WHERE check_id IS NULL is the race backstop.
+func (q *Queries) OpenStateAlert(ctx context.Context, arg OpenStateAlertParams) (Alert, error) {
+	row := q.db.QueryRow(ctx, openStateAlert,
+		arg.RuleID,
+		arg.DeviceID,
+		arg.Severity,
+		arg.Message,
+		arg.Fingerprint,
+	)
+	var i Alert
+	err := row.Scan(
+		&i.ID,
+		&i.RuleID,
+		&i.DeviceID,
+		&i.CheckID,
+		&i.Severity,
+		&i.Status,
+		&i.Message,
+		&i.WorkOrderID,
+		&i.OpenedAt,
+		&i.AcknowledgedAt,
+		&i.ResolvedAt,
+		&i.AcknowledgedBy,
+		&i.Escalated,
+		&i.EscalatedAt,
+		&i.Fingerprint,
+	)
+	return i, err
+}
+
 const resolveAlert = `-- name: ResolveAlert :one
 UPDATE alerts SET status = 'resolved', resolved_at = now()
 WHERE id = $1 AND status <> 'resolved'
-RETURNING id, rule_id, device_id, check_id, severity, status, message, work_order_id, opened_at, acknowledged_at, resolved_at, acknowledged_by, escalated, escalated_at
+RETURNING id, rule_id, device_id, check_id, severity, status, message, work_order_id, opened_at, acknowledged_at, resolved_at, acknowledged_by, escalated, escalated_at, fingerprint
 `
 
 func (q *Queries) ResolveAlert(ctx context.Context, id uuid.UUID) (Alert, error) {
@@ -668,6 +938,34 @@ func (q *Queries) ResolveAlert(ctx context.Context, id uuid.UUID) (Alert, error)
 		&i.AcknowledgedBy,
 		&i.Escalated,
 		&i.EscalatedAt,
+		&i.Fingerprint,
+	)
+	return i, err
+}
+
+const resolveAlertByID = `-- name: ResolveAlertByID :one
+UPDATE alerts SET status = 'resolved', resolved_at = now() WHERE id = $1 AND status <> 'resolved' RETURNING id, rule_id, device_id, check_id, severity, status, message, work_order_id, opened_at, acknowledged_at, resolved_at, acknowledged_by, escalated, escalated_at, fingerprint
+`
+
+func (q *Queries) ResolveAlertByID(ctx context.Context, id uuid.UUID) (Alert, error) {
+	row := q.db.QueryRow(ctx, resolveAlertByID, id)
+	var i Alert
+	err := row.Scan(
+		&i.ID,
+		&i.RuleID,
+		&i.DeviceID,
+		&i.CheckID,
+		&i.Severity,
+		&i.Status,
+		&i.Message,
+		&i.WorkOrderID,
+		&i.OpenedAt,
+		&i.AcknowledgedAt,
+		&i.ResolvedAt,
+		&i.AcknowledgedBy,
+		&i.Escalated,
+		&i.EscalatedAt,
+		&i.Fingerprint,
 	)
 	return i, err
 }
@@ -681,7 +979,7 @@ RETURNING a.id, a.device_id, a.work_order_id, a.message
 
 type ResolveRecoveredAlertsRow struct {
 	ID          uuid.UUID  `json:"id"`
-	DeviceID    uuid.UUID  `json:"device_id"`
+	DeviceID    *uuid.UUID `json:"device_id"`
 	WorkOrderID *uuid.UUID `json:"work_order_id"`
 	Message     string     `json:"message"`
 }
@@ -713,7 +1011,7 @@ func (q *Queries) ResolveRecoveredAlerts(ctx context.Context) ([]ResolveRecovere
 }
 
 const setAlertRuleEnabled = `-- name: SetAlertRuleEnabled :one
-UPDATE alert_rules SET enabled = $2, updated_at = now() WHERE id = $1 RETURNING id, name, trigger_status, min_failures, device_category, severity, auto_work_order, work_order_priority, enabled, created_at, updated_at, escalate_after_minutes
+UPDATE alert_rules SET enabled = $2, updated_at = now() WHERE id = $1 RETURNING id, name, trigger_status, min_failures, device_category, severity, auto_work_order, work_order_priority, enabled, created_at, updated_at, escalate_after_minutes, condition, warn_threshold, crit_threshold
 `
 
 type SetAlertRuleEnabledParams struct {
@@ -737,6 +1035,9 @@ func (q *Queries) SetAlertRuleEnabled(ctx context.Context, arg SetAlertRuleEnabl
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.EscalateAfterMinutes,
+		&i.Condition,
+		&i.WarnThreshold,
+		&i.CritThreshold,
 	)
 	return i, err
 }

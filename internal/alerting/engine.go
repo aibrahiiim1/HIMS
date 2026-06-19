@@ -184,10 +184,11 @@ func (e *Engine) event(ctx context.Context, alertID uuid.UUID, kind, actor, note
 // linked work order when the rule asks for it.
 func (e *Engine) fire(ctx context.Context, rule db.AlertRule, c db.ListEnabledChecksWithDeviceRow, res *Result) {
 	checkID := c.ID
+	devID := c.DeviceID
 	msg := alertMessage(rule, c)
 	alert, err := e.repo.OpenAlert(ctx, db.OpenAlertParams{
 		RuleID:   rule.ID,
-		DeviceID: c.DeviceID,
+		DeviceID: &devID,
 		CheckID:  &checkID,
 		Severity: rule.Severity,
 		Message:  msg,
@@ -205,7 +206,6 @@ func (e *Engine) fire(ctx context.Context, rule db.AlertRule, c db.ListEnabledCh
 	if !rule.AutoWorkOrder {
 		return
 	}
-	devID := c.DeviceID
 	wo, err := e.repo.CreateWorkOrder(ctx, db.CreateWorkOrderParams{
 		DeviceID:    &devID,
 		Title:       msg,

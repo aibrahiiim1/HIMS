@@ -54,7 +54,7 @@ type AgentJob struct {
 type Alert struct {
 	ID             uuid.UUID  `json:"id"`
 	RuleID         uuid.UUID  `json:"rule_id"`
-	DeviceID       uuid.UUID  `json:"device_id"`
+	DeviceID       *uuid.UUID `json:"device_id"`
 	CheckID        *uuid.UUID `json:"check_id"`
 	Severity       string     `json:"severity"`
 	Status         string     `json:"status"`
@@ -66,6 +66,7 @@ type Alert struct {
 	AcknowledgedBy *string    `json:"acknowledged_by"`
 	Escalated      bool       `json:"escalated"`
 	EscalatedAt    *time.Time `json:"escalated_at"`
+	Fingerprint    string     `json:"fingerprint"`
 }
 
 type AlertEvent struct {
@@ -90,6 +91,9 @@ type AlertRule struct {
 	CreatedAt            time.Time `json:"created_at"`
 	UpdatedAt            time.Time `json:"updated_at"`
 	EscalateAfterMinutes int32     `json:"escalate_after_minutes"`
+	Condition            string    `json:"condition"`
+	WarnThreshold        *int32    `json:"warn_threshold"`
+	CritThreshold        *int32    `json:"crit_threshold"`
 }
 
 type AppSetting struct {

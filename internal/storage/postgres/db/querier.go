@@ -234,6 +234,9 @@ type Querier interface {
 	DeleteWebPortCandidate(ctx context.Context, id uuid.UUID) error
 	// Replace an event set for a source (collectors re-publish the current window).
 	DeleteWirelessEventsForSource(ctx context.Context, arg DeleteWirelessEventsForSourceParams) error
+	// Most recent successful collection signal per device (deep OS inventory, ok virtualization
+	// collection, or a successful credential test) — feeds the collection-stale state alert.
+	DeviceCollectionRecency(ctx context.Context) ([]DeviceCollectionRecencyRow, error)
 	DeviceCountByCategory(ctx context.Context) ([]DeviceCountByCategoryRow, error)
 	DeviceCountByStatus(ctx context.Context) ([]DeviceCountByStatusRow, error)
 	// Per-device aggregate over ALL credential-test outcomes (every credential, every kind),
@@ -423,6 +426,8 @@ type Querier interface {
 	ListAlerts(ctx context.Context) ([]Alert, error)
 	// Alerts whose auto-bridge (or manual link) points at this work order.
 	ListAlertsByWorkOrder(ctx context.Context, workOrderID *uuid.UUID) ([]ListAlertsByWorkOrderRow, error)
+	ListAllCollectionHealth(ctx context.Context) ([]ListAllCollectionHealthRow, error)
+	ListAllDatastores(ctx context.Context) ([]ListAllDatastoresRow, error)
 	// Every live device (the Inventory page), ordered for grouped display.
 	ListAllDevices(ctx context.Context) ([]Device, error)
 	// Used by the topology graph to build the full picture.
@@ -496,11 +501,14 @@ type Querier interface {
 	ListDiscoveryResults(ctx context.Context, jobID uuid.UUID) ([]DiscoveryResult, error)
 	// A check is due when enabled and either never run or its interval elapsed.
 	ListDueMonitoringChecks(ctx context.Context) ([]MonitoringCheck, error)
+	// Check-status rules only — the check engine matches these against monitoring checks.
 	ListEnabledAlertRules(ctx context.Context) ([]AlertRule, error)
 	// ---- Monitoring state for evaluation --------------------------------------
 	// The evaluator's input: every enabled check joined to its device so rules
 	// can filter by category and alerts can carry a readable device name.
 	ListEnabledChecksWithDevice(ctx context.Context) ([]ListEnabledChecksWithDeviceRow, error)
+	// State-based rules — evaluated by the device-state evaluator (api/alert_state.go), not checks.
+	ListEnabledStateRules(ctx context.Context) ([]AlertRule, error)
 	ListEnabledWebPortCandidates(ctx context.Context) ([]WebPortCandidate, error)
 	// Every interface MAC belonging to a topology-capable fabric device (switch /
 	// router / ISP router). Used to map an observed FDB MAC back to the device that
@@ -563,6 +571,7 @@ type Querier interface {
 	ListOSServices(ctx context.Context, deviceID uuid.UUID) ([]OsService, error)
 	// --- software ---
 	ListOSSoftware(ctx context.Context, deviceID uuid.UUID) ([]OsSoftware, error)
+	ListOpenStateAlertsByRule(ctx context.Context, ruleID uuid.UUID) ([]ListOpenStateAlertsByRuleRow, error)
 	ListPbxPhones(ctx context.Context, deviceID uuid.UUID) ([]PbxPhone, error)
 	ListPermissions(ctx context.Context) ([]Permission, error)
 	ListPortVlans(ctx context.Context, deviceID uuid.UUID) ([]PortVlan, error)
@@ -667,6 +676,10 @@ type Querier interface {
 	OpenAlert(ctx context.Context, arg OpenAlertParams) (Alert, error)
 	// Open (unresolved) alert counts per device, for site rollups.
 	OpenAlertCountsByDevice(ctx context.Context) ([]OpenAlertCountsByDeviceRow, error)
+	// ---- State-based alerts (no check_id; dedup on rule_id + fingerprint) ------
+	// Opens a state alert. The evaluator checks existence first (single-threaded sweep), and the
+	// partial unique index (rule_id, fingerprint) WHERE check_id IS NULL is the race backstop.
+	OpenStateAlert(ctx context.Context, arg OpenStateAlertParams) (Alert, error)
 	PermissionsForRole(ctx context.Context, roleID uuid.UUID) ([]Permission, error)
 	// All permission codes a user holds via any of their roles.
 	PermissionsForUser(ctx context.Context, userID uuid.UUID) ([]string, error)
@@ -703,6 +716,7 @@ type Querier interface {
 	// failed so they never block re-enqueue forever. $1 = dispatched-before cutoff.
 	RequeueStaleAgentJobs(ctx context.Context, dispatchedAt *time.Time) (int64, error)
 	ResolveAlert(ctx context.Context, id uuid.UUID) (Alert, error)
+	ResolveAlertByID(ctx context.Context, id uuid.UUID) (Alert, error)
 	// The resolver-assembly query: for a device IP, return every credential in a
 	// group bound to either a subnet that contains the IP (more specific) or a
 	// location anchor, with the binding specificity + member priority so the

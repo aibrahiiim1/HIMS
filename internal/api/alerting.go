@@ -75,6 +75,7 @@ func (s *Server) createAlertRule(w http.ResponseWriter, r *http.Request) {
 		WorkOrderPriority:    orDefault(req.WorkOrderPriority, "high"),
 		Enabled:              true,
 		EscalateAfterMinutes: esc,
+		Condition:            "check",
 	})
 	if err != nil {
 		writeErr(w, err)
@@ -301,5 +302,10 @@ func (s *Server) evaluateAlerts(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, res)
+	stOpened, stResolved := s.evaluateStateAlerts(r.Context())
+	writeJSON(w, http.StatusOK, map[string]any{
+		"check_opened": res.Opened, "check_resolved": res.Resolved,
+		"state_opened": stOpened, "state_resolved": stResolved,
+		"work_orders": res.WorkOrders, "suppressed": res.Suppressed, "escalated": res.Escalated,
+	})
 }

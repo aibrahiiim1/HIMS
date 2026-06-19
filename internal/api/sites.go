@@ -76,7 +76,9 @@ func (s *Server) sitesOverview(w http.ResponseWriter, r *http.Request) {
 	}
 	alertByDevice := make(map[uuid.UUID]int, len(alertRows))
 	for _, a := range alertRows {
-		alertByDevice[a.DeviceID] = int(a.N)
+		if a.DeviceID != nil { // state alerts (e.g. offline agent) are not device-scoped
+			alertByDevice[*a.DeviceID] = int(a.N)
+		}
 	}
 
 	const unassigned = "unassigned"

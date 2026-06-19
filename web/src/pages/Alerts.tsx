@@ -90,11 +90,14 @@ export function Alerts() {
           {alerts.data && shownAlerts.length === 0 && <EmptyState icon={CircleCheck} title="No alerts" message="Nothing matches this filter — monitored devices are within their alerting thresholds." />}
           {shownAlerts.length > 0 && (
             <table className="data-table">
-              <thead><tr><th>Severity</th><th>Status</th><th>Message</th><th>Opened</th><th>WO</th><th></th></tr></thead>
+              <thead><tr><th>Severity</th><th>Type</th><th>Status</th><th>Message</th><th>Opened</th><th>WO</th><th></th></tr></thead>
               <tbody>
                 {pagedAlerts.slice.map((a) => (
                   <tr key={a.id}>
                     <td><SeverityBadge s={a.severity} />{a.escalated && <span className="badge badge-down" style={{ marginLeft: 6 }}><ArrowUpCircle size={11} /> esc</span>}</td>
+                    <td>{a.check_id
+                      ? <span className="badge" style={{ background: '#334155', color: '#fff' }} title="Reachability / monitoring-check alert">Check</span>
+                      : <span className="badge" style={{ background: '#7c3aed', color: '#fff' }} title="Device/system state alert (collection stale, agent offline, virtualization, datastore)">State</span>}</td>
                     <td><StatusPill status={a.status === 'open' ? 'down' : a.status === 'acknowledged' ? 'warning' : 'up'} label={a.status} /></td>
                     <td className="cell-name">{a.message}{a.acknowledged_by && <small className="muted"> · ack by {a.acknowledged_by}</small>}</td>
                     <td className="muted">{timeAgo(a.opened_at)}</td>
