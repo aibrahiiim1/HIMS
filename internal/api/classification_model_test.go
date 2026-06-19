@@ -123,6 +123,26 @@ func TestClassification_LegacyWmiBrokenIsCollectionFailedNotNeedsAgent(t *testin
 	}
 }
 
+func TestManagementReason_WmiBrokenSurfacedForCollectionFailed(t *testing.T) {
+	id := uuid.New()
+	dev := db.Device{ID: id, OsFamily: "windows", Category: "endpoint"}
+	// Legacy + broken WMI → collection_failed WITH a wmi_namespace_broken reason so the UI
+	// shows host-side WMI repair, not the generic firewall/credential text (the .10 case).
+	m := cmaps(id, credSignal{legacyAuthOK: true, wmiBroken: true}, nil)
+	st := m.statusFor(dev)
+	if st.Management != MgmtCollectionFailed {
+		t.Fatalf("state: got %s, want collection_failed", st.Management)
+	}
+	if st.ManagementReason != "wmi_namespace_broken" {
+		t.Errorf("reason: got %q, want wmi_namespace_broken", st.ManagementReason)
+	}
+	// A plain managed host carries no failure reason.
+	mgd := cmaps(id, credSignal{anySuccess: true}, map[string]string{"winrm": "evidence"})
+	if r := mgd.statusFor(dev).ManagementReason; r != "" {
+		t.Errorf("managed host reason: got %q, want empty", r)
+	}
+}
+
 func TestClassification_TransportAndTransientNotCredentialFailed(t *testing.T) {
 	id := uuid.New()
 	dev := db.Device{ID: id, OsFamily: "windows", Category: "endpoint"}

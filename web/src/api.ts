@@ -162,6 +162,7 @@ export interface Device {
   management?: string // managed | partially_managed | unmanaged | needs_credential | credential_failed | needs_agent | agent_offline | collection_failed | web_authenticated | not_authorized
   managed_by?: string[] // protocol tokens with a PROVEN working method
   previously_managed?: boolean // offline now, but has a working method on record
+  management_reason?: string // specific failure sub-reason (e.g. wmi_namespace_broken) for precise remediation
   // Operator-editable management attributes (Edit Device).
   subtype?: string
   notes?: string

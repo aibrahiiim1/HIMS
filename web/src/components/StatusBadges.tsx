@@ -10,15 +10,23 @@ export function ReachabilityBadge({ value }: { value?: string }) {
   return <span className={`badge ${b.cls}`} title={`Reachability: ${b.label}`}>{b.label}</span>
 }
 
-export function ManagementBadge({ value, managedBy }: { value?: string; managedBy?: string[] }) {
+// Short, human reason hints appended to the management badge tooltip so the precise cause
+// (e.g. a broken host WMI repository) is visible on hover wherever the badge appears.
+const REASON_HINT: Record<string, string> = {
+  wmi_namespace_broken: 'host WMI repository (root\\cimv2) broken — repair WMI on the host',
+  transport_unreachable: 'agent could not reach WinRM/RPC — check host firewall/listener',
+}
+
+export function ManagementBadge({ value, managedBy, reason }: { value?: string; managedBy?: string[]; reason?: string }) {
   const b = mgmtBadge(value)
   const by = value === 'managed' && managedBy && managedBy.length ? ` via ${managedBy.map((p) => p.toUpperCase()).join(', ')}` : ''
-  return <span className={`badge ${b.cls}`} title={`Management: ${b.label}${by}`}>{b.label}</span>
+  const hint = reason && REASON_HINT[reason] ? ` — ${REASON_HINT[reason]}` : ''
+  return <span className={`badge ${b.cls}`} title={`Management: ${b.label}${by}${hint}`}>{b.label}</span>
 }
 
 // StatusBadges renders both axes side by side for a device row/header.
-export function StatusBadges({ d, linkUnmanaged }: { d: Pick<Device, 'reachability' | 'management' | 'managed_by' | 'previously_managed'>; linkUnmanaged?: boolean }) {
-  const mgmt = <ManagementBadge value={d.management} managedBy={d.managed_by} />
+export function StatusBadges({ d, linkUnmanaged }: { d: Pick<Device, 'reachability' | 'management' | 'managed_by' | 'previously_managed' | 'management_reason'>; linkUnmanaged?: boolean }) {
+  const mgmt = <ManagementBadge value={d.management} managedBy={d.managed_by} reason={d.management_reason} />
   return (
     <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
       <ReachabilityBadge value={d.reachability} />

@@ -28,6 +28,21 @@ const ACTION: Record<string, string> = {
   partially_managed: 'Some methods work; add the missing one for full coverage',
 }
 
+// More-specific remediation keyed on the failure sub-reason (management_reason), used when
+// the management state alone is too generic. A broken host WMI repository, for example, is a
+// host-side repair — not the firewall/credential fix the generic collection_failed text implies.
+const REASON_ACTION: Record<string, string> = {
+  wmi_namespace_broken: 'Host WMI repository (root\\cimv2) is broken or unavailable — the agent reached the host but cannot collect. Repair WMI ON THE HOST (winmgmt /salvagerepository, then /resetrepository if needed), or the OS is too old for supported remoting. This is a host-side fix, NOT a credential or firewall problem.',
+  transport_unreachable: 'The agent could not reach WinRM/RPC on the host (port closed/filtered or listener disabled). Check the host firewall/listener — NOT a credential problem.',
+}
+
+// actionFor picks the most specific honest next-action: the sub-reason text when present,
+// otherwise the per-state default.
+function actionFor(d: Device): string {
+  if (d.management_reason && REASON_ACTION[d.management_reason]) return REASON_ACTION[d.management_reason]
+  return ACTION[d.management ?? ''] ?? 'Bind & prove a credential'
+}
+
 export function UnmanagedDevices() {
   const [sp, setSp] = useSearchParams()
   const filter = sp.get('management') ?? ''
@@ -101,8 +116,8 @@ export function UnmanagedDevices() {
                   <td style={{ textTransform: 'capitalize' }}>{(d.category || 'unknown').replace(/_/g, ' ')}</td>
                   <td>{d.vendor || '—'}</td>
                   <td><ReachabilityBadge value={d.reachability} /></td>
-                  <td><ManagementBadge value={d.management} managedBy={d.managed_by} /></td>
-                  <td className="muted" style={{ fontSize: 11 }}>{ACTION[d.management ?? ''] ?? 'Bind & prove a credential'}</td>
+                  <td><ManagementBadge value={d.management} managedBy={d.managed_by} reason={d.management_reason} /></td>
+                  <td className="muted" style={{ fontSize: 11 }}>{actionFor(d)}</td>
                   <td style={{ whiteSpace: 'nowrap' }}>
                     <Link className="btn btn-ghost btn-xs" to={`/devices/${d.id}`} title="Open device — bind credential / test / repair">Open</Link>{' '}
                     <button className="btn btn-ghost btn-xs" onClick={() => setEditDev(d)} title="Edit device"><Pencil size={12} /></button>{' '}

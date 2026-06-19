@@ -321,6 +321,37 @@ type deviceStatus struct {
 	Management        string   `json:"management"`
 	ManagedBy         []string `json:"managed_by,omitempty"`         // protocol tokens with a working method
 	PreviouslyManaged bool     `json:"previously_managed,omitempty"` // offline but has a working method on record
+	// ManagementReason is a specific sub-reason for a failure state so the UI can show
+	// precise, honest remediation (e.g. a broken host WMI repository vs a transient
+	// transport block) instead of one generic "collection failed" message. Empty when
+	// there is no more-specific reason than the management state itself conveys.
+	ManagementReason string `json:"management_reason,omitempty"`
+}
+
+// managementReason returns a specific sub-reason for a failure management state, so the UI
+// can render an accurate next-action instead of a generic one. Today it discriminates the
+// collection_failed bucket: a host whose WMI repository (root\cimv2) is broken
+// (namespace_unavailable) needs a HOST-side WMI/CIM repair — NOT a firewall/credential fix —
+// which the generic collection_failed text would wrongly suggest (the .10 case).
+func (m *statusMaps) managementReason(d db.Device, state string) string {
+	if state != MgmtCollectionFailed {
+		return ""
+	}
+	if cs, ok := m.cred[d.ID]; ok && cs.wmiBroken {
+		return "wmi_namespace_broken"
+	}
+	if ts := m.test[d.ID]; ts != nil {
+		if ts.kindCategory["wmi"] == "namespace_unavailable" || ts.kindCategory["winrm"] == "namespace_unavailable" {
+			return "wmi_namespace_broken"
+		}
+		for _, k := range []string{"wmi", "winrm"} {
+			switch ts.kindCategory[k] {
+			case "unreachable", "rpc_unreachable", "dcom_unreachable", "firewall_blocked":
+				return "transport_unreachable"
+			}
+		}
+	}
+	return ""
 }
 
 func (m *statusMaps) statusFor(d db.Device) deviceStatus {
@@ -339,6 +370,7 @@ func (m *statusMaps) statusFor(d db.Device) deviceStatus {
 		Management:        state,
 		ManagedBy:         managedBy,
 		PreviouslyManaged: reach == ReachOffline && len(managedBy) > 0,
+		ManagementReason:  m.managementReason(d, state),
 	}
 }
 
