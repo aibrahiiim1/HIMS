@@ -60,6 +60,11 @@ const (
 	winSoftwarePS = `@(Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*','HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'|Where-Object{$_.DisplayName}|ForEach-Object{[pscustomobject]@{name=$_.DisplayName;version=[string]$_.DisplayVersion;publisher=[string]$_.Publisher;install_date=[string]$_.InstallDate}})|ConvertTo-Json -Compress`
 
 	winEventsPS = `$s=(Get-Date).AddHours(-24);$h=@{LogName='System','Application';StartTime=$s};[pscustomobject]@{critical_24h=@(Get-WinEvent -FilterHashtable ($h+@{Level=1}) -EA SilentlyContinue).Count;error_24h=@(Get-WinEvent -FilterHashtable ($h+@{Level=2}) -EA SilentlyContinue).Count;warning_24h=@(Get-WinEvent -FilterHashtable ($h+@{Level=3}) -EA SilentlyContinue).Count}|ConvertTo-Json -Compress`
+
+	// Hyper-V guests, in-band: only emits rows on an actual Hyper-V host (Get-VM present),
+	// so a plain Windows server returns [] and is never mis-marked a hypervisor. State enum:
+	// 2=running,3=off,6=saved,9=paused. IPs need integration services (blank otherwise).
+	winVMsPS = `Import-Module Hyper-V -EA SilentlyContinue;if(Get-Command Get-VM -EA SilentlyContinue){@(Get-VM|ForEach-Object{$ip='';try{$ip=(@($_.NetworkAdapters.IPAddresses)|Where-Object{$_ -match '\.'}) -join ','}catch{};[pscustomobject]@{name=[string]$_.Name;power_state=(switch([int]$_.State){2{'on'}3{'off'}6{'suspended'}9{'suspended'}default{'unknown'}});vcpu=[int]$_.ProcessorCount;memory_mb=[int]($_.MemoryStartup/1MB);guest_os='';ip=[string]$ip}})|ConvertTo-Json -Compress}else{'[]'}`
 )
 
 // CollectWindows runs the per-section snippets through the runner and assembles
@@ -108,6 +113,9 @@ func CollectWindows(ctx context.Context, r Runner) (Report, error) {
 		if json.Unmarshal(bytes.TrimSpace([]byte(out)), &ev) == nil {
 			rep.Events = &ev
 		}
+	}
+	if out, err := r.Run(ctx, winVMsPS); err == nil {
+		rep.VMs, _ = jsonArray[ReportVM]([]byte(out))
 	}
 	return rep, nil
 }

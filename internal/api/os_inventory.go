@@ -326,6 +326,12 @@ func (s *Server) runOSCollection(ctx context.Context, d db.Device) osCollectResu
 		// query is an atomic no-op on classification-locked devices, so a manual
 		// operator override is never overwritten.
 		s.reclassifyFromCaption(ctx, d, rep.OS.Caption)
+		// Hyper-V detected in-band (the Windows pass enumerated guests) → mark this host a
+		// virtual_host + hyperv_host and persist its VMs (after the OS reclassify so it is
+		// not downgraded to plain server). Same handling as the agent path.
+		if reportIsHyperV(rep) {
+			s.markHyperVHost(ctx, d.ID, rep.VMs)
+		}
 		res.Status = "collected"
 		res.CredentialUsed = cd.name
 		res.Roles = osinv.DetectRoles(rep)

@@ -39,7 +39,7 @@ import (
 	"github.com/coralsearesorts/hims/internal/osinv"
 )
 
-const agentVersion = "1.2.12"
+const agentVersion = "1.2.15"
 
 // agentMaxConcurrent bounds how many collection jobs the agent runs in parallel
 // per poll. The HIMS server already caps how many jobs it dispatches to one agent
@@ -570,11 +570,26 @@ try {
       $sw=@($items|%{@{name=[string]$_.DisplayName;version=[string]$_.DisplayVersion;publisher=[string]$_.Publisher;install_date=[string]$_.InstallDate}})
       if($sw.Count -gt 0){$swnote='collected via winrm_native_local'} else {$swnote='no_software_found'}
     } catch { $swnote=('software_failed: '+$_.Exception.Message) }
+    # Hyper-V guests (in-band): if the Hyper-V PowerShell module is present, enumerate VMs so a
+    # Hyper-V host is detected + inventoried by the same pass. Module absent => not a Hyper-V host.
+    $vms=@()
+    try {
+      Import-Module Hyper-V -ErrorAction SilentlyContinue
+      if(Get-Command Get-VM -ErrorAction SilentlyContinue){
+        $vms=@(Get-VM | ForEach-Object {
+          $ip=''; try { $ip=(@($_.NetworkAdapters.IPAddresses)|Where-Object{$_ -match '\.'}) -join ',' } catch {}
+          @{ name=[string]$_.Name;
+             power_state=(switch([int]$_.State){2{'on'}3{'off'}6{'suspended'}9{'suspended'}default{'unknown'}});
+             vcpu=[int]$_.ProcessorCount; memory_mb=[int]($_.MemoryStartup/1MB);
+             guest_os=''; ip=[string]$ip }
+        })
+      }
+    } catch {}
     @{ method='winrm-native';
        identity=@{hostname=$os.CSName;fqdn=("{0}.{1}" -f $cs.Name,$cs.Domain).TrimEnd('.');domain=$cs.Domain;workgroup=$cs.Workgroup;logged_on_user=$cs.UserName};
        os=@{caption=$os.Caption;version=$os.Version;build="$($os.BuildNumber)";arch=$os.OSArchitecture;install_date="$($os.InstallDate)";last_boot="$($os.LastBootUpTime)"};
        hardware=@{manufacturer=$cs.Manufacturer;model=$cs.Model;serial=$bios.SerialNumber;bios_version=(@($bios.SMBIOSBIOSVersion)-join' ');cpu_model=$cpu[0].Name;cpu_sockets=$cpu.Count;cpu_cores=[int]$cores;ram_total_bytes=[int64]$cs.TotalPhysicalMemory};
-       disks=$disks; nics=$nics; services=$svc; software=$sw; processes=$procs; roles=@(); events=$null; software_note=$swnote }
+       disks=$disks; nics=$nics; services=$svc; software=$sw; processes=$procs; roles=@(); events=$null; software_note=$swnote; vms=$vms }
   }
   $out|ConvertTo-Json -Depth 8 -Compress
 } finally { if($s){ Remove-PSSession $s -ErrorAction SilentlyContinue } }`

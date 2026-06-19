@@ -15,6 +15,7 @@ import (
 	"github.com/coralsearesorts/hims/internal/credtest"
 	"github.com/coralsearesorts/hims/internal/discovery"
 	"github.com/coralsearesorts/hims/internal/domain"
+	"github.com/coralsearesorts/hims/internal/osinv"
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
 	"github.com/coralsearesorts/hims/internal/vsphere"
 )
@@ -129,6 +130,7 @@ func (s *Server) runVSphereCollection(ctx context.Context, d db.Device) vsphereR
 				DeviceClass: &dc, ConfidenceScore: &conf, ClassificationEvidence: blob,
 			})
 		}
+		s.markVirtualHost(ctx, d.ID, "esxi")
 		for _, vm := range inv.VMs {
 			var vcpu, mem *int32
 			if vm.NumCPU > 0 {
@@ -229,6 +231,7 @@ func (s *Server) collectVSphereProfile(ctx context.Context, p db.VendorConnectio
 			DeviceClass: &deviceClass, ConfidenceScore: &conf, ClassificationEvidence: blob,
 		})
 	}
+	s.markVirtualHost(ctx, d.ID, "esxi")
 	for _, vm := range inv.VMs {
 		var vcpu, mem *int32
 		if vm.NumCPU > 0 {
@@ -345,4 +348,83 @@ func (s *Server) resolveVMDevice(ctx context.Context, vmIP *netip.Addr) *uuid.UU
 	}
 	id := dev.ID
 	return &id
+}
+
+// markVirtualHost stamps the hypervisor ROLE (esxi_host / hyperv_host) + a consistent
+// hypervisor.type FACT on a collected host, so the read model derives a reliable server_role
+// (virtual_host_esxi / virtual_host_hyperv) regardless of which collection path ran. Both
+// writes are idempotent and best-effort.
+func (s *Server) markVirtualHost(ctx context.Context, id uuid.UUID, hvType string) {
+	role := string(domain.RoleESXiHost)
+	if hvType == "hyperv" {
+		role = string(domain.RoleHyperVHost)
+	}
+	_ = s.queries.AddDeviceRole(ctx, db.AddDeviceRoleParams{DeviceID: id, Role: role, Source: hvType})
+	hv := hvType
+	_ = s.queries.UpsertDeviceFact(ctx, db.UpsertDeviceFactParams{DeviceID: id, Key: "hypervisor.type", Value: &hv, Driver: hvType})
+}
+
+// reportIsHyperV reports whether a collected Windows host is a Hyper-V hypervisor. The
+// RELIABLE signal is the Hyper-V Virtual Machine Management service (vmms) running — present
+// on every Hyper-V host regardless of whether the Hyper-V PowerShell module (Get-VM) is
+// installed (Server Core / role-without-tools hosts have vmms but no Get-VM). Enumerated VMs
+// also imply it. This is what makes Hyper-V host DETECTION robust even when VM enumeration
+// (Get-VM) returns nothing.
+func reportIsHyperV(rep osinv.Report) bool {
+	for _, sv := range rep.Services {
+		if strings.EqualFold(sv.Name, "vmms") && strings.EqualFold(sv.Status, "Running") {
+			return true
+		}
+	}
+	return len(rep.VMs) > 0
+}
+
+// markHyperVHost classifies a Windows host that reported Hyper-V guests in-band as a
+// virtual_host + hyperv_host (called AFTER the OS reclassify so the hypervisor role is not
+// overwritten by the plain-Windows caption), and persists each guest VM linked to an existing
+// discovered device by guest IP — so Hyper-V hosts and their VMs appear exactly like ESXi ones,
+// with no duplicate fake VM devices.
+func (s *Server) markHyperVHost(ctx context.Context, id uuid.UUID, vms []osinv.ReportVM) {
+	if blob, err := domain.MarshalEvidence(nil); err == nil {
+		dc := "hyperv"
+		conf := int16(88)
+		_, _ = s.queries.UpdateDeviceClassification(ctx, db.UpdateDeviceClassificationParams{
+			ID: id, Category: string(domain.CatVirtualHost), OsFamily: domain.OSFamilyWindows,
+			DeviceClass: &dc, ConfidenceScore: &conf, ClassificationEvidence: blob,
+		})
+	}
+	s.markVirtualHost(ctx, id, "hyperv")
+	for _, vm := range vms {
+		var vcpu, mem *int32
+		if vm.VCPU > 0 {
+			v := vm.VCPU
+			vcpu = &v
+		}
+		if vm.MemoryMB > 0 {
+			m := vm.MemoryMB
+			mem = &m
+		}
+		var gos *string
+		if vm.GuestOS != "" {
+			g := vm.GuestOS
+			gos = &g
+		}
+		var vmIP *netip.Addr
+		if first := strings.SplitN(vm.IP, ",", 2)[0]; first != "" {
+			if a, perr := netip.ParseAddr(strings.TrimSpace(first)); perr == nil {
+				vmIP = &a
+			}
+		}
+		ps := vm.PowerState
+		switch ps {
+		case "on", "off", "suspended":
+		default:
+			ps = "unknown"
+		}
+		_, _ = s.queries.UpsertVM(ctx, db.UpsertVMParams{
+			HostDeviceID: id, Name: vm.Name, PowerState: ps,
+			Vcpu: vcpu, MemMb: mem, GuestOs: gos, PrimaryIp: vmIP,
+			VmDeviceID: s.resolveVMDevice(ctx, vmIP),
+		})
+	}
 }

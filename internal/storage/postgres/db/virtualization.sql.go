@@ -12,6 +12,78 @@ import (
 	"github.com/google/uuid"
 )
 
+const deviceHypervisorTypes = `-- name: DeviceHypervisorTypes :many
+SELECT device_id, value FROM device_facts
+WHERE key = 'hypervisor.type' AND value IS NOT NULL
+`
+
+type DeviceHypervisorTypesRow struct {
+	DeviceID uuid.UUID `json:"device_id"`
+	Value    *string   `json:"value"`
+}
+
+// Per-device hypervisor.type fact (esxi/hyperv) — feeds the derived server_role so the UI
+// can distinguish an ESXi host from a Hyper-V host without re-reading every device's facts.
+func (q *Queries) DeviceHypervisorTypes(ctx context.Context) ([]DeviceHypervisorTypesRow, error) {
+	rows, err := q.db.Query(ctx, deviceHypervisorTypes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DeviceHypervisorTypesRow{}
+	for rows.Next() {
+		var i DeviceHypervisorTypesRow
+		if err := rows.Scan(&i.DeviceID, &i.Value); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const linkedVMParents = `-- name: LinkedVMParents :many
+SELECT vm.vm_device_id, vm.host_device_id, h.name AS host_name, h.primary_ip AS host_ip
+FROM virtual_machines vm JOIN devices h ON h.id = vm.host_device_id
+WHERE vm.vm_device_id IS NOT NULL
+`
+
+type LinkedVMParentsRow struct {
+	VmDeviceID   *uuid.UUID  `json:"vm_device_id"`
+	HostDeviceID uuid.UUID   `json:"host_device_id"`
+	HostName     string      `json:"host_name"`
+	HostIp       *netip.Addr `json:"host_ip"`
+}
+
+// Every VM that is linked to a discovered device, with its parent host — so a device that IS
+// a VM derives server_role=virtual_machine and shows "hosted on <host>" (reverse link).
+func (q *Queries) LinkedVMParents(ctx context.Context) ([]LinkedVMParentsRow, error) {
+	rows, err := q.db.Query(ctx, linkedVMParents)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []LinkedVMParentsRow{}
+	for rows.Next() {
+		var i LinkedVMParentsRow
+		if err := rows.Scan(
+			&i.VmDeviceID,
+			&i.HostDeviceID,
+			&i.HostName,
+			&i.HostIp,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listVMsByHost = `-- name: ListVMsByHost :many
 SELECT id, host_device_id, vm_device_id, name, power_state, vcpu, mem_mb, guest_os, primary_ip, last_seen_at FROM virtual_machines WHERE host_device_id = $1 ORDER BY name
 `

@@ -245,6 +245,9 @@ type Querier interface {
 	//                   policy) — distinct from a wrong password
 	//   auth_rejected — a credential was cleanly rejected (wrong username/password)
 	DeviceCredentialSignals(ctx context.Context) ([]DeviceCredentialSignalsRow, error)
+	// Per-device hypervisor.type fact (esxi/hyperv) — feeds the derived server_role so the UI
+	// can distinguish an ESXi host from a Hyper-V host without re-reading every device's facts.
+	DeviceHypervisorTypes(ctx context.Context) ([]DeviceHypervisorTypesRow, error)
 	// Per-device availability over the window: sample/up counts (for uptime %),
 	// latency, and flap count (status transitions). Ordered worst-first so the UI can
 	// show "worst performers" and a flapping list. $1 = window (e.g. '24 hours').
@@ -397,6 +400,9 @@ type Querier interface {
 	// The most recent scan probe_data for a device (open ports, evidence, etc.) —
 	// used to repair its reachability check from the ports it actually answered on.
 	LatestDeviceProbeData(ctx context.Context, deviceID *uuid.UUID) ([]byte, error)
+	// Every VM that is linked to a discovered device, with its parent host — so a device that IS
+	// a VM derives server_role=virtual_machine and shows "hosted on <host>" (reverse link).
+	LinkedVMParents(ctx context.Context) ([]LinkedVMParentsRow, error)
 	ListARPForDevice(ctx context.Context, deviceID uuid.UUID) ([]ListARPForDeviceRow, error)
 	ListAccessPoints(ctx context.Context, controllerDeviceID uuid.UUID) ([]AccessPoint, error)
 	ListActiveMaintenanceWindows(ctx context.Context) ([]MaintenanceWindow, error)

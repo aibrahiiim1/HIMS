@@ -36,6 +36,20 @@ type Report struct {
 	// remote_registry") or the exact blocker ("remote_registry_disabled", etc.).
 	// Surfaced in the device's Software section instead of a silent empty list.
 	SoftwareNote string `json:"software_note,omitempty"`
+	// VMs is the Hyper-V guest list when the host is a Hyper-V hypervisor (empty otherwise).
+	// Collected in-band during the SAME Windows pass that gathers OS facts, so a Hyper-V host
+	// is detected and its VMs inventoried without a separate job or credential.
+	VMs []ReportVM `json:"vms,omitempty"`
+}
+
+// ReportVM is one Hyper-V guest VM enumerated in-band during Windows collection.
+type ReportVM struct {
+	Name       string `json:"name"`
+	PowerState string `json:"power_state"` // on|off|suspended|unknown
+	VCPU       int32  `json:"vcpu"`
+	MemoryMB   int32  `json:"memory_mb"`
+	GuestOS    string `json:"guest_os"`
+	IP         string `json:"ip"`
 }
 
 type Identity struct {

@@ -6,8 +6,10 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/coralsearesorts/hims/internal/domain"
 	"github.com/coralsearesorts/hims/internal/monitoring"
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
 	"github.com/google/uuid"
@@ -120,6 +122,19 @@ type statusMaps struct {
 	// dispatched). Drives MgmtPendingCollection so an in-flight host is not
 	// misreported with its stale direct-probe failure.
 	activeCollect map[uuid.UUID]bool
+	// hvType maps a host device_id → its hypervisor.type ("esxi"/"hyperv"), and vmParent
+	// maps a device_id that IS a guest VM → its parent host. Together they drive the derived
+	// server_role (virtual_host_esxi / virtual_host_hyperv / virtual_machine / physical_server
+	// / unknown_server) so the UI can distinguish host types without re-reading facts per row.
+	hvType   map[uuid.UUID]string
+	vmParent map[uuid.UUID]hostRef
+}
+
+// hostRef is the parent hypervisor of a guest VM, for the device→host reverse link.
+type hostRef struct {
+	ID   uuid.UUID `json:"id"`
+	Name string    `json:"name"`
+	IP   string    `json:"ip,omitempty"`
 }
 
 func (s *Server) buildStatusMaps(ctx context.Context) (*statusMaps, error) {
@@ -168,7 +183,58 @@ func (s *Server) buildStatusMaps(ctx context.Context) (*statusMaps, error) {
 			}
 		}
 	}
-	return &statusMaps{access: am, test: tm, cred: cm, onlineSites: onlineSites, anySites: anySites, nvrChannelCams: nvrCams, activeCollect: activeCollect}, nil
+	hvType := map[uuid.UUID]string{}
+	if rows, herr := s.queries.DeviceHypervisorTypes(ctx); herr == nil {
+		for _, r := range rows {
+			if r.Value != nil {
+				hvType[r.DeviceID] = *r.Value
+			}
+		}
+	}
+	vmParent := map[uuid.UUID]hostRef{}
+	if rows, verr := s.queries.LinkedVMParents(ctx); verr == nil {
+		for _, r := range rows {
+			if r.VmDeviceID == nil {
+				continue
+			}
+			ip := ""
+			if r.HostIp != nil {
+				ip = r.HostIp.String()
+			}
+			vmParent[*r.VmDeviceID] = hostRef{ID: r.HostDeviceID, Name: r.HostName, IP: ip}
+		}
+	}
+	return &statusMaps{access: am, test: tm, cred: cm, onlineSites: onlineSites, anySites: anySites,
+		nvrChannelCams: nvrCams, activeCollect: activeCollect, hvType: hvType, vmParent: vmParent}, nil
+}
+
+// serverRole derives the operator-facing role used to distinguish virtualization hosts,
+// guest VMs, and physical servers on the Servers / Virtual Hosts pages. A device that is a
+// linked guest VM wins virtual_machine regardless of its own category; a virtual_host splits
+// into esxi/hyperv by its hypervisor.type fact (or device_class); a plain server splits into
+// physical vs unknown by whether its OS is known. Non-server categories return "".
+func (m *statusMaps) serverRole(d db.Device) string {
+	if _, isVM := m.vmParent[d.ID]; isVM {
+		return "virtual_machine"
+	}
+	switch d.Category {
+	case string(domain.CatVirtualHost):
+		hv := m.hvType[d.ID]
+		dc := ""
+		if d.DeviceClass != nil {
+			dc = strings.ToLower(*d.DeviceClass)
+		}
+		if hv == "hyperv" || strings.Contains(dc, "hyperv") || strings.Contains(dc, "hyper-v") {
+			return "virtual_host_hyperv"
+		}
+		return "virtual_host_esxi"
+	case string(domain.CatServer):
+		if d.OsFamily != "" {
+			return "physical_server"
+		}
+		return "unknown_server"
+	}
+	return ""
 }
 
 // windowsLike reports whether a device is (or is most likely) a Windows host even
@@ -326,6 +392,12 @@ type deviceStatus struct {
 	// transport block) instead of one generic "collection failed" message. Empty when
 	// there is no more-specific reason than the management state itself conveys.
 	ManagementReason string `json:"management_reason,omitempty"`
+	// ServerRole distinguishes virtualization hosts, guest VMs, and physical servers:
+	// virtual_host_esxi / virtual_host_hyperv / virtual_machine / physical_server /
+	// unknown_server (empty for non-server categories).
+	ServerRole string `json:"server_role,omitempty"`
+	// HostedOn is the parent hypervisor when this device is a discovered guest VM (reverse link).
+	HostedOn *hostRef `json:"hosted_on,omitempty"`
 }
 
 // managementReason returns a specific sub-reason for a failure management state, so the UI
@@ -385,17 +457,23 @@ func (m *statusMaps) statusFor(d db.Device) deviceStatus {
 	// distinct "virtual" state (not a credential/collection gap). This also keeps
 	// them out of every management-gap data-quality bucket below.
 	if d.IsVirtual {
-		return deviceStatus{Reachability: reachabilityFromStatus(d.Status), Management: MgmtVirtual}
+		return deviceStatus{Reachability: reachabilityFromStatus(d.Status), Management: MgmtVirtual, ServerRole: m.serverRole(d)}
 	}
 	reach := reachabilityFromStatus(d.Status)
 	state, managedBy := m.deriveManagement(d)
-	return deviceStatus{
+	st := deviceStatus{
 		Reachability:      reach,
 		Management:        state,
 		ManagedBy:         managedBy,
 		PreviouslyManaged: reach == ReachOffline && len(managedBy) > 0,
 		ManagementReason:  m.managementReason(d, state),
+		ServerRole:        m.serverRole(d),
 	}
+	if h, ok := m.vmParent[d.ID]; ok {
+		hc := h
+		st.HostedOn = &hc
+	}
+	return st
 }
 
 // statusDataQualityIssues derives the reachability-vs-management hygiene issues —

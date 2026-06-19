@@ -563,6 +563,13 @@ func (s *Server) agentJobResult(w http.ResponseWriter, r *http.Request) {
 						_ = s.queries.SetDeviceCredential(pctx, db.SetDeviceCredentialParams{ID: *job.DeviceID, CredentialID: winningCred})
 					}
 					s.reclassifyFromCaption(pctx, db.Device{ID: *job.DeviceID}, rep.OS.Caption)
+					// Hyper-V: the Windows pass enumerated guest VMs in-band → this IS a
+					// hypervisor. Mark it virtual_host + hyperv_host role/fact (AFTER the OS
+					// reclassify so it isn't downgraded to plain server), and persist each VM
+					// linked to an existing device by guest IP (no duplicate fake devices).
+					if reportIsHyperV(rep) {
+						s.markHyperVHost(pctx, *job.DeviceID, rep.VMs)
+					}
 				} else {
 					status, req.Error = "failed", "agent collected but HIMS failed to persist: "+perr.Error()
 				}
