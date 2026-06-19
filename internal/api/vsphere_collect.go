@@ -131,31 +131,7 @@ func (s *Server) runVSphereCollection(ctx context.Context, d db.Device) vsphereR
 			})
 		}
 		s.markVirtualHost(ctx, d.ID, "esxi")
-		for _, vm := range inv.VMs {
-			var vcpu, mem *int32
-			if vm.NumCPU > 0 {
-				v := vm.NumCPU
-				vcpu = &v
-			}
-			if vm.MemoryMB > 0 {
-				m := vm.MemoryMB
-				mem = &m
-			}
-			var gos *string
-			if vm.GuestOS != "" {
-				g := vm.GuestOS
-				gos = &g
-			}
-			var vmIP *netip.Addr
-			if a, perr := netip.ParseAddr(vm.IP); perr == nil {
-				vmIP = &a
-			}
-			_, _ = s.queries.UpsertVM(ctx, db.UpsertVMParams{
-				HostDeviceID: d.ID, Name: vm.Name, PowerState: vm.PowerState,
-				Vcpu: vcpu, MemMb: mem, GuestOs: gos, PrimaryIp: vmIP,
-				VmDeviceID: s.resolveVMDevice(ctx, vmIP, ""),
-			})
-		}
+		s.persistVSphereInventory(ctx, d.ID, inv)
 		cid := cd.id
 		_ = s.queries.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: d.ID, CredentialID: &cid})
 		_ = s.queries.UpdateDeviceMonitoringStatus(ctx, db.UpdateDeviceMonitoringStatusParams{ID: d.ID, Status: "up"})
@@ -232,31 +208,7 @@ func (s *Server) collectVSphereProfile(ctx context.Context, p db.VendorConnectio
 		})
 	}
 	s.markVirtualHost(ctx, d.ID, "esxi")
-	for _, vm := range inv.VMs {
-		var vcpu, mem *int32
-		if vm.NumCPU > 0 {
-			v := vm.NumCPU
-			vcpu = &v
-		}
-		if vm.MemoryMB > 0 {
-			m := vm.MemoryMB
-			mem = &m
-		}
-		var gos *string
-		if vm.GuestOS != "" {
-			g := vm.GuestOS
-			gos = &g
-		}
-		var vmIP *netip.Addr
-		if a, perr := netip.ParseAddr(vm.IP); perr == nil {
-			vmIP = &a
-		}
-		_, _ = s.queries.UpsertVM(ctx, db.UpsertVMParams{
-			HostDeviceID: d.ID, Name: vm.Name, PowerState: vm.PowerState,
-			Vcpu: vcpu, MemMb: mem, GuestOs: gos, PrimaryIp: vmIP,
-			VmDeviceID: s.resolveVMDevice(ctx, vmIP, ""),
-		})
-	}
+	s.persistVSphereInventory(ctx, d.ID, inv)
 	if p.CredentialID != nil {
 		_ = s.queries.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: d.ID, CredentialID: p.CredentialID})
 	}

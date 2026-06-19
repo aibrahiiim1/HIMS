@@ -197,11 +197,14 @@ type Querier interface {
 	// Prune APs for a controller not refreshed in the latest collection of a source.
 	DeleteStaleAccessPoints(ctx context.Context, arg DeleteStaleAccessPointsParams) error
 	DeleteStaleBMCSensors(ctx context.Context, arg DeleteStaleBMCSensorsParams) error
+	DeleteStaleDatastores(ctx context.Context, arg DeleteStaleDatastoresParams) error
 	DeleteStaleHAMembers(ctx context.Context, arg DeleteStaleHAMembersParams) error
+	DeleteStaleHostNics(ctx context.Context, arg DeleteStaleHostNicsParams) error
 	DeleteStaleInterfaces(ctx context.Context, arg DeleteStaleInterfacesParams) error
 	DeleteStaleLicenses(ctx context.Context, arg DeleteStaleLicensesParams) error
 	DeleteStaleMACEntries(ctx context.Context, arg DeleteStaleMACEntriesParams) error
 	DeleteStaleNeighbors(ctx context.Context, arg DeleteStaleNeighborsParams) error
+	DeleteStaleNetworks(ctx context.Context, arg DeleteStaleNetworksParams) error
 	DeleteStaleOSDisks(ctx context.Context, arg DeleteStaleOSDisksParams) error
 	DeleteStaleOSNics(ctx context.Context, arg DeleteStaleOSNicsParams) error
 	DeleteStaleOSProcesses(ctx context.Context, arg DeleteStaleOSProcessesParams) error
@@ -214,6 +217,8 @@ type Querier interface {
 	DeleteStaleServerStorage(ctx context.Context, arg DeleteStaleServerStorageParams) error
 	// Prune links not re-seen since the cutoff (a neighbor that stopped reporting).
 	DeleteStaleTopologyLinks(ctx context.Context, lastSeenAt time.Time) (int64, error)
+	DeleteStaleVMDisks(ctx context.Context, arg DeleteStaleVMDisksParams) error
+	DeleteStaleVMNics(ctx context.Context, arg DeleteStaleVMNicsParams) error
 	DeleteStaleVlans(ctx context.Context, arg DeleteStaleVlansParams) error
 	DeleteStaleVpnTunnels(ctx context.Context, arg DeleteStaleVpnTunnelsParams) error
 	DeleteStaleWirelessClients(ctx context.Context, arg DeleteStaleWirelessClientsParams) error
@@ -316,6 +321,7 @@ type Querier interface {
 	GetAlert(ctx context.Context, id uuid.UUID) (Alert, error)
 	GetBMCInfo(ctx context.Context, deviceID uuid.UUID) (BmcInfo, error)
 	GetCameraInfo(ctx context.Context, deviceID uuid.UUID) (CameraInfo, error)
+	GetCollectionHealth(ctx context.Context, deviceID uuid.UUID) ([]VhCollectionHealth, error)
 	// Full row including the encrypted blob — used only by the key-gated
 	// content/diff endpoints, never by list responses.
 	GetConfigBackupContent(ctx context.Context, id uuid.UUID) (GetConfigBackupContentRow, error)
@@ -450,6 +456,7 @@ type Querier interface {
 	ListCredentialTestRuns(ctx context.Context, limit int32) ([]CredentialTestRun, error)
 	ListCredentials(ctx context.Context) ([]Credential, error)
 	ListCredentialsNeedingReentry(ctx context.Context) ([]ListCredentialsNeedingReentryRow, error)
+	ListDatastoresByHost(ctx context.Context, hostDeviceID uuid.UUID) ([]VhDatastore, error)
 	// One row per (device, protocol, source) describing a REAL way HIMS can manage
 	// the device. "Managed access" means an authenticated/working method — a bound
 	// credential or proof of a successful authenticated collection — NOT merely an
@@ -499,6 +506,7 @@ type Querier interface {
 	// owns it, for vendor-neutral L2 link inference (FDB-based topology).
 	ListFabricInterfaceMACs(ctx context.Context) ([]ListFabricInterfaceMACsRow, error)
 	ListHAMembers(ctx context.Context, deviceID uuid.UUID) ([]FirewallHaMember, error)
+	ListHostNicsByHost(ctx context.Context, hostDeviceID uuid.UUID) ([]VhHostNic, error)
 	ListInterfaces(ctx context.Context, deviceID uuid.UUID) ([]Interface, error)
 	// Per-device scan dispositions across recent jobs (newest first). Powers the
 	// scan-stability Data Quality issues: missed-last-scan, flapping (recovered by
@@ -536,6 +544,7 @@ type Querier interface {
 	ListNVRChannels(ctx context.Context, nvrDeviceID uuid.UUID) ([]NvrChannel, error)
 	ListNVRStorage(ctx context.Context, nvrDeviceID uuid.UUID) ([]NvrStorage, error)
 	ListNeighbors(ctx context.Context, deviceID uuid.UUID) ([]Neighbor, error)
+	ListNetworksByHost(ctx context.Context, hostDeviceID uuid.UUID) ([]VhNetwork, error)
 	// Alerts worth notifying about: still open or escalated, opened recently.
 	ListNotifiableAlerts(ctx context.Context) ([]ListNotifiableAlertsRow, error)
 	ListNotificationChannels(ctx context.Context) ([]NotificationChannel, error)
@@ -598,6 +607,8 @@ type Querier interface {
 	ListTopologyLinks(ctx context.Context, localDeviceID uuid.UUID) ([]TopologyLink, error)
 	// ===== RBAC: users / roles / permissions ==================================
 	ListUsers(ctx context.Context) ([]User, error)
+	ListVMDisksByVM(ctx context.Context, vmID uuid.UUID) ([]VmDisk, error)
+	ListVMNicsByVM(ctx context.Context, vmID uuid.UUID) ([]VmNic, error)
 	ListVMsByHost(ctx context.Context, hostDeviceID uuid.UUID) ([]VirtualMachine, error)
 	// ===== Vendor fingerprints =================================================
 	// Ordered so the matching engine's stable sort favours, among equal-confidence
@@ -775,6 +786,9 @@ type Querier interface {
 	SetRolePermissionsClear(ctx context.Context, roleID uuid.UUID) error
 	SetUserPassword(ctx context.Context, arg SetUserPasswordParams) error
 	SetUserRolesClear(ctx context.Context, userID uuid.UUID) error
+	// Platform-specific extra VM attributes; COALESCE(NULLIF...) so a collector that doesn't
+	// supply a field (e.g. vSphere has no generation) never wipes another platform's value.
+	SetVMExtra(ctx context.Context, arg SetVMExtraParams) error
 	SetVendorProfileCollection(ctx context.Context, arg SetVendorProfileCollectionParams) error
 	SetVendorProfileTest(ctx context.Context, arg SetVendorProfileTestParams) error
 	// Per-subnet assignment count + distinct kinds for a location (UI row badges).
@@ -851,12 +865,16 @@ type Querier interface {
 	// COALESCE keeps an existing value when a re-collect doesn't re-resolve a field.
 	UpsertCameraEnrichment(ctx context.Context, arg UpsertCameraEnrichmentParams) error
 	UpsertCameraInfo(ctx context.Context, arg UpsertCameraInfoParams) (CameraInfo, error)
+	UpsertCollectionHealth(ctx context.Context, arg UpsertCollectionHealthParams) error
+	// ===== Stage 2: rich virtualization detail (durable tables) =====
+	UpsertDatastore(ctx context.Context, arg UpsertDatastoreParams) error
 	UpsertDeviceFact(ctx context.Context, arg UpsertDeviceFactParams) error
 	UpsertDeviceLifecycle(ctx context.Context, arg UpsertDeviceLifecycleParams) (DeviceLifecycle, error)
 	// Adopt / record the current key's fingerprint (generate + first-run adopt).
 	UpsertEncryptionMetadata(ctx context.Context, arg UpsertEncryptionMetadataParams) error
 	UpsertFirewallStatus(ctx context.Context, arg UpsertFirewallStatusParams) error
 	UpsertHAMember(ctx context.Context, arg UpsertHAMemberParams) error
+	UpsertHostNic(ctx context.Context, arg UpsertHostNicParams) error
 	// ---- Interfaces -----------------------------------------------------------
 	UpsertInterface(ctx context.Context, arg UpsertInterfaceParams) (Interface, error)
 	UpsertLicense(ctx context.Context, arg UpsertLicenseParams) error
@@ -888,9 +906,12 @@ type Querier interface {
 	// ---- Topology links ------------------------------------------------------
 	UpsertTopologyLink(ctx context.Context, arg UpsertTopologyLinkParams) error
 	UpsertUPSStatus(ctx context.Context, arg UpsertUPSStatusParams) error
+	UpsertVHNetwork(ctx context.Context, arg UpsertVHNetworkParams) error
 	// Upsert keyed on (host, name): re-collecting refreshes state without dups. COALESCE on
 	// vm_id/mac so a later collection that lacks them (e.g. vSphere) never wipes Hyper-V values.
 	UpsertVM(ctx context.Context, arg UpsertVMParams) (VirtualMachine, error)
+	UpsertVMDisk(ctx context.Context, arg UpsertVMDiskParams) error
+	UpsertVMNic(ctx context.Context, arg UpsertVMNicParams) error
 	// Import path: idempotent by (kind, pattern). Re-importing updates the existing
 	// rule's vendor/type/confidence/model/priority/source/exclusions rather than duplicating it.
 	UpsertVendorFingerprint(ctx context.Context, arg UpsertVendorFingerprintParams) (VendorFingerprint, error)

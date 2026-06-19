@@ -1099,19 +1099,66 @@ type VendorFingerprint struct {
 	Exclusions []byte    `json:"exclusions"`
 }
 
+type VhCollectionHealth struct {
+	ID          uuid.UUID `json:"id"`
+	DeviceID    uuid.UUID `json:"device_id"`
+	Collector   string    `json:"collector"`
+	Status      string    `json:"status"`
+	Detail      *string   `json:"detail"`
+	VmCount     *int32    `json:"vm_count"`
+	CollectedAt time.Time `json:"collected_at"`
+}
+
+type VhDatastore struct {
+	ID            uuid.UUID `json:"id"`
+	HostDeviceID  uuid.UUID `json:"host_device_id"`
+	Name          string    `json:"name"`
+	Type          *string   `json:"type"`
+	CapacityBytes *int64    `json:"capacity_bytes"`
+	FreeBytes     *int64    `json:"free_bytes"`
+	LastSeenAt    time.Time `json:"last_seen_at"`
+}
+
+type VhHostNic struct {
+	ID            uuid.UUID `json:"id"`
+	HostDeviceID  uuid.UUID `json:"host_device_id"`
+	Name          string    `json:"name"`
+	Mac           *string   `json:"mac"`
+	LinkSpeedMbps *int32    `json:"link_speed_mbps"`
+	LinkUp        *bool     `json:"link_up"`
+	LastSeenAt    time.Time `json:"last_seen_at"`
+}
+
+type VhNetwork struct {
+	ID           uuid.UUID `json:"id"`
+	HostDeviceID uuid.UUID `json:"host_device_id"`
+	Kind         string    `json:"kind"`
+	Name         string    `json:"name"`
+	Vlan         *int32    `json:"vlan"`
+	Uplinks      *string   `json:"uplinks"`
+	SwitchName   *string   `json:"switch_name"`
+	LastSeenAt   time.Time `json:"last_seen_at"`
+}
+
 type VirtualMachine struct {
-	ID           uuid.UUID   `json:"id"`
-	HostDeviceID uuid.UUID   `json:"host_device_id"`
-	VmDeviceID   *uuid.UUID  `json:"vm_device_id"`
-	Name         string      `json:"name"`
-	PowerState   string      `json:"power_state"`
-	Vcpu         *int32      `json:"vcpu"`
-	MemMb        *int32      `json:"mem_mb"`
-	GuestOs      *string     `json:"guest_os"`
-	PrimaryIp    *netip.Addr `json:"primary_ip"`
-	LastSeenAt   time.Time   `json:"last_seen_at"`
-	VmID         *string     `json:"vm_id"`
-	Mac          *string     `json:"mac"`
+	ID                  uuid.UUID   `json:"id"`
+	HostDeviceID        uuid.UUID   `json:"host_device_id"`
+	VmDeviceID          *uuid.UUID  `json:"vm_device_id"`
+	Name                string      `json:"name"`
+	PowerState          string      `json:"power_state"`
+	Vcpu                *int32      `json:"vcpu"`
+	MemMb               *int32      `json:"mem_mb"`
+	GuestOs             *string     `json:"guest_os"`
+	PrimaryIp           *netip.Addr `json:"primary_ip"`
+	LastSeenAt          time.Time   `json:"last_seen_at"`
+	VmID                *string     `json:"vm_id"`
+	Mac                 *string     `json:"mac"`
+	ToolsState          *string     `json:"tools_state"`
+	Generation          *string     `json:"generation"`
+	UptimeSeconds       *int64      `json:"uptime_seconds"`
+	MemUsedMb           *int32      `json:"mem_used_mb"`
+	Datastore           *string     `json:"datastore"`
+	IntegrationServices *string     `json:"integration_services"`
 }
 
 type Vlan struct {
@@ -1121,6 +1168,27 @@ type Vlan struct {
 	Name             *string   `json:"name"`
 	CollectionSource string    `json:"collection_source"`
 	LastSeenAt       time.Time `json:"last_seen_at"`
+}
+
+type VmDisk struct {
+	ID            uuid.UUID `json:"id"`
+	VmID          uuid.UUID `json:"vm_id"`
+	Label         string    `json:"label"`
+	Path          *string   `json:"path"`
+	Datastore     *string   `json:"datastore"`
+	CapacityBytes *int64    `json:"capacity_bytes"`
+	UsedBytes     *int64    `json:"used_bytes"`
+	LastSeenAt    time.Time `json:"last_seen_at"`
+}
+
+type VmNic struct {
+	ID          uuid.UUID `json:"id"`
+	VmID        uuid.UUID `json:"vm_id"`
+	Mac         string    `json:"mac"`
+	Network     *string   `json:"network"`
+	IpAddresses *string   `json:"ip_addresses"`
+	Connected   *bool     `json:"connected"`
+	LastSeenAt  time.Time `json:"last_seen_at"`
 }
 
 type WebPortCandidate struct {

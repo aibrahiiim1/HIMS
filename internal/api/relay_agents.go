@@ -569,6 +569,7 @@ func (s *Server) agentJobResult(w http.ResponseWriter, r *http.Request) {
 					// linked to an existing device by guest IP (no duplicate fake devices).
 					if reportIsHyperV(rep) {
 						s.markHyperVHost(pctx, *job.DeviceID, rep.VMs)
+						s.persistHyperVDetail(pctx, *job.DeviceID, rep)
 					}
 				} else {
 					status, req.Error = "failed", "agent collected but HIMS failed to persist: "+perr.Error()

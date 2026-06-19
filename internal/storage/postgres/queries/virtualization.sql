@@ -39,3 +39,86 @@ WHERE key = 'hypervisor.type' AND value IS NOT NULL;
 SELECT vm.vm_device_id, vm.host_device_id, h.name AS host_name, h.primary_ip AS host_ip
 FROM virtual_machines vm JOIN devices h ON h.id = vm.host_device_id
 WHERE vm.vm_device_id IS NOT NULL;
+
+-- ===== Stage 2: rich virtualization detail (durable tables) =====
+
+-- name: UpsertDatastore :exec
+INSERT INTO vh_datastores (host_device_id, name, type, capacity_bytes, free_bytes)
+VALUES ($1,$2,$3,$4,$5)
+ON CONFLICT (host_device_id, name) DO UPDATE SET
+  type=EXCLUDED.type, capacity_bytes=EXCLUDED.capacity_bytes, free_bytes=EXCLUDED.free_bytes, last_seen_at=now();
+
+-- name: ListDatastoresByHost :many
+SELECT * FROM vh_datastores WHERE host_device_id=$1 ORDER BY name;
+
+-- name: DeleteStaleDatastores :exec
+DELETE FROM vh_datastores WHERE host_device_id=$1 AND last_seen_at < $2;
+
+-- name: UpsertVHNetwork :exec
+INSERT INTO vh_networks (host_device_id, kind, name, vlan, uplinks, switch_name)
+VALUES ($1,$2,$3,$4,$5,$6)
+ON CONFLICT (host_device_id, kind, name) DO UPDATE SET
+  vlan=EXCLUDED.vlan, uplinks=EXCLUDED.uplinks, switch_name=EXCLUDED.switch_name, last_seen_at=now();
+
+-- name: ListNetworksByHost :many
+SELECT * FROM vh_networks WHERE host_device_id=$1 ORDER BY kind, name;
+
+-- name: DeleteStaleNetworks :exec
+DELETE FROM vh_networks WHERE host_device_id=$1 AND last_seen_at < $2;
+
+-- name: UpsertHostNic :exec
+INSERT INTO vh_host_nics (host_device_id, name, mac, link_speed_mbps, link_up)
+VALUES ($1,$2,$3,$4,$5)
+ON CONFLICT (host_device_id, name) DO UPDATE SET
+  mac=EXCLUDED.mac, link_speed_mbps=EXCLUDED.link_speed_mbps, link_up=EXCLUDED.link_up, last_seen_at=now();
+
+-- name: ListHostNicsByHost :many
+SELECT * FROM vh_host_nics WHERE host_device_id=$1 ORDER BY name;
+
+-- name: DeleteStaleHostNics :exec
+DELETE FROM vh_host_nics WHERE host_device_id=$1 AND last_seen_at < $2;
+
+-- name: UpsertVMDisk :exec
+INSERT INTO vm_disks (vm_id, label, path, datastore, capacity_bytes, used_bytes)
+VALUES ($1,$2,$3,$4,$5,$6)
+ON CONFLICT (vm_id, label) DO UPDATE SET
+  path=EXCLUDED.path, datastore=EXCLUDED.datastore, capacity_bytes=EXCLUDED.capacity_bytes, used_bytes=EXCLUDED.used_bytes, last_seen_at=now();
+
+-- name: ListVMDisksByVM :many
+SELECT * FROM vm_disks WHERE vm_id=$1 ORDER BY label;
+
+-- name: DeleteStaleVMDisks :exec
+DELETE FROM vm_disks WHERE vm_id=$1 AND last_seen_at < $2;
+
+-- name: UpsertVMNic :exec
+INSERT INTO vm_nics (vm_id, mac, network, ip_addresses, connected)
+VALUES ($1,$2,$3,$4,$5)
+ON CONFLICT (vm_id, mac) DO UPDATE SET
+  network=EXCLUDED.network, ip_addresses=EXCLUDED.ip_addresses, connected=EXCLUDED.connected, last_seen_at=now();
+
+-- name: ListVMNicsByVM :many
+SELECT * FROM vm_nics WHERE vm_id=$1 ORDER BY mac;
+
+-- name: DeleteStaleVMNics :exec
+DELETE FROM vm_nics WHERE vm_id=$1 AND last_seen_at < $2;
+
+-- name: UpsertCollectionHealth :exec
+INSERT INTO vh_collection_health (device_id, collector, status, detail, vm_count)
+VALUES ($1,$2,$3,$4,$5)
+ON CONFLICT (device_id, collector) DO UPDATE SET
+  status=EXCLUDED.status, detail=EXCLUDED.detail, vm_count=EXCLUDED.vm_count, collected_at=now();
+
+-- name: GetCollectionHealth :many
+SELECT * FROM vh_collection_health WHERE device_id=$1 ORDER BY collector;
+
+-- name: SetVMExtra :exec
+-- Platform-specific extra VM attributes; COALESCE(NULLIF...) so a collector that doesn't
+-- supply a field (e.g. vSphere has no generation) never wipes another platform's value.
+UPDATE virtual_machines SET
+  tools_state          = COALESCE(NULLIF(@tools_state::text,''), tools_state),
+  generation           = COALESCE(NULLIF(@generation::text,''), generation),
+  datastore            = COALESCE(NULLIF(@datastore::text,''), datastore),
+  integration_services = COALESCE(NULLIF(@integration_services::text,''), integration_services),
+  uptime_seconds       = COALESCE(NULLIF(@uptime_seconds::bigint,0), uptime_seconds),
+  mem_used_mb          = COALESCE(NULLIF(@mem_used_mb::int,0), mem_used_mb)
+WHERE id = @id;

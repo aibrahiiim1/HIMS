@@ -39,7 +39,7 @@ import (
 	"github.com/coralsearesorts/hims/internal/osinv"
 )
 
-const agentVersion = "1.2.17"
+const agentVersion = "1.2.18"
 
 // agentMaxConcurrent bounds how many collection jobs the agent runs in parallel
 // per poll. The HIMS server already caps how many jobs it dispatches to one agent

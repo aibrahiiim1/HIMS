@@ -74,20 +74,25 @@ $out=@()
 $vms=Get-CimInstance -Namespace $ns -ClassName Msvm_ComputerSystem | Where-Object { $_.Caption -eq 'Virtual Machine' }
 foreach($vm in $vms){
   $ps=switch([int]$vm.EnabledState){2{'on'}3{'off'}9{'suspended'}6{'suspended'}32768{'suspended'}32769{'suspended'}default{'unknown'}}
-  $vcpu=0;$mem=0;$macs=@();$ips=@()
+  $vcpu=0;$mem=0;$macs=@();$ips=@();$gen='';$disks=@()
   $vssd=Get-CimAssociatedInstance -InputObject $vm -Association Msvm_SettingsDefineState -ResultClassName Msvm_VirtualSystemSettingData | Select-Object -First 1
   if($vssd){
+    $st=[string]$vssd.VirtualSystemSubType; if($st -match ':2$'){$gen='2'}elseif($st -match ':1$'){$gen='1'}
     $p=Get-CimAssociatedInstance -InputObject $vssd -Association Msvm_VirtualSystemSettingDataComponent -ResultClassName Msvm_ProcessorSettingData | Select-Object -First 1
     if($p){$vcpu=[int]$p.VirtualQuantity}
     $m=Get-CimAssociatedInstance -InputObject $vssd -Association Msvm_VirtualSystemSettingDataComponent -ResultClassName Msvm_MemorySettingData | Select-Object -First 1
     if($m){$mem=[int]$m.VirtualQuantity}
     $nics=Get-CimAssociatedInstance -InputObject $vssd -Association Msvm_VirtualSystemSettingDataComponent -ResultClassName Msvm_SyntheticEthernetPortSettingData
     foreach($n in $nics){ if($n.Address){ $macs+=($n.Address -replace '(.{2})(?=.)','$1:') } }
+    foreach($sa in (Get-CimAssociatedInstance -InputObject $vssd -Association Msvm_VirtualSystemSettingDataComponent -ResultClassName Msvm_StorageAllocationSettingData)){ foreach($hr in @($sa.HostResource)){ if($hr -match '\.vhdx?$'){ $cap=0;$used=0; try{ if(Get-Command Get-VHD -EA SilentlyContinue){ $vh=Get-VHD -Path $hr -EA SilentlyContinue; if($vh){$cap=[int64]$vh.Size;$used=[int64]$vh.FileSize} } }catch{}; $disks+=@{path=[string]$hr;capacity_bytes=$cap;used_bytes=$used} } } }
   }
   foreach($g in (Get-CimAssociatedInstance -InputObject $vm -ResultClassName Msvm_GuestNetworkAdapterConfiguration)){ foreach($a in @($g.IPAddresses)){ if($a -match '^\d+\.\d+\.\d+\.\d+$'){ $ips+=$a } } }
-  $out+=[pscustomobject]@{name=[string]$vm.ElementName;vm_id=[string]$vm.Name;power_state=$ps;vcpu=$vcpu;memory_mb=$mem;guest_os='';ip=(($ips|Select-Object -Unique) -join ',');mac=(($macs|Select-Object -Unique) -join ',')}
+  $out+=[pscustomobject]@{name=[string]$vm.ElementName;vm_id=[string]$vm.Name;power_state=$ps;vcpu=$vcpu;memory_mb=$mem;guest_os='';generation=$gen;ip=(($ips|Select-Object -Unique) -join ',');mac=(($macs|Select-Object -Unique) -join ',');disks=$disks}
 }
-ConvertTo-Json -Compress -Depth 3 -InputObject @($out)`
+ConvertTo-Json -Compress -Depth 4 -InputObject @($out)`
+
+	// Hyper-V host virtual switches (Msvm_VirtualEthernetSwitch). [] on a non-Hyper-V host.
+	winVSwitchesPS = `@(Get-CimInstance -Namespace root\virtualization\v2 -ClassName Msvm_VirtualEthernetSwitch -ErrorAction SilentlyContinue | ForEach-Object{ [pscustomobject]@{name=[string]$_.ElementName;switch_type=''} }) | ConvertTo-Json -Compress`
 )
 
 // CollectWindows runs the per-section snippets through the runner and assembles
@@ -139,6 +144,11 @@ func CollectWindows(ctx context.Context, r Runner) (Report, error) {
 	}
 	if out, err := r.Run(ctx, winVMsPS); err == nil {
 		rep.VMs, _ = jsonArray[ReportVM]([]byte(out))
+	}
+	if len(rep.VMs) > 0 {
+		if out, err := r.Run(ctx, winVSwitchesPS); err == nil {
+			rep.VSwitches, _ = jsonArray[ReportVSwitch]([]byte(out))
+		}
 	}
 	return rep, nil
 }

@@ -40,18 +40,36 @@ type Report struct {
 	// Collected in-band during the SAME Windows pass that gathers OS facts, so a Hyper-V host
 	// is detected and its VMs inventoried without a separate job or credential.
 	VMs []ReportVM `json:"vms,omitempty"`
+	// VSwitches is the Hyper-V host's virtual switches (empty on a non-Hyper-V host).
+	VSwitches []ReportVSwitch `json:"vswitches,omitempty"`
 }
 
 // ReportVM is one Hyper-V guest VM enumerated in-band during Windows collection.
 type ReportVM struct {
+	Name                string         `json:"name"`
+	VMID                string         `json:"vm_id"`       // Hyper-V VM GUID (Msvm_ComputerSystem.Name)
+	PowerState          string         `json:"power_state"` // on|off|suspended|unknown
+	VCPU                int32          `json:"vcpu"`
+	MemoryMB            int32          `json:"memory_mb"`
+	GuestOS             string         `json:"guest_os"`
+	IP                  string         `json:"ip"`  // guest IPs (comma-joined) — needs integration services
+	MAC                 string         `json:"mac"` // vNIC MAC(s) (comma-joined) — used to reverse-link to a device
+	Generation          string         `json:"generation,omitempty"`
+	IntegrationServices string         `json:"integration_services,omitempty"`
+	Disks               []ReportVMDisk `json:"disks,omitempty"`
+}
+
+// ReportVMDisk is one Hyper-V VM virtual disk (VHD/VHDX).
+type ReportVMDisk struct {
+	Path          string `json:"path"`
+	CapacityBytes int64  `json:"capacity_bytes"`
+	UsedBytes     int64  `json:"used_bytes"`
+}
+
+// ReportVSwitch is one Hyper-V host virtual switch.
+type ReportVSwitch struct {
 	Name       string `json:"name"`
-	VMID       string `json:"vm_id"`       // Hyper-V VM GUID (Msvm_ComputerSystem.Name)
-	PowerState string `json:"power_state"` // on|off|suspended|unknown
-	VCPU       int32  `json:"vcpu"`
-	MemoryMB   int32  `json:"memory_mb"`
-	GuestOS    string `json:"guest_os"`
-	IP         string `json:"ip"`  // guest IPs (comma-joined) — needs integration services
-	MAC        string `json:"mac"` // vNIC MAC(s) (comma-joined) — used to reverse-link to a device
+	SwitchType string `json:"switch_type"` // External|Internal|Private
 }
 
 type Identity struct {

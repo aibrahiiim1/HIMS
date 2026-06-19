@@ -8,9 +8,80 @@ package db
 import (
 	"context"
 	"net/netip"
+	"time"
 
 	"github.com/google/uuid"
 )
+
+const deleteStaleDatastores = `-- name: DeleteStaleDatastores :exec
+DELETE FROM vh_datastores WHERE host_device_id=$1 AND last_seen_at < $2
+`
+
+type DeleteStaleDatastoresParams struct {
+	HostDeviceID uuid.UUID `json:"host_device_id"`
+	LastSeenAt   time.Time `json:"last_seen_at"`
+}
+
+func (q *Queries) DeleteStaleDatastores(ctx context.Context, arg DeleteStaleDatastoresParams) error {
+	_, err := q.db.Exec(ctx, deleteStaleDatastores, arg.HostDeviceID, arg.LastSeenAt)
+	return err
+}
+
+const deleteStaleHostNics = `-- name: DeleteStaleHostNics :exec
+DELETE FROM vh_host_nics WHERE host_device_id=$1 AND last_seen_at < $2
+`
+
+type DeleteStaleHostNicsParams struct {
+	HostDeviceID uuid.UUID `json:"host_device_id"`
+	LastSeenAt   time.Time `json:"last_seen_at"`
+}
+
+func (q *Queries) DeleteStaleHostNics(ctx context.Context, arg DeleteStaleHostNicsParams) error {
+	_, err := q.db.Exec(ctx, deleteStaleHostNics, arg.HostDeviceID, arg.LastSeenAt)
+	return err
+}
+
+const deleteStaleNetworks = `-- name: DeleteStaleNetworks :exec
+DELETE FROM vh_networks WHERE host_device_id=$1 AND last_seen_at < $2
+`
+
+type DeleteStaleNetworksParams struct {
+	HostDeviceID uuid.UUID `json:"host_device_id"`
+	LastSeenAt   time.Time `json:"last_seen_at"`
+}
+
+func (q *Queries) DeleteStaleNetworks(ctx context.Context, arg DeleteStaleNetworksParams) error {
+	_, err := q.db.Exec(ctx, deleteStaleNetworks, arg.HostDeviceID, arg.LastSeenAt)
+	return err
+}
+
+const deleteStaleVMDisks = `-- name: DeleteStaleVMDisks :exec
+DELETE FROM vm_disks WHERE vm_id=$1 AND last_seen_at < $2
+`
+
+type DeleteStaleVMDisksParams struct {
+	VmID       uuid.UUID `json:"vm_id"`
+	LastSeenAt time.Time `json:"last_seen_at"`
+}
+
+func (q *Queries) DeleteStaleVMDisks(ctx context.Context, arg DeleteStaleVMDisksParams) error {
+	_, err := q.db.Exec(ctx, deleteStaleVMDisks, arg.VmID, arg.LastSeenAt)
+	return err
+}
+
+const deleteStaleVMNics = `-- name: DeleteStaleVMNics :exec
+DELETE FROM vm_nics WHERE vm_id=$1 AND last_seen_at < $2
+`
+
+type DeleteStaleVMNicsParams struct {
+	VmID       uuid.UUID `json:"vm_id"`
+	LastSeenAt time.Time `json:"last_seen_at"`
+}
+
+func (q *Queries) DeleteStaleVMNics(ctx context.Context, arg DeleteStaleVMNicsParams) error {
+	_, err := q.db.Exec(ctx, deleteStaleVMNics, arg.VmID, arg.LastSeenAt)
+	return err
+}
 
 const deviceHypervisorTypes = `-- name: DeviceHypervisorTypes :many
 SELECT device_id, value FROM device_facts
@@ -61,6 +132,38 @@ func (q *Queries) DeviceIDByMAC(ctx context.Context, mac string) (uuid.UUID, err
 	return device_id, err
 }
 
+const getCollectionHealth = `-- name: GetCollectionHealth :many
+SELECT id, device_id, collector, status, detail, vm_count, collected_at FROM vh_collection_health WHERE device_id=$1 ORDER BY collector
+`
+
+func (q *Queries) GetCollectionHealth(ctx context.Context, deviceID uuid.UUID) ([]VhCollectionHealth, error) {
+	rows, err := q.db.Query(ctx, getCollectionHealth, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []VhCollectionHealth{}
+	for rows.Next() {
+		var i VhCollectionHealth
+		if err := rows.Scan(
+			&i.ID,
+			&i.DeviceID,
+			&i.Collector,
+			&i.Status,
+			&i.Detail,
+			&i.VmCount,
+			&i.CollectedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const linkedVMParents = `-- name: LinkedVMParents :many
 SELECT vm.vm_device_id, vm.host_device_id, h.name AS host_name, h.primary_ip AS host_ip
 FROM virtual_machines vm JOIN devices h ON h.id = vm.host_device_id
@@ -101,8 +204,170 @@ func (q *Queries) LinkedVMParents(ctx context.Context) ([]LinkedVMParentsRow, er
 	return items, nil
 }
 
+const listDatastoresByHost = `-- name: ListDatastoresByHost :many
+SELECT id, host_device_id, name, type, capacity_bytes, free_bytes, last_seen_at FROM vh_datastores WHERE host_device_id=$1 ORDER BY name
+`
+
+func (q *Queries) ListDatastoresByHost(ctx context.Context, hostDeviceID uuid.UUID) ([]VhDatastore, error) {
+	rows, err := q.db.Query(ctx, listDatastoresByHost, hostDeviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []VhDatastore{}
+	for rows.Next() {
+		var i VhDatastore
+		if err := rows.Scan(
+			&i.ID,
+			&i.HostDeviceID,
+			&i.Name,
+			&i.Type,
+			&i.CapacityBytes,
+			&i.FreeBytes,
+			&i.LastSeenAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listHostNicsByHost = `-- name: ListHostNicsByHost :many
+SELECT id, host_device_id, name, mac, link_speed_mbps, link_up, last_seen_at FROM vh_host_nics WHERE host_device_id=$1 ORDER BY name
+`
+
+func (q *Queries) ListHostNicsByHost(ctx context.Context, hostDeviceID uuid.UUID) ([]VhHostNic, error) {
+	rows, err := q.db.Query(ctx, listHostNicsByHost, hostDeviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []VhHostNic{}
+	for rows.Next() {
+		var i VhHostNic
+		if err := rows.Scan(
+			&i.ID,
+			&i.HostDeviceID,
+			&i.Name,
+			&i.Mac,
+			&i.LinkSpeedMbps,
+			&i.LinkUp,
+			&i.LastSeenAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listNetworksByHost = `-- name: ListNetworksByHost :many
+SELECT id, host_device_id, kind, name, vlan, uplinks, switch_name, last_seen_at FROM vh_networks WHERE host_device_id=$1 ORDER BY kind, name
+`
+
+func (q *Queries) ListNetworksByHost(ctx context.Context, hostDeviceID uuid.UUID) ([]VhNetwork, error) {
+	rows, err := q.db.Query(ctx, listNetworksByHost, hostDeviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []VhNetwork{}
+	for rows.Next() {
+		var i VhNetwork
+		if err := rows.Scan(
+			&i.ID,
+			&i.HostDeviceID,
+			&i.Kind,
+			&i.Name,
+			&i.Vlan,
+			&i.Uplinks,
+			&i.SwitchName,
+			&i.LastSeenAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listVMDisksByVM = `-- name: ListVMDisksByVM :many
+SELECT id, vm_id, label, path, datastore, capacity_bytes, used_bytes, last_seen_at FROM vm_disks WHERE vm_id=$1 ORDER BY label
+`
+
+func (q *Queries) ListVMDisksByVM(ctx context.Context, vmID uuid.UUID) ([]VmDisk, error) {
+	rows, err := q.db.Query(ctx, listVMDisksByVM, vmID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []VmDisk{}
+	for rows.Next() {
+		var i VmDisk
+		if err := rows.Scan(
+			&i.ID,
+			&i.VmID,
+			&i.Label,
+			&i.Path,
+			&i.Datastore,
+			&i.CapacityBytes,
+			&i.UsedBytes,
+			&i.LastSeenAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listVMNicsByVM = `-- name: ListVMNicsByVM :many
+SELECT id, vm_id, mac, network, ip_addresses, connected, last_seen_at FROM vm_nics WHERE vm_id=$1 ORDER BY mac
+`
+
+func (q *Queries) ListVMNicsByVM(ctx context.Context, vmID uuid.UUID) ([]VmNic, error) {
+	rows, err := q.db.Query(ctx, listVMNicsByVM, vmID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []VmNic{}
+	for rows.Next() {
+		var i VmNic
+		if err := rows.Scan(
+			&i.ID,
+			&i.VmID,
+			&i.Mac,
+			&i.Network,
+			&i.IpAddresses,
+			&i.Connected,
+			&i.LastSeenAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listVMsByHost = `-- name: ListVMsByHost :many
-SELECT id, host_device_id, vm_device_id, name, power_state, vcpu, mem_mb, guest_os, primary_ip, last_seen_at, vm_id, mac FROM virtual_machines WHERE host_device_id = $1 ORDER BY name
+SELECT id, host_device_id, vm_device_id, name, power_state, vcpu, mem_mb, guest_os, primary_ip, last_seen_at, vm_id, mac, tools_state, generation, uptime_seconds, mem_used_mb, datastore, integration_services FROM virtual_machines WHERE host_device_id = $1 ORDER BY name
 `
 
 func (q *Queries) ListVMsByHost(ctx context.Context, hostDeviceID uuid.UUID) ([]VirtualMachine, error) {
@@ -127,6 +392,12 @@ func (q *Queries) ListVMsByHost(ctx context.Context, hostDeviceID uuid.UUID) ([]
 			&i.LastSeenAt,
 			&i.VmID,
 			&i.Mac,
+			&i.ToolsState,
+			&i.Generation,
+			&i.UptimeSeconds,
+			&i.MemUsedMb,
+			&i.Datastore,
+			&i.IntegrationServices,
 		); err != nil {
 			return nil, err
 		}
@@ -136,6 +407,150 @@ func (q *Queries) ListVMsByHost(ctx context.Context, hostDeviceID uuid.UUID) ([]
 		return nil, err
 	}
 	return items, nil
+}
+
+const setVMExtra = `-- name: SetVMExtra :exec
+UPDATE virtual_machines SET
+  tools_state          = COALESCE(NULLIF($1::text,''), tools_state),
+  generation           = COALESCE(NULLIF($2::text,''), generation),
+  datastore            = COALESCE(NULLIF($3::text,''), datastore),
+  integration_services = COALESCE(NULLIF($4::text,''), integration_services),
+  uptime_seconds       = COALESCE(NULLIF($5::bigint,0), uptime_seconds),
+  mem_used_mb          = COALESCE(NULLIF($6::int,0), mem_used_mb)
+WHERE id = $7
+`
+
+type SetVMExtraParams struct {
+	ToolsState          string    `json:"tools_state"`
+	Generation          string    `json:"generation"`
+	Datastore           string    `json:"datastore"`
+	IntegrationServices string    `json:"integration_services"`
+	UptimeSeconds       int64     `json:"uptime_seconds"`
+	MemUsedMb           int32     `json:"mem_used_mb"`
+	ID                  uuid.UUID `json:"id"`
+}
+
+// Platform-specific extra VM attributes; COALESCE(NULLIF...) so a collector that doesn't
+// supply a field (e.g. vSphere has no generation) never wipes another platform's value.
+func (q *Queries) SetVMExtra(ctx context.Context, arg SetVMExtraParams) error {
+	_, err := q.db.Exec(ctx, setVMExtra,
+		arg.ToolsState,
+		arg.Generation,
+		arg.Datastore,
+		arg.IntegrationServices,
+		arg.UptimeSeconds,
+		arg.MemUsedMb,
+		arg.ID,
+	)
+	return err
+}
+
+const upsertCollectionHealth = `-- name: UpsertCollectionHealth :exec
+INSERT INTO vh_collection_health (device_id, collector, status, detail, vm_count)
+VALUES ($1,$2,$3,$4,$5)
+ON CONFLICT (device_id, collector) DO UPDATE SET
+  status=EXCLUDED.status, detail=EXCLUDED.detail, vm_count=EXCLUDED.vm_count, collected_at=now()
+`
+
+type UpsertCollectionHealthParams struct {
+	DeviceID  uuid.UUID `json:"device_id"`
+	Collector string    `json:"collector"`
+	Status    string    `json:"status"`
+	Detail    *string   `json:"detail"`
+	VmCount   *int32    `json:"vm_count"`
+}
+
+func (q *Queries) UpsertCollectionHealth(ctx context.Context, arg UpsertCollectionHealthParams) error {
+	_, err := q.db.Exec(ctx, upsertCollectionHealth,
+		arg.DeviceID,
+		arg.Collector,
+		arg.Status,
+		arg.Detail,
+		arg.VmCount,
+	)
+	return err
+}
+
+const upsertDatastore = `-- name: UpsertDatastore :exec
+
+INSERT INTO vh_datastores (host_device_id, name, type, capacity_bytes, free_bytes)
+VALUES ($1,$2,$3,$4,$5)
+ON CONFLICT (host_device_id, name) DO UPDATE SET
+  type=EXCLUDED.type, capacity_bytes=EXCLUDED.capacity_bytes, free_bytes=EXCLUDED.free_bytes, last_seen_at=now()
+`
+
+type UpsertDatastoreParams struct {
+	HostDeviceID  uuid.UUID `json:"host_device_id"`
+	Name          string    `json:"name"`
+	Type          *string   `json:"type"`
+	CapacityBytes *int64    `json:"capacity_bytes"`
+	FreeBytes     *int64    `json:"free_bytes"`
+}
+
+// ===== Stage 2: rich virtualization detail (durable tables) =====
+func (q *Queries) UpsertDatastore(ctx context.Context, arg UpsertDatastoreParams) error {
+	_, err := q.db.Exec(ctx, upsertDatastore,
+		arg.HostDeviceID,
+		arg.Name,
+		arg.Type,
+		arg.CapacityBytes,
+		arg.FreeBytes,
+	)
+	return err
+}
+
+const upsertHostNic = `-- name: UpsertHostNic :exec
+INSERT INTO vh_host_nics (host_device_id, name, mac, link_speed_mbps, link_up)
+VALUES ($1,$2,$3,$4,$5)
+ON CONFLICT (host_device_id, name) DO UPDATE SET
+  mac=EXCLUDED.mac, link_speed_mbps=EXCLUDED.link_speed_mbps, link_up=EXCLUDED.link_up, last_seen_at=now()
+`
+
+type UpsertHostNicParams struct {
+	HostDeviceID  uuid.UUID `json:"host_device_id"`
+	Name          string    `json:"name"`
+	Mac           *string   `json:"mac"`
+	LinkSpeedMbps *int32    `json:"link_speed_mbps"`
+	LinkUp        *bool     `json:"link_up"`
+}
+
+func (q *Queries) UpsertHostNic(ctx context.Context, arg UpsertHostNicParams) error {
+	_, err := q.db.Exec(ctx, upsertHostNic,
+		arg.HostDeviceID,
+		arg.Name,
+		arg.Mac,
+		arg.LinkSpeedMbps,
+		arg.LinkUp,
+	)
+	return err
+}
+
+const upsertVHNetwork = `-- name: UpsertVHNetwork :exec
+INSERT INTO vh_networks (host_device_id, kind, name, vlan, uplinks, switch_name)
+VALUES ($1,$2,$3,$4,$5,$6)
+ON CONFLICT (host_device_id, kind, name) DO UPDATE SET
+  vlan=EXCLUDED.vlan, uplinks=EXCLUDED.uplinks, switch_name=EXCLUDED.switch_name, last_seen_at=now()
+`
+
+type UpsertVHNetworkParams struct {
+	HostDeviceID uuid.UUID `json:"host_device_id"`
+	Kind         string    `json:"kind"`
+	Name         string    `json:"name"`
+	Vlan         *int32    `json:"vlan"`
+	Uplinks      *string   `json:"uplinks"`
+	SwitchName   *string   `json:"switch_name"`
+}
+
+func (q *Queries) UpsertVHNetwork(ctx context.Context, arg UpsertVHNetworkParams) error {
+	_, err := q.db.Exec(ctx, upsertVHNetwork,
+		arg.HostDeviceID,
+		arg.Kind,
+		arg.Name,
+		arg.Vlan,
+		arg.Uplinks,
+		arg.SwitchName,
+	)
+	return err
 }
 
 const upsertVM = `-- name: UpsertVM :one
@@ -151,7 +566,7 @@ ON CONFLICT (host_device_id, name) DO UPDATE SET
     vm_id = COALESCE(EXCLUDED.vm_id, virtual_machines.vm_id),
     mac = COALESCE(EXCLUDED.mac, virtual_machines.mac),
     last_seen_at = now()
-RETURNING id, host_device_id, vm_device_id, name, power_state, vcpu, mem_mb, guest_os, primary_ip, last_seen_at, vm_id, mac
+RETURNING id, host_device_id, vm_device_id, name, power_state, vcpu, mem_mb, guest_os, primary_ip, last_seen_at, vm_id, mac, tools_state, generation, uptime_seconds, mem_used_mb, datastore, integration_services
 `
 
 type UpsertVMParams struct {
@@ -196,6 +611,66 @@ func (q *Queries) UpsertVM(ctx context.Context, arg UpsertVMParams) (VirtualMach
 		&i.LastSeenAt,
 		&i.VmID,
 		&i.Mac,
+		&i.ToolsState,
+		&i.Generation,
+		&i.UptimeSeconds,
+		&i.MemUsedMb,
+		&i.Datastore,
+		&i.IntegrationServices,
 	)
 	return i, err
+}
+
+const upsertVMDisk = `-- name: UpsertVMDisk :exec
+INSERT INTO vm_disks (vm_id, label, path, datastore, capacity_bytes, used_bytes)
+VALUES ($1,$2,$3,$4,$5,$6)
+ON CONFLICT (vm_id, label) DO UPDATE SET
+  path=EXCLUDED.path, datastore=EXCLUDED.datastore, capacity_bytes=EXCLUDED.capacity_bytes, used_bytes=EXCLUDED.used_bytes, last_seen_at=now()
+`
+
+type UpsertVMDiskParams struct {
+	VmID          uuid.UUID `json:"vm_id"`
+	Label         string    `json:"label"`
+	Path          *string   `json:"path"`
+	Datastore     *string   `json:"datastore"`
+	CapacityBytes *int64    `json:"capacity_bytes"`
+	UsedBytes     *int64    `json:"used_bytes"`
+}
+
+func (q *Queries) UpsertVMDisk(ctx context.Context, arg UpsertVMDiskParams) error {
+	_, err := q.db.Exec(ctx, upsertVMDisk,
+		arg.VmID,
+		arg.Label,
+		arg.Path,
+		arg.Datastore,
+		arg.CapacityBytes,
+		arg.UsedBytes,
+	)
+	return err
+}
+
+const upsertVMNic = `-- name: UpsertVMNic :exec
+INSERT INTO vm_nics (vm_id, mac, network, ip_addresses, connected)
+VALUES ($1,$2,$3,$4,$5)
+ON CONFLICT (vm_id, mac) DO UPDATE SET
+  network=EXCLUDED.network, ip_addresses=EXCLUDED.ip_addresses, connected=EXCLUDED.connected, last_seen_at=now()
+`
+
+type UpsertVMNicParams struct {
+	VmID        uuid.UUID `json:"vm_id"`
+	Mac         string    `json:"mac"`
+	Network     *string   `json:"network"`
+	IpAddresses *string   `json:"ip_addresses"`
+	Connected   *bool     `json:"connected"`
+}
+
+func (q *Queries) UpsertVMNic(ctx context.Context, arg UpsertVMNicParams) error {
+	_, err := q.db.Exec(ctx, upsertVMNic,
+		arg.VmID,
+		arg.Mac,
+		arg.Network,
+		arg.IpAddresses,
+		arg.Connected,
+	)
+	return err
 }

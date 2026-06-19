@@ -331,6 +331,7 @@ func (s *Server) runOSCollection(ctx context.Context, d db.Device) osCollectResu
 		// not downgraded to plain server). Same handling as the agent path.
 		if reportIsHyperV(rep) {
 			s.markHyperVHost(ctx, d.ID, rep.VMs)
+			s.persistHyperVDetail(ctx, d.ID, rep)
 		}
 		res.Status = "collected"
 		res.CredentialUsed = cd.name
