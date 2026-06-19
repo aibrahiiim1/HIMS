@@ -178,6 +178,19 @@ func OpenPorts(tcp []int) []domain.ClassificationEvidence {
 	if has[9100] {
 		out = append(out, ev(domain.EvidenceSourcePort, "tcp/9100 (JetDirect)", string(domain.CatPrinter), domain.OSFamilyEmbedded, "", 55))
 	}
+	// VMware ESXi host agent. Port 902 (vpxa/authd) is near-unique to ESXi/vCenter, so it
+	// classifies virtual_host with HIGH confidence even when the host's web banner does NOT
+	// advertise vmware/esxi — the exact case that left ESXi hosts misclassified as "server"
+	// and therefore NEVER tried with the vSphere/vendor_api credentials (vSphere collection
+	// is gated on category=virtual_host). 443 alongside (the vSphere SDK endpoint)
+	// corroborates and raises confidence further.
+	if has[902] {
+		conf := 80
+		if has[443] {
+			conf = 88
+		}
+		out = append(out, ev(domain.EvidenceSourcePort, "tcp/902 (VMware ESXi host agent)", string(domain.CatVirtualHost), "", "esxi", conf))
+	}
 	return out
 }
 

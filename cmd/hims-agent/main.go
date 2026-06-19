@@ -39,7 +39,7 @@ import (
 	"github.com/coralsearesorts/hims/internal/osinv"
 )
 
-const agentVersion = "1.2.8"
+const agentVersion = "1.2.9"
 
 // agentMaxConcurrent bounds how many collection jobs the agent runs in parallel
 // per poll. The HIMS server already caps how many jobs it dispatches to one agent
@@ -428,6 +428,16 @@ func isReachedVerdict(cat string) bool {
 func windowsFinalCat(nativeCat, winrmCat, wmiCat string) string {
 	if isReachedVerdict(nativeCat) {
 		return nativeCat
+	}
+	// A broken WMI repository (root\cimv2 unavailable/corrupt) is a DEFINITIVE host-side
+	// defect: the host WAS reached over WMI/RPC and its repository is broken, which no retry
+	// repairs (unlike a UAC wmi_access_denied, which can be load/policy and is handled by the
+	// storm guard below). It must outrank a transient WinRM negotiate/timeout so the host
+	// settles terminal (namespace_unavailable → honest collection_failed / repair WMI) instead
+	// of looping forever — the .10 case, where WinRM legacy-negotiates AND WMI is broken, so
+	// every path is dead and retrying is pointless.
+	if wmiCat == osinv.WMINamespaceUnavailable {
+		return wmiCat
 	}
 	if isTransientWinRM(nativeCat) {
 		return nativeCat

@@ -88,7 +88,12 @@ SELECT device_id,
   bool_or(success AND kind IN ('http_basic','http'))                    AS web_success,
   bool_or(category = 'auth_ok_operation_fault')                         AS legacy_authok,
   bool_or(category IN ('access_denied','wmi_access_denied'))            AS not_authorized,
-  bool_or(category = 'auth_failed')                                     AS auth_rejected
+  bool_or(category = 'auth_failed')                                     AS auth_rejected,
+  -- wmi_broken: a credential AUTHENTICATED/reached WMI but the host's WMI repository
+  -- (root\cimv2) is unavailable/corrupt — a HOST defect the agent cannot work around.
+  -- Used so a legacy host whose agent collection definitively failed this way derives
+  -- collection_failed (host repair) instead of looping at needs_agent.
+  bool_or(category = 'namespace_unavailable')                          AS wmi_broken
 FROM credential_test_results
 WHERE device_id IS NOT NULL AND kind <> ''
 GROUP BY device_id;

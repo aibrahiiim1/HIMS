@@ -108,6 +108,21 @@ func TestClassification_DeepSuccessOutranksEverything(t *testing.T) {
 	}
 }
 
+func TestClassification_LegacyWmiBrokenIsCollectionFailedNotNeedsAgent(t *testing.T) {
+	id := uuid.New()
+	dev := db.Device{ID: id, OsFamily: "windows", Category: "endpoint"}
+	// Legacy WSMan auth-ok (dpm authenticates) but the agent reached WMI and the host's
+	// repository is broken (namespace_unavailable) → collection_failed (repair the host),
+	// NOT needs_agent (the agent exists and tried). The .10 case.
+	if st, _ := cmaps(id, credSignal{legacyAuthOK: true, wmiBroken: true}, nil).deriveManagement(dev); st != MgmtCollectionFailed {
+		t.Errorf("legacy + wmi broken: got %s, want collection_failed", st)
+	}
+	// Legacy auth-ok WITHOUT a broken-WMI signal still routes to the agent (needs_agent).
+	if st, _ := cmaps(id, credSignal{legacyAuthOK: true}, nil).deriveManagement(dev); st != MgmtNeedsAgent {
+		t.Errorf("legacy auth-ok only: got %s, want needs_agent", st)
+	}
+}
+
 func TestClassification_TransportAndTransientNotCredentialFailed(t *testing.T) {
 	id := uuid.New()
 	dev := db.Device{ID: id, OsFamily: "windows", Category: "endpoint"}

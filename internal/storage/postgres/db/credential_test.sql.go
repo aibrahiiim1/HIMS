@@ -18,7 +18,12 @@ SELECT device_id,
   bool_or(success AND kind IN ('http_basic','http'))                    AS web_success,
   bool_or(category = 'auth_ok_operation_fault')                         AS legacy_authok,
   bool_or(category IN ('access_denied','wmi_access_denied'))            AS not_authorized,
-  bool_or(category = 'auth_failed')                                     AS auth_rejected
+  bool_or(category = 'auth_failed')                                     AS auth_rejected,
+  -- wmi_broken: a credential AUTHENTICATED/reached WMI but the host's WMI repository
+  -- (root\cimv2) is unavailable/corrupt — a HOST defect the agent cannot work around.
+  -- Used so a legacy host whose agent collection definitively failed this way derives
+  -- collection_failed (host repair) instead of looping at needs_agent.
+  bool_or(category = 'namespace_unavailable')                          AS wmi_broken
 FROM credential_test_results
 WHERE device_id IS NOT NULL AND kind <> ''
 GROUP BY device_id
@@ -31,6 +36,7 @@ type DeviceCredentialSignalsRow struct {
 	LegacyAuthok  bool      `json:"legacy_authok"`
 	NotAuthorized bool      `json:"not_authorized"`
 	AuthRejected  bool      `json:"auth_rejected"`
+	WmiBroken     bool      `json:"wmi_broken"`
 }
 
 // Per-device aggregate over ALL credential-test outcomes (every credential, every kind),
@@ -64,6 +70,7 @@ func (q *Queries) DeviceCredentialSignals(ctx context.Context) ([]DeviceCredenti
 			&i.LegacyAuthok,
 			&i.NotAuthorized,
 			&i.AuthRejected,
+			&i.WmiBroken,
 		); err != nil {
 			return nil, err
 		}

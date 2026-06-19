@@ -63,12 +63,20 @@ type scanReq struct {
 // signature makes that regression impossible to reintroduce. Specialized
 // appliances (wireless / VMware / voice / CCTV) have their own collection branch
 // and are excluded here.
-func osCollectionCandidate(d db.Device, boundOS, legacyWSMan, specialized bool) bool {
+func osCollectionCandidate(d db.Device, boundOS, legacyWSMan, specialized, winMgmtPort bool) bool {
 	if specialized {
 		return false
 	}
 	winHost := d.OsFamily == domain.OSFamilyWindows || d.Category == string(domain.CatEndpoint)
-	return boundOS || legacyWSMan || winHost
+	// winMgmtPort: the host answered on a Windows management port (WinRM 5985/5986, RPC 135,
+	// or SMB 445) THIS run. A host speaking WinRM/RPC is a Windows host worth a deep OS
+	// collection even when it enrolled as category=server with a blank os_family (the gap
+	// that left .67/.68/.116 — legacy-auth-OK Windows servers — never attempted and stuck at
+	// needs_agent: runOSCollection tries WinRM, gets auth_ok_operation_fault, and routes to
+	// the site Relay Agent for WMI/DCOM). This is an ADDITIONAL positive trigger, never a
+	// gate — a host WITHOUT the port still qualifies via winHost/boundOS/legacyWSMan, so the
+	// "gated on an observed management port" regression cannot return.
+	return boundOS || legacyWSMan || winHost || winMgmtPort
 }
 
 // startScan launches a background subnet scan and returns the job immediately
@@ -654,7 +662,27 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 				// of which ports the scan observed — see osCollectionCandidate, which
 				// owns this decision (and deliberately excludes ports so the
 				// "gated on an observed management port" regression can't return).
-				if s.cipher() != nil && osCollectionCandidate(dev, boundOS, legacyWSMan, specialized) {
+				winMgmtPort, winRMPort := false, false
+				for _, p := range r.OpenPorts {
+					if p == 5985 || p == 5986 {
+						winRMPort = true
+					}
+					if p == 5985 || p == 5986 || p == 135 || p == 445 {
+						winMgmtPort = true
+					}
+				}
+				// A host that authenticated WSMan (legacy auth-ok) or answers on WinRM
+				// (5985/5986) is DEFINITIVELY Windows even when it enrolled as a blank-os
+				// "server". Without an os_family, runOSCollection cannot pick the winrm
+				// method and dead-ends at "unsupported_os" — never trying WinRM and never
+				// routing to the site agent (the .67/.68/.116 gap: legacy-auth-OK Windows
+				// servers stuck at needs_agent with zero collect_os jobs). Set it in-memory
+				// for this collection so the host routes to the agent; a successful agent
+				// collection then persists the authoritative os_family from the OS caption.
+				if dev.OsFamily == "" && (legacyWSMan || winRMPort) {
+					dev.OsFamily = domain.OSFamilyWindows
+				}
+				if s.cipher() != nil && osCollectionCandidate(dev, boundOS, legacyWSMan, specialized, winMgmtPort) {
 					s.publishScanEvent(jobID, ip, id, "collection_started", "", "started", "deep OS inventory")
 					cctx, ccancel := context.WithTimeout(ctx, 2*time.Minute)
 					oc := s.runOSCollection(cctx, dev)

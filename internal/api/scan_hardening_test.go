@@ -19,27 +19,31 @@ import (
 // late/slow-probed endpoints enrolled with zero attempts → stuck needs_credential).
 func TestOSCollectionCandidate_NoPortGating(t *testing.T) {
 	cases := []struct {
-		name                          string
-		dev                           db.Device
-		boundOS, legacyWSMan, special bool
-		want                          bool
+		name                                       string
+		dev                                        db.Device
+		boundOS, legacyWSMan, special, winMgmtPort bool
+		want                                       bool
 	}{
 		// os_family=windows, no ports, no bound cred → still a candidate.
-		{"windows-osfamily", db.Device{OsFamily: "windows"}, false, false, false, true},
+		{"windows-osfamily", db.Device{OsFamily: "windows"}, false, false, false, false, true},
 		// The .106/.119 case: enrolled endpoint whose os_family is still blank
 		// (not yet collected) — must still be attempted.
-		{"endpoint-blank-osfamily", db.Device{Category: "endpoint"}, false, false, false, true},
+		{"endpoint-blank-osfamily", db.Device{Category: "endpoint"}, false, false, false, false, true},
 		// Bound WinRM/SSH credential on a non-endpoint (e.g. server) → candidate.
-		{"bound-os-cred", db.Device{Category: "server"}, true, false, false, true},
+		{"bound-os-cred", db.Device{Category: "server"}, true, false, false, false, true},
 		// Legacy WSMan-2.0 host (auth ok, op fault) → candidate (routes to agent).
-		{"legacy-wsman", db.Device{Category: "server"}, false, true, false, true},
-		// Non-Windows, non-bound (printer) → NOT a generic OS-collection candidate.
-		{"printer", db.Device{Category: "printer", OsFamily: ""}, false, false, false, false},
-		// Specialized appliance takes its own branch even if endpoint-like.
-		{"specialized-camera", db.Device{Category: "endpoint"}, false, false, true, false},
+		{"legacy-wsman", db.Device{Category: "server"}, false, true, false, false, true},
+		// The .67/.68/.116 case: a "server" with blank os_family but Windows mgmt ports
+		// (5985/135) observed → candidate (route to agent), even with no bound cred / no
+		// legacy signal this run.
+		{"server-with-winrm-port", db.Device{Category: "server"}, false, false, false, true, true},
+		// Non-Windows, non-bound (printer), no Windows ports → NOT a candidate.
+		{"printer", db.Device{Category: "printer", OsFamily: ""}, false, false, false, false, false},
+		// Specialized appliance takes its own branch even if endpoint-like / winMgmtPort.
+		{"specialized-camera", db.Device{Category: "endpoint"}, false, false, true, true, false},
 	}
 	for _, c := range cases {
-		if got := osCollectionCandidate(c.dev, c.boundOS, c.legacyWSMan, c.special); got != c.want {
+		if got := osCollectionCandidate(c.dev, c.boundOS, c.legacyWSMan, c.special, c.winMgmtPort); got != c.want {
 			t.Errorf("%s: osCollectionCandidate=%v want %v", c.name, got, c.want)
 		}
 	}
@@ -206,13 +210,15 @@ func TestProvenEvidenceOutranksPendingAndFailure(t *testing.T) {
 // retried; auth/authorization/unsupported are terminal (retrying a rejected
 // credential is pointless).
 func TestAgentJobRetryable(t *testing.T) {
-	transient := []string{"wmi_error", "namespace_unavailable", "unreachable", "timeout", "rpc_unreachable", "error", ""}
+	transient := []string{"wmi_error", "unreachable", "timeout", "rpc_unreachable", "error", ""}
 	for _, c := range transient {
 		if !agentJobRetryable(c) {
 			t.Errorf("category %q should be retryable (transient)", c)
 		}
 	}
-	terminal := []string{credtest.CatAuthFailed, credtest.CatUnsupported, "wmi_access_denied", "access_denied", "lockout_suspected"}
+	// namespace_unavailable (broken host WMI repository) is now TERMINAL — retrying never
+	// repairs the host's root\cimv2, so it must not loop (Gap C / the .10 case).
+	terminal := []string{credtest.CatAuthFailed, credtest.CatUnsupported, "wmi_access_denied", "access_denied", "lockout_suspected", "namespace_unavailable"}
 	for _, c := range terminal {
 		if agentJobRetryable(c) {
 			t.Errorf("category %q must NOT be retryable (auth/authz/unsupported is terminal)", c)

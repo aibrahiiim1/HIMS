@@ -279,7 +279,10 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 	// keys on (DNS/DC/DB). This breadth lets the scan DETECT non-SNMP hosts
 	// (Windows workstations, Linux, cameras) that the old switch-centric list
 	// missed entirely.
-	ports := []int{22, 23, 53, 80, 88, 135, 161, 389, 443, 445, 554, 636, 1433, 1521, 3389, 5432, 5985, 5986, 8000, 8008, 8010, 8080, 8443, 9100}
+	// 902 = VMware ESXi vpxa/authd host-agent port — near-unique to ESXi, so probing it lets
+	// classification detect ESXi (→ virtual_host) even when the host's web banner does not
+	// advertise vmware/esxi, which is what routes vSphere/vendor_api collection automatically.
+	ports := []int{22, 23, 53, 80, 88, 135, 161, 389, 443, 445, 554, 636, 902, 1433, 1521, 3389, 5432, 5985, 5986, 8000, 8008, 8010, 8080, 8443, 9100}
 	// Hikvision/CCTV convention: a recorder/camera's web/ISAPI port is commonly
 	// 8000 + the host's last octet (.2 -> 8002, .15 -> 8015). Probe it per-host so
 	// these recorders are discovered automatically — the operator never has to

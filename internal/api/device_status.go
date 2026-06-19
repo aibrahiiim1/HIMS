@@ -79,6 +79,7 @@ type credSignal struct {
 	legacyAuthOK  bool // a credential authenticated but the WSMan op faulted (legacy WSMan)
 	notAuthorized bool // a credential authenticated but the host denied access (UAC/policy)
 	authRejected  bool // a credential was cleanly rejected (wrong username/password)
+	wmiBroken     bool // WMI repository (root\cimv2) unavailable/corrupt — host-side defect
 }
 
 // authenticatedAny reports whether ANY credential authenticated by ANY supported method
@@ -135,7 +136,7 @@ func (s *Server) buildStatusMaps(ctx context.Context) (*statusMaps, error) {
 		for _, r := range rows {
 			cm[r.DeviceID] = credSignal{
 				anySuccess: r.AnySuccess, webSuccess: r.WebSuccess, legacyAuthOK: r.LegacyAuthok,
-				notAuthorized: r.NotAuthorized, authRejected: r.AuthRejected,
+				notAuthorized: r.NotAuthorized, authRejected: r.AuthRejected, wmiBroken: r.WmiBroken,
 			}
 		}
 	}
@@ -239,6 +240,13 @@ func (m *statusMaps) deriveManagement(d db.Device) (state string, managedBy []st
 	// (legacyAuthOK is itself proof of a Windows WSMan host, so it is not windowsLike-gated
 	// — a host enrolled as "server" with a blank os_family still routes to the agent.)
 	if cs.legacyAuthOK || (windowsLike(d) && ts.winrmLegacy()) {
+		// If the agent already REACHED the host over WMI but its WMI repository is
+		// broken (namespace_unavailable), the agent path cannot collect it — a HOST-side
+		// defect to repair (winmgmt /resetrepository) or an OS too old. That is an honest
+		// collection_failed, NOT "install/assign an agent" (the agent exists and tried).
+		if cs.wmiBroken {
+			return MgmtCollectionFailed, nil
+		}
 		if d.LocationID != nil && m.anySites[*d.LocationID] && !m.onlineSites[*d.LocationID] {
 			return MgmtAgentOffline, nil
 		}
