@@ -88,3 +88,28 @@ func TestWindowsFinalCat(t *testing.T) {
 		})
 	}
 }
+
+// A reached-host verdict (wmi_access_denied) from one credential must win the job headline
+// over another credential's transient transport miss (unreachable) — so the host settles on
+// the honest not_authorized verdict instead of retrying forever (the .156 case).
+func TestPickHeadlineAttempt_ReachedVerdictBeatsTransient(t *testing.T) {
+	attempts := []map[string]any{
+		{"credential_id": "local", "category": "wmi_access_denied"},
+		{"credential_id": "domain", "category": "unreachable"},
+	}
+	hl := pickHeadlineAttempt(attempts)
+	if hl == nil || hl["category"] != "wmi_access_denied" {
+		t.Fatalf("headline = %v, want wmi_access_denied (reached verdict beats transient)", hl)
+	}
+	// auth_failed (wrong credential) outranks an authorization denial.
+	hl2 := pickHeadlineAttempt([]map[string]any{
+		{"category": "access_denied"}, {"category": "auth_failed"}, {"category": "unreachable"},
+	})
+	if hl2["category"] != "auth_failed" {
+		t.Errorf("headline = %v, want auth_failed", hl2["category"])
+	}
+	// All transient → falls back to a transient (last/any), never panics.
+	if hl3 := pickHeadlineAttempt([]map[string]any{{"category": "unreachable"}}); hl3 == nil {
+		t.Error("nil headline for single transient")
+	}
+}

@@ -39,7 +39,7 @@ import (
 	"github.com/coralsearesorts/hims/internal/osinv"
 )
 
-const agentVersion = "1.2.11"
+const agentVersion = "1.2.12"
 
 // agentMaxConcurrent bounds how many collection jobs the agent runs in parallel
 // per poll. The HIMS server already caps how many jobs it dispatches to one agent
@@ -289,20 +289,59 @@ func (a *agent) runJob(j job) {
 		}
 	}
 
-	// All candidates failed — report the most-significant failure (last attempt) plus
-	// the full per-credential history.
+	// All candidates failed — report the MOST-INFORMATIVE failure as the job headline (not
+	// merely the last attempt). A reached-host verdict from ANY credential (a clean auth
+	// rejection, an authorization/WMI denial, or a broken namespace) must win over another
+	// credential's transient transport miss — otherwise one credential's "unreachable"
+	// masks another credential's definitive "wmi_access_denied", and the job retries forever
+	// instead of settling the honest terminal verdict. The .156 case: local admin proved
+	// wmi_access_denied (not_authorized) while the domain admin hit RPC-unreachable. The full
+	// per-credential history is always sent in `attempts`, so nothing is lost either way.
 	res := map[string]any{"success": false, "category": "error", "error": "no candidate credential succeeded", "attempts": attempts}
-	if n := len(attempts); n > 0 {
-		last := attempts[n-1]
-		if cat, ok := last["category"].(string); ok {
+	if hl := pickHeadlineAttempt(attempts); hl != nil {
+		if cat, ok := hl["category"].(string); ok {
 			res["category"] = cat
 		}
-		if d, ok := last["detail"].(string); ok {
+		if d, ok := hl["detail"].(string); ok {
 			res["error"] = d
 		}
-		res["credential_id"] = last["credential_id"]
+		res["credential_id"] = hl["credential_id"]
 	}
 	a.post(j.ID, res)
+}
+
+// pickHeadlineAttempt chooses the most operator-meaningful failed attempt as the job headline:
+// a reached-host verdict (the credential was evaluated — auth/authorization/namespace) ranks
+// above a transport/transient miss, so the host settles on the honest definitive reason rather
+// than retrying on another credential's transient. Order within reached verdicts is by how
+// actionable they are. Falls back to the last attempt when none is a reached verdict.
+func pickHeadlineAttempt(attempts []map[string]any) map[string]any {
+	rank := func(cat string) int {
+		switch cat {
+		case "auth_failed", osinv.WMIAuthFailed:
+			return 6 // wrong credential — fix the credential
+		case "access_denied", osinv.WMIAccessDenied:
+			return 5 // authenticated but WMI/host denied — not_authorized
+		case osinv.WMINamespaceUnavailable:
+			return 4 // authenticated, WMI namespace broken/denied
+		case osinv.WMIRpcUnreachable, osinv.WMIDcomUnreachable, osinv.WMIFirewallBlocked:
+			return 3 // reached the host but RPC/DCOM blocked
+		case osinv.WinRMNegotiateError:
+			return 2 // listener answered but negotiation failed
+		case "unreachable", osinv.WinRMConnectTimeout, "", "error":
+			return 1 // pure transport miss / unknown
+		}
+		return 2
+	}
+	var best map[string]any
+	bestRank := -1
+	for _, a := range attempts {
+		cat, _ := a["category"].(string)
+		if r := rank(cat); r > bestRank {
+			best, bestRank = a, r
+		}
+	}
+	return best
 }
 
 // post sends a job result back to HIMS (never logs secrets — res carries none).
