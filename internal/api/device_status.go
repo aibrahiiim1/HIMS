@@ -329,25 +329,49 @@ type deviceStatus struct {
 }
 
 // managementReason returns a specific sub-reason for a failure management state, so the UI
-// can render an accurate next-action instead of a generic one. Today it discriminates the
-// collection_failed bucket: a host whose WMI repository (root\cimv2) is broken
-// (namespace_unavailable) needs a HOST-side WMI/CIM repair — NOT a firewall/credential fix —
-// which the generic collection_failed text would wrongly suggest (the .10 case).
+// can render an accurate next-action instead of a generic one. It discriminates the
+// collection_failed bucket.
+//
+// CRITICAL (the .10 trust fix): a WMI namespace failure (root\cimv2 unavailable) is reported
+// as genuine host-WMI breakage ("repair host WMI") ONLY when it is the UNIVERSAL blocker —
+// i.e. NO credential was cleanly rejected. namespace_unavailable is observed PER CREDENTIAL:
+// on .10 the DOMAIN admin authenticated but hit namespace_unavailable (it lacked WMI rights),
+// while the LOCAL admin was rejected because its password did not match the host. Generalizing
+// the domain admin's single-credential namespace failure into "host WMI broken" sent the
+// operator to repair WMI when the real fix was the credential — once the local admin password
+// was corrected the host collected over WMI immediately. So: namespace_unavailable + a rejected
+// credential ⇒ a CREDENTIAL/WMI-rights problem to resolve first (credential_or_wmi_access),
+// never host-WMI-broken. Host-WMI-broken is reserved for "a credential authenticated, hit the
+// namespace failure, and NO credential was rejected" — the failure is then truly host-side.
 func (m *statusMaps) managementReason(d db.Device, state string) string {
 	if state != MgmtCollectionFailed {
 		return ""
 	}
-	if cs, ok := m.cred[d.ID]; ok && cs.wmiBroken {
+	cs, hasCS := m.cred[d.ID]
+	wmiNamespace := (hasCS && cs.wmiBroken)
+	if ts := m.test[d.ID]; ts != nil && !wmiNamespace {
+		wmiNamespace = ts.kindCategory["wmi"] == "namespace_unavailable" || ts.kindCategory["winrm"] == "namespace_unavailable"
+	}
+	if wmiNamespace {
+		// A rejected credential alongside ⇒ a correctable credential mismatch may exist;
+		// do NOT claim host-WMI-broken (the .10 generalization bug).
+		if hasCS && cs.authRejected {
+			return "credential_or_wmi_access"
+		}
 		return "wmi_namespace_broken"
 	}
 	if ts := m.test[d.ID]; ts != nil {
-		if ts.kindCategory["wmi"] == "namespace_unavailable" || ts.kindCategory["winrm"] == "namespace_unavailable" {
-			return "wmi_namespace_broken"
-		}
 		for _, k := range []string{"wmi", "winrm"} {
 			switch ts.kindCategory[k] {
 			case "unreachable", "rpc_unreachable", "dcom_unreachable", "firewall_blocked":
+				// Reached the network but the management transport is blocked: WinRM
+				// disabled (5985 closed) and/or WMI/DCOM RPC ports firewalled (135 mapper
+				// open but dynamic RPC range blocked → "RPC server unavailable"). The .156 case.
 				return "transport_unreachable"
+			case "wmi_error":
+				// The agent reached the host but the WMI/DCOM collection itself failed for
+				// a non-transport, non-namespace reason — a host-side WMI/DCOM defect.
+				return "wmi_collection_failed"
 			}
 		}
 	}

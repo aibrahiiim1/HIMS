@@ -14,6 +14,8 @@ export function ReachabilityBadge({ value }: { value?: string }) {
 // (e.g. a broken host WMI repository) is visible on hover wherever the badge appears.
 const REASON_HINT: Record<string, string> = {
   wmi_namespace_broken: 'host WMI repository (root\\cimv2) broken — repair WMI on the host',
+  credential_or_wmi_access: 'credential issue: one credential rejected, another authenticated but lacked WMI rights — verify credentials/WMI rights',
+  wmi_collection_failed: 'agent reached host but WMI/DCOM collection failed — check DCOM/RPC/WMI permissions',
   transport_unreachable: 'agent could not reach WinRM/RPC — check host firewall/listener',
 }
 

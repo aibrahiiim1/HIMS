@@ -39,7 +39,7 @@ import (
 	"github.com/coralsearesorts/hims/internal/osinv"
 )
 
-const agentVersion = "1.2.9"
+const agentVersion = "1.2.11"
 
 // agentMaxConcurrent bounds how many collection jobs the agent runs in parallel
 // per poll. The HIMS server already caps how many jobs it dispatches to one agent
@@ -552,7 +552,11 @@ try {
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
-		return nil, classifyNativeWinRMErr(stderr.String()), fmt.Errorf("%s", strings.TrimSpace(stderr.String()))
+		// Return a CONCISE error: the raw New-PSSession stderr is ~290 chars of verbose
+		// PowerShell boilerplate that, when folded into the combined "native | winrm | wmi"
+		// error, truncates away the other two rungs' reasons (the .156 case — the WMI/DCOM
+		// verdict was lost). The precise category is returned separately (classifyNativeWinRMErr).
+		return nil, classifyNativeWinRMErr(stderr.String()), fmt.Errorf("%s", condensePSErr(stderr.String()))
 	}
 	var rep osinv.Report
 	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &rep); err != nil {
@@ -628,10 +632,16 @@ $c=New-Object System.Management.Automation.PSCredential($u,$p); $t=$env:HIMS_J_T
 $sess=$null
 $probe=$null
 $useCim=$false
-try { $probe=Get-WmiObject -ComputerName $t -Credential $c -Class Win32_OperatingSystem -ErrorAction Stop } catch { $sess='cim' }
+$dcomErr=''
+try { $probe=Get-WmiObject -ComputerName $t -Credential $c -Class Win32_OperatingSystem -ErrorAction Stop } catch { $sess='cim'; $dcomErr=$_.Exception.Message }
 if($sess -eq 'cim'){
   $opt=New-CimSessionOption -Protocol Wsman
-  $sess=New-CimSession -ComputerName $t -Credential $c -SessionOption $opt -OperationTimeoutSec 60 -ErrorAction Stop
+  # When the WSMan-CIM fallback ALSO fails (e.g. WinRM disabled — 5985 closed), surface the
+  # REAL primary DCOM/WMI error too. Otherwise the host's actual blocker (e.g. "RPC server
+  # unavailable" = dynamic RPC ports firewalled) is hidden behind the generic CIM-connect
+  # message, mislabeling a DCOM-blocked host as an unreachable/unknown one (the .156 case).
+  try { $sess=New-CimSession -ComputerName $t -Credential $c -SessionOption $opt -OperationTimeoutSec 60 -ErrorAction Stop }
+  catch { throw ("wmi/dcom failed [{0}]; wsman-cim fallback failed [{1}]" -f $dcomErr, $_.Exception.Message) }
   $g={param($cls) Get-CimInstance -CimSession $sess -ClassName $cls -ErrorAction Stop}
   $useCim=$true
 } else {
@@ -766,10 +776,29 @@ func sanitize(msg, pass string) string {
 	if pass != "" {
 		msg = strings.ReplaceAll(msg, pass, "***")
 	}
-	if len(msg) > 300 {
-		msg = msg[:300] + "…"
+	// 600 (was 300): a fully-failing Windows host folds THREE rung errors into one string
+	// ("native: … | winrm: … | wmi: …"); 300 truncated after the verbose native PSRP message
+	// and lost the winrm/wmi reasons — exactly the per-rung detail an operator needs.
+	if len(msg) > 600 {
+		msg = msg[:600] + "…"
 	}
 	return strings.TrimSpace(msg)
+}
+
+// condensePSErr collapses a verbose PowerShell-remoting stderr to its essence: whitespace
+// folded to single spaces, the generic "Consult the logs … about_Remote_Troubleshooting"
+// boilerplate dropped, capped short. Keeps the meaningful failure phrase ("client cannot
+// connect to the destination …") without letting ~290 chars of boilerplate crowd out the
+// other rungs' reasons in the combined error.
+func condensePSErr(s string) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if i := strings.Index(s, "Consult the logs"); i > 0 {
+		s = strings.TrimSpace(s[:i])
+	}
+	if len(s) > 180 {
+		s = s[:180] + "…"
+	}
+	return s
 }
 
 func hostname() string { h, _ := os.Hostname(); return h }

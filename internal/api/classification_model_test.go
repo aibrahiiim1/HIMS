@@ -143,6 +143,28 @@ func TestManagementReason_WmiBrokenSurfacedForCollectionFailed(t *testing.T) {
 	}
 }
 
+// The .10 generalization fix: namespace_unavailable from one authenticated credential must
+// NOT be reported as host-WMI-broken when ANOTHER credential was cleanly rejected — that is a
+// correctable CREDENTIAL mismatch (local admin wrong on host; domain admin auth-ok but lacked
+// WMI rights), not host breakage. Only "namespace failure + NO rejected credential" is host-WMI-broken.
+func TestManagementReason_NamespaceNotGeneralizedOverRejectedCredential(t *testing.T) {
+	id := uuid.New()
+	dev := db.Device{ID: id, OsFamily: "windows", Category: "endpoint"}
+	// .10 at 08:00: domain admin auth_ok→namespace_unavailable, local admin rejected, no success.
+	mixed := cmaps(id, credSignal{legacyAuthOK: true, wmiBroken: true, authRejected: true}, nil).statusFor(dev)
+	if mixed.Management != MgmtCollectionFailed {
+		t.Fatalf("mixed state: got %s, want collection_failed", mixed.Management)
+	}
+	if mixed.ManagementReason != "credential_or_wmi_access" {
+		t.Errorf("mixed reason: got %q, want credential_or_wmi_access (NOT host-WMI-broken)", mixed.ManagementReason)
+	}
+	// Genuine host-WMI-broken: authenticated + namespace, NO rejected credential.
+	genuine := cmaps(id, credSignal{legacyAuthOK: true, wmiBroken: true}, nil).statusFor(dev)
+	if genuine.ManagementReason != "wmi_namespace_broken" {
+		t.Errorf("genuine reason: got %q, want wmi_namespace_broken", genuine.ManagementReason)
+	}
+}
+
 func TestClassification_TransportAndTransientNotCredentialFailed(t *testing.T) {
 	id := uuid.New()
 	dev := db.Device{ID: id, OsFamily: "windows", Category: "endpoint"}

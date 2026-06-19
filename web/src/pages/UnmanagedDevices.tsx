@@ -32,7 +32,9 @@ const ACTION: Record<string, string> = {
 // the management state alone is too generic. A broken host WMI repository, for example, is a
 // host-side repair — not the firewall/credential fix the generic collection_failed text implies.
 const REASON_ACTION: Record<string, string> = {
-  wmi_namespace_broken: 'Host WMI repository (root\\cimv2) is broken or unavailable — the agent reached the host but cannot collect. Repair WMI ON THE HOST (winmgmt /salvagerepository, then /resetrepository if needed), or the OS is too old for supported remoting. This is a host-side fix, NOT a credential or firewall problem.',
+  wmi_namespace_broken: 'Host WMI repository (root\\cimv2) is broken or unavailable — a valid credential authenticated but cannot collect, and no credential was rejected. Repair WMI ON THE HOST (winmgmt /salvagerepository, then /resetrepository if needed), or the OS is too old for supported remoting. This is a host-side fix.',
+  credential_or_wmi_access: 'A CREDENTIAL issue, not host WMI breakage: one credential was rejected (wrong username/password for this host) while another authenticated but lacked WMI rights. Verify the local AND domain admin credentials match this host, and that the authenticating account has WMI/DCOM rights — before assuming the host WMI is broken.',
+  wmi_collection_failed: 'The agent reached the host but WMI/DCOM collection failed (DCOM/RPC blocked or WMI access). Check the host firewall (RPC dynamic ports), DCOM, and WMI permissions — or enable WinRM (Enable-PSRemoting).',
   transport_unreachable: 'The agent could not reach WinRM/RPC on the host (port closed/filtered or listener disabled). Check the host firewall/listener — NOT a credential problem.',
 }
 
