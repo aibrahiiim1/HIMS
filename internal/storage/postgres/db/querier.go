@@ -156,6 +156,7 @@ type Querier interface {
 	CreateWorkOrder(ctx context.Context, arg CreateWorkOrderParams) (WorkOrder, error)
 	// Whether a group is already bound to a location (guards duplicate binds).
 	CredentialGroupLocationBound(ctx context.Context, arg CredentialGroupLocationBoundParams) (bool, error)
+	DatastoreSummaryByHost(ctx context.Context) ([]DatastoreSummaryByHostRow, error)
 	DeleteAlertRule(ctx context.Context, id uuid.UUID) error
 	DeleteAllMibWalkRows(ctx context.Context, deviceID uuid.UUID) error
 	// Removing a credential un-binds it from devices (FK ON DELETE SET NULL) and
@@ -607,9 +608,12 @@ type Querier interface {
 	ListTopologyLinks(ctx context.Context, localDeviceID uuid.UUID) ([]TopologyLink, error)
 	// ===== RBAC: users / roles / permissions ==================================
 	ListUsers(ctx context.Context) ([]User, error)
+	ListVMDisksByHost(ctx context.Context, hostDeviceID uuid.UUID) ([]VmDisk, error)
 	ListVMDisksByVM(ctx context.Context, vmID uuid.UUID) ([]VmDisk, error)
+	ListVMNicsByHost(ctx context.Context, hostDeviceID uuid.UUID) ([]VmNic, error)
 	ListVMNicsByVM(ctx context.Context, vmID uuid.UUID) ([]VmNic, error)
 	ListVMsByHost(ctx context.Context, hostDeviceID uuid.UUID) ([]VirtualMachine, error)
+	ListVMsByHostDetail(ctx context.Context, hostDeviceID uuid.UUID) ([]ListVMsByHostDetailRow, error)
 	// ===== Vendor fingerprints =================================================
 	// Ordered so the matching engine's stable sort favours, among equal-confidence
 	// ties: user rules over builtin (source asc: 'builtin'<'user' → invert), then
@@ -655,6 +659,7 @@ type Querier interface {
 	MonitoringStatusOverview(ctx context.Context) ([]MonitoringStatusOverviewRow, error)
 	// Path Finder: per-NVR channel totals (and how many are linked to a camera device).
 	NVRChannelStats(ctx context.Context, nvrDeviceID uuid.UUID) (NVRChannelStatsRow, error)
+	NetworkCountByHost(ctx context.Context) ([]NetworkCountByHostRow, error)
 	// ---- Alerts ---------------------------------------------------------------
 	// Atomic open: ON CONFLICT against idx_alerts_one_open means a second open
 	// for the same (rule, check) is a no-op. RETURNING yields a row ONLY on a
@@ -923,6 +928,7 @@ type Querier interface {
 	UpsertWirelessControllerSummary(ctx context.Context, arg UpsertWirelessControllerSummaryParams) error
 	UpsertWirelessRadio(ctx context.Context, arg UpsertWirelessRadioParams) (WirelessRadioStatus, error)
 	UpsertWirelessSSID(ctx context.Context, arg UpsertWirelessSSIDParams) (WirelessSsid, error)
+	VMCountsByHost(ctx context.Context) ([]VMCountsByHostRow, error)
 }
 
 var _ Querier = (*Queries)(nil)

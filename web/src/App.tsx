@@ -14,6 +14,7 @@ import { ServerDetail } from './pages/ServerDetail'
 import { EndpointDetail } from './pages/EndpointDetail'
 import { FirewallDetail } from './pages/FirewallDetail'
 import { VirtualHostDetail } from './pages/VirtualHostDetail'
+import { VirtualHosts } from './pages/VirtualHosts'
 import { CctvDetail } from './pages/CctvDetail'
 import { Cameras } from './pages/Cameras'
 import { PrinterDetail } from './pages/PrinterDetail'
@@ -119,13 +120,13 @@ function Shell({ me, onLogout }: { me?: AuthMe; onLogout: () => void }) {
             <Route path="/discovery/jobs/:jobId/live" element={<LiveDiscovery />} />
             <Route path="/discovery/results" element={<ScanResultsRedirect />} />
             <Route path="/" element={<DeviceList category="switch" title="Switches" detailBase="/devices" headerExtra={<AddVirtualButton type="switch" label="Switch" />} />} />
-            <Route path="/servers" element={<DeviceList category="server" title="Servers" detailBase="/servers" headerExtra={<AddVirtualButton type="server" label="Server" />} />} />
+            <Route path="/servers" element={<DeviceList category="server,virtual_host,virtual_machine" title="Servers" detailBase="/servers" showRole headerExtra={<AddVirtualButton type="server" label="Server" />} />} />
             <Route path="/firewalls" element={<DeviceList category="firewall" title="Firewalls" detailBase="/firewalls" headerExtra={<AddVirtualButton type="firewall" label="Firewall" />} />} />
             <Route path="/devices/virtual/new" element={<VirtualDeviceForm />} />
             <Route path="/devices/virtual/:id/edit" element={<VirtualDeviceForm />} />
             <Route path="/devices/:id" element={<DeviceDetailDispatch />} />
             <Route path="/servers/:id" element={<ServerDetail />} />
-            <Route path="/virtual-hosts" element={<DeviceList category="virtual_host" title="Virtual Hosts" detailBase="/virtual-hosts" />} />
+            <Route path="/virtual-hosts" element={<VirtualHosts />} />
             <Route path="/virtual-hosts/:id" element={<VirtualHostDetail />} />
             <Route path="/firewalls/:id" element={<FirewallDetail />} />
             <Route path="/cameras" element={<Cameras />} />

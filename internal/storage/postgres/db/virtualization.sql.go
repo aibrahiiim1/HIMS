@@ -13,6 +13,44 @@ import (
 	"github.com/google/uuid"
 )
 
+const datastoreSummaryByHost = `-- name: DatastoreSummaryByHost :many
+SELECT host_device_id, count(*)::int AS n,
+  COALESCE(sum(capacity_bytes),0)::bigint AS capacity, COALESCE(sum(free_bytes),0)::bigint AS free
+FROM vh_datastores GROUP BY host_device_id
+`
+
+type DatastoreSummaryByHostRow struct {
+	HostDeviceID uuid.UUID `json:"host_device_id"`
+	N            int32     `json:"n"`
+	Capacity     int64     `json:"capacity"`
+	Free         int64     `json:"free"`
+}
+
+func (q *Queries) DatastoreSummaryByHost(ctx context.Context) ([]DatastoreSummaryByHostRow, error) {
+	rows, err := q.db.Query(ctx, datastoreSummaryByHost)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DatastoreSummaryByHostRow{}
+	for rows.Next() {
+		var i DatastoreSummaryByHostRow
+		if err := rows.Scan(
+			&i.HostDeviceID,
+			&i.N,
+			&i.Capacity,
+			&i.Free,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const deleteStaleDatastores = `-- name: DeleteStaleDatastores :exec
 DELETE FROM vh_datastores WHERE host_device_id=$1 AND last_seen_at < $2
 `
@@ -301,6 +339,39 @@ func (q *Queries) ListNetworksByHost(ctx context.Context, hostDeviceID uuid.UUID
 	return items, nil
 }
 
+const listVMDisksByHost = `-- name: ListVMDisksByHost :many
+SELECT vd.id, vd.vm_id, vd.label, vd.path, vd.datastore, vd.capacity_bytes, vd.used_bytes, vd.last_seen_at FROM vm_disks vd JOIN virtual_machines vm ON vm.id = vd.vm_id WHERE vm.host_device_id = $1
+`
+
+func (q *Queries) ListVMDisksByHost(ctx context.Context, hostDeviceID uuid.UUID) ([]VmDisk, error) {
+	rows, err := q.db.Query(ctx, listVMDisksByHost, hostDeviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []VmDisk{}
+	for rows.Next() {
+		var i VmDisk
+		if err := rows.Scan(
+			&i.ID,
+			&i.VmID,
+			&i.Label,
+			&i.Path,
+			&i.Datastore,
+			&i.CapacityBytes,
+			&i.UsedBytes,
+			&i.LastSeenAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listVMDisksByVM = `-- name: ListVMDisksByVM :many
 SELECT id, vm_id, label, path, datastore, capacity_bytes, used_bytes, last_seen_at FROM vm_disks WHERE vm_id=$1 ORDER BY label
 `
@@ -322,6 +393,38 @@ func (q *Queries) ListVMDisksByVM(ctx context.Context, vmID uuid.UUID) ([]VmDisk
 			&i.Datastore,
 			&i.CapacityBytes,
 			&i.UsedBytes,
+			&i.LastSeenAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listVMNicsByHost = `-- name: ListVMNicsByHost :many
+SELECT vn.id, vn.vm_id, vn.mac, vn.network, vn.ip_addresses, vn.connected, vn.last_seen_at FROM vm_nics vn JOIN virtual_machines vm ON vm.id = vn.vm_id WHERE vm.host_device_id = $1
+`
+
+func (q *Queries) ListVMNicsByHost(ctx context.Context, hostDeviceID uuid.UUID) ([]VmNic, error) {
+	rows, err := q.db.Query(ctx, listVMNicsByHost, hostDeviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []VmNic{}
+	for rows.Next() {
+		var i VmNic
+		if err := rows.Scan(
+			&i.ID,
+			&i.VmID,
+			&i.Mac,
+			&i.Network,
+			&i.IpAddresses,
+			&i.Connected,
 			&i.LastSeenAt,
 		); err != nil {
 			return nil, err
@@ -399,6 +502,105 @@ func (q *Queries) ListVMsByHost(ctx context.Context, hostDeviceID uuid.UUID) ([]
 			&i.Datastore,
 			&i.IntegrationServices,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listVMsByHostDetail = `-- name: ListVMsByHostDetail :many
+SELECT vm.id, vm.host_device_id, vm.vm_device_id, vm.name, vm.power_state, vm.vcpu, vm.mem_mb, vm.guest_os, vm.primary_ip, vm.last_seen_at, vm.vm_id, vm.mac, vm.tools_state, vm.generation, vm.uptime_seconds, vm.mem_used_mb, vm.datastore, vm.integration_services, ld.name AS linked_name, (COALESCE(host(ld.primary_ip)::text,''))::text AS linked_ip
+FROM virtual_machines vm LEFT JOIN devices ld ON ld.id = vm.vm_device_id
+WHERE vm.host_device_id = $1 ORDER BY vm.name
+`
+
+type ListVMsByHostDetailRow struct {
+	ID                  uuid.UUID   `json:"id"`
+	HostDeviceID        uuid.UUID   `json:"host_device_id"`
+	VmDeviceID          *uuid.UUID  `json:"vm_device_id"`
+	Name                string      `json:"name"`
+	PowerState          string      `json:"power_state"`
+	Vcpu                *int32      `json:"vcpu"`
+	MemMb               *int32      `json:"mem_mb"`
+	GuestOs             *string     `json:"guest_os"`
+	PrimaryIp           *netip.Addr `json:"primary_ip"`
+	LastSeenAt          time.Time   `json:"last_seen_at"`
+	VmID                *string     `json:"vm_id"`
+	Mac                 *string     `json:"mac"`
+	ToolsState          *string     `json:"tools_state"`
+	Generation          *string     `json:"generation"`
+	UptimeSeconds       *int64      `json:"uptime_seconds"`
+	MemUsedMb           *int32      `json:"mem_used_mb"`
+	Datastore           *string     `json:"datastore"`
+	IntegrationServices *string     `json:"integration_services"`
+	LinkedName          *string     `json:"linked_name"`
+	LinkedIp            string      `json:"linked_ip"`
+}
+
+func (q *Queries) ListVMsByHostDetail(ctx context.Context, hostDeviceID uuid.UUID) ([]ListVMsByHostDetailRow, error) {
+	rows, err := q.db.Query(ctx, listVMsByHostDetail, hostDeviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListVMsByHostDetailRow{}
+	for rows.Next() {
+		var i ListVMsByHostDetailRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.HostDeviceID,
+			&i.VmDeviceID,
+			&i.Name,
+			&i.PowerState,
+			&i.Vcpu,
+			&i.MemMb,
+			&i.GuestOs,
+			&i.PrimaryIp,
+			&i.LastSeenAt,
+			&i.VmID,
+			&i.Mac,
+			&i.ToolsState,
+			&i.Generation,
+			&i.UptimeSeconds,
+			&i.MemUsedMb,
+			&i.Datastore,
+			&i.IntegrationServices,
+			&i.LinkedName,
+			&i.LinkedIp,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const networkCountByHost = `-- name: NetworkCountByHost :many
+SELECT host_device_id, count(*)::int AS n FROM vh_networks GROUP BY host_device_id
+`
+
+type NetworkCountByHostRow struct {
+	HostDeviceID uuid.UUID `json:"host_device_id"`
+	N            int32     `json:"n"`
+}
+
+func (q *Queries) NetworkCountByHost(ctx context.Context) ([]NetworkCountByHostRow, error) {
+	rows, err := q.db.Query(ctx, networkCountByHost)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []NetworkCountByHostRow{}
+	for rows.Next() {
+		var i NetworkCountByHostRow
+		if err := rows.Scan(&i.HostDeviceID, &i.N); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -673,4 +875,44 @@ func (q *Queries) UpsertVMNic(ctx context.Context, arg UpsertVMNicParams) error 
 		arg.Connected,
 	)
 	return err
+}
+
+const vMCountsByHost = `-- name: VMCountsByHost :many
+SELECT host_device_id,
+  count(*)::int AS total,
+  count(*) FILTER (WHERE power_state='on')::int  AS running,
+  count(*) FILTER (WHERE power_state='off')::int AS stopped
+FROM virtual_machines GROUP BY host_device_id
+`
+
+type VMCountsByHostRow struct {
+	HostDeviceID uuid.UUID `json:"host_device_id"`
+	Total        int32     `json:"total"`
+	Running      int32     `json:"running"`
+	Stopped      int32     `json:"stopped"`
+}
+
+func (q *Queries) VMCountsByHost(ctx context.Context) ([]VMCountsByHostRow, error) {
+	rows, err := q.db.Query(ctx, vMCountsByHost)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []VMCountsByHostRow{}
+	for rows.Next() {
+		var i VMCountsByHostRow
+		if err := rows.Scan(
+			&i.HostDeviceID,
+			&i.Total,
+			&i.Running,
+			&i.Stopped,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

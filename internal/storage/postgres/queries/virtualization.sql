@@ -122,3 +122,29 @@ UPDATE virtual_machines SET
   uptime_seconds       = COALESCE(NULLIF(@uptime_seconds::bigint,0), uptime_seconds),
   mem_used_mb          = COALESCE(NULLIF(@mem_used_mb::int,0), mem_used_mb)
 WHERE id = @id;
+
+-- name: VMCountsByHost :many
+SELECT host_device_id,
+  count(*)::int AS total,
+  count(*) FILTER (WHERE power_state='on')::int  AS running,
+  count(*) FILTER (WHERE power_state='off')::int AS stopped
+FROM virtual_machines GROUP BY host_device_id;
+
+-- name: ListVMsByHostDetail :many
+SELECT vm.*, ld.name AS linked_name, (COALESCE(host(ld.primary_ip)::text,''))::text AS linked_ip
+FROM virtual_machines vm LEFT JOIN devices ld ON ld.id = vm.vm_device_id
+WHERE vm.host_device_id = $1 ORDER BY vm.name;
+
+-- name: ListVMDisksByHost :many
+SELECT vd.* FROM vm_disks vd JOIN virtual_machines vm ON vm.id = vd.vm_id WHERE vm.host_device_id = $1;
+
+-- name: ListVMNicsByHost :many
+SELECT vn.* FROM vm_nics vn JOIN virtual_machines vm ON vm.id = vn.vm_id WHERE vm.host_device_id = $1;
+
+-- name: DatastoreSummaryByHost :many
+SELECT host_device_id, count(*)::int AS n,
+  COALESCE(sum(capacity_bytes),0)::bigint AS capacity, COALESCE(sum(free_bytes),0)::bigint AS free
+FROM vh_datastores GROUP BY host_device_id;
+
+-- name: NetworkCountByHost :many
+SELECT host_device_id, count(*)::int AS n FROM vh_networks GROUP BY host_device_id;

@@ -14,11 +14,27 @@ interface Props {
   detailBase: string
   headerExtra?: React.ReactNode // optional action(s) rendered before the delete control
   preContent?: React.ReactNode // optional content rendered above the KPI grid (e.g. CCTV fleet ops)
+  showRole?: boolean // show the virtualization "Type" column (Physical / VM / ESXi / Hyper-V / Unknown)
+}
+
+const ROLE_BADGE: Record<string, { label: string; bg: string }> = {
+  virtual_host_esxi: { label: 'ESXi Host', bg: '#166534' },
+  virtual_host_hyperv: { label: 'Hyper-V Host', bg: '#1e3a8a' },
+  virtual_machine: { label: 'Virtual Machine', bg: '#7c3aed' },
+  physical_server: { label: 'Physical', bg: '#0e7490' },
+  unknown_server: { label: 'Unknown', bg: '#6b7280' },
+}
+function RoleBadge({ role }: { role?: string }) {
+  if (!role) return <span className="muted">—</span>
+  const b = ROLE_BADGE[role]
+  if (!b) return <span className="muted">{role}</span>
+  return <span className="badge" style={{ background: b.bg, color: '#fff' }}>{b.label}</span>
 }
 
 const isOffline = (s: string) => ['down', 'offline', 'needs_attention'].includes((s || '').toLowerCase())
 
-export function DeviceList({ category, title, detailBase, headerExtra, preContent }: Props) {
+export function DeviceList({ category, title, detailBase, headerExtra, preContent, showRole }: Props) {
+  const hostDetail = (d: Device) => (d.server_role?.startsWith('virtual_host') ? `/virtual-hosts/${d.id}` : `${detailBase}/${d.id}`)
   const qc = useQueryClient()
   const [msg, setMsg] = useState('')
   const [editDev, setEditDev] = useState<Device | null>(null)
@@ -88,7 +104,7 @@ export function DeviceList({ category, title, detailBase, headerExtra, preConten
           </div>
           <table className="data-table">
             <thead>
-              <tr><th>Device</th><th>IP</th><th>Vendor</th><th>Model</th><th>OS</th><th>Driver</th><th>Status</th><th></th></tr>
+              <tr><th>Device</th><th>IP</th>{showRole && <th>Type</th>}<th>Vendor</th><th>Model</th><th>OS</th>{showRole ? <th>Hosted on</th> : <th>Driver</th>}<th>Status</th><th></th></tr>
             </thead>
             <tbody>
               {paged.slice.map((d) => (
@@ -97,16 +113,21 @@ export function DeviceList({ category, title, detailBase, headerExtra, preConten
                     <div className="dev-cell">
                       <span className="dev-avatar" style={{ background: colorFor(d.category) }}>{(d.name || d.category).charAt(0).toUpperCase()}</span>
                       <div className="dev-meta">
-                        <Link className="cell-name" to={`${detailBase}/${d.id}`}>{d.name}</Link>
+                        <Link className="cell-name" to={hostDetail(d)}>{d.name}</Link>
                         {d.hostname && <small>{d.hostname}</small>}
                       </div>
                     </div>
                   </td>
                   <td className="mono">{d.primary_ip ?? '—'}</td>
+                  {showRole && <td><RoleBadge role={d.server_role} /></td>}
                   <td>{d.vendor ?? '—'}</td>
                   <td>{d.model ?? '—'}</td>
                   <td>{d.os_version ?? '—'}</td>
-                  <td>{d.driver ?? '—'}</td>
+                  {showRole
+                    ? <td>{d.hosted_on
+                        ? <Link to={`/virtual-hosts/${d.hosted_on.id}`} className="cell-name" title="Parent hypervisor">{d.hosted_on.ip || d.hosted_on.name}</Link>
+                        : <span className="muted">—</span>}</td>
+                    : <td>{d.driver ?? '—'}</td>}
                   <td><StatusPill status={d.status} /></td>
                   <td><button className="btn btn-ghost btn-xs" onClick={() => setEditDev(d)} title="Edit device"><Pencil size={12} /></button></td>
                 </tr>

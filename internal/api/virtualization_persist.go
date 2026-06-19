@@ -37,6 +37,15 @@ func v32(n int32) *int32 {
 	return &n
 } //nolint:gofmt
 
+// putFact writes a non-empty string device fact (best-effort), used for host hardware summary.
+func (s *Server) putFact(ctx context.Context, id uuid.UUID, key, val string) {
+	if strings.TrimSpace(val) == "" {
+		return
+	}
+	v := val
+	_ = s.queries.UpsertDeviceFact(ctx, db.UpsertDeviceFactParams{DeviceID: id, Key: key, Value: &v, Driver: "vsphere"})
+}
+
 // persistVSphereInventory writes the full ESXi/vCenter inventory to the durable tables.
 func (s *Server) persistVSphereInventory(ctx context.Context, hostID uuid.UUID, inv vsphere.Inventory) {
 	start := time.Now().UTC()
@@ -62,6 +71,17 @@ func (s *Server) persistVSphereInventory(ctx context.Context, hostID uuid.UUID, 
 			_ = s.queries.UpsertVHNetwork(ctx, db.UpsertVHNetworkParams{
 				HostDeviceID: hostID, Kind: "portgroup", Name: pg.Name, Vlan: v32(pg.VLAN), SwitchName: vstr(pg.VSwitch),
 			})
+		}
+		// Host hardware summary as facts (no dedicated columns) so the overview shows
+		// CPU/memory/uptime for an ESXi host.
+		s.putFact(ctx, hostID, "hardware.cpu_model", h.CPUModel)
+		s.putFact(ctx, hostID, "hardware.cpu_cores", strconv.FormatInt(int64(h.CPUCores), 10))
+		s.putFact(ctx, hostID, "memory.total_bytes", strconv.FormatInt(h.MemoryBytes, 10))
+		if h.MemoryUsedBytes > 0 {
+			s.putFact(ctx, hostID, "memory.used_bytes", strconv.FormatInt(h.MemoryUsedBytes, 10))
+		}
+		if h.UptimeSeconds > 0 {
+			s.putFact(ctx, hostID, "hardware.uptime_seconds", strconv.FormatInt(h.UptimeSeconds, 10))
 		}
 	}
 	for _, vm := range inv.VMs {

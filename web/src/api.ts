@@ -163,6 +163,8 @@ export interface Device {
   managed_by?: string[] // protocol tokens with a PROVEN working method
   previously_managed?: boolean // offline now, but has a working method on record
   management_reason?: string // specific failure sub-reason (e.g. wmi_namespace_broken) for precise remediation
+  server_role?: string // virtual_host_esxi | virtual_host_hyperv | virtual_machine | physical_server | unknown_server
+  hosted_on?: { id: string; name: string; ip?: string } // parent hypervisor when this device is a discovered VM
   // Operator-editable management attributes (Edit Device).
   subtype?: string
   notes?: string
@@ -1323,6 +1325,43 @@ export interface VirtualMachine {
   guest_os?: string | null
   primary_ip?: string | null
   last_seen_at: string
+}
+
+// --- Virtualization (Stage 3) ---
+export interface VHost {
+  id: string; name: string; ip: string
+  hypervisor_type: string // esxi | hyperv
+  management: string
+  vm_count: number; running: number; stopped: number
+  cpu_model?: string; cpu_cores?: number; mem_total_bytes?: number; mem_used_bytes?: number
+  version?: string; vendor?: string; model?: string
+  datastore_count: number; datastore_capacity?: number; datastore_free?: number
+  network_count: number
+  health: string // ok | partial | failed | none
+  last_collected?: string
+}
+export interface VMDetail {
+  id: string; name: string; power_state: string; guest_os?: string
+  vcpu?: number; mem_mb?: number; ip?: string; mac?: string; vm_id?: string
+  generation?: string; tools_state?: string; datastore?: string
+  disk_count: number; disk_total_bytes: number; nic_count: number
+  disks: { label: string; path?: string; datastore?: string; capacity_bytes?: number; used_bytes?: number }[]
+  nics: { mac: string; network?: string; ip_addresses?: string; connected?: boolean }[]
+  linked_device_id?: string; linked_name?: string; linked_ip?: string
+}
+export interface VHDatastore { id: string; name: string; type?: string; capacity_bytes?: number; free_bytes?: number }
+export interface VHNetwork { id: string; kind: string; name: string; vlan?: number; uplinks?: string; switch_name?: string }
+export interface VHHostNic { id: string; name: string; mac?: string; link_speed_mbps?: number; link_up?: boolean }
+export interface VHOSNic { id: string; name: string; mac?: string; ip_addresses?: string }
+export interface VHHealth { collector: string; status: string; detail?: string; vm_count?: number; collected_at: string }
+export interface VHDetail {
+  overview: Record<string, string | number>
+  vms: VMDetail[]
+  datastores: VHDatastore[]
+  networks: VHNetwork[]
+  host_nics: VHHostNic[]
+  os_nics: VHOSNic[]
+  health: VHHealth[]
 }
 
 // Credential is metadata-only — the secret and encrypted blob never leave

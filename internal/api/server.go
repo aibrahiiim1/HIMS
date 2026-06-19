@@ -268,6 +268,8 @@ func (s *Server) routes() {
 		r.Get("/devices/{id}/monitoring/checks", s.deviceMonitoringChecks)
 		r.Get("/devices/{id}/monitoring/samples", s.deviceMonitoringSamples)
 		r.Get("/devices/{id}/vms", s.deviceVMs)
+		r.Get("/devices/{id}/virtualization", s.virtualizationDetail) // consolidated host-detail tabs
+		r.Get("/virtualization/hosts", s.virtualizationHosts)         // Virtual Hosts page list (ESXi + Hyper-V)
 		r.Get("/devices/{id}/camera", s.deviceCamera)
 		r.Get("/devices/{id}/nvr-channels", s.deviceNVRChannels)
 		r.Get("/devices/{id}/nvr", s.deviceNVR)
