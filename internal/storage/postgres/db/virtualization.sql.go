@@ -44,6 +44,23 @@ func (q *Queries) DeviceHypervisorTypes(ctx context.Context) ([]DeviceHypervisor
 	return items, nil
 }
 
+const deviceIDByMAC = `-- name: DeviceIDByMAC :one
+SELECT n.device_id FROM os_nics n
+JOIN devices d ON d.id = n.device_id AND d.deleted_at IS NULL AND d.is_virtual = false AND d.category <> 'virtual_host'
+WHERE n.mac <> '' AND lower(regexp_replace(n.mac,'[^0-9A-Fa-f]','','g')) = lower(regexp_replace($1::text,'[^0-9A-Fa-f]','','g'))
+LIMIT 1
+`
+
+// A discovered (non-virtual) device whose collected NIC MAC matches, normalized so
+// colon/dash/case differences don't matter — used to reverse-link a Hyper-V guest VM to
+// an existing device by MAC when its guest IP is unavailable (no integration services).
+func (q *Queries) DeviceIDByMAC(ctx context.Context, mac string) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, deviceIDByMAC, mac)
+	var device_id uuid.UUID
+	err := row.Scan(&device_id)
+	return device_id, err
+}
+
 const linkedVMParents = `-- name: LinkedVMParents :many
 SELECT vm.vm_device_id, vm.host_device_id, h.name AS host_name, h.primary_ip AS host_ip
 FROM virtual_machines vm JOIN devices h ON h.id = vm.host_device_id
@@ -85,7 +102,7 @@ func (q *Queries) LinkedVMParents(ctx context.Context) ([]LinkedVMParentsRow, er
 }
 
 const listVMsByHost = `-- name: ListVMsByHost :many
-SELECT id, host_device_id, vm_device_id, name, power_state, vcpu, mem_mb, guest_os, primary_ip, last_seen_at FROM virtual_machines WHERE host_device_id = $1 ORDER BY name
+SELECT id, host_device_id, vm_device_id, name, power_state, vcpu, mem_mb, guest_os, primary_ip, last_seen_at, vm_id, mac FROM virtual_machines WHERE host_device_id = $1 ORDER BY name
 `
 
 func (q *Queries) ListVMsByHost(ctx context.Context, hostDeviceID uuid.UUID) ([]VirtualMachine, error) {
@@ -108,6 +125,8 @@ func (q *Queries) ListVMsByHost(ctx context.Context, hostDeviceID uuid.UUID) ([]
 			&i.GuestOs,
 			&i.PrimaryIp,
 			&i.LastSeenAt,
+			&i.VmID,
+			&i.Mac,
 		); err != nil {
 			return nil, err
 		}
@@ -120,8 +139,8 @@ func (q *Queries) ListVMsByHost(ctx context.Context, hostDeviceID uuid.UUID) ([]
 }
 
 const upsertVM = `-- name: UpsertVM :one
-INSERT INTO virtual_machines (host_device_id, vm_device_id, name, power_state, vcpu, mem_mb, guest_os, primary_ip)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+INSERT INTO virtual_machines (host_device_id, vm_device_id, name, power_state, vcpu, mem_mb, guest_os, primary_ip, vm_id, mac)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 ON CONFLICT (host_device_id, name) DO UPDATE SET
     vm_device_id = EXCLUDED.vm_device_id,
     power_state = EXCLUDED.power_state,
@@ -129,8 +148,10 @@ ON CONFLICT (host_device_id, name) DO UPDATE SET
     mem_mb = EXCLUDED.mem_mb,
     guest_os = EXCLUDED.guest_os,
     primary_ip = EXCLUDED.primary_ip,
+    vm_id = COALESCE(EXCLUDED.vm_id, virtual_machines.vm_id),
+    mac = COALESCE(EXCLUDED.mac, virtual_machines.mac),
     last_seen_at = now()
-RETURNING id, host_device_id, vm_device_id, name, power_state, vcpu, mem_mb, guest_os, primary_ip, last_seen_at
+RETURNING id, host_device_id, vm_device_id, name, power_state, vcpu, mem_mb, guest_os, primary_ip, last_seen_at, vm_id, mac
 `
 
 type UpsertVMParams struct {
@@ -142,9 +163,12 @@ type UpsertVMParams struct {
 	MemMb        *int32      `json:"mem_mb"`
 	GuestOs      *string     `json:"guest_os"`
 	PrimaryIp    *netip.Addr `json:"primary_ip"`
+	VmID         *string     `json:"vm_id"`
+	Mac          *string     `json:"mac"`
 }
 
-// Upsert keyed on (host, name): re-collecting refreshes state without dups.
+// Upsert keyed on (host, name): re-collecting refreshes state without dups. COALESCE on
+// vm_id/mac so a later collection that lacks them (e.g. vSphere) never wipes Hyper-V values.
 func (q *Queries) UpsertVM(ctx context.Context, arg UpsertVMParams) (VirtualMachine, error) {
 	row := q.db.QueryRow(ctx, upsertVM,
 		arg.HostDeviceID,
@@ -155,6 +179,8 @@ func (q *Queries) UpsertVM(ctx context.Context, arg UpsertVMParams) (VirtualMach
 		arg.MemMb,
 		arg.GuestOs,
 		arg.PrimaryIp,
+		arg.VmID,
+		arg.Mac,
 	)
 	var i VirtualMachine
 	err := row.Scan(
@@ -168,6 +194,8 @@ func (q *Queries) UpsertVM(ctx context.Context, arg UpsertVMParams) (VirtualMach
 		&i.GuestOs,
 		&i.PrimaryIp,
 		&i.LastSeenAt,
+		&i.VmID,
+		&i.Mac,
 	)
 	return i, err
 }

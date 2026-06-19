@@ -1110,6 +1110,8 @@ type VirtualMachine struct {
 	GuestOs      *string     `json:"guest_os"`
 	PrimaryIp    *netip.Addr `json:"primary_ip"`
 	LastSeenAt   time.Time   `json:"last_seen_at"`
+	VmID         *string     `json:"vm_id"`
+	Mac          *string     `json:"mac"`
 }
 
 type Vlan struct {

@@ -153,7 +153,7 @@ func (s *Server) runVSphereCollection(ctx context.Context, d db.Device) vsphereR
 			_, _ = s.queries.UpsertVM(ctx, db.UpsertVMParams{
 				HostDeviceID: d.ID, Name: vm.Name, PowerState: vm.PowerState,
 				Vcpu: vcpu, MemMb: mem, GuestOs: gos, PrimaryIp: vmIP,
-				VmDeviceID: s.resolveVMDevice(ctx, vmIP),
+				VmDeviceID: s.resolveVMDevice(ctx, vmIP, ""),
 			})
 		}
 		cid := cd.id
@@ -254,7 +254,7 @@ func (s *Server) collectVSphereProfile(ctx context.Context, p db.VendorConnectio
 		_, _ = s.queries.UpsertVM(ctx, db.UpsertVMParams{
 			HostDeviceID: d.ID, Name: vm.Name, PowerState: vm.PowerState,
 			Vcpu: vcpu, MemMb: mem, GuestOs: gos, PrimaryIp: vmIP,
-			VmDeviceID: s.resolveVMDevice(ctx, vmIP),
+			VmDeviceID: s.resolveVMDevice(ctx, vmIP, ""),
 		})
 	}
 	if p.CredentialID != nil {
@@ -338,16 +338,24 @@ func (s *Server) collectVSphere(w http.ResponseWriter, r *http.Request) {
 // and the VM↔device cross-link works both ways (host→VM→device, device→its VM record).
 // It deliberately does NOT link to a virtual_host (a hypervisor is not its own guest) and
 // never invents a device: an unmatched VM stays a host-child VM record with vm_device_id NULL.
-func (s *Server) resolveVMDevice(ctx context.Context, vmIP *netip.Addr) *uuid.UUID {
-	if vmIP == nil {
-		return nil
+// It matches by guest IP first, then by vNIC MAC (the reliable key for Hyper-V guests with
+// no integration-services IP). mac may be a comma-joined list ("" if none).
+func (s *Server) resolveVMDevice(ctx context.Context, vmIP *netip.Addr, mac string) *uuid.UUID {
+	if vmIP != nil {
+		if dev, err := s.queries.LiveDeviceByIP(ctx, vmIP); err == nil && !dev.IsVirtual && dev.Category != string(domain.CatVirtualHost) {
+			id := dev.ID
+			return &id
+		}
 	}
-	dev, err := s.queries.LiveDeviceByIP(ctx, vmIP)
-	if err != nil || dev.IsVirtual || dev.Category == string(domain.CatVirtualHost) {
-		return nil
+	for _, m := range strings.Split(mac, ",") {
+		if m = strings.TrimSpace(m); m == "" {
+			continue
+		}
+		if id, err := s.queries.DeviceIDByMAC(ctx, m); err == nil && id != uuid.Nil {
+			return &id
+		}
 	}
-	id := dev.ID
-	return &id
+	return nil
 }
 
 // markVirtualHost stamps the hypervisor ROLE (esxi_host / hyperv_host) + a consistent
@@ -421,10 +429,19 @@ func (s *Server) markHyperVHost(ctx context.Context, id uuid.UUID, vms []osinv.R
 		default:
 			ps = "unknown"
 		}
+		var vmID, mac *string
+		if vm.VMID != "" {
+			v := vm.VMID
+			vmID = &v
+		}
+		if vm.MAC != "" {
+			m := vm.MAC
+			mac = &m
+		}
 		_, _ = s.queries.UpsertVM(ctx, db.UpsertVMParams{
 			HostDeviceID: id, Name: vm.Name, PowerState: ps,
 			Vcpu: vcpu, MemMb: mem, GuestOs: gos, PrimaryIp: vmIP,
-			VmDeviceID: s.resolveVMDevice(ctx, vmIP),
+			VmDeviceID: s.resolveVMDevice(ctx, vmIP, vm.MAC), VmID: vmID, Mac: mac,
 		})
 	}
 }

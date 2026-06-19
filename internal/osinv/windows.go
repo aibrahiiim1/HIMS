@@ -61,10 +61,33 @@ const (
 
 	winEventsPS = `$s=(Get-Date).AddHours(-24);$h=@{LogName='System','Application';StartTime=$s};[pscustomobject]@{critical_24h=@(Get-WinEvent -FilterHashtable ($h+@{Level=1}) -EA SilentlyContinue).Count;error_24h=@(Get-WinEvent -FilterHashtable ($h+@{Level=2}) -EA SilentlyContinue).Count;warning_24h=@(Get-WinEvent -FilterHashtable ($h+@{Level=3}) -EA SilentlyContinue).Count}|ConvertTo-Json -Compress`
 
-	// Hyper-V guests, in-band: only emits rows on an actual Hyper-V host (Get-VM present),
-	// so a plain Windows server returns [] and is never mis-marked a hypervisor. State enum:
-	// 2=running,3=off,6=saved,9=paused. IPs need integration services (blank otherwise).
-	winVMsPS = `Import-Module Hyper-V -EA SilentlyContinue;if(Get-Command Get-VM -EA SilentlyContinue){@(Get-VM|ForEach-Object{$ip='';try{$ip=(@($_.NetworkAdapters.IPAddresses)|Where-Object{$_ -match '\.'}) -join ','}catch{};[pscustomobject]@{name=[string]$_.Name;power_state=(switch([int]$_.State){2{'on'}3{'off'}6{'suspended'}9{'suspended'}default{'unknown'}});vcpu=[int]$_.ProcessorCount;memory_mb=[int]($_.MemoryStartup/1MB);guest_os='';ip=[string]$ip}})|ConvertTo-Json -Compress}else{'[]'}`
+	// Hyper-V guests, in-band, via the root\virtualization\v2 WMI namespace (Msvm_*). This is
+	// the RELIABLE path: it works on every Hyper-V host even without the Hyper-V PowerShell
+	// module (Server Core / role-without-tools), unlike Get-VM. A plain Windows server has no
+	// such namespace → [] → never mis-marked a hypervisor. Per VM it gathers name, GUID, power
+	// state (EnabledState 2=on/3=off/others=suspended), vCPU + memory (MB) from the active
+	// settings, vNIC MAC(s) (for reverse-linking to a device), and guest IPs when integration
+	// services expose them. Sent via -EncodedCommand so the multi-line script is safe.
+	winVMsPS = `$ErrorActionPreference='SilentlyContinue'
+$ns='root\virtualization\v2'
+$out=@()
+$vms=Get-CimInstance -Namespace $ns -ClassName Msvm_ComputerSystem | Where-Object { $_.Caption -eq 'Virtual Machine' }
+foreach($vm in $vms){
+  $ps=switch([int]$vm.EnabledState){2{'on'}3{'off'}9{'suspended'}6{'suspended'}32768{'suspended'}32769{'suspended'}default{'unknown'}}
+  $vcpu=0;$mem=0;$macs=@();$ips=@()
+  $vssd=Get-CimAssociatedInstance -InputObject $vm -Association Msvm_SettingsDefineState -ResultClassName Msvm_VirtualSystemSettingData | Select-Object -First 1
+  if($vssd){
+    $p=Get-CimAssociatedInstance -InputObject $vssd -Association Msvm_VirtualSystemSettingDataComponent -ResultClassName Msvm_ProcessorSettingData | Select-Object -First 1
+    if($p){$vcpu=[int]$p.VirtualQuantity}
+    $m=Get-CimAssociatedInstance -InputObject $vssd -Association Msvm_VirtualSystemSettingDataComponent -ResultClassName Msvm_MemorySettingData | Select-Object -First 1
+    if($m){$mem=[int]$m.VirtualQuantity}
+    $nics=Get-CimAssociatedInstance -InputObject $vssd -Association Msvm_VirtualSystemSettingDataComponent -ResultClassName Msvm_SyntheticEthernetPortSettingData
+    foreach($n in $nics){ if($n.Address){ $macs+=($n.Address -replace '(.{2})(?=.)','$1:') } }
+  }
+  foreach($g in (Get-CimAssociatedInstance -InputObject $vm -ResultClassName Msvm_GuestNetworkAdapterConfiguration)){ foreach($a in @($g.IPAddresses)){ if($a -match '^\d+\.\d+\.\d+\.\d+$'){ $ips+=$a } } }
+  $out+=[pscustomobject]@{name=[string]$vm.ElementName;vm_id=[string]$vm.Name;power_state=$ps;vcpu=$vcpu;memory_mb=$mem;guest_os='';ip=(($ips|Select-Object -Unique) -join ',');mac=(($macs|Select-Object -Unique) -join ',')}
+}
+ConvertTo-Json -Compress -Depth 3 -InputObject @($out)`
 )
 
 // CollectWindows runs the per-section snippets through the runner and assembles

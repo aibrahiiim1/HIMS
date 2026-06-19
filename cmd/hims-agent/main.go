@@ -39,7 +39,7 @@ import (
 	"github.com/coralsearesorts/hims/internal/osinv"
 )
 
-const agentVersion = "1.2.15"
+const agentVersion = "1.2.17"
 
 // agentMaxConcurrent bounds how many collection jobs the agent runs in parallel
 // per poll. The HIMS server already caps how many jobs it dispatches to one agent
@@ -570,19 +570,25 @@ try {
       $sw=@($items|%{@{name=[string]$_.DisplayName;version=[string]$_.DisplayVersion;publisher=[string]$_.Publisher;install_date=[string]$_.InstallDate}})
       if($sw.Count -gt 0){$swnote='collected via winrm_native_local'} else {$swnote='no_software_found'}
     } catch { $swnote=('software_failed: '+$_.Exception.Message) }
-    # Hyper-V guests (in-band): if the Hyper-V PowerShell module is present, enumerate VMs so a
-    # Hyper-V host is detected + inventoried by the same pass. Module absent => not a Hyper-V host.
+    # Hyper-V guests (in-band) via the root\virtualization\v2 WMI namespace (Msvm_*) — the
+    # RELIABLE path that works without the Hyper-V PowerShell module (Server Core / role-only),
+    # identical to the Go-WinRM collector. No such namespace => plain server => [].
     $vms=@()
     try {
-      Import-Module Hyper-V -ErrorAction SilentlyContinue
-      if(Get-Command Get-VM -ErrorAction SilentlyContinue){
-        $vms=@(Get-VM | ForEach-Object {
-          $ip=''; try { $ip=(@($_.NetworkAdapters.IPAddresses)|Where-Object{$_ -match '\.'}) -join ',' } catch {}
-          @{ name=[string]$_.Name;
-             power_state=(switch([int]$_.State){2{'on'}3{'off'}6{'suspended'}9{'suspended'}default{'unknown'}});
-             vcpu=[int]$_.ProcessorCount; memory_mb=[int]($_.MemoryStartup/1MB);
-             guest_os=''; ip=[string]$ip }
-        })
+      $hvns='root\virtualization\v2'
+      foreach($vm in (Get-CimInstance -Namespace $hvns -ClassName Msvm_ComputerSystem -ErrorAction SilentlyContinue | Where-Object { $_.Caption -eq 'Virtual Machine' })){
+        $vps=switch([int]$vm.EnabledState){2{'on'}3{'off'}9{'suspended'}6{'suspended'}32768{'suspended'}32769{'suspended'}default{'unknown'}}
+        $vc=0;$vmem=0;$vmacs=@();$vips=@()
+        $vssd=Get-CimAssociatedInstance -InputObject $vm -Association Msvm_SettingsDefineState -ResultClassName Msvm_VirtualSystemSettingData -EA SilentlyContinue | Select-Object -First 1
+        if($vssd){
+          $pp=Get-CimAssociatedInstance -InputObject $vssd -Association Msvm_VirtualSystemSettingDataComponent -ResultClassName Msvm_ProcessorSettingData -EA SilentlyContinue | Select-Object -First 1
+          if($pp){$vc=[int]$pp.VirtualQuantity}
+          $mm=Get-CimAssociatedInstance -InputObject $vssd -Association Msvm_VirtualSystemSettingDataComponent -ResultClassName Msvm_MemorySettingData -EA SilentlyContinue | Select-Object -First 1
+          if($mm){$vmem=[int]$mm.VirtualQuantity}
+          foreach($nn in (Get-CimAssociatedInstance -InputObject $vssd -Association Msvm_VirtualSystemSettingDataComponent -ResultClassName Msvm_SyntheticEthernetPortSettingData -EA SilentlyContinue)){ if($nn.Address){ $vmacs+=($nn.Address -replace '(.{2})(?=.)','$1:') } }
+        }
+        foreach($gg in (Get-CimAssociatedInstance -InputObject $vm -ResultClassName Msvm_GuestNetworkAdapterConfiguration -EA SilentlyContinue)){ foreach($aa in @($gg.IPAddresses)){ if($aa -match '^\d+\.\d+\.\d+\.\d+$'){ $vips+=$aa } } }
+        $vms+=@{ name=[string]$vm.ElementName; vm_id=[string]$vm.Name; power_state=$vps; vcpu=$vc; memory_mb=$vmem; guest_os=''; ip=(($vips|Select-Object -Unique) -join ','); mac=(($vmacs|Select-Object -Unique) -join ',') }
       }
     } catch {}
     @{ method='winrm-native';

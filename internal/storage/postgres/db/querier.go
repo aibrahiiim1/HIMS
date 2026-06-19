@@ -248,6 +248,10 @@ type Querier interface {
 	// Per-device hypervisor.type fact (esxi/hyperv) — feeds the derived server_role so the UI
 	// can distinguish an ESXi host from a Hyper-V host without re-reading every device's facts.
 	DeviceHypervisorTypes(ctx context.Context) ([]DeviceHypervisorTypesRow, error)
+	// A discovered (non-virtual) device whose collected NIC MAC matches, normalized so
+	// colon/dash/case differences don't matter — used to reverse-link a Hyper-V guest VM to
+	// an existing device by MAC when its guest IP is unavailable (no integration services).
+	DeviceIDByMAC(ctx context.Context, mac string) (uuid.UUID, error)
 	// Per-device availability over the window: sample/up counts (for uptime %),
 	// latency, and flap count (status transitions). Ordered worst-first so the UI can
 	// show "worst performers" and a flapping list. $1 = window (e.g. '24 hours').
@@ -884,7 +888,8 @@ type Querier interface {
 	// ---- Topology links ------------------------------------------------------
 	UpsertTopologyLink(ctx context.Context, arg UpsertTopologyLinkParams) error
 	UpsertUPSStatus(ctx context.Context, arg UpsertUPSStatusParams) error
-	// Upsert keyed on (host, name): re-collecting refreshes state without dups.
+	// Upsert keyed on (host, name): re-collecting refreshes state without dups. COALESCE on
+	// vm_id/mac so a later collection that lacks them (e.g. vSphere) never wipes Hyper-V values.
 	UpsertVM(ctx context.Context, arg UpsertVMParams) (VirtualMachine, error)
 	// Import path: idempotent by (kind, pattern). Re-importing updates the existing
 	// rule's vendor/type/confidence/model/priority/source/exclusions rather than duplicating it.
