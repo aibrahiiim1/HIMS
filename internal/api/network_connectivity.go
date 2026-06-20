@@ -26,40 +26,67 @@ func (s *Server) unknownMACs(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	out := make([]map[string]any, 0, len(rows))
 	const maxRows = 2000
 	skipped := 0
+	counts := map[string]int{"edge": 0, "transit": 0, "ambiguous": 0}
+	all := make([]map[string]any, 0, len(rows))
 	for _, m := range rows {
 		if isBogusMAC(m.Mac) { // broadcast / multicast / all-zero are not real endpoints
 			skipped++
 			continue
 		}
+		// Classify the port this MAC was learned on (same rule as the switch port-map):
+		// transit = trunk/uplink/neighbor (MAC noise, not directly actionable); edge = real access
+		// port with few MACs (actionable); ambiguous = mid-count, no trunk/neighbor signal.
+		cls := "ambiguous"
+		switch {
+		case m.PortMacCount > trunkMACThreshold || m.TaggedCount > 1 || m.HasNeighbor:
+			cls = "transit"
+		case m.PortMacCount <= 4:
+			cls = "edge"
+		}
+		counts[cls]++
 		ip := ""
 		if m.PossibleIp.IsValid() {
 			ip = m.PossibleIp.String()
 		}
-		action := "Unmapped L2 endpoint (no IP seen) — check the switch port; likely an unmanaged device."
-		if ip != "" {
-			action = "Discover " + ip + " — an IP was learned via ARP but it is not in inventory."
+		var action, reason string
+		switch cls {
+		case "edge":
+			if ip != "" {
+				action = "Discover " + ip + " — learned on an edge port but not in inventory."
+			} else {
+				action = "Investigate the switch port — an unmanaged L2 endpoint with no IP."
+			}
+		case "transit":
+			action = "Transit/uplink MAC — passes through this port; not a direct endpoint here. Do not create a device."
+			reason = strconv.FormatInt(m.PortMacCount, 10) + " MACs on a trunk/uplink/neighbor port"
+		default:
+			action = "Review — port classification uncertain."
+			reason = strconv.FormatInt(m.PortMacCount, 10) + " MACs on the port, no trunk/neighbor signal"
 		}
-		out = append(out, map[string]any{
-			"mac":          m.Mac,
-			"switch_id":    m.SwitchID.String(),
-			"switch_name":  m.SwitchName,
-			"if_index":     m.IfIndex,
-			"if_name":      m.IfName,
-			"if_alias":     m.IfAlias,
-			"vlan_id":      m.VlanID,
-			"last_seen_at": m.LastSeenAt,
-			"port_macs":    m.PortMacCount,
-			"possible_ip":  ip,
-			"suggested":    action,
+		all = append(all, map[string]any{
+			"mac": m.Mac, "switch_id": m.SwitchID.String(), "switch_name": m.SwitchName,
+			"if_index": m.IfIndex, "if_name": m.IfName, "if_alias": m.IfAlias, "vlan_id": m.VlanID,
+			"last_seen_at": m.LastSeenAt, "port_macs": m.PortMacCount, "possible_ip": ip,
+			"class": cls, "reason": reason, "suggested": action,
 		})
-		if len(out) >= maxRows {
-			break
-		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"total": total, "shown": len(out), "filtered_bogus": skipped, "macs": out})
+	// Edge first (actionable), then ambiguous, then transit — so the cap never drops actionable rows.
+	rank := map[string]int{"edge": 0, "ambiguous": 1, "transit": 2}
+	sort.SliceStable(all, func(i, j int) bool { return rank[all[i]["class"].(string)] < rank[all[j]["class"].(string)] })
+	out := all
+	if len(out) > maxRows {
+		out = out[:maxRows]
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"total": total, "shown": len(out), "filtered_bogus": skipped,
+		"counts": map[string]int{
+			"edge": counts["edge"], "transit": counts["transit"], "ambiguous": counts["ambiguous"],
+			"total": counts["edge"] + counts["transit"] + counts["ambiguous"],
+		},
+		"macs": out,
+	})
 }
 
 // isBogusMAC reports MACs that aren't real unicast endpoints: all-zero, broadcast,

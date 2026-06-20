@@ -35,10 +35,10 @@ export function ConnectedDevices({ deviceId }: { deviceId: string }) {
     <>
       <div className="kpi-grid">
         <Kpi label="Connected ports" value={`${d.connected_ports}/${d.total_ports}`} icon={Cable} tone="info" />
-        <Kpi label="Resolved device ports" value={d.summary.resolved_device_ports} tone="ok" />
-        <Kpi label="Trunk / uplink ports" value={d.summary.trunk_uplink_ports} />
-        <Kpi label="Ambiguous ports" value={d.summary.ambiguous_ports} tone={d.summary.ambiguous_ports ? 'warn' : 'default'} />
-        <Kpi label="Unknown MACs" value={d.summary.unknown_macs} tone={d.summary.unknown_macs ? 'warn' : 'default'} sub="not in inventory" />
+        <Kpi label="Resolved edge devices" value={d.summary.resolved_edge_devices} tone="ok" />
+        <Kpi label="Edge unknown MACs" value={d.summary.edge_unknown_macs} tone={d.summary.edge_unknown_macs ? 'warn' : 'default'} sub="actionable" />
+        <Kpi label="Trunk/uplink transit MACs" value={d.summary.transit_unknown_macs} sub="not actionable" />
+        <Kpi label="Ambiguous MACs" value={d.summary.ambiguous_unknown_macs} tone={d.summary.ambiguous_unknown_macs ? 'warn' : 'default'} sub="review" />
       </div>
       <Panel title="Port → device resolution" subtitle={`${ports.length}`} pad={false}
         actions={<label style={{ fontSize: 12, display: 'flex', gap: 4, alignItems: 'center' }}><input type="checkbox" checked={hideTrunk} onChange={(e) => setHideTrunk(e.target.checked)} /> hide trunk/uplink</label>}>

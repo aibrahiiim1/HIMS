@@ -695,6 +695,8 @@ SELECT DISTINCT ON (m.mac)
   m.vlan_id,
   m.last_seen_at,
   cnt.mac_count          AS port_mac_count,
+  COALESCE(tv.tagged_count, 0) AS tagged_count,
+  EXISTS (SELECT 1 FROM neighbors n WHERE n.device_id = m.device_id AND n.local_if_index = m.if_index) AS has_neighbor,
   arp.ip_address         AS possible_ip
 FROM mac_addresses m
 JOIN devices sw ON sw.id = m.device_id AND sw.deleted_at IS NULL
@@ -703,6 +705,10 @@ LEFT JOIN LATERAL (
   SELECT count(*) AS mac_count FROM mac_addresses mm
   WHERE mm.device_id = m.device_id AND mm.if_index = m.if_index
 ) cnt ON true
+LEFT JOIN LATERAL (
+  SELECT count(*) AS tagged_count FROM port_vlans pv
+  WHERE pv.device_id = m.device_id AND pv.if_index = m.if_index AND pv.tagged
+) tv ON true
 LEFT JOIN LATERAL (
   SELECT a.ip_address FROM arp_entries a WHERE a.mac = m.mac ORDER BY a.last_seen_at DESC LIMIT 1
 ) arp ON true
@@ -726,6 +732,8 @@ type ListUnknownMACsRow struct {
 	VlanID       int32      `json:"vlan_id"`
 	LastSeenAt   time.Time  `json:"last_seen_at"`
 	PortMacCount int64      `json:"port_mac_count"`
+	TaggedCount  int64      `json:"tagged_count"`
+	HasNeighbor  bool       `json:"has_neighbor"`
 	PossibleIp   netip.Addr `json:"possible_ip"`
 }
 
@@ -753,6 +761,8 @@ func (q *Queries) ListUnknownMACs(ctx context.Context) ([]ListUnknownMACsRow, er
 			&i.VlanID,
 			&i.LastSeenAt,
 			&i.PortMacCount,
+			&i.TaggedCount,
+			&i.HasNeighbor,
 			&i.PossibleIp,
 		); err != nil {
 			return nil, err

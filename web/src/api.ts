@@ -1854,13 +1854,13 @@ export interface DeviceConnectivity {
   switch_port: SwitchPortEntry[]; path: PathStep[] | null; confidence: string; confidence_reasons: string[] | null
   arp_device_name?: string | null; arp_source?: string | null; gap: string
 }
-export interface UnknownMac { mac: string; switch_id: string; switch_name: string; if_index?: number | null; if_name?: string | null; if_alias?: string | null; vlan_id: number; last_seen_at: string; port_macs: number; possible_ip: string; suggested: string }
+export interface UnknownMac { mac: string; switch_id: string; switch_name: string; if_index?: number | null; if_name?: string | null; if_alias?: string | null; vlan_id: number; last_seen_at: string; port_macs: number; possible_ip: string; suggested: string; class: string; reason?: string }
 
 // --- Per-switch resolved port map ---
 export interface PortMapMac { mac: string; ip?: string; device_id?: string; device_name?: string; category?: string; server_role?: string; vm_id?: string; vm_name?: string; vm_host_device_id?: string; vm_device_id?: string; method: string; last_seen?: string }
-export interface PortMapPort { if_index: number; if_name?: string; admin_status?: number; oper_status?: number; speed_mbps?: number; untagged_vlan?: number; tagged_vlans?: number[]; is_trunk: boolean; mac_count: number; resolved_count: number; unknown_count: number; confidence: string; neighbor?: string; neighbor_port?: string; macs: PortMapMac[] }
-export interface PortMapReport { device_id: string; connected_ports: number; total_ports: number; summary: { resolved_device_ports: number; trunk_uplink_ports: number; ambiguous_ports: number; unknown_macs: number }; ports: PortMapPort[] }
-export interface UnknownMacsReport { total: number; shown: number; filtered_bogus: number; macs: UnknownMac[] }
+export interface PortMapPort { if_index: number; if_name?: string; admin_status?: number; oper_status?: number; speed_mbps?: number; untagged_vlan?: number; tagged_vlans?: number[]; is_trunk: boolean; mac_count: number; resolved_count: number; unknown_count: number; confidence: string; unknown_class: string; neighbor?: string; neighbor_port?: string; macs: PortMapMac[] }
+export interface PortMapReport { device_id: string; connected_ports: number; total_ports: number; summary: { resolved_device_ports: number; resolved_edge_devices: number; trunk_uplink_ports: number; ambiguous_ports: number; unknown_macs: number; edge_unknown_macs: number; transit_unknown_macs: number; ambiguous_unknown_macs: number }; ports: PortMapPort[] }
+export interface UnknownMacsReport { total: number; shown: number; filtered_bogus: number; counts: { edge: number; transit: number; ambiguous: number; total: number }; macs: UnknownMac[] }
 
 // --- Discovery trust audit ---
 export interface TrustAuditRow { ip: string; device_id: string; category: string; state: string; evidence: string[]; expected_collectors: string[]; attempted_collectors: string[]; succeeded_collectors: string[]; missing_attempt: string[] | null; weaker_won: boolean; corrected_action: string; final_honest_state: string; pattern?: string; action?: string; last_attempt?: string; last_result?: string }

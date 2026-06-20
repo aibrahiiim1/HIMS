@@ -42,7 +42,8 @@ type pmPort struct {
 	MACCount     int     `json:"mac_count"`
 	Resolved     int     `json:"resolved_count"`
 	Unknown      int     `json:"unknown_count"`
-	Confidence   string  `json:"confidence"` // lldp_cdp | access_mac | arp_mac | trunk_uplink | ambiguous | none
+	Confidence   string  `json:"confidence"`    // lldp_cdp | access_mac | arp_mac | trunk_uplink | ambiguous | none
+	UnknownClass string  `json:"unknown_class"` // edge | transit | ambiguous (classifies this port's unknown MACs)
 	Neighbor     string  `json:"neighbor,omitempty"`
 	NeighborPort string  `json:"neighbor_port,omitempty"`
 	MACs         []pmMac `json:"macs"`
@@ -175,9 +176,10 @@ func (s *Server) devicePortMap(w http.ResponseWriter, r *http.Request) {
 		p.MACs = append(p.MACs, mr)
 	}
 
-	// Per-port confidence + summary.
+	// Per-port confidence + unknown-MAC classification + summary.
 	out := make([]pmPort, 0, len(ports))
 	var totalUnknown, trunkPorts, resolvedPorts, ambiguousPorts int
+	var edgeUnknown, transitUnknown, ambiguousUnknown, resolvedEdgeDevices int
 	for _, p := range ports {
 		switch {
 		case p.Neighbor != "":
@@ -201,7 +203,27 @@ func (s *Server) devicePortMap(w http.ResponseWriter, r *http.Request) {
 		default:
 			p.Confidence = "ambiguous"
 		}
+		// Unknown-MAC class is about the PORT's nature (independent of whether anything resolved):
+		// transit = trunk/uplink/neighbor (MAC noise, not actionable); edge = real access port with
+		// few MACs (actionable); ambiguous = mid-count port with no trunk/neighbor signal.
+		switch {
+		case p.IsTrunk || p.MACCount > trunkMACThreshold || p.Neighbor != "":
+			p.UnknownClass = "transit"
+		case p.MACCount <= 4:
+			p.UnknownClass = "edge"
+		default:
+			p.UnknownClass = "ambiguous"
+		}
 		totalUnknown += p.Unknown
+		switch p.UnknownClass {
+		case "transit":
+			transitUnknown += p.Unknown
+		case "edge":
+			edgeUnknown += p.Unknown
+			resolvedEdgeDevices += p.Resolved
+		case "ambiguous":
+			ambiguousUnknown += p.Unknown
+		}
 		switch p.Confidence {
 		case "trunk_uplink":
 			trunkPorts++
@@ -221,10 +243,14 @@ func (s *Server) devicePortMap(w http.ResponseWriter, r *http.Request) {
 		"connected_ports": len(out),
 		"total_ports":     len(ifByIdx),
 		"summary": map[string]int{
-			"resolved_device_ports": resolvedPorts,
-			"trunk_uplink_ports":    trunkPorts,
-			"ambiguous_ports":       ambiguousPorts,
-			"unknown_macs":          totalUnknown,
+			"resolved_device_ports":  resolvedPorts,
+			"resolved_edge_devices":  resolvedEdgeDevices,
+			"trunk_uplink_ports":     trunkPorts,
+			"ambiguous_ports":        ambiguousPorts,
+			"unknown_macs":           totalUnknown,
+			"edge_unknown_macs":      edgeUnknown,
+			"transit_unknown_macs":   transitUnknown,
+			"ambiguous_unknown_macs": ambiguousUnknown,
 		},
 		"ports": out,
 	})
