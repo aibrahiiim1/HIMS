@@ -291,3 +291,34 @@ WHERE NOT EXISTS (SELECT 1 FROM interfaces oi WHERE oi.mac = m.mac)
     SELECT 1 FROM arp_entries a2 JOIN devices d2 ON d2.primary_ip = a2.ip_address AND d2.deleted_at IS NULL
     WHERE a2.mac = m.mac
   );
+
+-- name: ResolvePortMap :many
+-- Per FDB entry on a switch, resolve the learned MAC to an inventory device (by switch-interface
+-- MAC, by OS NIC, or by ARP-derived IP), to a VM (by vNIC MAC), and to an IP (latest ARP). Each
+-- candidate is returned separately and NULLable; the API coalesces with a priority + confidence.
+-- No fake devices: a NULL device_id means the MAC is unmapped.
+SELECT
+  m.if_index, i.if_name, m.mac, m.vlan_id, m.last_seen_at,
+  dev_if.id AS dev_if_id, COALESCE(dev_if.name,'') AS dev_if_name, COALESCE(dev_if.category,'') AS dev_if_cat,
+  dev_nic.id AS dev_nic_id, COALESCE(dev_nic.name,'') AS dev_nic_name, COALESCE(dev_nic.category,'') AS dev_nic_cat,
+  dev_arp.id AS dev_arp_id, COALESCE(dev_arp.name,'') AS dev_arp_name, COALESCE(dev_arp.category,'') AS dev_arp_cat,
+  vm.id AS vm_id, COALESCE(vm.name,'') AS vm_name, vm.host_device_id AS vm_host_device_id, vm.vm_device_id AS vm_device_id,
+  arp.ip_address AS resolved_ip
+FROM mac_addresses m
+LEFT JOIN interfaces i ON i.device_id = m.device_id AND i.if_index = m.if_index
+LEFT JOIN LATERAL (
+  SELECT d.id, d.name, d.category FROM interfaces oi JOIN devices d ON d.id = oi.device_id AND d.deleted_at IS NULL
+  WHERE oi.mac = m.mac AND oi.device_id <> m.device_id LIMIT 1) dev_if ON true
+LEFT JOIN LATERAL (
+  SELECT d.id, d.name, d.category FROM os_nics o JOIN devices d ON d.id = o.device_id AND d.deleted_at IS NULL
+  WHERE o.mac = m.mac LIMIT 1) dev_nic ON true
+LEFT JOIN LATERAL (
+  SELECT a.ip_address FROM arp_entries a WHERE a.mac = m.mac ORDER BY a.last_seen_at DESC LIMIT 1) arp ON true
+LEFT JOIN LATERAL (
+  SELECT d.id, d.name, d.category FROM devices d
+  WHERE host(d.primary_ip) = host(arp.ip_address) AND d.deleted_at IS NULL LIMIT 1) dev_arp ON true
+LEFT JOIN LATERAL (
+  SELECT v.id, v.name, v.host_device_id, v.vm_device_id FROM vm_nics vn JOIN virtual_machines v ON v.id = vn.vm_id
+  WHERE vn.mac = m.mac LIMIT 1) vm ON true
+WHERE m.device_id = $1
+ORDER BY m.if_index, m.mac;

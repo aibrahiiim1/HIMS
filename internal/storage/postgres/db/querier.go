@@ -746,6 +746,11 @@ type Querier interface {
 	// wireless endpoint's IP still traces to its switch port via the FDB. Clients are
 	// preferred over APs ($1 = IP as text).
 	ResolveIPToMAC(ctx context.Context, ip string) ([]ResolveIPToMACRow, error)
+	// Per FDB entry on a switch, resolve the learned MAC to an inventory device (by switch-interface
+	// MAC, by OS NIC, or by ARP-derived IP), to a VM (by vNIC MAC), and to an IP (latest ARP). Each
+	// candidate is returned separately and NULLable; the API coalesces with a priority + confidence.
+	// No fake devices: a NULL device_id means the MAC is unmapped.
+	ResolvePortMap(ctx context.Context, deviceID uuid.UUID) ([]ResolvePortMapRow, error)
 	// Auto-resolve: any un-resolved alert whose check has recovered to 'up'.
 	ResolveRecoveredAlerts(ctx context.Context) ([]ResolveRecoveredAlertsRow, error)
 	// The newest enabled, recently-online agent assigned to a location — used to

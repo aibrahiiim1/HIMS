@@ -10,9 +10,10 @@ import { DeviceOps } from '../components/DeviceOps'
 import { DeviceCredentialHealth } from '../components/DeviceCredentialHealth'
 import { CredentialBindSelect } from '../components/CredentialBindSelect'
 import { SwitchPorts } from '../components/SwitchPorts'
+import { ConnectedDevices } from '../components/ConnectedDevices'
 import { Panel, TabBar, Kpi, StatusPill, EmptyState, Sparkline, timeAgo, usePaged, Pager } from '../components/ui'
 
-type Tab = 'overview' | 'ports' | 'mac' | 'arp' | 'interfaces' | 'vlans' | 'neighbors' | 'topology' | 'monitoring' | 'operations'
+type Tab = 'overview' | 'ports' | 'connected' | 'mac' | 'arp' | 'interfaces' | 'vlans' | 'neighbors' | 'topology' | 'monitoring' | 'operations'
 const operLabel = (s?: number | null) => (s === 1 ? 'up' : s === 2 ? 'down' : 'unknown')
 
 export function SwitchDetail() {
@@ -42,6 +43,7 @@ export function SwitchDetail() {
   const tabs = [
     { key: 'overview', label: 'Overview', icon: Activity },
     { key: 'ports', label: 'Ports', icon: LayoutGrid, count: ifList.length || undefined },
+    { key: 'connected', label: 'Connected Devices', icon: Share2 },
     { key: 'mac', label: 'MAC Table', icon: Table },
     { key: 'arp', label: 'ARP Table', icon: Router },
     { key: 'vlans', label: 'VLANs', icon: Layers, count: vlans.data?.length || undefined },
@@ -100,6 +102,7 @@ export function SwitchDetail() {
       )}
 
       {tab === 'ports' && <SwitchPorts deviceId={id!} />}
+      {tab === 'connected' && <ConnectedDevices deviceId={id!} />}
       {tab === 'mac' && <MacTable id={id!} />}
       {tab === 'arp' && <ArpTable id={id!} />}
 

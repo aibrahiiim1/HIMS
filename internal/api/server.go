@@ -269,6 +269,7 @@ func (s *Server) routes() {
 		r.Get("/devices/{id}/topology", s.deviceTopology)
 		r.Get("/devices/{id}/mac", s.deviceMACTable)
 		r.Get("/devices/{id}/connectivity", s.deviceConnectivity) // resolved switch/port/VLAN attachment + confidence
+		r.Get("/devices/{id}/port-map", s.devicePortMap)          // per-switch resolved port→device/VM view
 		r.Get("/devices/{id}/arp", s.deviceARPTable)
 		r.Get("/devices/{id}/port-vlans", s.devicePortVlans)
 		r.Get("/devices/{id}/mac-counts", s.deviceMACCounts)
