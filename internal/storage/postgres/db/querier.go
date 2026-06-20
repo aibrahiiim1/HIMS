@@ -453,6 +453,9 @@ type Querier interface {
 	ListChildLocations(ctx context.Context, parentID *uuid.UUID) ([]Location, error)
 	// Metadata only (no content_encrypted) — newest first.
 	ListConfigBackupsByDevice(ctx context.Context, arg ListConfigBackupsByDeviceParams) ([]ListConfigBackupsByDeviceRow, error)
+	// Per (device, protocol): whether ANY attempt succeeded and how many were tried.
+	// Drives the trust audit's "attempted vs succeeded collectors" per device.
+	ListCredTestProtocols(ctx context.Context) ([]ListCredTestProtocolsRow, error)
 	ListCredentialBlobs(ctx context.Context) ([]ListCredentialBlobsRow, error)
 	// All credentials as resolver candidates (the "try everything" default for a
 	// scan when the operator selects none). Metadata only — no secret.

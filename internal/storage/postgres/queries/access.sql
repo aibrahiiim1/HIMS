@@ -106,3 +106,10 @@ SELECT device_id, protocol::text AS protocol, source::text AS source FROM (
     FROM credential_test_results
     WHERE kind <> '' AND success
 ) sig;
+
+-- name: ListCredTestProtocols :many
+-- Per (device, protocol): whether ANY attempt succeeded and how many were tried.
+-- Drives the trust audit's "attempted vs succeeded collectors" per device.
+SELECT device_id, protocol::text AS protocol,
+       bool_or(success) AS any_success, count(*)::int AS attempts
+FROM credential_test_results GROUP BY device_id, protocol;

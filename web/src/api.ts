@@ -1857,6 +1857,11 @@ export interface DeviceConnectivity {
 export interface UnknownMac { mac: string; switch_id: string; switch_name: string; if_index?: number | null; if_name?: string | null; if_alias?: string | null; vlan_id: number; last_seen_at: string; port_macs: number; possible_ip: string; suggested: string }
 export interface UnknownMacsReport { total: number; shown: number; filtered_bogus: number; macs: UnknownMac[] }
 
+// --- Discovery trust audit ---
+export interface TrustAuditRow { ip: string; device_id: string; category: string; state: string; evidence: string[]; expected_collectors: string[]; attempted_collectors: string[]; succeeded_collectors: string[]; missing_attempt: string[] | null; weaker_won: boolean; corrected_action: string; final_honest_state: string; pattern?: string }
+export interface TrustAuditPattern { pattern: string; count: number; device_types: string[]; examples: string[] }
+export interface TrustAuditReport { generated_at: string; probed: boolean; total_devices: number; weak_devices: number; devices: TrustAuditRow[]; patterns: TrustAuditPattern[] }
+
 // --- Action Center (remediation queues) ---
 export interface AcRow { device_id: string; name: string; ip?: string; server_role?: string; category?: string; reason: string; recommended_action: string; last_success?: string; last_error?: string; superseded?: boolean }
 export interface AcQueue { key: string; label: string; description: string; action_kind: string; auto_actionable: boolean; severity: string; count: number; rows: AcRow[] | null }

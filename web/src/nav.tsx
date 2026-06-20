@@ -58,6 +58,7 @@ export const NAV: NavGroup[] = [
       { label: 'Credentials', icon: KeyRound, to: '/credentials' },
       { label: 'Vendor Profiles', icon: Plug, to: '/vendor-profiles' },
       { label: 'Relay Agents', icon: Radar, to: '/agents' },
+      { label: 'Trust Audit', icon: ShieldCheck, to: '/trust-audit' },
     ],
   },
   {

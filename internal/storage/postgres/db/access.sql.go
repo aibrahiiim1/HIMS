@@ -11,6 +11,46 @@ import (
 	"github.com/google/uuid"
 )
 
+const listCredTestProtocols = `-- name: ListCredTestProtocols :many
+SELECT device_id, protocol::text AS protocol,
+       bool_or(success) AS any_success, count(*)::int AS attempts
+FROM credential_test_results GROUP BY device_id, protocol
+`
+
+type ListCredTestProtocolsRow struct {
+	DeviceID   uuid.UUID `json:"device_id"`
+	Protocol   string    `json:"protocol"`
+	AnySuccess bool      `json:"any_success"`
+	Attempts   int32     `json:"attempts"`
+}
+
+// Per (device, protocol): whether ANY attempt succeeded and how many were tried.
+// Drives the trust audit's "attempted vs succeeded collectors" per device.
+func (q *Queries) ListCredTestProtocols(ctx context.Context) ([]ListCredTestProtocolsRow, error) {
+	rows, err := q.db.Query(ctx, listCredTestProtocols)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListCredTestProtocolsRow{}
+	for rows.Next() {
+		var i ListCredTestProtocolsRow
+		if err := rows.Scan(
+			&i.DeviceID,
+			&i.Protocol,
+			&i.AnySuccess,
+			&i.Attempts,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDeviceAccessSignals = `-- name: ListDeviceAccessSignals :many
 SELECT device_id, protocol::text AS protocol, source::text AS source FROM (
   -- 1) Device-bound credential — the operator's/HIMS's confirmed working method.
