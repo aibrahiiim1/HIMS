@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { DatabaseBackup, ShieldCheck, CircleCheck, CircleX, DownloadCloud, FileUp, ClipboardList } from 'lucide-react'
+import { DatabaseBackup, ShieldCheck, CircleCheck, CircleX, DownloadCloud, FileUp, ClipboardList, Trash2 } from 'lucide-react'
 import { api, type DRReadiness, type BackupRun } from '../api'
 import { PageHeader, Panel, Kpi, EmptyState, timeAgo } from '../components/ui'
 
@@ -91,7 +91,69 @@ export function BackupRestore() {
           </table>
         )}
       </Panel>
+
+      <DangerZone />
     </div>
+  )
+}
+
+interface DbResetCategory { key: string; label: string; count: number }
+interface DbResetSummary { categories: DbResetCategory[]; protected: string[] }
+
+// DangerZone — initialize/reset the database by wiping selected data categories. Destructive +
+// irreversible: requires checking categories AND typing ERASE. Admin-only (rbac.manage). The
+// backend wipes all selected categories in one transaction and never touches users/auth/encryption.
+function DangerZone() {
+  const qc = useQueryClient()
+  const sum = useQuery({ queryKey: ['db-reset-summary'], queryFn: () => api.get<DbResetSummary>('/admin/database/summary') })
+  const [sel, setSel] = useState<Set<string>>(new Set())
+  const [confirm, setConfirm] = useState('')
+  const [result, setResult] = useState<string>('')
+  const reset = useMutation({
+    mutationFn: () => api.post<{ reset: boolean; deleted: Record<string, number> }>('/admin/database/reset', { categories: [...sel], confirm }),
+    onSuccess: (r) => {
+      const lines = Object.entries(r.deleted).map(([k, n]) => `${k}: ${n} rows`).join(' · ')
+      setResult(`Done — ${lines || 'nothing matched'}.`)
+      setSel(new Set()); setConfirm('')
+      qc.invalidateQueries() // refresh everything; the data changed fleet-wide
+    },
+    onError: (e: unknown) => setResult('Failed: ' + (e instanceof Error ? e.message : String(e))),
+  })
+  const toggle = (k: string) => setSel((s) => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n })
+  const ready = sel.size > 0 && confirm.trim().toUpperCase() === 'ERASE'
+
+  return (
+    <Panel title="Danger Zone — Initialize / Reset Database" icon={Trash2} className="panel-danger"
+      subtitle="wipe selected data to empty">
+      <p className="muted" style={{ fontSize: 13 }}>
+        Select the data to permanently delete, then type <b>ERASE</b> to confirm. This is <b>irreversible</b> — export a backup first.
+        Users, roles, sessions, the encryption key, schema migrations, app settings and site/subnet definitions are never wiped here.
+      </p>
+      {sum.isLoading && <div className="loading">Loading categories…</div>}
+      {sum.data && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 6, margin: '10px 0' }}>
+          {sum.data.categories.map((c) => (
+            <label key={c.key} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', padding: '6px 8px', border: '1px solid #3a2a2a', borderRadius: 6, cursor: 'pointer' }}>
+              <input type="checkbox" checked={sel.has(c.key)} onChange={() => toggle(c.key)} style={{ marginTop: 3 }} />
+              <span style={{ fontSize: 13 }}>
+                <b>{c.key}</b> <span className="badge badge-unknown" style={{ fontSize: 10 }}>{c.count} rows</span>
+                <br /><small className="muted">{c.label}</small>
+              </span>
+            </label>
+          ))}
+        </div>
+      )}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <input className="field" placeholder='Type ERASE to confirm' value={confirm} onChange={(e) => setConfirm(e.target.value)}
+          style={{ width: 200, padding: '6px 10px', border: '1px solid #2a3a47', borderRadius: 6, fontSize: 13 }} />
+        <button className="btn btn-sm" style={{ background: '#b91c1c', color: '#fff' }} disabled={!ready || reset.isPending}
+          onClick={() => { if (window.confirm(`Permanently delete ${sel.size} categor${sel.size === 1 ? 'y' : 'ies'}? This cannot be undone.`)) reset.mutate() }}>
+          <Trash2 size={14} /> {reset.isPending ? 'Wiping…' : `Delete selected (${sel.size})`}
+        </button>
+        {sel.size > 0 && <button className="btn btn-ghost btn-sm" onClick={() => { setSel(new Set()); setConfirm('') }}>Clear</button>}
+      </div>
+      {result && <div className="banner" style={{ marginTop: 10, fontSize: 13 }}>{result}</div>}
+    </Panel>
   )
 }
 

@@ -326,6 +326,8 @@ func (s *Server) routes() {
 		r.Get("/admin/backup/runs", s.listBackupRuns)
 		r.Post("/admin/backup/record-external", s.recordExternalBackup)
 		r.Get("/admin/dr-readiness", s.drReadiness)
+		r.Get("/admin/database/summary", s.databaseSummary) // wipeable categories + current row counts
+		r.Post("/admin/database/reset", s.resetDatabase)    // DESTRUCTIVE: wipe selected categories (rbac.manage)
 		// --- NetFlow Analytics (#12) ----------------------------------
 		r.Get("/netflow/overview", s.flowOverview)
 		r.Get("/netflow/top-talkers", s.flowTopTalkers)
