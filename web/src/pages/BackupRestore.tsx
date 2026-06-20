@@ -23,20 +23,12 @@ export function BackupRestore() {
   const runs = useQuery({ queryKey: ['backup-runs'], queryFn: () => api.get<BackupRun[]>('/admin/backup/runs') })
   const inv = () => { qc.invalidateQueries({ queryKey: ['dr-readiness'] }); qc.invalidateQueries({ queryKey: ['backup-runs'] }) }
 
-  const [valResult, setValResult] = useState<string | null>(null)
-  const fileRef = useRef<HTMLInputElement>(null)
   const d = dr.data
 
   const delRun = useMutation({
     mutationFn: (id: number) => api.del(`/admin/backup/runs/${id}`),
     onSuccess: inv,
   })
-  const validate = useMutation({
-    mutationFn: async (text: string) => api.postText<{ ok: boolean; error?: string; summary?: { total_rows: number; tables: { table: string; rows: number }[] } }>('/admin/backup/validate', text, 'application/json'),
-    onSuccess: (r) => setValResult(r.ok ? `✓ Valid archive — ${r.summary?.tables.length} tables, ${r.summary?.total_rows} rows` : `✗ ${r.error}`),
-    onError: (e) => setValResult('✗ ' + (e as Error).message),
-  })
-  const onFile = (f: File | undefined) => { if (!f) return; setValResult(null); f.text().then((t) => validate.mutate(t)) }
 
   const okCount = (d?.checklist ?? []).filter((c) => c.ok).length
 
@@ -72,11 +64,8 @@ export function BackupRestore() {
       </Panel>
 
       <div className="grid-2">
-        <Panel title="Validate a Backup" icon={FileUp} subtitle="restore pre-check">
-          <p className="muted" style={{ fontSize: 13, marginBottom: 10 }}>Upload a HIMS config snapshot (.json) to confirm it is well-formed before relying on it for restore.</p>
-          <input ref={fileRef} type="file" accept="application/json,.json" style={{ display: 'none' }} onChange={(e) => onFile(e.target.files?.[0])} />
-          <button className="btn" disabled={validate.isPending} onClick={() => fileRef.current?.click()}><FileUp size={14} /> {validate.isPending ? 'Validating…' : 'Choose file…'}</button>
-          {valResult && <div className={'enc-banner ' + (valResult.startsWith('✓') ? 'info' : 'crit')} style={{ marginTop: 10 }}>{valResult}</div>}
+        <Panel title="Import & Restore a Backup" icon={FileUp} subtitle="upload → pick tables → restore">
+          <ImportRestore onDone={inv} />
         </Panel>
 
         <Panel title="Record External Backup" icon={DatabaseBackup} subtitle="off-box pg_dump">
@@ -173,6 +162,87 @@ function DangerZone() {
       </div>
       {result && <div className="banner" style={{ marginTop: 10, fontSize: 13 }}>{result}</div>}
     </Panel>
+  )
+}
+
+// Tables the backend can restore (config/inventory). Auth + credentials are excluded.
+const RESTORABLE = new Set(['locations', 'device_templates', 'vendor_fingerprints', 'systems', 'devices', 'device_lifecycle', 'work_orders', 'alert_rules', 'report_schedules'])
+
+// ImportRestore — upload a snapshot, validate it, pick which (restorable) tables to import, then
+// restore. The chosen tables are upserted on their primary key; rows that violate FK constraints
+// (e.g. reference a device not restored) are skipped and reported, never aborting the whole restore.
+function ImportRestore({ onDone }: { onDone: () => void }) {
+  const fileRef = useRef<HTMLInputElement>(null)
+  const [content, setContent] = useState('')
+  const [tables, setTables] = useState<{ table: string; rows: number }[] | null>(null)
+  const [sel, setSel] = useState<Set<string>>(new Set())
+  const [msg, setMsg] = useState('')
+  const [results, setResults] = useState<{ table: string; restored: number; skipped: number; error: string }[] | null>(null)
+
+  const onFile = (f?: File) => {
+    if (!f) return
+    setResults(null); setMsg(''); setSel(new Set()); setTables(null); setContent('')
+    f.text().then(async (t) => {
+      setContent(t)
+      try {
+        const r = await api.postText<{ ok: boolean; error?: string; summary?: { tables: { table: string; rows: number }[] } }>('/admin/backup/validate', t, 'application/json')
+        if (!r.ok) { setMsg('✗ ' + r.error); return }
+        const ts = r.summary?.tables ?? []
+        setTables(ts)
+        setSel(new Set(ts.filter((x) => RESTORABLE.has(x.table) && x.rows > 0).map((x) => x.table)))
+      } catch (e) { setMsg('✗ ' + (e as Error).message) }
+    })
+  }
+  const toggle = (t: string) => setSel((s) => { const n = new Set(s); if (n.has(t)) n.delete(t); else n.add(t); return n })
+  const restore = useMutation({
+    mutationFn: () => api.postText<{ restored: boolean; results: { table: string; restored: number; skipped: number; error: string }[] }>('/admin/backup/restore?tables=' + [...sel].join(','), content, 'application/json'),
+    onSuccess: (r) => { setResults(r.results); onDone() },
+    onError: (e) => setMsg('✗ ' + (e as Error).message),
+  })
+
+  return (
+    <>
+      <p className="muted" style={{ fontSize: 13, marginBottom: 10 }}>Upload a HIMS config snapshot (.json), choose the tables to import, then restore. Existing rows are updated by primary key. Auth (users/roles) and credential secrets are not restorable.</p>
+      <input ref={fileRef} type="file" accept="application/json,.json" style={{ display: 'none' }} onChange={(e) => onFile(e.target.files?.[0])} />
+      <button className="btn" onClick={() => fileRef.current?.click()}><FileUp size={14} /> Choose backup file…</button>
+      {msg && <div className={'enc-banner ' + (msg.startsWith('✓') ? 'info' : 'crit')} style={{ marginTop: 10 }}>{msg}</div>}
+
+      {tables && (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ display: 'grid', gap: 4 }}>
+            {tables.map((t) => {
+              const can = RESTORABLE.has(t.table)
+              return (
+                <label key={t.table} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, opacity: can ? 1 : 0.5 }}>
+                  <input type="checkbox" disabled={!can || t.rows === 0} checked={sel.has(t.table)} onChange={() => toggle(t.table)} />
+                  <span><b>{t.table}</b> <span className="badge badge-unknown" style={{ fontSize: 10 }}>{t.rows} rows</span>{!can && <small className="muted"> · not restorable</small>}</span>
+                </label>
+              )
+            })}
+          </div>
+          <button className="btn btn-primary btn-sm" style={{ marginTop: 10 }} disabled={sel.size === 0 || restore.isPending}
+            onClick={() => { if (window.confirm(`Restore ${sel.size} table(s)? Existing rows are overwritten by primary key.`)) restore.mutate() }}>
+            {restore.isPending ? 'Restoring…' : `Restore selected (${sel.size})`}
+          </button>
+        </div>
+      )}
+
+      {results && (
+        <table className="data-table" style={{ marginTop: 12 }}>
+          <thead><tr><th>Table</th><th>Restored</th><th>Skipped</th><th>Note</th></tr></thead>
+          <tbody>
+            {results.map((r) => (
+              <tr key={r.table}>
+                <td className="cell-name">{r.table}</td>
+                <td><span className="badge badge-up">{r.restored}</span></td>
+                <td>{r.skipped ? <span className="badge badge-warn">{r.skipped}</span> : '—'}</td>
+                <td className="muted" style={{ fontSize: 12 }}>{r.error || 'ok'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </>
   )
 }
 

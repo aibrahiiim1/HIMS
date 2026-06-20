@@ -323,6 +323,7 @@ func (s *Server) routes() {
 		// --- Backup & Restore (#25) -----------------------------------
 		r.Get("/admin/backup/export", s.exportBackup)
 		r.Post("/admin/backup/validate", s.validateBackup)
+		r.Post("/admin/backup/restore", s.restoreBackup) // selective restore of chosen tables
 		r.Get("/admin/backup/runs", s.listBackupRuns)
 		r.Get("/admin/backup/runs/{id}/download", s.downloadBackupRun) // re-download a stored snapshot
 		r.Delete("/admin/backup/runs/{id}", s.deleteBackupRun)         // delete one backup record
