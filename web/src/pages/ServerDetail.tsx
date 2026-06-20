@@ -5,6 +5,7 @@ import { Server, Cpu, HardDrive, Cable, Activity, Settings, LayoutDashboard, Gau
 import { api, type ServerStorage, type DeviceFact, type DeviceRole, type Interface, type BMCInfo, type BMCSensor } from '../api'
 import { DeviceOps } from '../components/DeviceOps'
 import { DeviceHeader } from '../components/DeviceHeader'
+import { ConnectivityPanel } from '../components/ConnectivityPanel'
 import { ClassificationEvidencePanel } from '../components/ClassificationEvidence'
 import { DeepOSInventory } from '../components/DeepOSInventory'
 import { DeviceCredentialHealth } from '../components/DeviceCredentialHealth'
@@ -72,6 +73,7 @@ export function ServerDetail() {
   return (
     <div>
       <DeviceHeader deviceId={deviceId} icon={Server} showCredential={false} />
+      <ConnectivityPanel deviceId={deviceId} />
       <ClassificationEvidencePanel deviceId={deviceId} />
 
       <TabBar tabs={tabs} active={tab} onChange={(k) => setTab(k as Tab)} />

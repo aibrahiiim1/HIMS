@@ -10,6 +10,7 @@ import {
 } from '../api'
 import { Panel, EmptyState, timeAgo } from '../components/ui'
 import { DeviceHeader } from '../components/DeviceHeader'
+import { ConnectivityPanel } from '../components/ConnectivityPanel'
 import { ClassificationCard } from '../components/ClassificationCard'
 import { DeepOSInventory } from '../components/DeepOSInventory'
 import { DeviceOps } from '../components/DeviceOps'
@@ -30,6 +31,7 @@ export function GenericDeviceDetail() {
   return (
     <div>
       <DeviceHeader deviceId={id} icon={HelpCircle} />
+      <ConnectivityPanel deviceId={id} />
       <IdentityCard deviceId={id} />
       <QuickActions deviceId={id} />
       <div style={{ marginBottom: 16 }}><ClassificationCard deviceId={id} /></div>

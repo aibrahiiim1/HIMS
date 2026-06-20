@@ -244,3 +244,50 @@ JOIN devices ld ON ld.id = tl.local_device_id AND ld.deleted_at IS NULL
 LEFT JOIN devices rd ON rd.id = tl.remote_device_id AND rd.deleted_at IS NULL
 WHERE tl.local_device_id = $1 OR tl.remote_device_id = $1
 ORDER BY tl.local_if_index NULLS LAST;
+
+-- name: ListUnknownMACs :many
+-- MACs learned in a switch FDB that map to NO inventory device: not a known device
+-- NIC (interfaces/os_nics/vm_nics) AND whose ARP-derived IP (if any) is not an
+-- inventory device's primary IP. One row per (mac) — the EDGE port (fewest MACs)
+-- where it was seen — with the switch, port, VLAN, last-seen and a possible IP from
+-- ARP. No fake devices are created; this is pure visibility into unmapped endpoints.
+SELECT DISTINCT ON (m.mac)
+  m.mac,
+  m.device_id            AS switch_id,
+  sw.name                AS switch_name,
+  m.if_index,
+  i.if_name,
+  i.if_alias,
+  m.vlan_id,
+  m.last_seen_at,
+  cnt.mac_count          AS port_mac_count,
+  arp.ip_address         AS possible_ip
+FROM mac_addresses m
+JOIN devices sw ON sw.id = m.device_id AND sw.deleted_at IS NULL
+LEFT JOIN interfaces i ON i.device_id = m.device_id AND i.if_index = m.if_index
+LEFT JOIN LATERAL (
+  SELECT count(*) AS mac_count FROM mac_addresses mm
+  WHERE mm.device_id = m.device_id AND mm.if_index = m.if_index
+) cnt ON true
+LEFT JOIN LATERAL (
+  SELECT a.ip_address FROM arp_entries a WHERE a.mac = m.mac ORDER BY a.last_seen_at DESC LIMIT 1
+) arp ON true
+WHERE NOT EXISTS (SELECT 1 FROM interfaces oi WHERE oi.mac = m.mac)
+  AND NOT EXISTS (SELECT 1 FROM os_nics o   WHERE o.mac = m.mac)
+  AND NOT EXISTS (SELECT 1 FROM vm_nics v   WHERE v.mac = m.mac)
+  AND NOT EXISTS (
+    SELECT 1 FROM arp_entries a2 JOIN devices d2 ON d2.primary_ip = a2.ip_address AND d2.deleted_at IS NULL
+    WHERE a2.mac = m.mac
+  )
+ORDER BY m.mac, cnt.mac_count ASC NULLS LAST, m.last_seen_at DESC;
+
+-- name: CountUnknownMACs :one
+SELECT count(DISTINCT m.mac)::int AS total
+FROM mac_addresses m
+WHERE NOT EXISTS (SELECT 1 FROM interfaces oi WHERE oi.mac = m.mac)
+  AND NOT EXISTS (SELECT 1 FROM os_nics o   WHERE o.mac = m.mac)
+  AND NOT EXISTS (SELECT 1 FROM vm_nics v   WHERE v.mac = m.mac)
+  AND NOT EXISTS (
+    SELECT 1 FROM arp_entries a2 JOIN devices d2 ON d2.primary_ip = a2.ip_address AND d2.deleted_at IS NULL
+    WHERE a2.mac = m.mac
+  );

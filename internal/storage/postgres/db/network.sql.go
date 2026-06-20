@@ -13,6 +13,25 @@ import (
 	"github.com/google/uuid"
 )
 
+const countUnknownMACs = `-- name: CountUnknownMACs :one
+SELECT count(DISTINCT m.mac)::int AS total
+FROM mac_addresses m
+WHERE NOT EXISTS (SELECT 1 FROM interfaces oi WHERE oi.mac = m.mac)
+  AND NOT EXISTS (SELECT 1 FROM os_nics o   WHERE o.mac = m.mac)
+  AND NOT EXISTS (SELECT 1 FROM vm_nics v   WHERE v.mac = m.mac)
+  AND NOT EXISTS (
+    SELECT 1 FROM arp_entries a2 JOIN devices d2 ON d2.primary_ip = a2.ip_address AND d2.deleted_at IS NULL
+    WHERE a2.mac = m.mac
+  )
+`
+
+func (q *Queries) CountUnknownMACs(ctx context.Context) (int32, error) {
+	row := q.db.QueryRow(ctx, countUnknownMACs)
+	var total int32
+	err := row.Scan(&total)
+	return total, err
+}
+
 const deleteStaleARP = `-- name: DeleteStaleARP :exec
 DELETE FROM arp_entries
 WHERE device_id = $1 AND last_seen_at < $2 AND collection_source = $3
@@ -654,6 +673,87 @@ func (q *Queries) ListTopologyLinks(ctx context.Context, localDeviceID uuid.UUID
 			&i.RemoteSysName,
 			&i.LinkSource,
 			&i.LastSeenAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUnknownMACs = `-- name: ListUnknownMACs :many
+SELECT DISTINCT ON (m.mac)
+  m.mac,
+  m.device_id            AS switch_id,
+  sw.name                AS switch_name,
+  m.if_index,
+  i.if_name,
+  i.if_alias,
+  m.vlan_id,
+  m.last_seen_at,
+  cnt.mac_count          AS port_mac_count,
+  arp.ip_address         AS possible_ip
+FROM mac_addresses m
+JOIN devices sw ON sw.id = m.device_id AND sw.deleted_at IS NULL
+LEFT JOIN interfaces i ON i.device_id = m.device_id AND i.if_index = m.if_index
+LEFT JOIN LATERAL (
+  SELECT count(*) AS mac_count FROM mac_addresses mm
+  WHERE mm.device_id = m.device_id AND mm.if_index = m.if_index
+) cnt ON true
+LEFT JOIN LATERAL (
+  SELECT a.ip_address FROM arp_entries a WHERE a.mac = m.mac ORDER BY a.last_seen_at DESC LIMIT 1
+) arp ON true
+WHERE NOT EXISTS (SELECT 1 FROM interfaces oi WHERE oi.mac = m.mac)
+  AND NOT EXISTS (SELECT 1 FROM os_nics o   WHERE o.mac = m.mac)
+  AND NOT EXISTS (SELECT 1 FROM vm_nics v   WHERE v.mac = m.mac)
+  AND NOT EXISTS (
+    SELECT 1 FROM arp_entries a2 JOIN devices d2 ON d2.primary_ip = a2.ip_address AND d2.deleted_at IS NULL
+    WHERE a2.mac = m.mac
+  )
+ORDER BY m.mac, cnt.mac_count ASC NULLS LAST, m.last_seen_at DESC
+`
+
+type ListUnknownMACsRow struct {
+	Mac          string     `json:"mac"`
+	SwitchID     uuid.UUID  `json:"switch_id"`
+	SwitchName   string     `json:"switch_name"`
+	IfIndex      *int32     `json:"if_index"`
+	IfName       *string    `json:"if_name"`
+	IfAlias      *string    `json:"if_alias"`
+	VlanID       int32      `json:"vlan_id"`
+	LastSeenAt   time.Time  `json:"last_seen_at"`
+	PortMacCount int64      `json:"port_mac_count"`
+	PossibleIp   netip.Addr `json:"possible_ip"`
+}
+
+// MACs learned in a switch FDB that map to NO inventory device: not a known device
+// NIC (interfaces/os_nics/vm_nics) AND whose ARP-derived IP (if any) is not an
+// inventory device's primary IP. One row per (mac) — the EDGE port (fewest MACs)
+// where it was seen — with the switch, port, VLAN, last-seen and a possible IP from
+// ARP. No fake devices are created; this is pure visibility into unmapped endpoints.
+func (q *Queries) ListUnknownMACs(ctx context.Context) ([]ListUnknownMACsRow, error) {
+	rows, err := q.db.Query(ctx, listUnknownMACs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListUnknownMACsRow{}
+	for rows.Next() {
+		var i ListUnknownMACsRow
+		if err := rows.Scan(
+			&i.Mac,
+			&i.SwitchID,
+			&i.SwitchName,
+			&i.IfIndex,
+			&i.IfName,
+			&i.IfAlias,
+			&i.VlanID,
+			&i.LastSeenAt,
+			&i.PortMacCount,
+			&i.PossibleIp,
 		); err != nil {
 			return nil, err
 		}

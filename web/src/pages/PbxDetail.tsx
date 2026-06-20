@@ -4,6 +4,7 @@ import { useParams } from 'react-router-dom'
 import { Phone, PhoneCall, Server, Hash, Cpu } from 'lucide-react'
 import { api, type DeviceFact, type PhoneExtension } from '../api'
 import { DeviceHeader } from '../components/DeviceHeader'
+import { ConnectivityPanel } from '../components/ConnectivityPanel'
 import { ClassificationEvidencePanel } from '../components/ClassificationEvidence'
 import {
   Panel, Kpi, EmptyState, TabBar, usePaged, Pager, Donut, Legend, BarList, colorFor, timeAgo,
@@ -53,6 +54,7 @@ export function PbxDetail() {
   return (
     <div>
       <DeviceHeader deviceId={id!} icon={Phone} />
+      <ConnectivityPanel deviceId={id!} />
       <ClassificationEvidencePanel deviceId={id!} />
 
       <div className="kpi-grid">

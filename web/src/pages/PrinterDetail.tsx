@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom'
 import { Printer } from 'lucide-react'
 import { api, type DeviceFact, type PrinterSupply } from '../api'
 import { DeviceHeader } from '../components/DeviceHeader'
+import { ConnectivityPanel } from '../components/ConnectivityPanel'
 import { ClassificationEvidencePanel } from '../components/ClassificationEvidence'
 
 const barColor = (pct?: number | null) =>
@@ -19,6 +20,7 @@ export function PrinterDetail() {
   return (
     <div>
       <DeviceHeader deviceId={id!} icon={Printer} />
+      <ConnectivityPanel deviceId={id!} />
       <ClassificationEvidencePanel deviceId={id!} />
       <div className="card">
         <h2>Printer</h2>

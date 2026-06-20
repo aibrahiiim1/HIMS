@@ -4,6 +4,7 @@ import { useParams } from 'react-router-dom'
 import { Laptop, MonitorSmartphone, Cpu, MemoryStick, HardDrive, Boxes, AlertTriangle, Settings, LayoutDashboard, Clock, KeyRound } from 'lucide-react'
 import { api, type OSInventoryBundle } from '../api'
 import { DeviceHeader } from '../components/DeviceHeader'
+import { ConnectivityPanel } from '../components/ConnectivityPanel'
 import { ClassificationCard } from '../components/ClassificationCard'
 import { DeepOSInventory } from '../components/DeepOSInventory'
 import { DeviceOps } from '../components/DeviceOps'
@@ -55,6 +56,7 @@ export function EndpointDetail() {
   return (
     <div>
       <DeviceHeader deviceId={deviceId} icon={Laptop} showCredential={false} />
+      <ConnectivityPanel deviceId={deviceId} />
 
       <TabBar tabs={tabs} active={tab} onChange={(k) => setTab(k as Tab)} />
 

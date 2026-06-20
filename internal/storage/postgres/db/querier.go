@@ -107,6 +107,7 @@ type Querier interface {
 	CountSelfHealEligibleForJob(ctx context.Context, jobID uuid.UUID) (int64, error)
 	// Blobs sealed under a key id other than the one currently loaded.
 	CountUndecryptableCredentials(ctx context.Context, keyID string) (int64, error)
+	CountUnknownMACs(ctx context.Context) (int32, error)
 	CountUsersWithPassword(ctx context.Context) (int64, error)
 	// How many profiles still reference a credential (for orphan-credential cleanup on
 	// profile delete).
@@ -623,6 +624,12 @@ type Querier interface {
 	ListSubnetsByLocation(ctx context.Context, locationID uuid.UUID) ([]Subnet, error)
 	ListSystems(ctx context.Context) ([]System, error)
 	ListTopologyLinks(ctx context.Context, localDeviceID uuid.UUID) ([]TopologyLink, error)
+	// MACs learned in a switch FDB that map to NO inventory device: not a known device
+	// NIC (interfaces/os_nics/vm_nics) AND whose ARP-derived IP (if any) is not an
+	// inventory device's primary IP. One row per (mac) — the EDGE port (fewest MACs)
+	// where it was seen — with the switch, port, VLAN, last-seen and a possible IP from
+	// ARP. No fake devices are created; this is pure visibility into unmapped endpoints.
+	ListUnknownMACs(ctx context.Context) ([]ListUnknownMACsRow, error)
 	// ===== RBAC: users / roles / permissions ==================================
 	ListUsers(ctx context.Context) ([]User, error)
 	ListVMDisksByHost(ctx context.Context, hostDeviceID uuid.UUID) ([]VmDisk, error)

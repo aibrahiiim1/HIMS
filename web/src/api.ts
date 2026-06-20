@@ -1848,6 +1848,15 @@ export interface CoverageReport {
   virtualization: { esxi_hosts: number; hyperv_hosts: number; vms_total: number; vms_linked: number; vms_unlinked: number; datastores_warn: number; datastores_crit: number; stale_virt_hosts: number; hosts: { id: string; name: string; ip: string; type: string; vm_count: number; running: number; stopped: number; health: string }[] }
 }
 
+// --- Device connectivity + unknown MACs (Topology) ---
+export interface DeviceConnectivity {
+  device_id: string; device_name: string; primary_ip: string; matched_mac?: string | null
+  switch_port: SwitchPortEntry[]; path: PathStep[] | null; confidence: string; confidence_reasons: string[] | null
+  arp_device_name?: string | null; arp_source?: string | null; gap: string
+}
+export interface UnknownMac { mac: string; switch_id: string; switch_name: string; if_index?: number | null; if_name?: string | null; if_alias?: string | null; vlan_id: number; last_seen_at: string; port_macs: number; possible_ip: string; suggested: string }
+export interface UnknownMacsReport { total: number; shown: number; filtered_bogus: number; macs: UnknownMac[] }
+
 // --- Action Center (remediation queues) ---
 export interface AcRow { device_id: string; name: string; ip?: string; server_role?: string; category?: string; reason: string; recommended_action: string; last_success?: string; last_error?: string; superseded?: boolean }
 export interface AcQueue { key: string; label: string; description: string; action_kind: string; auto_actionable: boolean; severity: string; count: number; rows: AcRow[] | null }

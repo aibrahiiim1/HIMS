@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom'
 import { BatteryCharging } from 'lucide-react'
 import { api, type UPSStatus } from '../api'
 import { DeviceHeader } from '../components/DeviceHeader'
+import { ConnectivityPanel } from '../components/ConnectivityPanel'
 import { ClassificationEvidencePanel } from '../components/ClassificationEvidence'
 
 const battBadge = (s?: string) =>
@@ -17,6 +18,7 @@ export function UPSDetail() {
   return (
     <div>
       <DeviceHeader deviceId={id!} icon={BatteryCharging} />
+      <ConnectivityPanel deviceId={id!} />
       <ClassificationEvidencePanel deviceId={id!} />
       <div className="card">
       <h2>UPS

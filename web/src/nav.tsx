@@ -112,6 +112,7 @@ export const NAV: NavGroup[] = [
       { label: 'Network Map', icon: Map, to: '/topology' },
       { label: 'Path Finder', icon: RouteIcon, to: '/path-finder' },
       { label: 'NetFlow', icon: Waypoints, to: '/netflow' },
+      { label: 'Unknown MACs', icon: CircleHelp, to: '/unknown-macs' },
     ],
   },
   {

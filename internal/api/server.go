@@ -266,6 +266,7 @@ func (s *Server) routes() {
 		r.Get("/devices/{id}/neighbors", s.deviceNeighbors)
 		r.Get("/devices/{id}/topology", s.deviceTopology)
 		r.Get("/devices/{id}/mac", s.deviceMACTable)
+		r.Get("/devices/{id}/connectivity", s.deviceConnectivity) // resolved switch/port/VLAN attachment + confidence
 		r.Get("/devices/{id}/arp", s.deviceARPTable)
 		r.Get("/devices/{id}/port-vlans", s.devicePortVlans)
 		r.Get("/devices/{id}/mac-counts", s.deviceMACCounts)
@@ -337,8 +338,9 @@ func (s *Server) routes() {
 
 		// --- Topology & search ----------------------------------------
 		// IP/MAC/name → switch+port+path (the headline Phase 1 feature).
-		r.Get("/search", s.search)                  // ?q=<IP|MAC|name> → topology path trace
-		r.Get("/search/entities", s.searchEntities) // ?q= → unified hits across APs/clients/FDB/ARP
+		r.Get("/search", s.search)                     // ?q=<IP|MAC|name> → topology path trace
+		r.Get("/search/entities", s.searchEntities)    // ?q= → unified hits across APs/clients/FDB/ARP
+		r.Get("/topology/unknown-macs", s.unknownMACs) // FDB MACs not mapped to any inventory device
 		r.Get("/topology/links", s.allLinks)
 		r.Get("/topology/graph", s.topologyGraph)
 		r.Post("/topology/rebuild", s.rebuildTopology)
