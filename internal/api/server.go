@@ -180,6 +180,7 @@ func (s *Server) routes() {
 		r.Post("/data-quality/collect-os", s.bulkCollectOS)
 		r.Get("/action-center", s.actionCenter)              // remediation queues (active vs historical)
 		r.Get("/discovery/trust-audit", s.trustAudit)        // fleet-wide evidence→collector trust audit (active probe)
+		r.Post("/discovery/trust-action", s.trustAction)     // guided, safe remediation for one trust gap
 		r.Post("/action-center/snooze", s.snoozeRemediation) // mute one device+issue (or unsnooze)
 
 		// --- Discovery (operator-launched subnet scans) --------------

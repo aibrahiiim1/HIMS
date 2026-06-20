@@ -38,6 +38,18 @@ type auditRow struct {
 	Corrected   string   `json:"corrected_action"`
 	HonestState string   `json:"final_honest_state"`
 	PatternKey  string   `json:"pattern,omitempty"`
+	Action      string   `json:"action,omitempty"`       // guided action key for this pattern ("" = none)
+	LastAt      string   `json:"last_attempt,omitempty"` // last guided-action time (RFC3339)
+	LastResult  string   `json:"last_result,omitempty"`  // last guided-action result (status: detail)
+}
+
+// patternAction maps an actionable trust pattern to its guided action (a stronger collector the
+// system can attempt safely). Honest-terminal patterns map to nothing.
+var patternAction = map[string]string{
+	"esxi_evidence_vsphere_skipped":         "onboard_esxi",
+	"redfish_bmc_reachable_not_collected":   "collect_bmc",
+	"linux_evidence_ssh_skipped":            "retry_ssh",
+	"windows_evidence_deep_collect_skipped": "rerun_windows",
 }
 
 type probeResult struct {
@@ -177,6 +189,11 @@ func (s *Server) trustAudit(w http.ResponseWriter, r *http.Request) {
 		strongMissing := contains(missing, "vmware") || contains(missing, "winrm") || contains(missing, "wmi") || contains(missing, "redfish")
 		row.WeakerWon = shallow && strongMissing
 		row.PatternKey, row.Corrected, row.HonestState = assessAudit(d, c.state, suc, missing, pr)
+		row.Action = patternAction[row.PatternKey]
+		if la, ok := lastTrustAction(row.DeviceID); ok {
+			row.LastAt = la.At
+			row.LastResult = la.Status + ": " + la.Detail
+		}
 		if row.PatternKey != "" {
 			pa := patterns[row.PatternKey]
 			if pa == nil {

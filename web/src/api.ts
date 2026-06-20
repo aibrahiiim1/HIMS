@@ -1858,7 +1858,8 @@ export interface UnknownMac { mac: string; switch_id: string; switch_name: strin
 export interface UnknownMacsReport { total: number; shown: number; filtered_bogus: number; macs: UnknownMac[] }
 
 // --- Discovery trust audit ---
-export interface TrustAuditRow { ip: string; device_id: string; category: string; state: string; evidence: string[]; expected_collectors: string[]; attempted_collectors: string[]; succeeded_collectors: string[]; missing_attempt: string[] | null; weaker_won: boolean; corrected_action: string; final_honest_state: string; pattern?: string }
+export interface TrustAuditRow { ip: string; device_id: string; category: string; state: string; evidence: string[]; expected_collectors: string[]; attempted_collectors: string[]; succeeded_collectors: string[]; missing_attempt: string[] | null; weaker_won: boolean; corrected_action: string; final_honest_state: string; pattern?: string; action?: string; last_attempt?: string; last_result?: string }
+export interface TrustActionResult { action: string; status: string; detail: string; credential_used?: string; at: string }
 export interface TrustAuditPattern { pattern: string; count: number; device_types: string[]; examples: string[] }
 export interface TrustAuditReport { generated_at: string; probed: boolean; total_devices: number; weak_devices: number; devices: TrustAuditRow[]; patterns: TrustAuditPattern[] }
 

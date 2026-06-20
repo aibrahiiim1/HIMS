@@ -4,35 +4,21 @@ import { Link } from 'react-router-dom'
 import { Wrench, RefreshCw, KeyRound, ShieldAlert, Server, Globe, Clock, BellOff, ChevronDown, ChevronRight, CircleCheck, Radar } from 'lucide-react'
 import { api, type ActionCenterReport, type AcRow, type AcQueue, type BulkCollectOSResult, type TrustAuditReport } from '../api'
 import { PageHeader, Panel, Kpi, EmptyState, timeAgo } from '../components/ui'
-import { ACTIONABLE_PATTERNS } from '../trustPatterns'
+import { TrustGapTable } from '../components/TrustActions'
 
 // TrustGapsPanel surfaces the ACTIONABLE Discovery Trust Audit findings (a stronger collector
-// exists but was skipped) inside the Action Center. Fetched lazily — the audit actively re-probes
-// weak hosts and is slow — so it never blocks the main remediation queues.
+// exists but was skipped) inside the Action Center as per-device rows with safe guided actions.
+// Fetched lazily — the audit actively re-probes weak hosts and is slow — so it never blocks the
+// main remediation queues.
 function TrustGapsPanel() {
   const q = useQuery({ queryKey: ['trust-audit'], queryFn: () => api.get<TrustAuditReport>('/discovery/trust-audit'), staleTime: 120_000 })
-  const actionable = (q.data?.patterns ?? []).filter((p) => ACTIONABLE_PATTERNS.has(p.pattern))
-  const total = actionable.reduce((n, p) => n + p.count, 0)
+  const actionable = (q.data?.devices ?? []).filter((r) => !!r.action)
   return (
-    <Panel title="Discovery trust gaps" icon={Radar} subtitle={q.data ? `${total} actionable` : undefined}
+    <Panel title="Discovery trust gaps" icon={Radar} subtitle={q.data ? `${actionable.length} actionable` : undefined} pad={false}
       actions={<Link to="/trust-audit" className="btn btn-ghost btn-xs">Open Trust Audit →</Link>}>
-      {q.isLoading && <div className="loading">Auditing the fleet (active probe)…</div>}
+      {q.isLoading && <div className="loading" style={{ padding: 12 }}>Auditing the fleet (active probe)…</div>}
       {q.data && actionable.length === 0 && <EmptyState icon={CircleCheck} title="No skipped collectors" message="Every device with stronger-collector evidence has had it attempted." />}
-      {actionable.length > 0 && (
-        <table className="data-table">
-          <thead><tr><th>Skipped-collector pattern</th><th>Count</th><th>Device types</th><th>Examples</th></tr></thead>
-          <tbody>
-            {actionable.map((p) => (
-              <tr key={p.pattern}>
-                <td className="cell-name">{p.pattern.replace(/_/g, ' ')}</td>
-                <td>{p.count}</td>
-                <td className="muted">{p.device_types.join(', ')}</td>
-                <td className="muted" style={{ fontSize: 12 }}>{p.examples.slice(0, 4).join(', ')}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+      <TrustGapTable rows={actionable} />
     </Panel>
   )
 }

@@ -5,6 +5,7 @@ import { ShieldCheck, AlertTriangle, RefreshCw } from 'lucide-react'
 import { api, type TrustAuditReport } from '../api'
 import { PageHeader, Panel, Kpi, EmptyState } from '../components/ui'
 import { PATTERN_LABEL } from '../trustPatterns'
+import { TrustActionButton } from '../components/TrustActions'
 
 // Discovery Trust Audit — device-class-agnostic. For every weak / shallowly-managed device it shows
 // evidence → expected collectors → attempted → missing, whether a weaker protocol won while a
@@ -73,7 +74,7 @@ export function TrustAudit() {
             {rows.length === 0 && <EmptyState icon={ShieldCheck} title="Nothing to audit" message="No weak/shallow devices match — discovery is complete here." />}
             {rows.length > 0 && (
               <table className="data-table">
-                <thead><tr><th>IP</th><th>Category</th><th>State</th><th>Evidence</th><th>Expected</th><th>Attempted</th><th>Missing</th><th>Corrected action</th><th>Honest state</th></tr></thead>
+                <thead><tr><th>IP</th><th>Category</th><th>State</th><th>Evidence</th><th>Expected</th><th>Attempted</th><th>Missing</th><th>Honest state</th><th>Action</th></tr></thead>
                 <tbody>
                   {rows.map((r) => (
                     <tr key={r.device_id} style={r.weaker_won ? { background: 'rgba(220,80,80,0.08)' } : undefined}>
@@ -84,8 +85,8 @@ export function TrustAudit() {
                       <td><Chips items={r.expected_collectors} /></td>
                       <td><Chips items={r.succeeded_collectors} tone="badge-up" /></td>
                       <td><Chips items={r.missing_attempt} tone="badge-crit" /></td>
-                      <td className="muted" style={{ fontSize: 12, maxWidth: 260 }}>{r.corrected_action}</td>
-                      <td className="muted" style={{ fontSize: 11, maxWidth: 220 }}>{r.final_honest_state}</td>
+                      <td className="muted" style={{ fontSize: 11, maxWidth: 220 }} title={r.corrected_action}>{r.final_honest_state}</td>
+                      <td>{r.action ? <TrustActionButton row={r} /> : <span className="muted">—</span>}</td>
                     </tr>
                   ))}
                 </tbody>
