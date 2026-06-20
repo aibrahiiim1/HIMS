@@ -160,6 +160,7 @@ type Querier interface {
 	DatastoreSummaryByHost(ctx context.Context) ([]DatastoreSummaryByHostRow, error)
 	DeleteAlertRule(ctx context.Context, id uuid.UUID) error
 	DeleteAllMibWalkRows(ctx context.Context, deviceID uuid.UUID) error
+	DeleteBackupRun(ctx context.Context, id int64) error
 	// Removing a credential un-binds it from devices (FK ON DELETE SET NULL) and
 	// drops its group memberships (FK ON DELETE CASCADE).
 	DeleteCredential(ctx context.Context, id uuid.UUID) error
@@ -326,6 +327,7 @@ type Querier interface {
 	GetAgentJob(ctx context.Context, id uuid.UUID) (AgentJob, error)
 	GetAlert(ctx context.Context, id uuid.UUID) (Alert, error)
 	GetBMCInfo(ctx context.Context, deviceID uuid.UUID) (BmcInfo, error)
+	GetBackupRunContent(ctx context.Context, id int64) (GetBackupRunContentRow, error)
 	GetCameraInfo(ctx context.Context, deviceID uuid.UUID) (CameraInfo, error)
 	GetCollectionHealth(ctx context.Context, deviceID uuid.UUID) ([]VhCollectionHealth, error)
 	// Full row including the encrypted blob — used only by the key-gated
@@ -371,7 +373,8 @@ type Querier interface {
 	IncrDiscoveryJobScanned(ctx context.Context, id uuid.UUID) error
 	// ===== Audit log ===========================================================
 	InsertAuditLog(ctx context.Context, arg InsertAuditLogParams) error
-	InsertBackupRun(ctx context.Context, arg InsertBackupRunParams) (BackupRun, error)
+	InsertBackupRun(ctx context.Context, arg InsertBackupRunParams) (InsertBackupRunRow, error)
+	InsertBackupRunWithContent(ctx context.Context, arg InsertBackupRunWithContentParams) (InsertBackupRunWithContentRow, error)
 	InsertConfigBackup(ctx context.Context, arg InsertConfigBackupParams) (InsertConfigBackupRow, error)
 	InsertCredentialTestResult(ctx context.Context, arg InsertCredentialTestResultParams) error
 	// Credential test history persistence + read models. No secrets are ever stored
@@ -400,7 +403,7 @@ type Querier interface {
 	// (mirrors ListSelfHealCandidates without the cooldown — the job is unsettled for the
 	// whole window, not only after the cooldown elapses). Returns only unsettled jobs.
 	JobsCollectionState(ctx context.Context) ([]JobsCollectionStateRow, error)
-	LastSuccessfulBackup(ctx context.Context) (BackupRun, error)
+	LastSuccessfulBackup(ctx context.Context) (LastSuccessfulBackupRow, error)
 	// The most recent ONVIF/ISAPI credential-test outcome for a device — the CCTV
 	// fleet skip-guard reads this to avoid re-attempting a device that recently
 	// auth-failed (which would accumulate failed logins toward a Hikvision IP
@@ -449,7 +452,8 @@ type Querier interface {
 	// text (summary) / time range. NULL args are ignored.
 	ListAuditLogFiltered(ctx context.Context, arg ListAuditLogFilteredParams) ([]AuditLog, error)
 	ListBMCSensors(ctx context.Context, deviceID uuid.UUID) ([]BmcSensor, error)
-	ListBackupRuns(ctx context.Context) ([]BackupRun, error)
+	// Excludes the content blob (can be large); content is fetched on demand for download.
+	ListBackupRuns(ctx context.Context) ([]ListBackupRunsRow, error)
 	ListChildLocations(ctx context.Context, parentID *uuid.UUID) ([]Location, error)
 	// Metadata only (no content_encrypted) — newest first.
 	ListConfigBackupsByDevice(ctx context.Context, arg ListConfigBackupsByDeviceParams) ([]ListConfigBackupsByDeviceRow, error)

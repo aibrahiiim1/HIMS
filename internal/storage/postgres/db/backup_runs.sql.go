@@ -7,7 +7,40 @@ package db
 
 import (
 	"context"
+	"time"
 )
+
+const deleteBackupRun = `-- name: DeleteBackupRun :exec
+DELETE FROM backup_runs WHERE id = $1
+`
+
+func (q *Queries) DeleteBackupRun(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, deleteBackupRun, id)
+	return err
+}
+
+const getBackupRunContent = `-- name: GetBackupRunContent :one
+SELECT id, at, kind, content FROM backup_runs WHERE id = $1
+`
+
+type GetBackupRunContentRow struct {
+	ID      int64     `json:"id"`
+	At      time.Time `json:"at"`
+	Kind    string    `json:"kind"`
+	Content []byte    `json:"content"`
+}
+
+func (q *Queries) GetBackupRunContent(ctx context.Context, id int64) (GetBackupRunContentRow, error) {
+	row := q.db.QueryRow(ctx, getBackupRunContent, id)
+	var i GetBackupRunContentRow
+	err := row.Scan(
+		&i.ID,
+		&i.At,
+		&i.Kind,
+		&i.Content,
+	)
+	return i, err
+}
 
 const insertBackupRun = `-- name: InsertBackupRun :one
 INSERT INTO backup_runs (kind, status, tables, rows, size_bytes, actor, detail)
@@ -24,7 +57,19 @@ type InsertBackupRunParams struct {
 	Detail    string `json:"detail"`
 }
 
-func (q *Queries) InsertBackupRun(ctx context.Context, arg InsertBackupRunParams) (BackupRun, error) {
+type InsertBackupRunRow struct {
+	ID        int64     `json:"id"`
+	At        time.Time `json:"at"`
+	Kind      string    `json:"kind"`
+	Status    string    `json:"status"`
+	Tables    int32     `json:"tables"`
+	Rows      int32     `json:"rows"`
+	SizeBytes int64     `json:"size_bytes"`
+	Actor     string    `json:"actor"`
+	Detail    string    `json:"detail"`
+}
+
+func (q *Queries) InsertBackupRun(ctx context.Context, arg InsertBackupRunParams) (InsertBackupRunRow, error) {
 	row := q.db.QueryRow(ctx, insertBackupRun,
 		arg.Kind,
 		arg.Status,
@@ -34,7 +79,61 @@ func (q *Queries) InsertBackupRun(ctx context.Context, arg InsertBackupRunParams
 		arg.Actor,
 		arg.Detail,
 	)
-	var i BackupRun
+	var i InsertBackupRunRow
+	err := row.Scan(
+		&i.ID,
+		&i.At,
+		&i.Kind,
+		&i.Status,
+		&i.Tables,
+		&i.Rows,
+		&i.SizeBytes,
+		&i.Actor,
+		&i.Detail,
+	)
+	return i, err
+}
+
+const insertBackupRunWithContent = `-- name: InsertBackupRunWithContent :one
+INSERT INTO backup_runs (kind, status, tables, rows, size_bytes, actor, detail, content)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id, at, kind, status, tables, rows, size_bytes, actor, detail
+`
+
+type InsertBackupRunWithContentParams struct {
+	Kind      string `json:"kind"`
+	Status    string `json:"status"`
+	Tables    int32  `json:"tables"`
+	Rows      int32  `json:"rows"`
+	SizeBytes int64  `json:"size_bytes"`
+	Actor     string `json:"actor"`
+	Detail    string `json:"detail"`
+	Content   []byte `json:"content"`
+}
+
+type InsertBackupRunWithContentRow struct {
+	ID        int64     `json:"id"`
+	At        time.Time `json:"at"`
+	Kind      string    `json:"kind"`
+	Status    string    `json:"status"`
+	Tables    int32     `json:"tables"`
+	Rows      int32     `json:"rows"`
+	SizeBytes int64     `json:"size_bytes"`
+	Actor     string    `json:"actor"`
+	Detail    string    `json:"detail"`
+}
+
+func (q *Queries) InsertBackupRunWithContent(ctx context.Context, arg InsertBackupRunWithContentParams) (InsertBackupRunWithContentRow, error) {
+	row := q.db.QueryRow(ctx, insertBackupRunWithContent,
+		arg.Kind,
+		arg.Status,
+		arg.Tables,
+		arg.Rows,
+		arg.SizeBytes,
+		arg.Actor,
+		arg.Detail,
+		arg.Content,
+	)
+	var i InsertBackupRunWithContentRow
 	err := row.Scan(
 		&i.ID,
 		&i.At,
@@ -50,12 +149,25 @@ func (q *Queries) InsertBackupRun(ctx context.Context, arg InsertBackupRunParams
 }
 
 const lastSuccessfulBackup = `-- name: LastSuccessfulBackup :one
-SELECT id, at, kind, status, tables, rows, size_bytes, actor, detail FROM backup_runs WHERE status = 'success' ORDER BY at DESC LIMIT 1
+SELECT id, at, kind, status, tables, rows, size_bytes, actor, detail
+FROM backup_runs WHERE status = 'success' ORDER BY at DESC LIMIT 1
 `
 
-func (q *Queries) LastSuccessfulBackup(ctx context.Context) (BackupRun, error) {
+type LastSuccessfulBackupRow struct {
+	ID        int64     `json:"id"`
+	At        time.Time `json:"at"`
+	Kind      string    `json:"kind"`
+	Status    string    `json:"status"`
+	Tables    int32     `json:"tables"`
+	Rows      int32     `json:"rows"`
+	SizeBytes int64     `json:"size_bytes"`
+	Actor     string    `json:"actor"`
+	Detail    string    `json:"detail"`
+}
+
+func (q *Queries) LastSuccessfulBackup(ctx context.Context) (LastSuccessfulBackupRow, error) {
 	row := q.db.QueryRow(ctx, lastSuccessfulBackup)
-	var i BackupRun
+	var i LastSuccessfulBackupRow
 	err := row.Scan(
 		&i.ID,
 		&i.At,
@@ -71,18 +183,34 @@ func (q *Queries) LastSuccessfulBackup(ctx context.Context) (BackupRun, error) {
 }
 
 const listBackupRuns = `-- name: ListBackupRuns :many
-SELECT id, at, kind, status, tables, rows, size_bytes, actor, detail FROM backup_runs ORDER BY at DESC LIMIT 100
+SELECT id, at, kind, status, tables, rows, size_bytes, actor, detail,
+       (content IS NOT NULL) AS downloadable
+FROM backup_runs ORDER BY at DESC LIMIT 100
 `
 
-func (q *Queries) ListBackupRuns(ctx context.Context) ([]BackupRun, error) {
+type ListBackupRunsRow struct {
+	ID           int64       `json:"id"`
+	At           time.Time   `json:"at"`
+	Kind         string      `json:"kind"`
+	Status       string      `json:"status"`
+	Tables       int32       `json:"tables"`
+	Rows         int32       `json:"rows"`
+	SizeBytes    int64       `json:"size_bytes"`
+	Actor        string      `json:"actor"`
+	Detail       string      `json:"detail"`
+	Downloadable interface{} `json:"downloadable"`
+}
+
+// Excludes the content blob (can be large); content is fetched on demand for download.
+func (q *Queries) ListBackupRuns(ctx context.Context) ([]ListBackupRunsRow, error) {
 	rows, err := q.db.Query(ctx, listBackupRuns)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []BackupRun{}
+	items := []ListBackupRunsRow{}
 	for rows.Next() {
-		var i BackupRun
+		var i ListBackupRunsRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.At,
@@ -93,6 +221,7 @@ func (q *Queries) ListBackupRuns(ctx context.Context) ([]BackupRun, error) {
 			&i.SizeBytes,
 			&i.Actor,
 			&i.Detail,
+			&i.Downloadable,
 		); err != nil {
 			return nil, err
 		}

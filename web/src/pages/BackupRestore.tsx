@@ -4,8 +4,18 @@ import { DatabaseBackup, ShieldCheck, CircleCheck, CircleX, DownloadCloud, FileU
 import { api, type DRReadiness, type BackupRun } from '../api'
 import { PageHeader, Panel, Kpi, EmptyState, timeAgo } from '../components/ui'
 
-const API_BASE = import.meta.env.VITE_API_BASE ?? '/api/v1'
 const fmtBytes = (n: number) => (n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`)
+
+// Download via the authenticated API client (cookie-carrying fetch → blob → save). A plain <a href>
+// can fail silently when the request isn't a same-origin cookie navigation; this is reliable.
+async function downloadFile(path: string, filename: string) {
+  const blob = await api.getBlob(path)
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url; a.download = filename
+  document.body.appendChild(a); a.click(); a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
 
 export function BackupRestore() {
   const qc = useQueryClient()
@@ -17,6 +27,10 @@ export function BackupRestore() {
   const fileRef = useRef<HTMLInputElement>(null)
   const d = dr.data
 
+  const delRun = useMutation({
+    mutationFn: (id: number) => api.del(`/admin/backup/runs/${id}`),
+    onSuccess: inv,
+  })
   const validate = useMutation({
     mutationFn: async (text: string) => api.postText<{ ok: boolean; error?: string; summary?: { total_rows: number; tables: { table: string; rows: number }[] } }>('/admin/backup/validate', text, 'application/json'),
     onSuccess: (r) => setValResult(r.ok ? `✓ Valid archive — ${r.summary?.tables.length} tables, ${r.summary?.total_rows} rows` : `✗ ${r.error}`),
@@ -30,7 +44,7 @@ export function BackupRestore() {
     <div>
       <PageHeader title="Backup & Restore" icon={DatabaseBackup}
         subtitle="DR readiness, configuration snapshots, restore validation and backup history"
-        actions={<a className="btn btn-primary btn-sm" href={`${API_BASE}/admin/backup/export`} onClick={() => setTimeout(inv, 800)}><DownloadCloud size={14} /> Download config backup</a>} />
+        actions={<button className="btn btn-primary btn-sm" onClick={async () => { await downloadFile('/admin/backup/export', `hims-config-${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '')}.json`); inv() }}><DownloadCloud size={14} /> Download config backup</button>} />
 
       <div className="kpi-grid">
         <Kpi label="DR Checks Passing" value={d ? `${okCount}/${d.checklist.length}` : '—'} icon={ShieldCheck} tone={d && okCount === d.checklist.length ? 'ok' : 'warn'} />
@@ -74,17 +88,21 @@ export function BackupRestore() {
         {runs.data && runs.data.length === 0 && <EmptyState icon={DatabaseBackup} title="No backups yet" message="Download a config snapshot, or record an external pg_dump." />}
         {runs.data && runs.data.length > 0 && (
           <table className="data-table">
-            <thead><tr><th>When</th><th>Kind</th><th>Status</th><th>Tables</th><th>Rows</th><th>Size</th><th>Detail</th></tr></thead>
+            <thead><tr><th>When</th><th>Kind</th><th>Status</th><th>Tables</th><th>Rows</th><th>Size</th><th>Detail</th><th></th></tr></thead>
             <tbody>
               {runs.data.map((r) => (
                 <tr key={r.id}>
                   <td className="muted">{timeAgo(r.at)}</td>
-                  <td>{r.kind === 'external_pg_dump' ? <span className="badge badge-trunk">pg_dump</span> : <span className="badge badge-info">config</span>}</td>
+                  <td>{r.kind === 'external_pg_dump' ? <span className="badge badge-trunk">pg_dump</span> : r.kind === 'pre_reset' ? <span className="badge badge-warn">pre-reset</span> : <span className="badge badge-info">config</span>}</td>
                   <td>{r.status === 'success' ? <span className="badge badge-up">success</span> : <span className="badge badge-down">failed</span>}</td>
                   <td>{r.tables || '—'}</td>
                   <td>{r.rows || '—'}</td>
                   <td className="mono">{fmtBytes(r.size_bytes)}</td>
                   <td className="muted">{r.detail}</td>
+                  <td className="cell-actions">
+                    {r.downloadable && <button className="btn btn-ghost btn-xs" onClick={() => downloadFile(`/admin/backup/runs/${r.id}/download`, `hims-${r.kind}-${r.id}.json`)}><DownloadCloud size={12} /> Download</button>}
+                    <button className="btn btn-ghost btn-xs" onClick={() => { if (window.confirm('Delete this backup record? This cannot be undone.')) delRun.mutate(r.id) }}><Trash2 size={12} /></button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -110,10 +128,10 @@ function DangerZone() {
   const [confirm, setConfirm] = useState('')
   const [result, setResult] = useState<string>('')
   const reset = useMutation({
-    mutationFn: () => api.post<{ reset: boolean; deleted: Record<string, number> }>('/admin/database/reset', { categories: [...sel], confirm }),
+    mutationFn: () => api.post<{ reset: boolean; deleted: Record<string, number>; backup_id: number }>('/admin/database/reset', { categories: [...sel], confirm }),
     onSuccess: (r) => {
       const lines = Object.entries(r.deleted).map(([k, n]) => `${k}: ${n} rows`).join(' · ')
-      setResult(`Done — ${lines || 'nothing matched'}.`)
+      setResult(`Done — ${lines || 'nothing matched'}. Auto-backup #${r.backup_id} saved (download it from Backup History).`)
       setSel(new Set()); setConfirm('')
       qc.invalidateQueries() // refresh everything; the data changed fleet-wide
     },
@@ -126,7 +144,8 @@ function DangerZone() {
     <Panel title="Danger Zone — Initialize / Reset Database" icon={Trash2} className="panel-danger"
       subtitle="wipe selected data to empty">
       <p className="muted" style={{ fontSize: 13 }}>
-        Select the data to permanently delete, then type <b>ERASE</b> to confirm. This is <b>irreversible</b> — export a backup first.
+        Select the data to permanently delete, then type <b>ERASE</b> to confirm. A configuration backup is taken
+        <b> automatically before wiping</b> (saved to Backup History as <span className="badge badge-warn">pre-reset</span>, downloadable there).
         Users, roles, sessions, the encryption key, schema migrations, app settings and site/subnet definitions are never wiped here.
       </p>
       {sum.isLoading && <div className="loading">Loading categories…</div>}

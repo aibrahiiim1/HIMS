@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+
+	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
 )
 
 // Database reset / initialize. Lets an admin wipe selected categories of data so the database can be
@@ -121,6 +123,24 @@ func (s *Server) resetDatabase(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+
+	// Safety: take a configuration snapshot FIRST and store it as a downloadable backup run, so the
+	// wipe is always recoverable to the extent the snapshot covers. If the backup itself fails, abort
+	// the whole reset — never wipe without a backup.
+	var backupID int64
+	if data, nt, nr, berr := s.buildConfigSnapshot(ctx); berr != nil {
+		http.Error(w, "pre-reset backup failed: "+berr.Error()+" — nothing was deleted", http.StatusInternalServerError)
+		return
+	} else if run, ierr := s.queries.InsertBackupRunWithContent(ctx, db.InsertBackupRunWithContentParams{
+		Kind: "pre_reset", Status: "success", Tables: int32(nt), Rows: int32(nr),
+		SizeBytes: int64(len(data)), Actor: s.actor(r), Detail: "automatic backup before database reset", Content: data,
+	}); ierr != nil {
+		http.Error(w, "pre-reset backup could not be saved: "+ierr.Error()+" — nothing was deleted", http.StatusInternalServerError)
+		return
+	} else {
+		backupID = run.ID
+	}
+
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		writeErr(w, err)
@@ -151,6 +171,6 @@ func (s *Server) resetDatabase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.audit(r, "admin", "database.reset", "database", "", "Database reset: wiped "+strings.Join(req.Categories, ", "), map[string]any{"categories": req.Categories, "counts": counts})
-	writeJSON(w, http.StatusOK, map[string]any{"reset": true, "deleted": counts})
+	s.audit(r, "admin", "database.reset", "database", "", "Database reset: wiped "+strings.Join(req.Categories, ", "), map[string]any{"categories": req.Categories, "counts": counts, "backup_id": backupID})
+	writeJSON(w, http.StatusOK, map[string]any{"reset": true, "deleted": counts, "backup_id": backupID})
 }

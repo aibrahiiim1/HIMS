@@ -324,6 +324,8 @@ func (s *Server) routes() {
 		r.Get("/admin/backup/export", s.exportBackup)
 		r.Post("/admin/backup/validate", s.validateBackup)
 		r.Get("/admin/backup/runs", s.listBackupRuns)
+		r.Get("/admin/backup/runs/{id}/download", s.downloadBackupRun) // re-download a stored snapshot
+		r.Delete("/admin/backup/runs/{id}", s.deleteBackupRun)         // delete one backup record
 		r.Post("/admin/backup/record-external", s.recordExternalBackup)
 		r.Get("/admin/dr-readiness", s.drReadiness)
 		r.Get("/admin/database/summary", s.databaseSummary) // wipeable categories + current row counts

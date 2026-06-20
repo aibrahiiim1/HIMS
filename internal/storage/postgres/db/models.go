@@ -134,6 +134,7 @@ type BackupRun struct {
 	SizeBytes int64     `json:"size_bytes"`
 	Actor     string    `json:"actor"`
 	Detail    string    `json:"detail"`
+	Content   []byte    `json:"content"`
 }
 
 type BmcInfo struct {

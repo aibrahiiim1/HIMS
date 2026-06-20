@@ -1,15 +1,18 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/coralsearesorts/hims/internal/backup"
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
+	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -27,23 +30,18 @@ func rawJSON(v any) json.RawMessage {
 	return b
 }
 
-// exportBackup handles GET /admin/backup/export — builds + streams a config
-// snapshot and records a backup run. Credentials are exported as metadata only
-// (no encrypted blob); notification-channel + config-backup secrets are
-// excluded (recover those from a full pg_dump).
-func (s *Server) exportBackup(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+// buildConfigSnapshot builds the portable configuration snapshot (JSON, no raw secrets). Reused by
+// the manual export AND the automatic pre-reset backup. Credentials are metadata-only (no blob).
+func (s *Server) buildConfigSnapshot(ctx context.Context) (data []byte, nTables, nRows int, err error) {
 	tables := map[string]json.RawMessage{}
-
 	add := func(name string, fetch func() (any, error)) error {
-		v, err := fetch()
-		if err != nil {
-			return err
+		v, e := fetch()
+		if e != nil {
+			return e
 		}
 		tables[name] = rawJSON(v)
 		return nil
 	}
-
 	type step struct {
 		name  string
 		fetch func() (any, error)
@@ -62,9 +60,9 @@ func (s *Server) exportBackup(w http.ResponseWriter, r *http.Request) {
 		{"roles", func() (any, error) { return s.queries.ListRoles(ctx) }},
 		{"permissions", func() (any, error) { return s.queries.ListPermissions(ctx) }},
 		{"credentials", func() (any, error) { // metadata only — never the blob
-			rows, err := s.queries.ListCredentials(ctx)
-			if err != nil {
-				return nil, err
+			rows, e := s.queries.ListCredentials(ctx)
+			if e != nil {
+				return nil, e
 			}
 			out := make([]credentialDTO, len(rows))
 			for i, c := range rows {
@@ -74,13 +72,18 @@ func (s *Server) exportBackup(w http.ResponseWriter, r *http.Request) {
 		}},
 	}
 	for _, st := range steps {
-		if err := add(st.name, st.fetch); err != nil {
-			writeErr(w, err)
-			return
+		if e := add(st.name, st.fetch); e != nil {
+			return nil, 0, 0, e
 		}
 	}
+	return backup.Build(tables, time.Now().UTC())
+}
 
-	data, nt, nr, err := backup.Build(tables, time.Now().UTC())
+// exportBackup handles GET /admin/backup/export — builds + streams a config snapshot and records a
+// backup run WITH its content stored, so it can be re-downloaded or deleted later.
+func (s *Server) exportBackup(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	data, nt, nr, err := s.buildConfigSnapshot(ctx)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -89,14 +92,50 @@ func (s *Server) exportBackup(w http.ResponseWriter, r *http.Request) {
 	if actor == "" {
 		actor = "operator"
 	}
-	_, _ = s.queries.InsertBackupRun(ctx, db.InsertBackupRunParams{
+	_, _ = s.queries.InsertBackupRunWithContent(ctx, db.InsertBackupRunWithContentParams{
 		Kind: "config_export", Status: "success", Tables: int32(nt), Rows: int32(nr),
-		SizeBytes: int64(len(data)), Actor: actor, Detail: "configuration snapshot",
+		SizeBytes: int64(len(data)), Actor: actor, Detail: "configuration snapshot", Content: data,
 	})
 	s.audit(r, "config", "backup.export", "backup", "", fmt.Sprintf("Exported config snapshot (%d tables, %d rows)", nt, nr), nil)
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Disposition", "attachment; filename=\"hims-config-"+time.Now().UTC().Format("20060102-1504")+".json\"")
 	_, _ = w.Write(data)
+}
+
+// downloadBackupRun handles GET /admin/backup/runs/{id}/download — streams a stored snapshot.
+func (s *Server) downloadBackupRun(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	row, err := s.queries.GetBackupRunContent(r.Context(), id)
+	if err != nil {
+		http.Error(w, "backup not found", http.StatusNotFound)
+		return
+	}
+	if len(row.Content) == 0 {
+		http.Error(w, "this backup has no stored content (e.g. an external pg_dump record) — nothing to download", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", "hims-"+row.Kind+"-"+row.At.Format("20060102-1504")+".json"))
+	_, _ = w.Write(row.Content)
+}
+
+// deleteBackupRun handles DELETE /admin/backup/runs/{id} — removes one backup record (+ content).
+func (s *Server) deleteBackupRun(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	if err := s.queries.DeleteBackupRun(r.Context(), id); err != nil {
+		writeErr(w, err)
+		return
+	}
+	s.audit(r, "config", "backup.delete", "backup", strconv.FormatInt(id, 10), "Deleted backup run", nil)
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": true})
 }
 
 // validateBackup handles POST /admin/backup/validate — parses an uploaded

@@ -2146,6 +2146,7 @@ export interface BackupRun {
   size_bytes: number
   actor: string
   detail: string
+  downloadable?: boolean
 }
 
 // Management Access Coverage (GET /dashboard/access-coverage) — how many devices
