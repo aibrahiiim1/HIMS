@@ -33,6 +33,19 @@ function RoleBadge({ role }: { role?: string }) {
 
 const isOffline = (s: string) => ['down', 'offline', 'needs_attention'].includes((s || '').toLowerCase())
 
+// The Device column should show the resolved NAME, not the IP. At discovery a device's `name`
+// defaults to its IP when no hostname resolved; the real collected hostname lands in `hostname`.
+// Prefer a real name (name or hostname that differs from the IP), and fall back to the IP only when
+// nothing resolved — the IP column shows the address regardless.
+function deviceDisplayName(d: Device): string {
+  const ip = d.primary_ip ?? ''
+  // A "real" name is one that isn't the bare IP and isn't a generic default (localhost*).
+  const real = (v?: string | null) => !!v && v !== ip && !/^localhost(\.|$)/i.test(v)
+  if (real(d.name)) return d.name
+  if (real(d.hostname)) return d.hostname!
+  return ip || d.name || '—'
+}
+
 export function DeviceList({ category, title, detailBase, headerExtra, preContent, showRole }: Props) {
   const hostDetail = (d: Device) => (d.server_role?.startsWith('virtual_host') ? `/virtual-hosts/${d.id}` : `${detailBase}/${d.id}`)
   const qc = useQueryClient()
@@ -111,10 +124,10 @@ export function DeviceList({ category, title, detailBase, headerExtra, preConten
                 <tr key={d.id}>
                   <td>
                     <div className="dev-cell">
-                      <span className="dev-avatar" style={{ background: colorFor(d.category) }}>{(d.name || d.category).charAt(0).toUpperCase()}</span>
+                      <span className="dev-avatar" style={{ background: colorFor(d.category) }}>{(deviceDisplayName(d) || d.category).charAt(0).toUpperCase()}</span>
                       <div className="dev-meta">
-                        <Link className="cell-name" to={hostDetail(d)}>{d.name}</Link>
-                        {d.hostname && <small>{d.hostname}</small>}
+                        <Link className="cell-name" to={hostDetail(d)}>{deviceDisplayName(d)}</Link>
+                        {d.hostname && d.hostname !== deviceDisplayName(d) && <small>{d.hostname}</small>}
                       </div>
                     </div>
                   </td>
