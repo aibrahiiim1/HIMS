@@ -54,9 +54,9 @@ var resetCategories = []resetCategory{
 	{Key: "workorders", Label: "Work orders (incl. events & parts)",
 		Count: "SELECT count(*) FROM work_orders",
 		Stmts: []string{"DELETE FROM work_order_parts", "DELETE FROM work_order_events", "DELETE FROM work_orders"}},
-	{Key: "backups", Label: "Backup runs & config backups",
-		Count: "SELECT count(*) FROM backup_runs",
-		Stmts: []string{"DELETE FROM backup_runs", "DELETE FROM config_backups"}},
+	// NOTE: backups (backup_runs / config_backups) are deliberately NOT wipeable here — the reset must
+	// never delete the backup history or the automatic pre-reset safety backup it just took. Manage
+	// backups individually from Backup History instead.
 }
 
 func resetCategoryByKey(k string) *resetCategory {
