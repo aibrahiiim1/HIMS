@@ -41,9 +41,21 @@ type auditRow struct {
 }
 
 type probeResult struct {
-	esxi, redfish                bool
-	p443, p902, p5985, p22, p161 bool
-	serverHdr                    string
+	esxi, redfish                      bool
+	p443, p902, p5985, p22, p135, p445 bool
+	serverHdr                          string
+}
+
+// winEvidence / linuxEvidence decide deep collectors from REAL evidence, never from the bare
+// category label. A device categorised "server" with no Windows signal must NOT be told it is
+// "missing WinRM/WMI".
+func winEvidence(d db.Device, pr probeResult, att map[string]bool) bool {
+	// 135 (MSRPC/DCOM) and 5985 (WinRM) are Windows-specific. 445 (SMB) is NOT used as evidence on
+	// its own — Linux Samba / NAS appliances expose it and are not WMI-manageable.
+	return d.OsFamily == "windows" || pr.p5985 || pr.p135 || att["winrm"] || att["wmi"]
+}
+func linuxEvidence(d db.Device, pr probeResult, att map[string]bool) bool {
+	return d.OsFamily == "linux" || pr.p22 || att["ssh"]
 }
 
 func (s *Server) trustAudit(w http.ResponseWriter, r *http.Request) {
@@ -139,13 +151,22 @@ func (s *Server) trustAudit(w http.ResponseWriter, r *http.Request) {
 		}
 		pr := probes[d.ID]
 		ev := buildEvidence(d, suc, pr, hasIface[d.ID])
-		expected := expectedCollectors(d, pr)
 		attSet := setOf(att)
+		expected := expectedCollectors(d, pr, attSet)
 		var missing []string
 		for _, e := range expected {
 			if !attSet[e] {
 				missing = append(missing, e)
 			}
+		}
+		// Collapse alternative collectors for the SAME capability: winrm↔wmi are two paths to
+		// Windows deep collection, onvif↔isapi to camera inventory. If EITHER was attempted, the
+		// capability was attempted — don't report the sibling as a skipped collector.
+		if attSet["winrm"] || attSet["wmi"] {
+			missing = removeAll(missing, "winrm", "wmi")
+		}
+		if attSet["onvif"] || attSet["isapi"] {
+			missing = removeAll(missing, "onvif", "isapi")
 		}
 		row := auditRow{
 			IP: addrStr(d.PrimaryIp), DeviceID: d.ID.String(), Category: d.Category, State: c.state,
@@ -201,9 +222,12 @@ type patternAgg struct {
 	cats     map[string]bool
 }
 
-// expectedCollectors maps a device's evidence (category, OS, vendor, and live probe) to the
-// collectors that SHOULD be attempted.
-func expectedCollectors(d db.Device, pr probeResult) []string {
+// expectedCollectors maps a device's EVIDENCE (probe fingerprint, OS family, prior attempts) to the
+// collectors that should be attempted — NOT the bare category label. A "server" with no Windows
+// signal is never told it is missing WinRM/WMI; a Linux/appliance/BMC/ESXi host gets its real
+// applicable collector. Infrastructure classes (switch/camera/etc.) keep their protocol since the
+// category there IS the evidence (it was classified from SNMP/ONVIF/etc.).
+func expectedCollectors(d db.Device, pr probeResult, att map[string]bool) []string {
 	set := map[string]bool{}
 	add := func(xs ...string) {
 		for _, x := range xs {
@@ -211,9 +235,7 @@ func expectedCollectors(d db.Device, pr probeResult) []string {
 		}
 	}
 	switch d.Category {
-	case "switch", "router":
-		add("snmp")
-	case "firewall":
+	case "switch", "router", "firewall", "printer", "ups", "storage", "pdu":
 		add("snmp")
 	case "camera", "nvr", "dvr":
 		add("onvif", "isapi")
@@ -221,33 +243,26 @@ func expectedCollectors(d db.Device, pr probeResult) []string {
 		add("vendor_api", "snmp")
 	case "pbx", "ip_phone", "voice_gateway":
 		add("vendor_api")
-	case "printer", "ups", "storage", "pdu":
-		add("snmp")
 	case "virtual_host":
 		if d.DeviceClass != nil && *d.DeviceClass == "hyperv" {
 			add("wmi")
 		} else {
 			add("vmware")
 		}
-	case "server", "endpoint":
-		if d.OsFamily == "linux" {
-			add("ssh")
-		} else {
-			add("winrm", "wmi")
-		}
+		// server / endpoint / unknown: purely evidence-driven (handled below); no blanket WinRM/WMI.
 	}
-	// Live probe overrides the label: evidence beats the stored category.
+	// Evidence-driven deep collectors (apply to every class; evidence beats the label).
 	if pr.esxi {
-		add("vmware")
+		add("vmware") // vSphere SDK present
 	}
 	if pr.redfish {
-		add("redfish")
+		add("redfish") // iLO/iDRAC/Redfish BMC present
 	}
-	if pr.p5985 {
-		add("winrm", "wmi")
+	if winEvidence(d, pr, att) {
+		add("winrm", "wmi") // 5985/135/445 open, Windows OS, or a prior WinRM/WMI attempt
 	}
-	if d.OsFamily == "windows" {
-		add("winrm", "wmi")
+	if linuxEvidence(d, pr, att) {
+		add("ssh") // 22 open, Linux OS, or a prior SSH attempt
 	}
 	return sortUniq(keys(set))
 }
@@ -272,6 +287,12 @@ func buildEvidence(d db.Device, suc []string, pr probeResult, iface bool) []stri
 	if pr.p5985 {
 		ev = append(ev, "tcp/5985(WinRM)")
 	}
+	if pr.p135 || pr.p445 {
+		ev = append(ev, "tcp/135-445(Windows RPC/SMB)")
+	}
+	if pr.p22 {
+		ev = append(ev, "tcp/22(SSH)")
+	}
 	if pr.p443 {
 		ev = append(ev, "tcp/443")
 	}
@@ -287,21 +308,29 @@ func buildEvidence(d db.Device, suc []string, pr probeResult, iface bool) []stri
 	return ev
 }
 
-// assessAudit returns (patternKey, correctedAction, honestState).
+// assessAudit returns (patternKey, correctedAction, honestState). The `missing` set is already
+// evidence-gated (a collector only appears there if its evidence exists), so a missing deep
+// collector is always a REAL skip, never a category-default guess.
 func assessAudit(d db.Device, state string, suc, missing []string, pr probeResult) (string, string, string) {
 	switch {
-	case pr.esxi && contains(missing, "vmware"):
+	// --- real skipped-collector findings (evidence present, collector not attempted) ---
+	case contains(missing, "vmware"):
 		return "esxi_evidence_vsphere_skipped",
 			"Classify as ESXi virtual_host and run vSphere collection (collect-vsphere).",
 			"INCOMPLETE: vSphere SDK present but vmware collector never attempted."
-	case pr.redfish && contains(missing, "redfish"):
+	case contains(missing, "redfish"):
 		return "redfish_bmc_reachable_not_collected",
 			"Add an iLO/iDRAC (http_basic) credential, then collect BMC via the Redfish driver.",
 			"INCOMPLETE: Redfish/BMC reachable but no BMC collected (no valid iLO credential)."
-	case (pr.p5985 || d.OsFamily == "windows") && (contains(missing, "winrm") || contains(missing, "wmi")):
+	case contains(missing, "winrm") || contains(missing, "wmi"):
 		return "windows_evidence_deep_collect_skipped",
-			"Route to the relay agent for WMI/DCOM (Win2008 WinRM negotiation fails); verify the credential.",
+			"Windows evidence present — route to the relay agent for WMI/DCOM (Win2008 WinRM negotiation fails); verify the credential.",
 			"INCOMPLETE: Windows host with no deep (WMI/WinRM) collection attempted."
+	case contains(missing, "ssh"):
+		return "linux_evidence_ssh_skipped",
+			"SSH/Linux evidence present — attempt the SSH collector / verify the SSH credential.",
+			"INCOMPLETE: SSH evidence present but the SSH collector was not attempted."
+	// --- honest terminal states (no applicable collector was skipped) ---
 	case state == MgmtCredentialFailed:
 		return "credential_failed_real",
 			"Supply/correct the credential for the applicable protocol, then re-collect.",
@@ -310,20 +339,36 @@ func assessAudit(d db.Device, state string, suc, missing []string, pr probeResul
 		return "authenticated_but_access_denied",
 			"Grant the account WMI/DCOM/API rights on the host (host-side), then re-scan.",
 			"Honest: credential authenticates but host denies access."
+	case len(missing) > 0:
+		// A non-deep collector (e.g. snmp) is applicable but unattempted.
+		return "applicable_collector_skipped",
+			"Attempt the applicable collector (" + strings.Join(missing, ",") + ").",
+			"INCOMPLETE: an applicable collector (" + strings.Join(missing, ",") + ") was not attempted."
 	case len(suc) == 0:
 		return "unidentified_no_working_collector",
 			"No collector authenticated. Add correct credentials or classify manually; confirm the device is in scope.",
 			"Honest: reachable but no applicable credential succeeded — unidentified."
-	case state == MgmtWebAuthenticated && len(missing) > 0:
-		return "web_authenticated_deep_skipped",
-			"A deep collector (" + strings.Join(missing, ",") + ") is applicable — attempt it.",
-			"INCOMPLETE: only a web login succeeded; a deeper collector applies."
-	case state == MgmtManaged && len(missing) > 0:
-		return "managed_shallow_stronger_skipped",
-			"Managed only by a shallow protocol; attempt the deeper collector (" + strings.Join(missing, ",") + ").",
-			"INCOMPLETE: managed by a shallow protocol (e.g. SNMP) while a deeper collector applies."
+	case state == MgmtWebAuthenticated || (contains(suc, "http") && !hasDeep(suc)):
+		return "web_only_no_deeper_evidence",
+			"Web login works and no stronger protocol is evidenced — treat as web-only/unsupported, or add deep evidence (enable SNMP/WinRM/SSH/API on the host).",
+			"Honest: web-only — only an HTTP login authenticated and no deeper collector is applicable from current evidence."
+	case state == MgmtManaged:
+		return "managed_shallow_no_deeper_evidence",
+			"Managed via a shallow protocol (e.g. SNMP) and no deeper collector is evidenced — acceptable unless this host should expose WinRM/SSH/Redfish/vSphere.",
+			"Honest: managed as fully as current evidence allows (no deeper collector applicable)."
 	}
-	return "", "Review.", "Weak state with no stronger collector evidenced."
+	return "", "Review.", "Honest: weak state with no stronger collector evidenced."
+}
+
+// hasDeep reports whether a succeeded-protocol set already includes a deep collector.
+func hasDeep(suc []string) bool {
+	for _, p := range suc {
+		switch p {
+		case "winrm", "wmi", "ssh", "vmware", "redfish":
+			return true
+		}
+	}
+	return false
 }
 
 // probeHost does a bounded, read-only fingerprint of a host.
@@ -341,6 +386,8 @@ func probeHost(ip string) probeResult {
 	pr.p902 = dial("902")
 	pr.p5985 = dial("5985")
 	pr.p22 = dial("22")
+	pr.p135 = dial("135")
+	pr.p445 = dial("445")
 	client := &http.Client{
 		Timeout:       4 * time.Second,
 		Transport:     &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
@@ -442,6 +489,16 @@ func addUniq(xs []string, v string) []string {
 		return xs
 	}
 	return append(xs, v)
+}
+func removeAll(xs []string, drop ...string) []string {
+	ds := setOf(drop)
+	out := xs[:0:0]
+	for _, x := range xs {
+		if !ds[x] {
+			out = append(out, x)
+		}
+	}
+	return out
 }
 func sortUniq(xs []string) []string {
 	m := setOf(xs)

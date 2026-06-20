@@ -4,21 +4,12 @@ import { Link } from 'react-router-dom'
 import { ShieldCheck, AlertTriangle, RefreshCw } from 'lucide-react'
 import { api, type TrustAuditReport } from '../api'
 import { PageHeader, Panel, Kpi, EmptyState } from '../components/ui'
+import { PATTERN_LABEL } from '../trustPatterns'
 
 // Discovery Trust Audit — device-class-agnostic. For every weak / shallowly-managed device it shows
 // evidence → expected collectors → attempted → missing, whether a weaker protocol won while a
 // stronger was skipped, the corrected action, and the honest final state. Data is from
 // /discovery/trust-audit which actively re-probes weak hosts (read-only fingerprint).
-const PATTERN_LABEL: Record<string, string> = {
-  esxi_evidence_vsphere_skipped: 'ESXi evidence — vSphere skipped',
-  redfish_bmc_reachable_not_collected: 'Redfish/BMC reachable — not collected',
-  windows_evidence_deep_collect_skipped: 'Windows — deep (WMI/WinRM) skipped',
-  managed_shallow_stronger_skipped: 'Managed shallow — stronger skipped',
-  web_authenticated_deep_skipped: 'Web-auth only — deep skipped',
-  credential_failed_real: 'Credential failed (honest)',
-  authenticated_but_access_denied: 'Auth OK but access denied (host-side)',
-  unidentified_no_working_collector: 'Unidentified — no collector worked',
-}
 const Chips = ({ items, tone }: { items: string[] | null; tone?: string }) => (
   <span style={{ display: 'inline-flex', gap: 3, flexWrap: 'wrap' }}>
     {(items ?? []).map((x) => <span key={x} className={'badge ' + (tone || 'badge-unknown')} style={{ fontSize: 10 }}>{x}</span>)}
