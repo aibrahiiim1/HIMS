@@ -170,7 +170,7 @@ func (s *Server) pickAgentCredID(ctx context.Context, d db.Device, protocol stri
 	want := func(kind string) bool {
 		switch protocol {
 		case "winrm", "wmi":
-			return kind == "winrm" || kind == "wmi"
+			return kind == "windows" || kind == "winrm" || kind == "wmi"
 		case "ssh":
 			return kind == "ssh" || kind == "cli"
 		}

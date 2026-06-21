@@ -524,11 +524,11 @@ func (s *Server) tryWMIFallback(ctx context.Context, d db.Device, ip string, can
 func credKindMatchesMethod(kind, method string) bool {
 	switch method {
 	case "winrm", "wmi":
-		// Windows: both WinRM and WMI credentials are user/pass and work over either
-		// transport, so the direct WinRM path and the agent WMI path try the SAME
-		// candidate set — they converge to the same managed state when a valid
+		// Windows: a unified "windows" credential (and the legacy winrm/wmi kinds) are all
+		// user/pass and work over either transport, so the direct WinRM path and the agent WMI
+		// path try the SAME candidate set — they converge to the same managed state when a valid
 		// credential exists.
-		return kind == "winrm" || kind == "wmi"
+		return kind == "windows" || kind == "winrm" || kind == "wmi"
 	}
 	return kind == "ssh" || kind == "cli" // linux
 }

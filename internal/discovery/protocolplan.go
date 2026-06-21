@@ -35,7 +35,7 @@ func kindToken(k domain.CredentialKind) string {
 		return "snmp"
 	case domain.CredSSH:
 		return "ssh"
-	case domain.CredWinRM, domain.CredWMI:
+	case domain.CredWinRM, domain.CredWMI, domain.CredWindows:
 		return "winrm"
 	case domain.CredONVIF:
 		return "onvif"
@@ -131,9 +131,9 @@ func planProtocols(ports []int, sshBanner, httpServer, httpTitle, httpBody strin
 		// Windows: WinRM is the management protocol. HTTP only if a web port is
 		// open (rare mgmt UI). Never SNMP/SSH/ONVIF.
 		if httpOpen {
-			return mk("windows", []string{"winrm"}, domain.CredWinRM, domain.CredHTTPBasic)
+			return mk("windows", []string{"winrm"}, domain.CredWindows, domain.CredWinRM, domain.CredHTTPBasic)
 		}
-		return mk("windows", []string{"winrm"}, domain.CredWinRM)
+		return mk("windows", []string{"winrm"}, domain.CredWindows, domain.CredWinRM)
 	case appliance:
 		// SSH-managed network appliance (wireless controller, firewall, load
 		// balancer, switch with a mgmt UI). Try SNMP + SSH (+ HTTP) — NOT SSH-only —

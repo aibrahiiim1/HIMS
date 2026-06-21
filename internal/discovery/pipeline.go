@@ -83,7 +83,7 @@ func portAllowsProto(ports []int, kind domain.CredentialKind) bool {
 	switch kind {
 	case domain.CredSSH:
 		return hasPortN(ports, 22)
-	case domain.CredWinRM:
+	case domain.CredWinRM, domain.CredWindows:
 		return hasPortN(ports, 5985) || hasPortN(ports, 5986)
 	case domain.CredONVIF, domain.CredHTTPBasic, domain.CredVendorAPI:
 		return anyWebPort(ports)
@@ -97,7 +97,7 @@ func portAllowsProto(ports []int, kind domain.CredentialKind) bool {
 // using the real OS caption; ONVIF→camera is already definitive.
 func provisionalCategory(kind domain.CredentialKind) domain.DeviceCategory {
 	switch kind {
-	case domain.CredWinRM:
+	case domain.CredWinRM, domain.CredWindows:
 		return domain.CatEndpoint
 	case domain.CredSSH:
 		return domain.CatServer

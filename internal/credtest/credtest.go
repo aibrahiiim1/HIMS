@@ -76,7 +76,9 @@ func ProtocolForKind(kind string) string {
 		return "snmp"
 	case k == "ssh" || k == "cli":
 		return "ssh"
-	case k == "winrm":
+	case k == "winrm" || k == "windows":
+		// A unified "windows" credential is tested over WinRM; the WMI/DCOM and
+		// relay-agent transports are exercised at collection time.
 		return "winrm"
 	case k == "wmi":
 		return "wmi"

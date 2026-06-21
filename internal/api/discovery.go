@@ -189,7 +189,7 @@ func (s *Server) scanPreflight(w http.ResponseWriter, r *http.Request) {
 			counts["snmp"]++
 		case string(domain.CredSSH):
 			counts["ssh"]++
-		case string(domain.CredWinRM):
+		case string(domain.CredWinRM), string(domain.CredWindows):
 			counts["winrm"]++
 		case string(domain.CredWMI):
 			counts["wmi"]++
