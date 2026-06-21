@@ -304,6 +304,9 @@ function NetworkScan({ locations, locPath, creds, onLaunch, setMsg }: { location
   const [exclude, setExclude] = useState('')
   const [location, setLocation] = useState('')
   const [showAdv, setShowAdv] = useState(false)
+  const [selCreds, setSelCreds] = useState<Set<string>>(new Set()) // empty = use ALL stored credentials
+  const toggleCred = (id: string) => setSelCreds((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n })
+  const credIds = [...selCreds]
 
   const hasTargets = !!targets.trim()
   // No targets typed but a site is selected → scan every subnet bound to that site.
@@ -316,19 +319,21 @@ function NetworkScan({ locations, locPath, creds, onLaunch, setMsg }: { location
       mode: siteScan ? 'site_subnets' : 'targets',
       targets: siteScan ? '' : targets.trim(),
       location_id: location || null,
-      credential_ids: [], // always auto-try ALL stored credentials
+      credential_ids: credIds, // empty = auto-try ALL; otherwise restrict to the chosen credentials
       exclude: exclude.trim(),
     }),
     onSuccess: (j) => { setTargets(''); setExclude(''); onLaunch(j as DiscoveryJob); setMsg('Scan launched.') },
     onError: (e) => setMsg((e as Error).message),
   })
 
-  // Preflight: what protocols we're equipped to authenticate with for this scope.
+  // Preflight: what protocols we're equipped to authenticate with for this scope (scoped to the
+  // selected credentials when the operator picks specific ones).
   const preflight = useQuery({
-    queryKey: ['scan-preflight', location],
+    queryKey: ['scan-preflight', location, credIds.join(',')],
     queryFn: () => {
       const p = new URLSearchParams()
       if (location) p.set('location_id', location)
+      if (credIds.length) p.set('credential_ids', credIds.join(','))
       return api.get<ScanPreflight>(`/discovery/scan-preflight?${p.toString()}`)
     },
   })
@@ -355,7 +360,7 @@ function NetworkScan({ locations, locPath, creds, onLaunch, setMsg }: { location
         </select>
         <button style={btn} disabled={!canScan || scan.isPending} onClick={() => scan.mutate()}>{btnLabel}</button>
         {creds.length > 0
-          ? <span className="muted" style={{ fontSize: 12 }}>🔑 Automatically tries all {creds.length} stored credential{creds.length === 1 ? '' : 's'}.</span>
+          ? <span className="muted" style={{ fontSize: 12 }}>🔑 {credIds.length ? `Using ${credIds.length} selected credential${credIds.length === 1 ? '' : 's'} (see Advanced).` : `Automatically tries all ${creds.length} stored credential${creds.length === 1 ? '' : 's'}.`}</span>
           : <Link to="/credentials" style={{ fontSize: 12 }}>No credentials yet — add some so devices can be managed →</Link>}
       </div>
 
@@ -368,6 +373,23 @@ function NetworkScan({ locations, locPath, creds, onLaunch, setMsg }: { location
             <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Exclude IPs (optional)</div>
             <input style={{ ...input, width: 360 }} placeholder="e.g. 172.21.96.10, 172.21.96.20-25, 172.21.96.0/28" value={exclude} onChange={(e) => setExclude(e.target.value)} />
             <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>Single IPs, ranges, or CIDRs (comma/space-separated) carved out of the scope above — those hosts are not scanned.</div>
+
+            {creds.length > 0 && (
+              <div style={{ marginTop: 14 }}>
+                <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+                  Use specific credentials (optional) — default: try all. {selCreds.size > 0 && <button style={{ ...ghost, fontSize: 11 }} onClick={() => setSelCreds(new Set())}>clear selection</button>}
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 180, overflowY: 'auto', padding: 4, border: '1px solid #d6dee8', borderRadius: 6 }}>
+                  {creds.map((c) => (
+                    <label key={c.id} style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: 12, padding: '3px 8px', borderRadius: 12, border: `1px solid ${selCreds.has(c.id) ? '#90caf9' : '#d6dee8'}`, background: selCreds.has(c.id) ? '#e3f2fd' : 'transparent', cursor: 'pointer' }}>
+                      <input type="checkbox" checked={selCreds.has(c.id)} onChange={() => toggleCred(c.id)} />
+                      {c.name} <span className="muted">· {c.kind}</span>
+                    </label>
+                  ))}
+                </div>
+                <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>When none are checked, the scan tries every stored credential. Check some to restrict this scan to only those.</div>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -393,8 +415,7 @@ function ScanPreflightPanel({ pf, siteSelected }: { pf: ScanPreflight; siteSelec
       <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>What HIMS can authenticate with here</div>
       <div className="muted" style={{ fontSize: 11, marginBottom: 8 }}>All of these are tried automatically — this is just a heads-up of what's covered. You can still scan with gaps; uncovered devices are simply listed as needing that credential.</div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-        {chip('WinRM', c.winrm ?? 0)}
-        {chip('WMI/DCOM', c.wmi ?? 0)}
+        {chip('Windows', c.windows ?? 0)}
         {chip('SSH', c.ssh ?? 0)}
         {chip('SNMP', c.snmp ?? 0)}
         {chip('ONVIF', c.onvif ?? 0)}

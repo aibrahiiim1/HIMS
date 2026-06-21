@@ -179,7 +179,7 @@ func (s *Server) scanPreflight(w http.ResponseWriter, r *http.Request) {
 	for _, id := range selected {
 		selSet[id] = true
 	}
-	counts := map[string]int{"snmp": 0, "ssh": 0, "winrm": 0, "wmi": 0, "onvif": 0, "http_basic": 0, "vendor_api": 0}
+	counts := map[string]int{"snmp": 0, "ssh": 0, "windows": 0, "onvif": 0, "http_basic": 0, "vendor_api": 0}
 	for _, c := range creds {
 		if len(selSet) > 0 && !selSet[c.ID.String()] {
 			continue
@@ -189,10 +189,8 @@ func (s *Server) scanPreflight(w http.ResponseWriter, r *http.Request) {
 			counts["snmp"]++
 		case string(domain.CredSSH):
 			counts["ssh"]++
-		case string(domain.CredWinRM), string(domain.CredWindows):
-			counts["winrm"]++
-		case string(domain.CredWMI):
-			counts["wmi"]++
+		case string(domain.CredWindows), string(domain.CredWinRM), string(domain.CredWMI):
+			counts["windows"]++
 		case string(domain.CredONVIF):
 			counts["onvif"]++
 		case string(domain.CredHTTPBasic):
@@ -223,8 +221,8 @@ func (s *Server) scanPreflight(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var warnings []string
-	if counts["winrm"] == 0 {
-		warnings = append(warnings, "No WinRM credential available — Windows hosts cannot be onboarded (deep OS inventory).")
+	if counts["windows"] == 0 {
+		warnings = append(warnings, "No Windows credential available — Windows hosts cannot be onboarded (deep OS inventory via WinRM/WMI/agent).")
 	}
 	if counts["ssh"] == 0 {
 		warnings = append(warnings, "No SSH credential available — Linux hosts and CLI-managed network gear cannot be onboarded.")
