@@ -178,18 +178,23 @@ func OpenPorts(tcp []int) []domain.ClassificationEvidence {
 	if has[9100] {
 		out = append(out, ev(domain.EvidenceSourcePort, "tcp/9100 (JetDirect)", string(domain.CatPrinter), domain.OSFamilyEmbedded, "", 55))
 	}
-	// VMware ESXi host agent. Port 902 (vpxa/authd) is near-unique to ESXi/vCenter, so it
-	// classifies virtual_host with HIGH confidence even when the host's web banner does NOT
-	// advertise vmware/esxi — the exact case that left ESXi hosts misclassified as "server"
-	// and therefore NEVER tried with the vSphere/vendor_api credentials (vSphere collection
-	// is gated on category=virtual_host). 443 alongside (the vSphere SDK endpoint)
-	// corroborates and raises confidence further.
+	// VMware ESXi host agent. Port 902 (vpxa/authd) points at ESXi — BUT only on a host that is
+	// not also clearly Windows. A bare ESXi host exposes 902 (+ the 443 vSphere SDK) and does NOT
+	// run WinRM/SMB/RPC/RDP; a Windows box that happens to expose 902 (VMware Workstation, a
+	// Windows vCenter, or a stray 902) also has 5985/135/445/3389 — classifying THAT as virtual_host
+	// strands it on vSphere collection and it is never tried with Windows credentials. So: suppress
+	// the ESXi signal when Windows ports are present (let the Windows rules win), require the 443 SDK
+	// port for the high-confidence ESXi case, and treat 902-alone as only a weak candidate.
 	if has[902] {
-		conf := 80
-		if has[443] {
-			conf = 88
+		windowsPorts := has[5985] || has[5986] || has[135] || has[445] || has[3389]
+		switch {
+		case windowsPorts:
+			// Not a bare ESXi host — defer to the Windows classification rules.
+		case has[443]:
+			out = append(out, ev(domain.EvidenceSourcePort, "tcp/902+443 (VMware ESXi host agent + vSphere SDK)", string(domain.CatVirtualHost), "", "esxi", 88))
+		default:
+			out = append(out, ev(domain.EvidenceSourcePort, "tcp/902 (VMware ESXi host agent — unconfirmed, no 443 SDK)", string(domain.CatVirtualHost), "", "esxi", 60))
 		}
-		out = append(out, ev(domain.EvidenceSourcePort, "tcp/902 (VMware ESXi host agent)", string(domain.CatVirtualHost), "", "esxi", conf))
 	}
 	return out
 }
