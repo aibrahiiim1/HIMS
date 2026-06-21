@@ -204,7 +204,8 @@ export function Dashboard() {
   const detailBase: Record<string, string> = { switch: '/devices', server: '/servers', firewall: '/firewalls', camera: '/cctv', nvr: '/cctv', wireless_controller: '/wlan', printer: '/printers', ups: '/ups', pbx: '/pbx', virtual_host: '/virtual-hosts' }
 
   // ---- Availability analytics (windowed) ----
-  const aSum = avail.data?.summary
+  // Treat zero collected polls as "no history" — never imply uptime on an empty system.
+  const aSum = (avail.data?.summary?.samples ?? 0) > 0 ? avail.data!.summary : undefined
   const aBucket = avail.data?.bucket ?? 'hour'
   const aSeries = avail.data?.series ?? []
   const aLabels = aSeries.map((p) => bucketLabel(p.ts, aBucket))
@@ -247,7 +248,7 @@ export function Dashboard() {
         <InfraHealthCard data={infra.data} />
           <Panel
             title={`Availability · ${win}`} icon={ShieldCheck}
-            actions={<span className={`badge ${availTone === 'ok' ? 'badge-up' : availTone === 'warn' ? 'badge-warning' : availTone === 'crit' ? 'badge-down' : 'badge-unknown'}`}>SLA {SLA_TARGET}%</span>}
+            actions={aSum ? <span className={`badge ${availTone === 'ok' ? 'badge-up' : availTone === 'warn' ? 'badge-warning' : availTone === 'crit' ? 'badge-down' : 'badge-unknown'}`} title="Target SLA — the goal line, not measured uptime">Target {SLA_TARGET}%</span> : undefined}
           >
             {aSum ? (
               <>
