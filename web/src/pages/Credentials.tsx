@@ -82,7 +82,7 @@ export function Credentials() {
   const inUse = creds.filter((c) => (c.usage_count ?? 0) > 0).length
 
   const cols: DataCol<Credential>[] = [
-    { key: 'name', label: 'Name', sortVal: (c) => c.name, render: (c) => <strong>{c.name}</strong> },
+    { key: 'name', label: 'Name', sortVal: (c) => c.name, render: (c) => <span><strong>{c.name}</strong>{c.needs_secret_reentry && <span className="badge badge-warning" style={{ marginLeft: 6 }} title="Restored as metadata — edit and re-enter the password">re-enter password</span>}</span> },
     { key: 'kind', label: 'Kind', sortVal: (c) => c.kind, render: (c) => <span className="badge badge-info">{kindLabel(c.kind)}</span> },
     { key: 'weak', label: 'Strength', sortVal: (c) => (c.weak ? 0 : 1), render: (c) => (c.weak ? <span className="badge badge-warning">weak</span> : <span className="badge badge-up">ok</span>) },
     {

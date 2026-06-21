@@ -1373,6 +1373,7 @@ export interface Credential {
   weak: boolean
   created_at: string
   usage_count?: number // distinct devices bound to this credential (primary or CCTV)
+  needs_secret_reentry?: boolean // true when restored as metadata — operator must re-enter the secret
 }
 
 // One device that uses a credential, from GET /credentials/{id}/devices.

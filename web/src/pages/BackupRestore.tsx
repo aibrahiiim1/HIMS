@@ -166,7 +166,9 @@ function DangerZone() {
 }
 
 // Tables the backend can restore (config/inventory). Auth + credentials are excluded.
-const RESTORABLE = new Set(['locations', 'device_templates', 'vendor_fingerprints', 'systems', 'devices', 'device_lifecycle', 'work_orders', 'alert_rules', 'report_schedules'])
+const RESTORABLE = new Set(['credentials', 'locations', 'device_templates', 'vendor_fingerprints', 'systems', 'devices', 'device_lifecycle', 'work_orders', 'alert_rules', 'report_schedules'])
+// Tables restored as metadata only (no secret) — operator must re-enter values afterward.
+const METADATA_ONLY = new Set(['credentials'])
 
 // ImportRestore — upload a snapshot, validate it, pick which (restorable) tables to import, then
 // restore. The chosen tables are upserted on their primary key; rows that violate FK constraints
@@ -215,7 +217,7 @@ function ImportRestore({ onDone }: { onDone: () => void }) {
               return (
                 <label key={t.table} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, opacity: can ? 1 : 0.5 }}>
                   <input type="checkbox" disabled={!can || t.rows === 0} checked={sel.has(t.table)} onChange={() => toggle(t.table)} />
-                  <span><b>{t.table}</b> <span className="badge badge-unknown" style={{ fontSize: 10 }}>{t.rows} rows</span>{!can && <small className="muted"> · not restorable</small>}</span>
+                  <span><b>{t.table}</b> <span className="badge badge-unknown" style={{ fontSize: 10 }}>{t.rows} rows</span>{!can && <small className="muted"> · not restorable</small>}{METADATA_ONLY.has(t.table) && <small className="muted"> · metadata only — re-enter passwords after</small>}</span>
                 </label>
               )
             })}

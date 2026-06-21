@@ -21,8 +21,11 @@ import (
 //   - Tables run in FK-safe order; a row that violates a constraint (e.g. references a device/location
 //     not restored) is skipped and counted, never aborting the whole restore.
 
-// restoreOrder is the FK-safe order; the map value is the table's allow-listed flag. Parents first.
+// restoreOrder is the FK-safe order (parents first). credentials are first + restored as METADATA
+// ONLY (name/kind, no secret — backups never contain secrets), flagged needs_secret_reentry so the
+// operator re-types each password; keeping their original IDs lets device bindings re-link.
 var restoreOrder = []string{
+	"credentials",
 	"locations", "device_templates", "vendor_fingerprints", "systems",
 	"devices", "device_lifecycle", "work_orders", "alert_rules", "report_schedules",
 }
@@ -92,11 +95,46 @@ func (s *Server) restoreBackup(w http.ResponseWriter, r *http.Request) {
 			results = append(results, map[string]any{"table": table, "restored": 0, "skipped": 0, "error": "rows not a JSON array: " + err.Error()})
 			continue
 		}
-		restored, skipped, firstErr := s.restoreTable(ctx, table, rows)
+		var restored, skipped int
+		var firstErr string
+		if table == "credentials" {
+			restored, skipped, firstErr = s.restoreCredentialsMeta(ctx, rows)
+		} else {
+			restored, skipped, firstErr = s.restoreTable(ctx, table, rows)
+		}
 		results = append(results, map[string]any{"table": table, "restored": restored, "skipped": skipped, "error": firstErr})
 	}
 	s.audit(r, "config", "backup.restore", "backup", "", "Restored tables: "+strings.Join(keysOf(sel), ", "), map[string]any{"results": results})
 	writeJSON(w, http.StatusOK, map[string]any{"restored": true, "results": results})
+}
+
+// restoreCredentialsMeta restores credentials as METADATA ONLY: name + kind, with an empty secret
+// and needs_secret_reentry=true so the operator re-types the password (backups never store secrets).
+// Original IDs are preserved so device bindings can re-link. An existing credential (same id) keeps
+// its current secret — only metadata is refreshed.
+func (s *Server) restoreCredentialsMeta(ctx context.Context, rows []map[string]any) (restored, skipped int, firstErr string) {
+	const sql = `INSERT INTO credentials (id, name, kind, weak, encrypted_blob, key_id, needs_secret_reentry, metadata)
+		VALUES ($1, $2, $3, $4, ''::bytea, '', true, '{}'::jsonb)
+		ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, kind = EXCLUDED.kind, weak = EXCLUDED.weak`
+	for _, row := range rows {
+		id, _ := row["id"].(string)
+		name, _ := row["name"].(string)
+		kind, _ := row["kind"].(string)
+		if id == "" || name == "" || kind == "" {
+			skipped++
+			continue
+		}
+		weak, _ := row["weak"].(bool)
+		if _, err := s.pool.Exec(ctx, sql, id, name, kind, weak); err != nil {
+			skipped++
+			if firstErr == "" {
+				firstErr = shortErr(err)
+			}
+			continue
+		}
+		restored++
+	}
+	return restored, skipped, firstErr
 }
 
 // restoreTable upserts rows into one table, validating columns/PK against the live schema.
