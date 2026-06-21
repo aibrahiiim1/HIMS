@@ -11,12 +11,10 @@ import { DataTable, type DataCol } from '../components/DataTable'
 // so operators know what secret each kind expects (e.g. ESXi/vCenter = root:pass
 // as a vendor_api credential).
 const KIND_META: Record<string, { label: string; hint?: string; tone?: Tone }> = {
-  windows:    { label: 'Windows (recommended)', hint: 'username:password — one credential the system uses over WinRM, WMI/DCOM, legacy SMB or the relay agent (no need to add WinRM + WMI separately)' },
+  windows:    { label: 'Windows', hint: 'username:password — one credential the system uses over WinRM, WMI/DCOM, legacy SMB or the relay agent' },
   snmp_v2c:   { label: 'SNMP v2c', hint: 'Community string (e.g. public)' },
   snmp_v3:    { label: 'SNMP v3', hint: 'USM security name + auth/priv keys' },
   ssh:        { label: 'SSH', hint: 'username:password' },
-  winrm:      { label: 'WinRM (legacy — prefer Windows)', hint: 'username:password (DOMAIN\\user or user@domain)' },
-  wmi:        { label: 'WMI / DCOM (legacy — prefer Windows)', hint: 'username:password (domain admin for servers)' },
   http_basic: { label: 'HTTP Basic', hint: 'username:password' },
   onvif:      { label: 'CCTV (ONVIF)', hint: 'username:password' },
   vendor_api: { label: 'Vendor API (VMware / REST)', hint: 'username:password — e.g. ESXi/vCenter root:password' },
