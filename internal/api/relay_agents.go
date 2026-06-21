@@ -618,7 +618,7 @@ func (s *Server) agentJobResult(w http.ResponseWriter, r *http.Request) {
 			}
 			attempts = append(attempts, discovery.CredAttempt{
 				CredentialID: cid, Kind: domain.CredentialKind(job.Protocol), Protocol: job.Protocol,
-				Success: at.Success, Category: cat, Detail: "via relay agent " + a.Name,
+				Success: at.Success, Category: cat, Detail: agentAttemptDetail(a.Name, cat, at.Detail),
 			})
 		}
 		if len(attempts) == 0 && job.CredentialID != nil { // legacy single-cred agent
@@ -632,7 +632,7 @@ func (s *Server) agentJobResult(w http.ResponseWriter, r *http.Request) {
 			}
 			attempts = append(attempts, discovery.CredAttempt{
 				CredentialID: *job.CredentialID, Kind: domain.CredentialKind(job.Protocol), Protocol: job.Protocol,
-				Success: status == "done", Category: cat, Detail: "via relay agent " + a.Name,
+				Success: status == "done", Category: cat, Detail: agentAttemptDetail(a.Name, cat, req.Error),
 			})
 		}
 		if len(attempts) > 0 {
@@ -687,4 +687,38 @@ func (s *Server) collectionQueueSummary(w http.ResponseWriter, r *http.Request) 
 		"agents":       agents,
 		"dispatch_cap": agentDispatchCap,
 	})
+}
+
+// agentAttemptDetail turns an agent-reported (category, detail) into an honest, human-readable
+// reason on the credential-test row — so a Windows host that the agent REACHED but couldn't collect
+// reads "authenticated but WMI/DCOM access denied (host-side)" instead of an opaque "via relay agent
+// CHR" that looks like a wrong password. The category still drives the management state; this only
+// makes the displayed detail truthful + actionable.
+func agentAttemptDetail(agent, category, agentDetail string) string {
+	base := "via relay agent " + agent
+	reason := strings.TrimSpace(agentDetail)
+	if reason == "" {
+		reason = humanAgentCategory(category)
+	}
+	if reason == "" {
+		return base
+	}
+	return base + " — " + reason
+}
+
+func humanAgentCategory(cat string) string {
+	switch cat {
+	case "auth_failed", "authentication_failed":
+		return "authentication rejected — wrong username/password for this host"
+	case "access_denied", "wmi_access_denied":
+		return "authenticated but WMI/DCOM access denied (host-side: grant the account DCOM + WMI rights / UAC remote restrictions / firewall)"
+	case "namespace_unavailable":
+		return "authenticated but the host's WMI repository is unavailable (host-side: winmgmt /resetrepository, or OS too old)"
+	case "winrm_connect_timeout", "winrm_negotiate_error", "unreachable", "transport_blocked", "rpc_unavailable":
+		return "could not connect to WinRM/WMI — port blocked by firewall or the service is not listening (host-side)"
+	case "success", "":
+		return ""
+	default:
+		return cat
+	}
 }
