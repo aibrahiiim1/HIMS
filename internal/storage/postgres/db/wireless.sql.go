@@ -185,6 +185,38 @@ func (q *Queries) ListAccessPoints(ctx context.Context, controllerDeviceID uuid.
 	return items, nil
 }
 
+const listWirelessCapabilityHealth = `-- name: ListWirelessCapabilityHealth :many
+SELECT controller_device_id, capability, status, detail, row_count, source, collected_at FROM wireless_collection_health WHERE controller_device_id = $1 ORDER BY capability
+`
+
+func (q *Queries) ListWirelessCapabilityHealth(ctx context.Context, controllerDeviceID uuid.UUID) ([]WirelessCollectionHealth, error) {
+	rows, err := q.db.Query(ctx, listWirelessCapabilityHealth, controllerDeviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []WirelessCollectionHealth{}
+	for rows.Next() {
+		var i WirelessCollectionHealth
+		if err := rows.Scan(
+			&i.ControllerDeviceID,
+			&i.Capability,
+			&i.Status,
+			&i.Detail,
+			&i.RowCount,
+			&i.Source,
+			&i.CollectedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listWirelessClients = `-- name: ListWirelessClients :many
 SELECT id, controller_device_id, mac, ip, hostname, ap_name, ssid, rssi, band, source, collected_at, snr, rx_bytes, tx_bytes, connected_since FROM wireless_clients WHERE controller_device_id = $1 ORDER BY ap_name, mac
 `
@@ -475,6 +507,40 @@ func (q *Queries) UpsertWLANControllerInfo(ctx context.Context, arg UpsertWLANCo
 		&i.CollectedAt,
 	)
 	return i, err
+}
+
+const upsertWirelessCapabilityHealth = `-- name: UpsertWirelessCapabilityHealth :exec
+INSERT INTO wireless_collection_health (controller_device_id, capability, status, detail, row_count, source, collected_at)
+VALUES ($1,$2,$3,$4,$5,$6, now())
+ON CONFLICT (controller_device_id, capability) DO UPDATE SET
+    status = EXCLUDED.status,
+    detail = EXCLUDED.detail,
+    row_count = EXCLUDED.row_count,
+    source = EXCLUDED.source,
+    collected_at = now()
+`
+
+type UpsertWirelessCapabilityHealthParams struct {
+	ControllerDeviceID uuid.UUID `json:"controller_device_id"`
+	Capability         string    `json:"capability"`
+	Status             string    `json:"status"`
+	Detail             string    `json:"detail"`
+	RowCount           int32     `json:"row_count"`
+	Source             string    `json:"source"`
+}
+
+// Record the outcome of ONE capability on the last real collection. Idempotent
+// per (controller, capability) so each collect overwrites the prior verdict.
+func (q *Queries) UpsertWirelessCapabilityHealth(ctx context.Context, arg UpsertWirelessCapabilityHealthParams) error {
+	_, err := q.db.Exec(ctx, upsertWirelessCapabilityHealth,
+		arg.ControllerDeviceID,
+		arg.Capability,
+		arg.Status,
+		arg.Detail,
+		arg.RowCount,
+		arg.Source,
+	)
+	return err
 }
 
 const upsertWirelessClient = `-- name: UpsertWirelessClient :one

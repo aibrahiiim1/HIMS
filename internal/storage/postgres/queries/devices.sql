@@ -82,6 +82,16 @@ UPDATE devices SET
     updated_at = now()
 WHERE id = sqlc.arg('id') AND deleted_at IS NULL;
 
+-- name: SetDeviceDriver :exec
+-- Record which collector driver currently owns a device (e.g. the wireless
+-- controller vendor key "ruckus_zd"/"unifi"). COALESCE(NULLIF…) means a blank
+-- value never wipes an existing driver — collection only ENRICHES, so the
+-- Inventory "Driver" column populates without clobbering a classifier's value.
+UPDATE devices SET
+    driver = COALESCE(NULLIF(sqlc.arg('driver')::text, ''), driver),
+    updated_at = now()
+WHERE id = sqlc.arg('id') AND deleted_at IS NULL;
+
 -- name: BulkAssignClassification :execrows
 -- Assign vlan/device_class/location to many devices at once (multi-select).
 -- Only the provided (non-null) fields are changed — COALESCE keeps the rest —

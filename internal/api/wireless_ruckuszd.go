@@ -157,5 +157,23 @@ func (s *Server) collectRuckusZDProfile(ctx context.Context, p db.VendorConnecti
 	if !ok {
 		detail = "Ruckus ZoneDirector authenticated but the AJAX interface returned no AP/SSID/client rows. " + detail
 	}
+	// Enrich the device row so the Wireless Controllers list shows Vendor/Model/OS/
+	// Driver/Status instead of blanks. COALESCE-safe: ZD's Web-XML system config
+	// exposes no controller model/serial, so those stay whatever a prior SNMP probe
+	// set — never wiped, never fabricated. The firmware (backfilled from the AP
+	// fleet) populates OS; a successful poll proves the controller is up.
+	s.enrichWirelessControllerDevice(ctx, dev.ID, p.VendorType, ven, res.Model, res.Serial, res.Version, res.Hostname, ok)
+	s.recordWirelessHealth(ctx, dev.ID, wlVendorKeyForProfileType(p.VendorType), ruckusZDSource, true, map[string]int{
+		wcapAPs: len(res.APs), wcapSSIDs: len(res.SSIDs), wcapClients: len(res.Stations), wcapFirmware: boolToCount(res.Version != ""),
+	})
 	return ok, detail
+}
+
+// boolToCount turns a "was this present" flag into a 0/1 row count for the
+// firmware capability, which has no roster of its own.
+func boolToCount(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }

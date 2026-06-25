@@ -928,6 +928,27 @@ func (q *Queries) SetDeviceCredential(ctx context.Context, arg SetDeviceCredenti
 	return err
 }
 
+const setDeviceDriver = `-- name: SetDeviceDriver :exec
+UPDATE devices SET
+    driver = COALESCE(NULLIF($1::text, ''), driver),
+    updated_at = now()
+WHERE id = $2 AND deleted_at IS NULL
+`
+
+type SetDeviceDriverParams struct {
+	Driver string    `json:"driver"`
+	ID     uuid.UUID `json:"id"`
+}
+
+// Record which collector driver currently owns a device (e.g. the wireless
+// controller vendor key "ruckus_zd"/"unifi"). COALESCE(NULLIF…) means a blank
+// value never wipes an existing driver — collection only ENRICHES, so the
+// Inventory "Driver" column populates without clobbering a classifier's value.
+func (q *Queries) SetDeviceDriver(ctx context.Context, arg SetDeviceDriverParams) error {
+	_, err := q.db.Exec(ctx, setDeviceDriver, arg.Driver, arg.ID)
+	return err
+}
+
 const setDeviceWebOverride = `-- name: SetDeviceWebOverride :exec
 UPDATE devices SET web_scheme_pref = $2, web_port_pref = $3, web_alt_ports = $4, web_notes = $5, web_pref_proto = $6, updated_at = now() WHERE id = $1
 `

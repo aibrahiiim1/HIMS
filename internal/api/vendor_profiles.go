@@ -576,10 +576,14 @@ func (s *Server) collectWirelessProfile(ctx context.Context, p db.VendorConnecti
 		})
 	}
 	_ = s.queries.UpdateDeviceHardwareInfo(ctx, db.UpdateDeviceHardwareInfoParams{ID: dev.ID, Vendor: vendor})
+	// Stamp the Driver column with the active collector's registry key so the
+	// Wireless Controllers list shows which integration owns this controller.
+	_ = s.queries.SetDeviceDriver(ctx, db.SetDeviceDriverParams{ID: dev.ID, Driver: wlVendorKeyForProfileType(p.VendorType)})
 	if p.CredentialID != nil {
 		_ = s.queries.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: dev.ID, CredentialID: p.CredentialID})
 	}
 	_ = s.queries.UpdateDeviceMonitoringStatus(ctx, db.UpdateDeviceMonitoringStatusParams{ID: dev.ID, Status: "up"})
+	s.recordWirelessHealth(ctx, dev.ID, wlVendorKeyForProfileType(p.VendorType), p.VendorType, true, map[string]int{wcapAPs: len(aps)})
 	return true, vendor + " controller collected — " + itoaN(len(aps)) + " AP(s)"
 }
 

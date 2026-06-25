@@ -149,6 +149,28 @@ export function WirelessDetail() {
               : d.collection.next_action && <div className="enc-banner info" style={{ marginTop: 12 }}>{d.collection.next_action} <button className="btn btn-ghost btn-xs" style={{ marginLeft: 8 }} onClick={() => setTab('manage')}>Open Manage</button></div>}
           </Panel>
 
+          {/* Driver & per-capability collection health — honest about what the active
+              driver collected vs what it cannot. */}
+          {d.driver && (
+            <Panel title="Driver & capabilities" icon={Layers} subtitle={d.driver.model_family}>
+              <DefList items={[
+                { label: 'Driver', value: `${d.driver.display_name}` },
+                { label: 'Protocol / login', value: `${d.driver.protocol || '—'}${d.driver.login_method && d.driver.login_method !== '—' ? ' · ' + d.driver.login_method : ''}` },
+              ]} />
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
+                {(d.capabilities ?? []).map((c) => (
+                  <span key={c.key} className={'badge ' + capTone(c.status)} title={capTitle(c)}>
+                    {c.label}: {capLabel(c.status)}{c.status === 'collected' && c.row_count ? ` (${c.row_count})` : ''}
+                  </span>
+                ))}
+              </div>
+              <div className="muted" style={{ fontSize: 11, marginTop: 10 }}>
+                <strong>collected</strong> = real rows persisted · <strong>endpoint not exposed</strong> = authenticated but the firmware/API returned none ·
+                <strong> not implemented</strong> = no collector for this feature yet · <strong>auth failed</strong> = login rejected.
+              </div>
+            </Panel>
+          )}
+
           {/* Summary KPIs — robust whether or not a controller summary exists. */}
           <div className="kpi-grid">
             <Kpi label="Access points" value={c.aps ?? 0} icon={Radio} tone={apMissing > 0 ? 'warn' : 'info'} sub={sm && sm.ap_total ? `controller reports ${sm.ap_total}${apMissing > 0 ? ` · missing ${apMissing}` : ''}` : undefined} />
@@ -486,6 +508,40 @@ function ssidFilters(ssids: WirelessSSID[]): DataFilter<WirelessSSID>[] {
 }
 
 // ---- small helpers ---------------------------------------------------------
+
+// capTone/capLabel/capTitle render a per-capability collection-health status as
+// an honest badge: green only when real rows were collected; muted/amber/red for
+// the various "did not collect" reasons; never a fake "supported = working".
+function capTone(status: string): string {
+  switch (status) {
+    case 'collected': return 'badge-success'
+    case 'supported': return 'badge-info' // declared-capable, not yet run
+    case 'endpoint_not_exposed':
+    case 'unsupported_by_device':
+    case 'needs_configuration': return 'badge-warning'
+    case 'auth_failed': return 'badge-down'
+    default: return 'badge-muted' // not_implemented | collector_pending
+  }
+}
+function capLabel(status: string): string {
+  switch (status) {
+    case 'collected': return 'collected'
+    case 'supported': return 'supported (not run)'
+    case 'endpoint_not_exposed': return 'endpoint not exposed'
+    case 'unsupported_by_device': return 'unsupported by device'
+    case 'needs_configuration': return 'needs configuration'
+    case 'auth_failed': return 'auth failed'
+    case 'collector_pending': return 'collector pending'
+    case 'not_implemented': return 'not implemented'
+    default: return status
+  }
+}
+function capTitle(c: { declared: string; detail?: string; source?: string }): string {
+  const parts = [`declared: ${c.declared}`]
+  if (c.detail) parts.push(c.detail)
+  if (c.source) parts.push(`source: ${c.source}`)
+  return parts.join(' — ')
+}
 
 function uniq(xs: string[]): string[] { return Array.from(new Set(xs)).sort() }
 function cap(s: string): string { return s ? s.charAt(0).toUpperCase() + s.slice(1) : '—' }

@@ -61,3 +61,22 @@ CUCM AXL `schema version` + service-account URL. These onboard via
 operator supplies that config; the scan classifies them as candidates and points
 there. Lifting this gate = letting the scan carry those params (operator config),
 not a missing capability.
+
+## Wireless Controller Driver Catalog — catalog row vs collector
+
+The wireless "Add controller" flow is driven by a single driver catalog
+(`internal/api/wireless_registry.go`), shared by the form, the Test Connection
+endpoint, and the persist+collect handler. Onboarding a new controller platform
+is a catalog row — but a row alone does NOT collect data:
+
+**Catalog row enables onboarding/profile/gating. Full collection requires a
+collector implementation unless an existing compatible driver can handle it.**
+
+Concretely, a catalog row covers: showing the vendor in the UI, defining its
+fields, validation, capability declaration, and the honest `collector_pending`
+gate. Actually pulling APs/SSIDs/clients still needs a real collector adapter (a
+client + a `collectWirelessForDevice` case) OR reuse of an existing compatible
+client. A capability is marked `supported` ONLY when its collector really runs;
+otherwise it stays `not_implemented` / `collector_pending` — never a fake
+"full support". (Today SmartZone/UniFi/Omada are AP-inventory-only; Aruba is
+`collector_pending` with no collector yet.)

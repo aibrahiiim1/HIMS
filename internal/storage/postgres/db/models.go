@@ -1233,6 +1233,16 @@ type WirelessClient struct {
 	ConnectedSince     string    `json:"connected_since"`
 }
 
+type WirelessCollectionHealth struct {
+	ControllerDeviceID uuid.UUID `json:"controller_device_id"`
+	Capability         string    `json:"capability"`
+	Status             string    `json:"status"`
+	Detail             string    `json:"detail"`
+	RowCount           int32     `json:"row_count"`
+	Source             string    `json:"source"`
+	CollectedAt        time.Time `json:"collected_at"`
+}
+
 type WirelessControllerSummary struct {
 	DeviceID         uuid.UUID `json:"device_id"`
 	SummarySource    string    `json:"summary_source"`

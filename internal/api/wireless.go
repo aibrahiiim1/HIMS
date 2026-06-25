@@ -91,17 +91,45 @@ type wirelessControllerSummary struct {
 }
 
 type wirelessDTO struct {
-	Identity   wirelessIdentity          `json:"identity"`
-	Collection wirelessCollection        `json:"collection"`
-	Counts     map[string]int            `json:"counts"`
-	MIB        wirelessMibStatus         `json:"mib"`
-	SSH        wirelessSSHStatus         `json:"ssh"`
-	Summary    wirelessControllerSummary `json:"summary"`
-	APs        []db.AccessPoint          `json:"aps"`
-	SSIDs      []db.WirelessSsid         `json:"ssids"`
-	Clients    []db.WirelessClient       `json:"clients"`
-	Radios     []db.WirelessRadioStatus  `json:"radios"`
-	Events     []db.WirelessEvent        `json:"events"`
+	Identity     wirelessIdentity          `json:"identity"`
+	Collection   wirelessCollection        `json:"collection"`
+	Counts       map[string]int            `json:"counts"`
+	MIB          wirelessMibStatus         `json:"mib"`
+	SSH          wirelessSSHStatus         `json:"ssh"`
+	Summary      wirelessControllerSummary `json:"summary"`
+	APs          []db.AccessPoint          `json:"aps"`
+	SSIDs        []db.WirelessSsid         `json:"ssids"`
+	Clients      []db.WirelessClient       `json:"clients"`
+	Radios       []db.WirelessRadioStatus  `json:"radios"`
+	Events       []db.WirelessEvent        `json:"events"`
+	Driver       *wlDriverInfo             `json:"driver,omitempty"`       // active driver catalog entry
+	Capabilities []wlCapabilityHealth      `json:"capabilities,omitempty"` // per-feature declared + runtime status
+}
+
+// wlDriverInfo is the slim driver-catalog summary the wireless detail page shows
+// (platform family / protocol / login method), so the operator sees which driver
+// owns the controller and how it connects.
+type wlDriverInfo struct {
+	Key         string `json:"key"`
+	DisplayName string `json:"display_name"`
+	ModelFamily string `json:"model_family"`
+	Protocol    string `json:"protocol"`
+	LoginMethod string `json:"login_method"`
+	Status      string `json:"status"`
+}
+
+// wlCapabilityHealth merges a driver's DECLARED capability (what the collector can
+// do) with its last RUNTIME outcome (what the last collection actually did), so
+// the UI never claims a feature that did not really run.
+type wlCapabilityHealth struct {
+	Key         string  `json:"key"`
+	Label       string  `json:"label"`
+	Declared    string  `json:"declared"`
+	Status      string  `json:"status"`
+	Detail      string  `json:"detail,omitempty"`
+	RowCount    int     `json:"row_count"`
+	Source      string  `json:"source,omitempty"`
+	CollectedAt *string `json:"collected_at,omitempty"`
 }
 
 // deviceWireless serves GET /devices/{id}/wireless.
@@ -173,14 +201,20 @@ func (s *Server) deviceWireless(w http.ResponseWriter, r *http.Request) {
 	// this controller? Prefer an enabled one — the enabled profile is the PRIMARY
 	// collection path, regardless of vendor.
 	hasEnabledProfile := false
+	primaryVendorType := "" // the wireless driver vendor_type bound to this device
+	wirelessTypes := map[string]bool{}
+	for _, vt := range wirelessProfileVendorTypes() {
+		wirelessTypes[vt] = true
+	}
 	if profs, e := s.queries.ListVendorProfiles(ctx); e == nil {
 		for _, p := range profs {
-			if (p.VendorType == "extreme_xcc" || p.VendorType == "ruckus_zd") && p.DeviceID != nil && *p.DeviceID == id {
+			if wirelessTypes[p.VendorType] && p.DeviceID != nil && *p.DeviceID == id {
 				dto.Collection.HasAPIProfile = true
 				if dto.Collection.ProfileID == "" || p.Enabled {
 					dto.Collection.ProfileID = p.ID.String()
 					dto.Collection.ProfileStatus = p.Status
 					dto.Collection.LastDetail = p.LastCollectionDetail
+					primaryVendorType = p.VendorType
 				}
 				if p.Enabled {
 					hasEnabledProfile = true
@@ -340,6 +374,37 @@ func (s *Server) deviceWireless(w http.ResponseWriter, r *http.Request) {
 			ParsedAPRows: int(cs.ParsedApRows), ParsedClientRows: int(cs.ParsedClientRows), ParsedSSIDRows: int(cs.ParsedSsidRows),
 			APStatusExposed: cs.ActiveAps > 0 || cs.NonActiveAps > 0,
 			Detail:          cs.Detail, CollectedAt: &ts,
+		}
+	}
+
+	// Driver catalog + per-capability health. Resolve the active driver from the
+	// bound profile (preferred) or the device's Driver column, then merge the
+	// catalog's DECLARED capabilities with the last RUNTIME health rows so the
+	// detail page shows an honest per-feature status. Absent when the device isn't
+	// bound to any known wireless driver yet (pure SNMP baseline).
+	driverKey := wlVendorKeyForProfileType(primaryVendorType)
+	if primaryVendorType == "" {
+		driverKey = derefStr(dev.Driver)
+	}
+	if ven, okk := wlVendorByKey(driverKey); okk {
+		dto.Driver = &wlDriverInfo{
+			Key: ven.Key, DisplayName: ven.DisplayName, ModelFamily: ven.ModelFamily,
+			Protocol: ven.Protocol, LoginMethod: ven.LoginMethod, Status: string(ven.Status),
+		}
+		health := map[string]db.WirelessCollectionHealth{}
+		if rows, e := s.queries.ListWirelessCapabilityHealth(ctx, id); e == nil {
+			for _, h := range rows {
+				health[h.Capability] = h
+			}
+		}
+		for _, c := range ven.Capabilities {
+			ch := wlCapabilityHealth{Key: c.Key, Label: c.Label, Declared: string(c.Status), Status: string(c.Status)}
+			if h, seen := health[c.Key]; seen {
+				ch.Status, ch.Detail, ch.RowCount, ch.Source = h.Status, h.Detail, int(h.RowCount), h.Source
+				ts := h.CollectedAt.UTC().Format("2006-01-02T15:04:05Z07:00")
+				ch.CollectedAt = &ts
+			}
+			dto.Capabilities = append(dto.Capabilities, ch)
 		}
 	}
 

@@ -654,6 +654,7 @@ type Querier interface {
 	ListVlans(ctx context.Context, deviceID uuid.UUID) ([]Vlan, error)
 	ListVpnTunnels(ctx context.Context, deviceID uuid.UUID) ([]FirewallVpnTunnel, error)
 	ListWebPortCandidates(ctx context.Context) ([]WebPortCandidate, error)
+	ListWirelessCapabilityHealth(ctx context.Context, controllerDeviceID uuid.UUID) ([]WirelessCollectionHealth, error)
 	ListWirelessClients(ctx context.Context, controllerDeviceID uuid.UUID) ([]WirelessClient, error)
 	ListWirelessEvents(ctx context.Context, arg ListWirelessEventsParams) ([]WirelessEvent, error)
 	ListWirelessRadios(ctx context.Context, controllerDeviceID uuid.UUID) ([]WirelessRadioStatus, error)
@@ -803,6 +804,11 @@ type Querier interface {
 	SetDeviceCCTVCredential(ctx context.Context, arg SetDeviceCCTVCredentialParams) error
 	// Bind-on-success: record the credential that last authenticated.
 	SetDeviceCredential(ctx context.Context, arg SetDeviceCredentialParams) error
+	// Record which collector driver currently owns a device (e.g. the wireless
+	// controller vendor key "ruckus_zd"/"unifi"). COALESCE(NULLIF…) means a blank
+	// value never wipes an existing driver — collection only ENRICHES, so the
+	// Inventory "Driver" column populates without clobbering a classifier's value.
+	SetDeviceDriver(ctx context.Context, arg SetDeviceDriverParams) error
 	// Operator-set per-device web-access override: preferred scheme/port, alternate
 	// ports (comma-separated), preferred protocol, and a free-text note. Collectors
 	// try these first.
@@ -966,6 +972,9 @@ type Querier interface {
 	UpsertVlan(ctx context.Context, arg UpsertVlanParams) (Vlan, error)
 	UpsertVpnTunnel(ctx context.Context, arg UpsertVpnTunnelParams) error
 	UpsertWLANControllerInfo(ctx context.Context, arg UpsertWLANControllerInfoParams) (WlanControllerInfo, error)
+	// Record the outcome of ONE capability on the last real collection. Idempotent
+	// per (controller, capability) so each collect overwrites the prior verdict.
+	UpsertWirelessCapabilityHealth(ctx context.Context, arg UpsertWirelessCapabilityHealthParams) error
 	UpsertWirelessClient(ctx context.Context, arg UpsertWirelessClientParams) (WirelessClient, error)
 	UpsertWirelessControllerSummary(ctx context.Context, arg UpsertWirelessControllerSummaryParams) error
 	UpsertWirelessRadio(ctx context.Context, arg UpsertWirelessRadioParams) (WirelessRadioStatus, error)

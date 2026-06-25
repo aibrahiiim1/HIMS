@@ -222,6 +222,13 @@ func (s *Server) collectXCCProfile(ctx context.Context, p db.VendorConnectionPro
 	if !ok {
 		detail = "Extreme XCC authenticated but the API exposed no AP/SSID/client roster on this firmware/path. " + detail
 	}
+	// Enrich the device row so the Wireless Controllers list shows Vendor/Model/OS/
+	// Driver/Status. COALESCE-safe; Status flips to up only on a successful poll.
+	s.enrichWirelessControllerDevice(ctx, dev.ID, p.VendorType, ven, res.Model, res.Serial, res.Version, "", ok)
+	s.recordWirelessHealth(ctx, dev.ID, wlVendorKeyForProfileType(p.VendorType), xccSource, true, map[string]int{
+		wcapAPs: len(res.APs), wcapSSIDs: len(res.SSIDs), wcapClients: len(res.Stations),
+		wcapHealth: len(res.Events), wcapFirmware: boolToCount(res.Version != ""),
+	})
 	return ok, detail
 }
 

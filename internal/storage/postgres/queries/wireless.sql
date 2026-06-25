@@ -128,3 +128,18 @@ SELECT * FROM wireless_events WHERE controller_device_id = $1 ORDER BY at DESC L
 -- name: DeleteWirelessEventsForSource :exec
 -- Replace an event set for a source (collectors re-publish the current window).
 DELETE FROM wireless_events WHERE controller_device_id = $1 AND source = $2;
+
+-- name: UpsertWirelessCapabilityHealth :exec
+-- Record the outcome of ONE capability on the last real collection. Idempotent
+-- per (controller, capability) so each collect overwrites the prior verdict.
+INSERT INTO wireless_collection_health (controller_device_id, capability, status, detail, row_count, source, collected_at)
+VALUES ($1,$2,$3,$4,$5,$6, now())
+ON CONFLICT (controller_device_id, capability) DO UPDATE SET
+    status = EXCLUDED.status,
+    detail = EXCLUDED.detail,
+    row_count = EXCLUDED.row_count,
+    source = EXCLUDED.source,
+    collected_at = now();
+
+-- name: ListWirelessCapabilityHealth :many
+SELECT * FROM wireless_collection_health WHERE controller_device_id = $1 ORDER BY capability;

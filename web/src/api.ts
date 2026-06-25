@@ -1103,6 +1103,23 @@ export interface WirelessDetailResp {
   clients: WirelessClient[]
   radios: WirelessRadio[]
   events: WirelessEvent[]
+  driver?: {
+    key: string; display_name: string; model_family: string; protocol: string; login_method: string; status: string
+  } | null
+  capabilities?: WirelessCapabilityHealth[]
+}
+
+// Per-capability collection health: DECLARED (what the driver can do) merged with
+// the last RUNTIME outcome (what the last collection actually did).
+export interface WirelessCapabilityHealth {
+  key: string
+  label: string
+  declared: string // supported | not_implemented | collector_pending
+  status: string   // declared, or runtime: collected | endpoint_not_exposed | auth_failed | unsupported_by_device | needs_configuration | not_implemented
+  detail?: string
+  row_count: number
+  source?: string
+  collected_at?: string | null
 }
 
 // ---- MIB packs (operator-managed SNMP MIB → collection) --------------------

@@ -295,6 +295,8 @@ func (s *Server) routes() {
 		r.Get("/devices/{id}/access-points", s.deviceAccessPoints)
 		r.Get("/devices/{id}/wireless", s.deviceWireless)                        // consolidated wireless detail (identity + rosters)
 		r.Post("/devices/{id}/collect-wireless-mib", s.runWirelessMibCollection) // SNMP MIB-pack wireless collection
+		r.Get("/wireless/controller-vendors", s.listWirelessVendors)             // driver catalog: vendors + per-driver fields + honest capabilities
+		r.Post("/wireless/controllers/test", s.testWirelessController)           // pre-persist Test Connection (no DB writes)
 		r.Post("/wireless/controllers", s.addWirelessController)                 // add a controller manually (REST/XML primary)
 		r.Get("/devices/{id}/mib-rows", s.listMibWalkRows)                       // raw walked MIB rows
 		r.Get("/devices/{id}/mib-explorer", s.mibExplorer)                       // grouped OID-tree explorer
