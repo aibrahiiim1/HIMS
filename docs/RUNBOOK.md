@@ -167,6 +167,12 @@ right site scope.
 
 ## 6. Wireless — UniFi controller (REST)
 
+> **Wireless driver catalog + full capability matrix:** see
+> [wireless-driver-catalog.md](wireless-driver-catalog.md) for the model-driven
+> Add-controller flow, the per-capability status model
+> (`implemented_live_validation_pending` vs `unsupported_by_device`), live-tested
+> vs fixture-tested status, and how to validate each pending-live driver.
+
 | Field | Value |
 |---|---|
 | **Credential type** | `http_basic` / `vendor_api` |
