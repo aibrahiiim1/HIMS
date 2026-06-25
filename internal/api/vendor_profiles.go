@@ -16,6 +16,8 @@ import (
 	"github.com/vmware/govmomi"
 	"github.com/vmware/govmomi/vim25/soap"
 
+	"github.com/coralsearesorts/hims/internal/aruba"
+	"github.com/coralsearesorts/hims/internal/arubacentral"
 	"github.com/coralsearesorts/hims/internal/credtest"
 	"github.com/coralsearesorts/hims/internal/cucm"
 	"github.com/coralsearesorts/hims/internal/domain"
@@ -349,8 +351,24 @@ func (s *Server) vendorProfileTest(ctx context.Context, p db.VendorConnectionPro
 			return false, "Ruckus ZoneDirector login failed: " + shortErr(err)
 		}
 		return true, "Ruckus ZoneDirector authenticated (admin path /" + zc.AdminBase() + "/) — " + itoaN(n) + " AP(s)"
-	case "wireless_aruba":
-		return false, "Aruba controller integration not implemented yet — profile saved; detection + classification active, deep collection pending"
+	case "wireless_aruba", "wireless_aruba_os10":
+		c := aruba.NewClient(base, user, pass, doer)
+		if err := c.Login(cctx); err != nil {
+			return false, "Aruba login failed: " + shortErr(err)
+		}
+		aps, _ := c.ListAPs(cctx)
+		return true, "Aruba (ArubaOS 8-compatible showcommand) authenticated — " + itoaN(len(aps)) + " AP(s)"
+	case "wireless_aruba_central":
+		token := pass
+		if token == "" {
+			token = user
+		}
+		c := arubacentral.NewClient(centralGateway(cfg.APIBase, base), token, doer)
+		n, err := c.Ping(cctx)
+		if err != nil {
+			return false, "Aruba Central token/gateway failed: " + shortErr(err)
+		}
+		return true, "Aruba Central authenticated — " + itoaN(n) + " AP(s)"
 	case "cucm":
 		c := cucm.NewClient(base, user, pass, cfg.Version, doer)
 		phones, err := c.ListPhones(cctx)
@@ -441,7 +459,8 @@ func (s *Server) runVendorProfileCollection(w http.ResponseWriter, r *http.Reque
 		res := s.collectCCTVProfile(ctx, p, dev)
 		ok, detail = res.CollectionOK, res.Detail
 		_ = s.queries.SetVendorProfileTest(ctx, db.SetVendorProfileTestParams{ID: id, LastTestOk: &res.AuthOK, LastTestDetail: detail})
-	case "wireless_unifi", "wireless_omada", "wireless_ruckus", "wireless_extreme":
+	case "wireless_unifi", "wireless_omada", "wireless_ruckus", "wireless_extreme",
+		"wireless_aruba", "wireless_aruba_os10", "wireless_aruba_central":
 		ok, detail = s.collectWirelessProfile(ctx, p, dev)
 		_ = s.queries.SetVendorProfileTest(ctx, db.SetVendorProfileTestParams{ID: id, LastTestOk: &ok, LastTestDetail: detail})
 	case "extreme_xcc":
@@ -474,7 +493,10 @@ func (s *Server) runVendorProfileCollection(w http.ResponseWriter, r *http.Reque
 }
 
 // collectWirelessProfile logs into a wireless controller via the profile and
-// persists controller + AP inventory onto the device.
+// persists the FULL roster set its driver supports (APs/SSIDs/clients/radios)
+// onto the device — never just APs. Each capability the driver implements is
+// collected and its honest per-capability health is recorded; a capability the
+// driver does not implement is left untouched (recordWirelessHealth marks it).
 func (s *Server) collectWirelessProfile(ctx context.Context, p db.VendorConnectionProfile, dev db.Device) (bool, string) {
 	user, pass, hasCred := s.vendorProfileSecret(ctx, p)
 	if !hasCred {
@@ -482,55 +504,17 @@ func (s *Server) collectWirelessProfile(ctx context.Context, p db.VendorConnecti
 	}
 	cfg := parseVPConfig(p.Config)
 	base := strings.TrimRight(p.TargetUrl, "/")
-	doer := insecureDoer(20 * time.Second)
-	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	cctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 
-	var aps []wlanAP
-	var vendor string
-	switch p.VendorType {
-	case "wireless_unifi":
-		vendor = "Ubiquiti UniFi"
-		c := unifi.NewClient(base, nz(cfg.Site, "default"), user, pass, doer)
-		if err := c.Login(cctx); err != nil {
-			return false, "UniFi login failed: " + shortErr(err)
-		}
-		raw, err := c.ListAPs(cctx)
-		if err != nil {
-			return false, "UniFi AP list failed: " + shortErr(err)
-		}
-		for _, a := range raw {
-			aps = append(aps, wlanAP{a.Name, a.MAC, a.Model, a.IP, a.Status, a.ClientCount})
-		}
-	case "wireless_omada":
-		vendor = "TP-Link Omada"
-		c := omada.NewClient(base, cfg.ControllerID, nz(cfg.Site, "Default"), user, pass, doer)
-		if err := c.Login(cctx); err != nil {
-			return false, "Omada login failed: " + shortErr(err)
-		}
-		raw, err := c.ListAPs(cctx)
-		if err != nil {
-			return false, "Omada AP list failed: " + shortErr(err)
-		}
-		for _, a := range raw {
-			aps = append(aps, wlanAP{a.Name, a.MAC, a.Model, a.IP, a.Status, a.ClientCount})
-		}
-	case "wireless_ruckus":
-		vendor = "Ruckus"
-		c := ruckus.NewClient(base, cfg.APIBase, user, pass, doer)
-		if err := c.Login(cctx); err != nil {
-			return false, "Ruckus login failed: " + shortErr(err)
-		}
-		raw, err := c.ListAPs(cctx)
-		if err != nil {
-			return false, "Ruckus AP list failed: " + shortErr(err)
-		}
-		for _, a := range raw {
-			aps = append(aps, wlanAP{a.Name, a.MAC, a.Model, a.IP, a.Status, a.ClientCount})
-		}
-	case "wireless_extreme":
-		vendor = "Extreme"
-		c := extreme.NewClient(base, user, pass, doer)
+	// wireless_extreme (XIQ cloud) keeps its legacy AP-only client; everything else
+	// goes through the normalized multi-roster gather.
+	var res wlanResult
+	var ok bool
+	var detail string
+	if p.VendorType == "wireless_extreme" {
+		res = wlanResult{vendor: "Extreme", source: "extreme_xiq"}
+		c := extreme.NewClient(base, user, pass, insecureDoer(20*time.Second))
 		if err := c.Login(cctx); err != nil {
 			return false, "Extreme login failed: " + shortErr(err)
 		}
@@ -539,15 +523,46 @@ func (s *Server) collectWirelessProfile(ctx context.Context, p db.VendorConnecti
 			return false, "Extreme AP list failed: " + shortErr(err)
 		}
 		for _, a := range raw {
-			aps = append(aps, wlanAP{a.Name, a.MAC, a.Model, a.IP, a.Status, a.ClientCount})
+			res.aps = append(res.aps, wlanAP{a.Name, a.MAC, a.Model, a.IP, a.Status, a.ClientCount})
+		}
+		ok = true
+	} else {
+		res, ok, detail = s.gatherWirelessRosters(cctx, p.VendorType, base, cfg, user, pass)
+		if !ok {
+			return false, detail
 		}
 	}
 
-	ven := vendor
+	s.persistWirelessResult(ctx, dev, p, res)
+
+	parts := itoaN(len(res.aps)) + " AP(s)"
+	if len(res.ssids) > 0 {
+		parts += ", " + itoaN(len(res.ssids)) + " SSID(s)"
+	}
+	if len(res.clients) > 0 {
+		parts += ", " + itoaN(len(res.clients)) + " client(s)"
+	}
+	if len(res.radios) > 0 {
+		parts += ", " + itoaN(len(res.radios)) + " radio(s)"
+	}
+	return true, res.vendor + " controller collected — " + parts
+}
+
+// persistWirelessResult writes a normalized vendor REST result into the common
+// wireless tables, prunes stale rows for this source, enriches the device row,
+// and records honest per-capability health.
+func (s *Server) persistWirelessResult(ctx context.Context, dev db.Device, p db.VendorConnectionProfile, res wlanResult) {
+	poll := time.Now().UTC()
+	pid := p.ID
+	ven := res.vendor
+	verPtr := nzPtr(res.version)
 	_, _ = s.queries.UpsertWLANControllerInfo(ctx, db.UpsertWLANControllerInfoParams{
-		DeviceID: dev.ID, Vendor: &ven, ApCount: int32(len(aps)),
+		DeviceID: dev.ID, Vendor: &ven, Version: verPtr, ApCount: int32(len(res.aps)), ClientCount: int32(len(res.clients)),
+		Source: res.source, ProfileID: &pid, ControllerName: dev.Name, Model: derefStr(dev.Model),
+		SsidCount: int32(len(res.ssids)),
 	})
-	for _, a := range aps {
+
+	for _, a := range res.aps {
 		var mac, model *string
 		if a.mac != "" {
 			mac = &a.mac
@@ -559,14 +574,71 @@ func (s *Server) collectWirelessProfile(ctx context.Context, p db.VendorConnecti
 		if addr, perr := netip.ParseAddr(a.ip); perr == nil {
 			ip = &addr
 		}
-		st := a.status
-		if st == "" {
-			st = "unknown"
-		}
 		_, _ = s.queries.UpsertAccessPoint(ctx, db.UpsertAccessPointParams{
-			ControllerDeviceID: dev.ID, Name: a.name, Mac: mac, Model: model, Ip: ip, Status: st, ClientCount: a.clients,
+			ControllerDeviceID: dev.ID, Name: a.name, Mac: mac, Model: model, Ip: ip,
+			Status: nz(a.status, "unknown"), ClientCount: a.clients, Source: res.source,
 		})
 	}
+
+	// Per-SSID live client counts derived from the roster (honest: only what we saw).
+	ssidClients := map[string]int32{}
+	for _, c := range res.clients {
+		if c.ssid != "" {
+			ssidClients[strings.ToLower(strings.TrimSpace(c.ssid))]++
+		}
+	}
+	for _, ss := range res.ssids {
+		if ss.name == "" {
+			continue
+		}
+		status := "enabled"
+		if !ss.enabled {
+			status = "disabled"
+		}
+		_, _ = s.queries.UpsertWirelessSSID(ctx, db.UpsertWirelessSSIDParams{
+			ControllerDeviceID: dev.ID, Name: ss.name, Status: status, Security: ss.security,
+			Band: ss.band, Vlan: ss.vlan, ClientCount: ssidClients[strings.ToLower(strings.TrimSpace(ss.name))], Source: res.source,
+		})
+	}
+
+	for _, c := range res.clients {
+		if c.mac == "" {
+			continue
+		}
+		_, _ = s.queries.UpsertWirelessClient(ctx, db.UpsertWirelessClientParams{
+			ControllerDeviceID: dev.ID, Mac: c.mac, Ip: c.ip, Hostname: c.hostname,
+			ApName: c.apName, Ssid: c.ssid, Rssi: c.rssi, Snr: c.snr,
+			RxBytes: c.rx, TxBytes: c.tx, Band: c.band, Source: res.source,
+		})
+	}
+
+	for _, r := range res.radios {
+		if r.apName == "" {
+			continue
+		}
+		_, _ = s.queries.UpsertWirelessRadio(ctx, db.UpsertWirelessRadioParams{
+			ControllerDeviceID: dev.ID, ApName: r.apName, Radio: nz(r.radio, r.band), Band: r.band,
+			Channel: r.channel, PowerDbm: r.power, ClientCount: r.clients, ChannelWidth: r.width, Source: res.source,
+		})
+	}
+
+	// Events — replace the window for this source (collectors re-publish current).
+	if len(res.events) > 0 {
+		_ = s.queries.DeleteWirelessEventsForSource(ctx, db.DeleteWirelessEventsForSourceParams{ControllerDeviceID: dev.ID, Source: res.source})
+		for _, ev := range res.events {
+			_ = s.queries.InsertWirelessEvent(ctx, db.InsertWirelessEventParams{
+				ControllerDeviceID: dev.ID, At: ev.at, Severity: nz(ev.severity, "info"),
+				Category: ev.category, Message: ev.message, Source: res.source,
+			})
+		}
+	}
+
+	// Prune rows from this source not refreshed this run.
+	_ = s.queries.DeleteStaleAccessPoints(ctx, db.DeleteStaleAccessPointsParams{ControllerDeviceID: dev.ID, Source: res.source, CollectedAt: poll})
+	_ = s.queries.DeleteStaleWirelessSSIDs(ctx, db.DeleteStaleWirelessSSIDsParams{ControllerDeviceID: dev.ID, Source: res.source, CollectedAt: poll})
+	_ = s.queries.DeleteStaleWirelessClients(ctx, db.DeleteStaleWirelessClientsParams{ControllerDeviceID: dev.ID, Source: res.source, CollectedAt: poll})
+	_ = s.queries.DeleteStaleWirelessRadios(ctx, db.DeleteStaleWirelessRadiosParams{ControllerDeviceID: dev.ID, Source: res.source, CollectedAt: poll})
+
 	if blob, merr := domain.MarshalEvidence(nil); merr == nil {
 		conf := int16(85)
 		dc := "wireless_controller"
@@ -575,16 +647,14 @@ func (s *Server) collectWirelessProfile(ctx context.Context, p db.VendorConnecti
 			DeviceClass: &dc, ConfidenceScore: &conf, ClassificationEvidence: blob,
 		})
 	}
-	_ = s.queries.UpdateDeviceHardwareInfo(ctx, db.UpdateDeviceHardwareInfoParams{ID: dev.ID, Vendor: vendor})
-	// Stamp the Driver column with the active collector's registry key so the
-	// Wireless Controllers list shows which integration owns this controller.
-	_ = s.queries.SetDeviceDriver(ctx, db.SetDeviceDriverParams{ID: dev.ID, Driver: wlVendorKeyForProfileType(p.VendorType)})
+	s.enrichWirelessControllerDevice(ctx, dev.ID, p.VendorType, res.vendor, "", "", res.version, "", len(res.aps) > 0)
 	if p.CredentialID != nil {
 		_ = s.queries.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: dev.ID, CredentialID: p.CredentialID})
 	}
-	_ = s.queries.UpdateDeviceMonitoringStatus(ctx, db.UpdateDeviceMonitoringStatusParams{ID: dev.ID, Status: "up"})
-	s.recordWirelessHealth(ctx, dev.ID, wlVendorKeyForProfileType(p.VendorType), p.VendorType, true, map[string]int{wcapAPs: len(aps)})
-	return true, vendor + " controller collected — " + itoaN(len(aps)) + " AP(s)"
+	s.recordWirelessHealth(ctx, dev.ID, wlVendorKeyForProfileType(p.VendorType), res.source, true, map[string]int{
+		wcapAPs: len(res.aps), wcapSSIDs: len(res.ssids), wcapClients: len(res.clients), wcapRadios: len(res.radios),
+		wcapEvents: len(res.events), wcapHealth: boolToCount(res.healthOK), wcapFirmware: boolToCount(res.version != ""),
+	})
 }
 
 type wlanAP struct {

@@ -68,3 +68,111 @@ func TestListAPs_DeviceErrorFails(t *testing.T) {
 		t.Fatal("expected error on 500")
 	}
 }
+
+// Fixture mirrors GET /api/s/<site>/rest/wlanconf (passphrase intentionally
+// present in the source to prove it is NEVER surfaced).
+const wlanConfJSON = `{"data":[
+  {"name":"Guest","enabled":true,"security":"open","wlan_band":"2g","vlan_enabled":true,"vlan":30,"x_passphrase":"SECRET"},
+  {"name":"Corp","enabled":true,"security":"wpapsk","wpa_mode":"wpa2","wlan_band":"both","x_passphrase":"SECRET2"},
+  {"name":"Legacy","enabled":false,"security":"wpaeap","wlan_band":"5g"}
+]}`
+
+func TestParseWLANConf(t *testing.T) {
+	ssids, err := parseWLANConf([]byte(wlanConfJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ssids) != 3 {
+		t.Fatalf("got %d SSIDs; want 3", len(ssids))
+	}
+	if ssids[0].Name != "Guest" || ssids[0].Band != "2.4" || ssids[0].VLAN != "30" || !ssids[0].Enabled || ssids[0].Security != "open" {
+		t.Fatalf("Guest wrong: %+v", ssids[0])
+	}
+	if ssids[1].Band != "dual" { // wlan_band "both"
+		t.Fatalf("Corp band: %+v", ssids[1])
+	}
+	if ssids[2].Enabled { // disabled
+		t.Fatalf("Legacy should be disabled: %+v", ssids[2])
+	}
+	// The passphrase must never appear anywhere in the parsed output.
+	for _, s := range ssids {
+		if strings.Contains(s.Name+s.Security+s.VLAN+s.Band, "SECRET") {
+			t.Fatalf("passphrase leaked into SSID: %+v", s)
+		}
+	}
+}
+
+// Fixture mirrors GET /api/s/<site>/stat/sta.
+const staJSON = `{"data":[
+  {"mac":"de:ad:be:ef:00:01","ip":"10.0.0.50","hostname":"laptop-1","essid":"Corp","ap_mac":"aa:bb:cc:00:11:22","signal":-55,"noise":-95,"rx_bytes":1024,"tx_bytes":2048,"radio":"na"},
+  {"mac":"de:ad:be:ef:00:02","ip":"10.0.0.51","name":"phone","essid":"Guest","ap_mac":"aa:bb:cc:00:11:22","rssi":40,"radio":"ng"}
+]}`
+
+func TestParseStations(t *testing.T) {
+	cl, err := parseStations([]byte(staJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cl) != 2 {
+		t.Fatalf("got %d clients; want 2", len(cl))
+	}
+	if cl[0].Hostname != "laptop-1" || cl[0].SSID != "Corp" || cl[0].Band != "5" {
+		t.Fatalf("client0 wrong: %+v", cl[0])
+	}
+	if cl[0].SNR == nil || *cl[0].SNR != 40 { // signal(-55) - noise(-95) = 40
+		t.Fatalf("client0 SNR: %+v", cl[0].SNR)
+	}
+	if cl[1].Hostname != "phone" || cl[1].Band != "2.4" { // falls back to name
+		t.Fatalf("client1 wrong: %+v", cl[1])
+	}
+}
+
+// Fixture mirrors radio_table_stats inside GET /api/s/<site>/stat/device.
+const radioJSON = `{"data":[
+  {"type":"uap","name":"AP-Lobby","mac":"aa:bb:cc:00:11:22","radio_table_stats":[
+     {"name":"wifi0","radio":"ng","channel":6,"tx_power":20,"num_sta":5},
+     {"name":"wifi1","radio":"na","channel":36,"tx_power":23,"num_sta":9}
+  ]},
+  {"type":"usw","name":"Switch-1","mac":"aa:bb:cc:00:99:99"}
+]}`
+
+func TestParseRadios(t *testing.T) {
+	radios, err := parseRadios([]byte(radioJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(radios) != 2 { // switch contributes none
+		t.Fatalf("got %d radios; want 2", len(radios))
+	}
+	if radios[0].Band != "2.4" || radios[0].Channel == nil || *radios[0].Channel != 6 || radios[0].ClientCount != 5 {
+		t.Fatalf("radio0 wrong: %+v", radios[0])
+	}
+	if radios[1].Band != "5" || radios[1].PowerDbm == nil || *radios[1].PowerDbm != 23 {
+		t.Fatalf("radio1 wrong: %+v", radios[1])
+	}
+}
+
+func TestParseSysinfo(t *testing.T) {
+	if v := parseSysinfo([]byte(`{"data":[{"version":"8.0.28"}]}`)); v != "8.0.28" {
+		t.Fatalf("version = %q; want 8.0.28", v)
+	}
+	if v := parseSysinfo([]byte(`{"data":[]}`)); v != "" {
+		t.Fatalf("empty sysinfo should yield empty version, got %q", v)
+	}
+}
+
+func TestParseHealth(t *testing.T) {
+	raw := []byte(`{"data":[{"subsystem":"wlan","status":"ok","num_ap":12,"num_user":140},{"subsystem":"www","status":"ok"}]}`)
+	hs := parseHealth(raw)
+	if len(hs) != 2 || hs[0].Name != "wlan" || hs[0].Status != "ok" || hs[0].NumAP != 12 {
+		t.Fatalf("health wrong: %+v", hs)
+	}
+}
+
+func TestParseEvents(t *testing.T) {
+	raw := []byte(`{"data":[{"time":1700000000000,"key":"EVT_AP_Lost_Contact","msg":"AP[Lobby] lost contact","subsystem":"wlan"}]}`)
+	ev := parseEvents(raw)
+	if len(ev) != 1 || ev[0].Key != "EVT_AP_Lost_Contact" || ev[0].AtMillis != 1700000000000 || ev[0].Subsystem != "wlan" {
+		t.Fatalf("event wrong: %+v", ev)
+	}
+}

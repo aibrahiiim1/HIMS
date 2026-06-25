@@ -14,9 +14,9 @@ interface Props {
 // the honest per-capability status are all server-driven, so onboarding a new
 // platform is a backend catalog row with NO change to this form.
 type VendorStatus = 'working' | 'detection_only' | 'collector_pending' | 'unsupported'
-type CapStatus = 'supported' | 'not_implemented' | 'collector_pending' | 'needs_configuration' | 'auth_failed' | 'unsupported_by_device' | 'endpoint_not_exposed' | 'collected'
+type CapStatus = 'supported' | 'implemented_live_validation_pending' | 'external_dependency_required' | 'not_implemented' | 'collector_pending' | 'needs_configuration' | 'auth_failed' | 'unsupported_by_device' | 'endpoint_not_exposed' | 'collected'
 interface VendorField { key: string; label: string; placeholder?: string; default?: string; help?: string; required: boolean }
-interface Capability { key: string; label: string; status: CapStatus }
+interface Capability { key: string; label: string; status: CapStatus; reason?: string }
 interface WLVendor {
   key: string
   display_name: string
@@ -46,6 +46,8 @@ function capTone(s: CapStatus): string {
   switch (s) {
     case 'collected': return 'badge-success'
     case 'supported': return 'badge-info'
+    case 'implemented_live_validation_pending':
+    case 'external_dependency_required': return 'badge-info'
     case 'auth_failed': return 'badge-down'
     case 'endpoint_not_exposed':
     case 'unsupported_by_device':
@@ -57,6 +59,8 @@ function capText(s: CapStatus): string {
   switch (s) {
     case 'supported': return 'supported'
     case 'collected': return 'collected'
+    case 'implemented_live_validation_pending': return 'implemented · live-validation pending'
+    case 'external_dependency_required': return 'implemented · external dependency'
     case 'collector_pending': return 'collector pending'
     case 'not_implemented': return 'not implemented'
     case 'endpoint_not_exposed': return 'endpoint not exposed'
@@ -120,7 +124,13 @@ export function AddWirelessController({ onClose, onAdded }: Props) {
     setErr(null)
     if (!vendor) { setErr('Choose the controller type.'); return false }
     if (!f.ip.trim()) { setErr('Controller IP is required.'); return false }
-    if (!f.username.trim() || !f.password) { setErr('Admin username and password are required.'); return false }
+    // Bearer-token drivers (Aruba Central) authenticate with the token alone — it
+    // is entered in the password field; the username is optional.
+    if (vendor.credential_type === 'bearer_token') {
+      if (!f.password) { setErr(`${vendor.display_name} requires an API/OAuth2 token (enter it as the password).`); return false }
+    } else if (!f.username.trim() || !f.password) {
+      setErr('Admin username and password are required.'); return false
+    }
     for (const fld of vendor.fields ?? []) {
       if (fld.required && !(extra[fld.key] ?? '').trim()) { setErr(`${vendor.display_name} requires ${fld.label}.`); return false }
     }
@@ -183,7 +193,7 @@ export function AddWirelessController({ onClose, onAdded }: Props) {
               {vendor.message && <div style={{ marginTop: working ? 0 : 6 }}>{vendor.message}</div>}
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
                 {vendor.capabilities.map((c) => (
-                  <span key={c.key} className={'badge ' + capTone(c.status)} title={`${c.label}: ${capText(c.status)}`}>
+                  <span key={c.key} className={'badge ' + capTone(c.status)} title={`${c.label}: ${capText(c.status)}${c.reason ? ' — ' + c.reason : ''}`}>
                     {c.label}: {capText(c.status)}
                   </span>
                 ))}
@@ -200,8 +210,8 @@ export function AddWirelessController({ onClose, onAdded }: Props) {
               {(locs.data ?? []).map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
             </select>
           ))}
-          {field('Admin username', <input value={f.username} onChange={(e) => { set('username', e.target.value); setTest(null) }} autoComplete="off" style={inputStyle} />)}
-          {field('Admin password', <input type="password" value={f.password} onChange={(e) => { set('password', e.target.value); setTest(null) }} autoComplete="new-password" style={inputStyle} />)}
+          {vendor?.credential_type !== 'bearer_token' && field('Admin username', <input value={f.username} onChange={(e) => { set('username', e.target.value); setTest(null) }} autoComplete="off" style={inputStyle} />)}
+          {field(vendor?.credential_type === 'bearer_token' ? 'API / OAuth2 token' : 'Admin password', <input type="password" value={f.password} onChange={(e) => { set('password', e.target.value); setTest(null) }} autoComplete="new-password" style={inputStyle} />)}
           {field('Port', <input value={f.port} onChange={(e) => { set('port', e.target.value); setTest(null) }} placeholder={vendor ? String(vendor.default_port) : 'choose a vendor first'} style={inputStyle} />, vendor ? `Default ${vendor.default_port} · ${vendor.path_rules}` : undefined)}
 
           {/* Driver-specific connection parameters, rendered from the catalog. */}

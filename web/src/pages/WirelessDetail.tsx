@@ -516,6 +516,8 @@ function capTone(status: string): string {
   switch (status) {
     case 'collected': return 'badge-success'
     case 'supported': return 'badge-info' // declared-capable, not yet run
+    case 'implemented_live_validation_pending':
+    case 'external_dependency_required': return 'badge-info'
     case 'endpoint_not_exposed':
     case 'unsupported_by_device':
     case 'needs_configuration': return 'badge-warning'
@@ -527,6 +529,8 @@ function capLabel(status: string): string {
   switch (status) {
     case 'collected': return 'collected'
     case 'supported': return 'supported (not run)'
+    case 'implemented_live_validation_pending': return 'implemented · live-validation pending'
+    case 'external_dependency_required': return 'implemented · external dependency'
     case 'endpoint_not_exposed': return 'endpoint not exposed'
     case 'unsupported_by_device': return 'unsupported by device'
     case 'needs_configuration': return 'needs configuration'

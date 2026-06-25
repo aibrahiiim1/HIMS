@@ -2,11 +2,31 @@ package extremexcc
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
 )
+
+// Fixture mirrors one AP object's "radios" array from /aps/query.
+func TestAPRadios(t *testing.T) {
+	var m map[string]any
+	_ = json.Unmarshal([]byte(`{"apName":"AP-Lobby","radios":[
+	  {"radioBand":"2.4GHz","opChannel":6,"txPower":11,"channelWidth":"20MHz","numClients":4},
+	  {"radioBand":"5GHz","opChannel":44,"txPower":14,"channelWidth":"80MHz","numClients":12}
+	]}`), &m)
+	radios := apRadios(m, "AP-Lobby")
+	if len(radios) != 2 {
+		t.Fatalf("got %d radios; want 2", len(radios))
+	}
+	if radios[0].Band != "2.4" || radios[0].Channel == nil || *radios[0].Channel != 6 || radios[0].ChannelWidth != "20MHz" || radios[0].Clients != 4 {
+		t.Fatalf("radio0 wrong: %+v", radios[0])
+	}
+	if radios[1].Band != "5" || radios[1].Power == nil || *radios[1].Power != 14 || radios[1].APName != "AP-Lobby" {
+		t.Fatalf("radio1 wrong: %+v", radios[1])
+	}
+}
 
 // fakeDoer returns a canned response per path substring.
 type fakeDoer struct{ routes map[string]string }

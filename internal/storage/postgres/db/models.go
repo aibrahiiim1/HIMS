@@ -1284,6 +1284,7 @@ type WirelessRadioStatus struct {
 	ClientCount        int32     `json:"client_count"`
 	Source             string    `json:"source"`
 	CollectedAt        time.Time `json:"collected_at"`
+	ChannelWidth       string    `json:"channel_width"`
 }
 
 type WirelessSsid struct {

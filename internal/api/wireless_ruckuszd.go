@@ -141,10 +141,21 @@ func (s *Server) collectRuckusZDProfile(ctx context.Context, p db.VendorConnecti
 			Band: st.Band, Source: ruckusZDSource,
 		})
 	}
+	// Radios — one row per AP per band from the stamgr <ap><radio…/> elements.
+	for _, rd := range res.Radios {
+		if rd.APName == "" {
+			continue
+		}
+		_, _ = s.queries.UpsertWirelessRadio(ctx, db.UpsertWirelessRadioParams{
+			ControllerDeviceID: dev.ID, ApName: rd.APName, Radio: nz(rd.RadioType, rd.Band), Band: rd.Band,
+			Channel: rd.Channel, PowerDbm: rd.Power, ClientCount: rd.Clients, Source: ruckusZDSource,
+		})
+	}
 	// Prune rows from this source not refreshed this run.
 	_ = s.queries.DeleteStaleAccessPoints(ctx, db.DeleteStaleAccessPointsParams{ControllerDeviceID: dev.ID, Source: ruckusZDSource, CollectedAt: poll})
 	_ = s.queries.DeleteStaleWirelessSSIDs(ctx, db.DeleteStaleWirelessSSIDsParams{ControllerDeviceID: dev.ID, Source: ruckusZDSource, CollectedAt: poll})
 	_ = s.queries.DeleteStaleWirelessClients(ctx, db.DeleteStaleWirelessClientsParams{ControllerDeviceID: dev.ID, Source: ruckusZDSource, CollectedAt: poll})
+	_ = s.queries.DeleteStaleWirelessRadios(ctx, db.DeleteStaleWirelessRadiosParams{ControllerDeviceID: dev.ID, Source: ruckusZDSource, CollectedAt: poll})
 
 	if p.CredentialID != nil {
 		_ = s.queries.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: dev.ID, CredentialID: p.CredentialID})
@@ -164,7 +175,8 @@ func (s *Server) collectRuckusZDProfile(ctx context.Context, p db.VendorConnecti
 	// fleet) populates OS; a successful poll proves the controller is up.
 	s.enrichWirelessControllerDevice(ctx, dev.ID, p.VendorType, ven, res.Model, res.Serial, res.Version, res.Hostname, ok)
 	s.recordWirelessHealth(ctx, dev.ID, wlVendorKeyForProfileType(p.VendorType), ruckusZDSource, true, map[string]int{
-		wcapAPs: len(res.APs), wcapSSIDs: len(res.SSIDs), wcapClients: len(res.Stations), wcapFirmware: boolToCount(res.Version != ""),
+		wcapAPs: len(res.APs), wcapSSIDs: len(res.SSIDs), wcapClients: len(res.Stations),
+		wcapRadios: len(res.Radios), wcapFirmware: boolToCount(res.Version != ""),
 	})
 	return ok, detail
 }

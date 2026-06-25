@@ -60,9 +60,22 @@ type CollectResult struct {
 	APs           []AP
 	SSIDs         []SSID
 	Stations      []Station
+	Radios        []Radio
 	// EventsExposed is false: the ZD AJAX interface returns zero event rows on
 	// this firmware (honest gate — events would require SNMP traps).
 	EventsExposed bool
+}
+
+// Radio is one AP radio from the ZoneDirector stamgr stats (<ap><radio…/></ap>).
+// channel / tx-power are populated only when the firmware's AJAX includes them;
+// band + client count are always derivable from radio-type + num-sta.
+type Radio struct {
+	APName    string
+	RadioType string // 11ng | 11na | 11ac | 11ax …
+	Band      string // 2.4 | 5 | 6
+	Channel   *int32
+	Power     *int32
+	Clients   int32
 }
 
 // Collect logs in and pulls the AP / client / SSID / system rosters via the
@@ -88,6 +101,7 @@ func (c *Client) Collect(ctx context.Context) (CollectResult, error) {
 				Site:        get(m, "location", "group-id", "ap-group", "zone"),
 			})
 		}
+		out.Radios = apRadios(b)
 	} else {
 		return out, err
 	}

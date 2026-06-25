@@ -99,6 +99,22 @@ func TestLoginDiscoversAdminAndCSRF(t *testing.T) {
 	}
 }
 
+func TestAPRadios(t *testing.T) {
+	radios := apRadios([]byte(apXMLFixture))
+	if len(radios) != 3 { // Lobby (2) + Pool (1)
+		t.Fatalf("got %d radios; want 3", len(radios))
+	}
+	if radios[0].APName != "Lobby" || radios[0].Band != "2.4" || radios[0].Clients != 3 || radios[0].RadioType != "11ng" {
+		t.Fatalf("radio0 wrong: %+v", radios[0])
+	}
+	if radios[1].APName != "Lobby" || radios[1].Band != "5" || radios[1].Clients != 5 { // 11ac → 5GHz
+		t.Fatalf("radio1 wrong: %+v", radios[1])
+	}
+	if radios[2].APName != "Pool" || radios[2].Band != "2.4" {
+		t.Fatalf("radio2 wrong: %+v", radios[2])
+	}
+}
+
 func TestLoginRejectedShowsLoginPage(t *testing.T) {
 	d := &fakeDoer{routes: map[string]resp{
 		"/":                  {status: 302, headers: map[string]string{"Location": "/admin10/login.jsp"}},

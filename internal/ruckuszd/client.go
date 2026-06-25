@@ -259,6 +259,60 @@ func attrRows(b []byte, local string) []map[string]string {
 	return out
 }
 
+// apRadios walks each <ap> element and emits one Radio per child <radio>,
+// carrying the parent AP's name. channel / tx-power are captured when the
+// firmware's AJAX includes them (older trains expose only radio-type + num-sta,
+// in which case those stay nil — honest, never fabricated).
+func apRadios(b []byte) []Radio {
+	dec := xml.NewDecoder(bytes.NewReader(b))
+	var out []Radio
+	var apName string
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			break
+		}
+		switch se := tok.(type) {
+		case xml.StartElement:
+			switch strings.ToLower(se.Name.Local) {
+			case "ap":
+				m := attrMap(se.Attr)
+				apName = get(m, "ap-name", "devname", "name", "description")
+				if apName == "" {
+					apName = get(m, "mac", "ap-mac", "bssid")
+				}
+			case "radio":
+				if apName == "" {
+					continue
+				}
+				m := attrMap(se.Attr)
+				rt := get(m, "radio-type", "radio", "wlan-radio")
+				out = append(out, Radio{
+					APName: apName, RadioType: rt, Band: zdBand(rt),
+					Channel: getIntPtr(m, "channel"), Power: getIntPtr(m, "tx-power", "txpower", "tx-power-dbm"),
+					Clients: int32(atoiOr(get(m, "num-sta", "num-sta-total"))),
+				})
+			}
+		}
+	}
+	return out
+}
+
+// zdBand maps a Ruckus radio-type token to a normalized band.
+func zdBand(rt string) string {
+	r := strings.ToLower(rt)
+	switch {
+	case strings.Contains(r, "11ng"), strings.Contains(r, "11bg"), strings.Contains(r, "11g"), strings.Contains(r, "11b"), strings.Contains(r, "2.4"):
+		return "2.4"
+	case strings.Contains(r, "6g"), strings.Contains(r, "11ax6"):
+		return "6"
+	case strings.Contains(r, "11na"), strings.Contains(r, "11ac"), strings.Contains(r, "11an"), strings.Contains(r, "11ax"), strings.Contains(r, "5g"), strings.Contains(r, "11a"):
+		return "5"
+	default:
+		return ""
+	}
+}
+
 // apRows walks each <ap> element, capturing its attributes and summing the
 // per-radio <radio num-sta> client counts into "num-sta-total".
 func apRows(b []byte) []map[string]string {

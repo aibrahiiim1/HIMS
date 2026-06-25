@@ -81,9 +81,21 @@ type CollectResult struct {
 	APs           []AP
 	SSIDs         []SSID
 	Stations      []Station
+	Radios        []Radio
 	Events        []Event
 	Endpoints     []EndpointOutcome
 	Partial       bool
+}
+
+// Radio is one AP radio parsed from the XCC AP payload's "radios" array
+// (the same array indexRadioNoise already reads for client SNR).
+type Radio struct {
+	APName       string
+	Band         string // 2.4 | 5 | 6
+	Channel      *int32
+	Power        *int32
+	ChannelWidth string
+	Clients      int32
 }
 
 // Collect authenticates and pulls the AP / SSID / client rosters from the
@@ -123,6 +135,7 @@ func (c *Client) Collect(ctx context.Context) (CollectResult, error) {
 			Uptime:      pick(m, "sysUptime", "uptime", "upTime"),
 		}
 		indexRadioNoise(m, ap.Serial, radioNoise)
+		out.Radios = append(out.Radios, apRadios(m, ap.Name)...)
 		out.APs = append(out.APs, ap)
 	}
 
@@ -410,6 +423,47 @@ func prettyAPStatus(raw string) string {
 
 // indexRadioNoise records each radio's noise floor keyed by "serial|channel" for
 // later client-SNR computation (the station record carries no SNR field).
+// apRadios extracts the per-radio operational state from an AP payload's
+// "radios" array. Fields are tolerated across firmware variants; band is
+// normalized to 2.4/5/6. Channel/power/width stay nil/empty when a radio omits
+// them — never fabricated.
+func apRadios(m map[string]any, apName string) []Radio {
+	radios, ok := m["radios"].([]any)
+	if !ok {
+		return nil
+	}
+	var out []Radio
+	for _, r := range radios {
+		rm, ok := r.(map[string]any)
+		if !ok {
+			continue
+		}
+		out = append(out, Radio{
+			APName:       apName,
+			Band:         xccBand(pick(rm, "band", "radioBand", "radioType", "frequencyBand", "frequency")),
+			Channel:      pickIntPtr(rm, "opChannel", "channel", "currentChannel"),
+			Power:        pickIntPtr(rm, "txPower", "txPowerDbm", "power", "currentTxPower"),
+			ChannelWidth: pick(rm, "channelWidth", "channelBandwidth", "width", "bandwidth"),
+			Clients:      pickInt(rm, "numClients", "clientCount", "stationCount", "associatedClients"),
+		})
+	}
+	return out
+}
+
+// xccBand normalizes an XCC radio band/type label to 2.4/5/6.
+func xccBand(b string) string {
+	switch {
+	case strings.Contains(b, "2.4"), strings.Contains(b, "11ng"), strings.Contains(b, "11bg"):
+		return "2.4"
+	case strings.Contains(b, "6"):
+		return "6"
+	case strings.Contains(b, "5"), strings.Contains(b, "11ac"), strings.Contains(b, "11na"), strings.Contains(b, "11ax"):
+		return "5"
+	default:
+		return ""
+	}
+}
+
 func indexRadioNoise(m map[string]any, serial string, dst map[string]int32) {
 	if serial == "" {
 		return

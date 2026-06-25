@@ -195,10 +195,21 @@ func (s *Server) collectXCCProfile(ctx context.Context, p db.VendorConnectionPro
 			})
 		}
 	}
+	// Radios — per-AP per-band from the AP payload's "radios" array.
+	for _, rd := range res.Radios {
+		if rd.APName == "" {
+			continue
+		}
+		_, _ = s.queries.UpsertWirelessRadio(ctx, db.UpsertWirelessRadioParams{
+			ControllerDeviceID: dev.ID, ApName: rd.APName, Radio: nz(rd.Band, "radio"), Band: rd.Band,
+			Channel: rd.Channel, PowerDbm: rd.Power, ClientCount: rd.Clients, ChannelWidth: rd.ChannelWidth, Source: xccSource,
+		})
+	}
 	// Prune rows from this source not refreshed this run.
 	_ = s.queries.DeleteStaleAccessPoints(ctx, db.DeleteStaleAccessPointsParams{ControllerDeviceID: dev.ID, Source: xccSource, CollectedAt: poll})
 	_ = s.queries.DeleteStaleWirelessSSIDs(ctx, db.DeleteStaleWirelessSSIDsParams{ControllerDeviceID: dev.ID, Source: xccSource, CollectedAt: poll})
 	_ = s.queries.DeleteStaleWirelessClients(ctx, db.DeleteStaleWirelessClientsParams{ControllerDeviceID: dev.ID, Source: xccSource, CollectedAt: poll})
+	_ = s.queries.DeleteStaleWirelessRadios(ctx, db.DeleteStaleWirelessRadiosParams{ControllerDeviceID: dev.ID, Source: xccSource, CollectedAt: poll})
 
 	if p.CredentialID != nil {
 		_ = s.queries.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: dev.ID, CredentialID: p.CredentialID})
@@ -226,8 +237,8 @@ func (s *Server) collectXCCProfile(ctx context.Context, p db.VendorConnectionPro
 	// Driver/Status. COALESCE-safe; Status flips to up only on a successful poll.
 	s.enrichWirelessControllerDevice(ctx, dev.ID, p.VendorType, ven, res.Model, res.Serial, res.Version, "", ok)
 	s.recordWirelessHealth(ctx, dev.ID, wlVendorKeyForProfileType(p.VendorType), xccSource, true, map[string]int{
-		wcapAPs: len(res.APs), wcapSSIDs: len(res.SSIDs), wcapClients: len(res.Stations),
-		wcapHealth: len(res.Events), wcapFirmware: boolToCount(res.Version != ""),
+		wcapAPs: len(res.APs), wcapSSIDs: len(res.SSIDs), wcapClients: len(res.Stations), wcapRadios: len(res.Radios),
+		wcapEvents: len(res.Events), wcapHealth: boolToCount(res.Version != ""), wcapFirmware: boolToCount(res.Version != ""),
 	})
 	return ok, detail
 }

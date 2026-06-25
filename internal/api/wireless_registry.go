@@ -51,9 +51,15 @@ type wlCapStatus string
 
 const (
 	// declared (design-time) ----------------------------------------------------
-	capSupported        wlCapStatus = "supported"         // collector implements this and collects it
-	capNotImplemented   wlCapStatus = "not_implemented"   // no collector code for this capability yet
-	capCollectorPending wlCapStatus = "collector_pending" // whole driver is gated (no client at all)
+	capSupported wlCapStatus = "supported" // collector implements this and is expected to collect it
+	// implemented_live_validation_pending: the FULL technical path exists — collector
+	// code, endpoint/command, parser, fixture test, and runtime route — but the exact
+	// response shape has not been confirmed against real hardware/tenant yet. This is
+	// NOT "developer work remaining"; it is "needs a live controller to validate".
+	capLiveValidationPending wlCapStatus = "implemented_live_validation_pending"
+	capExternalDependency    wlCapStatus = "external_dependency_required" // implemented; blocked on an external input (token/tenant)
+	capNotImplemented        wlCapStatus = "not_implemented"              // genuinely no collector code (developer work remains)
+	capCollectorPending      wlCapStatus = "collector_pending"            // whole driver is gated (no client at all)
 	// runtime (after a real test/collection) ------------------------------------
 	capNeedsConfiguration  wlCapStatus = "needs_configuration"   // a required field (e.g. controllerId) is missing
 	capAuthFailed          wlCapStatus = "auth_failed"           // login rejected
@@ -62,11 +68,15 @@ const (
 	capCollected           wlCapStatus = "collected"             // real data was persisted this run
 )
 
-// wlCapability is one collectible feature with its declared status.
+// wlCapability is one collectible feature with its declared status. Reason is the
+// proof/justification shown when the status is a non-collectable one
+// (unsupported_by_device / not_implemented) — e.g. the exact endpoint/command
+// that does not exist on this controller family.
 type wlCapability struct {
-	Key    string      `json:"key"` // aps | ssids | clients | radios | health | firmware
+	Key    string      `json:"key"` // aps | ssids | clients | radios | health | events | firmware
 	Label  string      `json:"label"`
 	Status wlCapStatus `json:"status"`
+	Reason string      `json:"reason,omitempty"`
 }
 
 // Canonical capability keys (also the wireless_collection_health.capability values).
@@ -75,7 +85,8 @@ const (
 	wcapSSIDs    = "ssids"
 	wcapClients  = "clients"
 	wcapRadios   = "radios"
-	wcapHealth   = "health" // controller events / health feed
+	wcapHealth   = "health" // controller / subsystem health
+	wcapEvents   = "events" // controller events / alarms feed
 	wcapFirmware = "firmware"
 )
 
@@ -118,11 +129,16 @@ type wlVendor struct {
 const (
 	credUserPass        = "username_password"
 	credUserPassOrToken = "username_password_or_token"
+	credToken           = "bearer_token" // the password field carries an API/OAuth2 token
 )
 
-// cap is a tiny helper to keep the catalog rows readable.
+// wcap / wcapWhy keep the catalog rows readable. wcapWhy attaches the proof for a
+// non-collectable capability (the endpoint/command that does not exist).
 func wcap(key, label string, st wlCapStatus) wlCapability {
 	return wlCapability{Key: key, Label: label, Status: st}
+}
+func wcapWhy(key, label string, st wlCapStatus, reason string) wlCapability {
+	return wlCapability{Key: key, Label: label, Status: st, Reason: reason}
 }
 
 // wirelessVendors is the driver catalog, in dropdown order. Add a row to onboard
@@ -138,7 +154,9 @@ var wirelessVendors = []wlVendor{
 		Capabilities: []wlCapability{
 			wcap(wcapAPs, "APs", capSupported), wcap(wcapSSIDs, "SSIDs/WLANs", capSupported),
 			wcap(wcapClients, "Clients", capSupported), wcap(wcapFirmware, "Firmware/OS", capSupported),
-			wcap(wcapRadios, "Radios", capNotImplemented), wcap(wcapHealth, "Events/Health", capNotImplemented),
+			wcap(wcapRadios, "Radios", capSupported),
+			wcapWhy(wcapHealth, "Health", capUnsupportedByDevice, "ZoneDirector's AJAX admin interface exposes no controller/subsystem health endpoint; reachability + firmware (backfilled from the AP fleet) are the available signals."),
+			wcapWhy(wcapEvents, "Events", capUnsupportedByDevice, "ZoneDirector's AJAX interface returns zero event/alarm rows on this firmware; events are delivered via SNMP traps, not a pollable endpoint."),
 		},
 		Status: wlStatusWorking, CollectorAvailable: true,
 		deviceVendor: "Ruckus Wireless", profileVendorType: "ruckus_zd",
@@ -155,8 +173,9 @@ var wirelessVendors = []wlVendor{
 		},
 		Capabilities: []wlCapability{
 			wcap(wcapAPs, "APs", capSupported), wcap(wcapSSIDs, "SSIDs/WLANs", capSupported),
-			wcap(wcapClients, "Clients", capSupported), wcap(wcapHealth, "Events/Health", capSupported),
-			wcap(wcapFirmware, "Firmware/OS", capSupported), wcap(wcapRadios, "Radios", capNotImplemented),
+			wcap(wcapClients, "Clients", capSupported), wcap(wcapHealth, "Health", capSupported),
+			wcap(wcapEvents, "Events", capSupported), wcap(wcapFirmware, "Firmware/OS", capSupported),
+			wcapWhy(wcapRadios, "Radios", capLiveValidationPending, "Implemented: parser reads the AP payload's 'radios' array (channel/power/width/clients), persisted + fixture-tested + routed. Live validation pending — no XCC wireless profile is bound in this environment to confirm the field shape against a VE6120."),
 		},
 		Status: wlStatusWorking, CollectorAvailable: true,
 		deviceVendor: "Extreme Networks", profileVendorType: "extreme_xcc",
@@ -167,14 +186,14 @@ var wirelessVendors = []wlVendor{
 		Protocol: "REST/HTTPS", DefaultPort: 8443,
 		CredentialType: credUserPass, LoginMethod: "REST session (serviceTicket)",
 		PathRules:       "API base /wsg/api/public/v<ver> (version varies by firmware)",
-		HealthEndpoints: "serviceTicket login + AP query",
+		HealthEndpoints: "serviceTicket login + AP / WLAN / client / radio / event query + controller",
 		Fields: []wlVendorField{
-			{Key: "api_base", Label: "API base", Placeholder: "/wsg/api/public/v9_1", Default: "/wsg/api/public/v9_1", Help: "SmartZone public-API path; version varies by firmware.", Required: false},
+			{Key: "api_base", Label: "API base", Placeholder: "/wsg/api/public/v9_1", Default: "/wsg/api/public/v9_1", Help: "SmartZone public-API path; version varies by firmware (auto-detected via apiInfo).", Required: false},
 		},
 		Capabilities: []wlCapability{
-			wcap(wcapAPs, "APs", capSupported), wcap(wcapSSIDs, "SSIDs/WLANs", capNotImplemented),
-			wcap(wcapClients, "Clients", capNotImplemented), wcap(wcapRadios, "Radios", capNotImplemented),
-			wcap(wcapHealth, "Events/Health", capNotImplemented), wcap(wcapFirmware, "Firmware/OS", capNotImplemented),
+			wcap(wcapAPs, "APs", capSupported), wcap(wcapSSIDs, "SSIDs/WLANs", capSupported),
+			wcap(wcapClients, "Clients", capSupported), wcap(wcapRadios, "Radios", capSupported),
+			wcap(wcapHealth, "Health", capSupported), wcap(wcapEvents, "Events", capSupported), wcap(wcapFirmware, "Firmware/OS", capSupported),
 		},
 		Status: wlStatusWorking, CollectorAvailable: true,
 		deviceVendor: "Ruckus Wireless", profileVendorType: "wireless_ruckus",
@@ -184,15 +203,15 @@ var wirelessVendors = []wlVendor{
 		ModelFamily: "Ubiquiti UniFi (UDM / Cloud Key / self-hosted)", ControllerType: "UniFi Network REST API",
 		Protocol: "REST/HTTPS", DefaultPort: 8443,
 		CredentialType: credUserPass, LoginMethod: "REST login (cookie session)",
-		PathRules:       "/api/login + /api/s/<site>/stat/device",
-		HealthEndpoints: "login + site device list",
+		PathRules:       "/api/login + /api/s/<site>/{stat/device,stat/sta,rest/wlanconf,stat/sysinfo,stat/health,stat/event}",
+		HealthEndpoints: "login + device / station / wlanconf / sysinfo / health / event",
 		Fields: []wlVendorField{
 			{Key: "site", Label: "Controller site", Placeholder: "default", Default: "default", Help: "UniFi site name (not the HIMS location). Defaults to 'default'.", Required: false},
 		},
 		Capabilities: []wlCapability{
-			wcap(wcapAPs, "APs", capSupported), wcap(wcapSSIDs, "SSIDs/WLANs", capNotImplemented),
-			wcap(wcapClients, "Clients", capNotImplemented), wcap(wcapRadios, "Radios", capNotImplemented),
-			wcap(wcapHealth, "Events/Health", capNotImplemented), wcap(wcapFirmware, "Firmware/OS", capNotImplemented),
+			wcap(wcapAPs, "APs", capSupported), wcap(wcapSSIDs, "SSIDs/WLANs", capSupported),
+			wcap(wcapClients, "Clients", capSupported), wcap(wcapRadios, "Radios", capSupported),
+			wcap(wcapHealth, "Health", capSupported), wcap(wcapEvents, "Events", capSupported), wcap(wcapFirmware, "Firmware/OS", capSupported),
 		},
 		Status: wlStatusWorking, CollectorAvailable: true,
 		deviceVendor: "Ubiquiti UniFi", profileVendorType: "wireless_unifi",
@@ -202,39 +221,100 @@ var wirelessVendors = []wlVendor{
 		ModelFamily: "TP-Link Omada (OC200 / OC300 / software)", ControllerType: "Omada Controller REST API",
 		Protocol: "REST/HTTPS", DefaultPort: 8043,
 		CredentialType: credUserPass, LoginMethod: "REST login (token + controller-id + CSRF)",
-		PathRules:       "/<controller-id>/api/v2/... — requires the controllerId URL segment",
-		HealthEndpoints: "login + site device list",
+		PathRules:       "/api/info + /<controller-id>/api/v2/sites/<site>/{devices,setting/wlans/ssids,clients,alerts}",
+		HealthEndpoints: "login + info / devices / ssids / clients / alerts",
 		Fields: []wlVendorField{
 			{Key: "controller_id", Label: "Controller ID", Placeholder: "omadac-id from the controller URL", Help: "Required: the controllerId segment in the Omada web URL.", Required: true},
 			{Key: "site", Label: "Controller site", Placeholder: "Default", Default: "Default", Help: "Omada site name (not the HIMS location). Defaults to 'Default'.", Required: false},
 		},
 		Capabilities: []wlCapability{
-			wcap(wcapAPs, "APs", capSupported), wcap(wcapSSIDs, "SSIDs/WLANs", capNotImplemented),
-			wcap(wcapClients, "Clients", capNotImplemented), wcap(wcapRadios, "Radios", capNotImplemented),
-			wcap(wcapHealth, "Events/Health", capNotImplemented), wcap(wcapFirmware, "Firmware/OS", capNotImplemented),
+			wcap(wcapAPs, "APs", capSupported), wcap(wcapSSIDs, "SSIDs/WLANs", capSupported),
+			wcap(wcapClients, "Clients", capSupported),
+			wcap(wcapHealth, "Health", capSupported), wcap(wcapEvents, "Events", capSupported), wcap(wcapFirmware, "Firmware/OS", capSupported),
+			wcapWhy(wcapRadios, "Radios", capLiveValidationPending, "Implemented: per-AP detail call (/eaps/{mac}) parses radioList (band/channel/power/width/clients), persisted + fixture-tested + routed (bounded to 200 APs). Live validation pending — the radioList shape varies across controller v4 vs v5/OC200 and needs a live controller to confirm."),
 		},
 		Status: wlStatusWorking, CollectorAvailable: true,
 		deviceVendor: "TP-Link Omada", profileVendorType: "wireless_omada",
 	},
 	{
-		Key: "aruba", DisplayName: "Aruba (Mobility / Instant)",
-		ModelFamily: "Aruba Mobility Controller / Instant", ControllerType: "Controller REST API",
-		Protocol: "REST/HTTPS", DefaultPort: 443,
-		CredentialType: credUserPass, LoginMethod: "—",
-		PathRules: "—", HealthEndpoints: "detection/classification only (no collector yet)",
+		Key: "aruba_os8", DisplayName: "Aruba — Mobility Controller (ArubaOS 8)",
+		ModelFamily: "Aruba Mobility Controller / Conductor (ArubaOS 8)", ControllerType: "On-prem REST showcommand API",
+		Protocol: "REST/HTTPS", DefaultPort: 4343,
+		CredentialType: credUserPass, LoginMethod: "REST login (UIDARUBA session token)",
+		PathRules:       "/v1/api/login + /v1/configuration/showcommand?command=…",
+		HealthEndpoints: "login + show ap database long / show user-table",
 		Fields: []wlVendorField{
-			{Key: "site", Label: "Controller site", Placeholder: "(optional)", Help: "Stored for the future collector; not used for collection yet.", Required: false},
+			{Key: "site", Label: "Controller site", Placeholder: "(optional)", Help: "Optional grouping label; not required by the ArubaOS API.", Required: false},
 		},
 		Capabilities: []wlCapability{
-			wcap(wcapAPs, "APs", capCollectorPending), wcap(wcapSSIDs, "SSIDs/WLANs", capCollectorPending),
-			wcap(wcapClients, "Clients", capCollectorPending), wcap(wcapRadios, "Radios", capCollectorPending),
-			wcap(wcapHealth, "Events/Health", capCollectorPending), wcap(wcapFirmware, "Firmware/OS", capCollectorPending),
+			wcap(wcapAPs, "APs", capSupported), wcap(wcapSSIDs, "SSIDs/WLANs", capSupported),
+			wcap(wcapClients, "Clients", capSupported), wcap(wcapHealth, "Health", capSupported), wcap(wcapFirmware, "Firmware/OS", capSupported),
+			wcapWhy(wcapRadios, "Radios", capLiveValidationPending, "Implemented: 'show ap bss-table' parsed into per-AP per-band radios (channel from 'ch', band from 'phy'), fixture-tested + routed. Live validation pending — BSS-table column naming varies by AOS train and needs a real controller to confirm."),
+			wcapWhy(wcapEvents, "Events", capUnsupportedByDevice, "ArubaOS controllers stream events to syslog/SNMP; no structured showcommand returns a pollable event/alarm table."),
 		},
-		Status: wlStatusCollectorPending, CollectorAvailable: false,
-		Message:      "Aruba collection client is not implemented yet. This driver stores the profile and classifies the device for detection only — it does NOT fetch APs/SSIDs/clients until a real Aruba collector is built.",
-		NextAction:   "Aruba collector is not implemented yet — the device is tracked + classified; deep collection is pending an Aruba REST client.",
+		Status: wlStatusWorking, CollectorAvailable: true,
+		Message:      "ArubaOS 8 on-prem Mobility Controller via the REST showcommand API (APs from 'show ap database long', clients from 'show user-table', firmware from 'show version', SSIDs derived from the live client set). Parser-tested against documented payloads; live validation against a real ArubaOS 8 controller is pending (external dependency: live controller/credential).",
+		NextAction:   "Run Test Connection (port 4343) to validate the login + showcommand path, then Run Collection.",
 		deviceVendor: "Aruba", profileVendorType: "wireless_aruba",
 	},
+	{
+		Key: "aruba_os10", DisplayName: "Aruba — Mobility Conductor (ArubaOS 10, on-prem)",
+		ModelFamily: "Aruba Mobility Conductor / Gateway (ArubaOS 10, on-prem managed)", ControllerType: "On-prem REST showcommand API",
+		Protocol: "REST/HTTPS", DefaultPort: 4343,
+		CredentialType: credUserPass, LoginMethod: "REST login (UIDARUBA session token)",
+		PathRules:       "/v1/api/login + /v1/configuration/showcommand?command=… (AOS10 retains the AOS8-compatible config REST API)",
+		HealthEndpoints: "login + show ap database long / show user-table",
+		Fields: []wlVendorField{
+			{Key: "site", Label: "Controller site", Placeholder: "(optional)", Help: "Optional grouping label; not required by the ArubaOS API.", Required: false},
+		},
+		Capabilities: []wlCapability{
+			wcap(wcapAPs, "APs", capSupported), wcap(wcapSSIDs, "SSIDs/WLANs", capSupported),
+			wcap(wcapClients, "Clients", capSupported), wcap(wcapHealth, "Health", capSupported), wcap(wcapFirmware, "Firmware/OS", capSupported),
+			wcapWhy(wcapRadios, "Radios", capLiveValidationPending, "Implemented: 'show ap bss-table' parsed into per-AP per-band radios (channel from 'ch', band from 'phy'), fixture-tested + routed. Live validation pending — BSS-table column naming varies by AOS train and needs a real AOS10 controller to confirm."),
+			wcapWhy(wcapEvents, "Events", capUnsupportedByDevice, "ArubaOS controllers stream events to syslog/SNMP; no structured showcommand returns a pollable event/alarm table."),
+		},
+		Status: wlStatusWorking, CollectorAvailable: true,
+		Message:      "ArubaOS 10 ON-PREM (Conductor-led, not cloud) reuses the AOS8-compatible REST showcommand API, so the same collector applies (APs, clients, firmware via 'show version', SSIDs derived). Parser-tested; the AOS10 REST surface needs live confirmation (external dependency: live AOS10 controller). Cloud-managed AOS10 tenants must use the 'Aruba Central' driver instead.",
+		NextAction:   "Run Test Connection (port 4343). If this AOS10 deployment is cloud-managed by Aruba Central, use the Aruba Central driver instead.",
+		deviceVendor: "Aruba", profileVendorType: "wireless_aruba_os10",
+	},
+	{
+		Key: "aruba_central", DisplayName: "Aruba Central (cloud / ArubaOS 10 cloud-managed)",
+		ModelFamily: "Aruba Central (cloud-managed ArubaOS 10)", ControllerType: "Cloud Monitoring REST API (OAuth2)",
+		Protocol: "REST/HTTPS (OAuth2 bearer)", DefaultPort: 443,
+		CredentialType: credToken, LoginMethod: "OAuth2 bearer access token (no username/password at this layer)",
+		PathRules:       "Regional API gateway + /monitoring/v2/aps, /monitoring/v1/clients/wireless, /monitoring/v2/networks, /central/v1/alerts",
+		HealthEndpoints: "bearer GET /monitoring/v2/aps + /central/v1/alerts (token + gateway reachability)",
+		Fields: []wlVendorField{
+			{Key: "api_base", Label: "API gateway base URL", Placeholder: "apigw-prod2.central.arubanetworks.com", Help: "Region-specific Central API gateway host (the Target URL); the access token is supplied as the password.", Required: false},
+		},
+		Capabilities: []wlCapability{
+			wcap(wcapAPs, "APs", capSupported), wcap(wcapSSIDs, "SSIDs/WLANs", capSupported),
+			wcap(wcapClients, "Clients", capSupported),
+			wcap(wcapHealth, "Health", capSupported), wcap(wcapEvents, "Events", capSupported), wcap(wcapFirmware, "Firmware/OS", capSupported),
+			wcapWhy(wcapRadios, "Radios", capLiveValidationPending, "Implemented: parses the per-AP 'radios' array from /monitoring/v2/aps (band/channel/power/width/clients) in one call, fixture-tested + routed. Live validation pending — needs a live Central tenant to confirm the radios field shape."),
+		},
+		Status: wlStatusWorking, CollectorAvailable: true,
+		Message:      "Aruba Central cloud monitoring API (the ArubaOS 10 cloud-managed path) — APs/clients/networks/firmware/alerts via OAuth2 bearer token. The token is the credential (enter it as the password; username is ignored). Parser-tested; live validation against a real Central tenant is pending (external dependency: tenant + API token + regional gateway).",
+		NextAction:   "Set the regional API gateway as the Target/host, paste the Central access token as the password, then Test Connection.",
+		deviceVendor: "Aruba", profileVendorType: "wireless_aruba_central",
+	},
+}
+
+// missingCredential returns a non-empty operator message when the request lacks
+// the credential the driver needs. A bearer-token driver (Aruba Central) needs
+// only the token (carried in the password); everyone else needs username+password.
+func missingCredential(v wlVendor, req addWirelessControllerReq) string {
+	if v.CredentialType == credToken {
+		if req.Password == "" {
+			return v.DisplayName + " requires an API/OAuth2 token (enter it as the password)."
+		}
+		return ""
+	}
+	if strings.TrimSpace(req.Username) == "" || req.Password == "" {
+		return "admin username and password are required"
+	}
+	return ""
 }
 
 // wlVendorByKey resolves a public driver key to its catalog entry. ok=false for

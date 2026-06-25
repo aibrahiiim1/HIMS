@@ -100,13 +100,14 @@ WHERE controller_device_id = $1 AND source = $2 AND collected_at < $3;
 
 -- name: UpsertWirelessRadio :one
 INSERT INTO wireless_radio_status
-    (controller_device_id, ap_name, radio, band, channel, power_dbm, client_count, source, collected_at)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8, now())
+    (controller_device_id, ap_name, radio, band, channel, power_dbm, client_count, channel_width, source, collected_at)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, now())
 ON CONFLICT (controller_device_id, ap_name, radio) DO UPDATE SET
     band = EXCLUDED.band,
     channel = EXCLUDED.channel,
     power_dbm = EXCLUDED.power_dbm,
     client_count = EXCLUDED.client_count,
+    channel_width = EXCLUDED.channel_width,
     source = EXCLUDED.source,
     collected_at = now()
 RETURNING *;

@@ -46,14 +46,24 @@ func (s *Server) recordWirelessHealth(ctx context.Context, deviceID uuid.UUID, v
 	for _, c := range ven.Capabilities {
 		status, detail := capCollected, ""
 		switch {
-		case c.Status == capCollectorPending || c.Status == capNotImplemented:
-			status, detail = capNotImplemented, "no collector for this capability yet"
-		case !authed:
-			status, detail = capAuthFailed, "controller login did not succeed"
 		case counts[c.Key] > 0:
-			status, detail = capCollected, itoaN(counts[c.Key])+" row(s)"
+			// Real rows win over any declared status — proof of collection.
+			status, detail = capCollected, itoaN(counts[c.Key])+" "+c.Key+" row(s) via "+source
+		case c.Status == capUnsupportedByDevice || c.Status == capNotImplemented || c.Status == capCollectorPending ||
+			c.Status == capLiveValidationPending || c.Status == capExternalDependency:
+			// Declared non-collected-yet: record the status as-is with its reason.
+			// For implemented_live_validation_pending this means "the collector ran
+			// but returned no rows (no live data to confirm the shape)" — NOT
+			// "developer work remaining". Real rows (the case above) flip it to
+			// collected automatically.
+			status, detail = c.Status, nz(c.Reason, "no "+c.Key+" path on "+ven.DisplayName)
+		case !authed:
+			status, detail = capAuthFailed, "controller login did not succeed — "+c.Key+" not collected"
 		default:
-			status, detail = capEndpointNotExposed, "authenticated but this API/firmware returned no rows"
+			// Endpoint-level honesty: the driver implements this capability and
+			// authenticated, but THIS endpoint returned nothing on this firmware/API
+			// version (names the exact capability so the operator can act).
+			status, detail = capEndpointNotExposed, ven.DisplayName+" "+c.Key+" endpoint returned no rows on this firmware/API version"
 		}
 		_ = s.queries.UpsertWirelessCapabilityHealth(ctx, db.UpsertWirelessCapabilityHealthParams{
 			ControllerDeviceID: deviceID, Capability: c.Key, Status: string(status),
@@ -113,8 +123,8 @@ func (s *Server) addWirelessController(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid ip", http.StatusBadRequest)
 		return
 	}
-	if strings.TrimSpace(req.Username) == "" || req.Password == "" {
-		http.Error(w, "username and password are required", http.StatusBadRequest)
+	if msg := missingCredential(ven, req); msg != "" {
+		http.Error(w, msg, http.StatusBadRequest)
 		return
 	}
 	port := req.Port
@@ -330,14 +340,9 @@ func (s *Server) collectWirelessForDevice(ctx context.Context, dev db.Device, kn
 			rok, rdetail = s.collectXCCProfile(ctx, p, dev)
 		case "ruckus_zd":
 			rok, rdetail = s.collectRuckusZDProfile(ctx, p, dev)
-		case "wireless_unifi", "wireless_omada", "wireless_ruckus", "wireless_extreme":
+		case "wireless_unifi", "wireless_omada", "wireless_ruckus", "wireless_extreme",
+			"wireless_aruba", "wireless_aruba_os10", "wireless_aruba_central":
 			rok, rdetail = s.collectWirelessProfile(ctx, p, dev)
-		case "wireless_aruba":
-			// Honest gate: the profile + detection are real, but there is no Aruba
-			// collection client. Never fabricate AP/client rows; record every
-			// capability as not_implemented so the UI shows the truth.
-			rok, rdetail = false, "Aruba collector is not implemented yet — device tracked + classified; deep collection pending an Aruba REST client."
-			s.recordWirelessHealth(ctx, dev.ID, wlVendorKeyForProfileType(p.VendorType), p.VendorType, false, nil)
 		default:
 			return false, ""
 		}

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/coralsearesorts/hims/internal/aruba"
+	"github.com/coralsearesorts/hims/internal/arubacentral"
 	"github.com/coralsearesorts/hims/internal/omada"
 	"github.com/coralsearesorts/hims/internal/ruckus"
 	"github.com/coralsearesorts/hims/internal/ruckuszd"
@@ -77,9 +79,9 @@ func (s *Server) testWirelessController(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusOK, res)
 		return
 	}
-	if strings.TrimSpace(req.Username) == "" || req.Password == "" {
-		res.Checks = append(res.Checks, wlCheck{Name: "Credentials", Status: "fail", Detail: "admin username and password are required"})
-		res.Detail = "admin username and password are required"
+	if missing := missingCredential(ven, req); missing != "" {
+		res.Checks = append(res.Checks, wlCheck{Name: "Credentials", Status: "fail", Detail: missing})
+		res.Detail = missing
 		writeJSON(w, http.StatusOK, res)
 		return
 	}
@@ -207,6 +209,26 @@ func (s *Server) probeWirelessController(ctx context.Context, ven wlVendor, base
 		}
 		aps, _ := c.ListAPs(ctx)
 		authOK(len(aps), nz(cfg.APIBase, "/wsg/api/public"))
+	case "wireless_aruba", "wireless_aruba_os10":
+		c := aruba.NewClient(base, user, pass, doer)
+		if err := c.Login(ctx); err != nil {
+			failAuth(err)
+			return
+		}
+		aps, _ := c.ListAPs(ctx)
+		authOK(len(aps), "ArubaOS 8-compatible showcommand")
+	case "wireless_aruba_central":
+		token := pass
+		if token == "" {
+			token = user
+		}
+		c := arubacentral.NewClient(centralGateway(cfg.APIBase, base), token, doer)
+		n, err := c.Ping(ctx)
+		if err != nil {
+			failAuth(err)
+			return
+		}
+		authOK(n, "Aruba Central OAuth2 bearer")
 	default:
 		res.Checks = append(res.Checks, wlCheck{Name: "Collector", Status: "warn", Detail: "no connection test for this driver"})
 		res.Detail = "No connection test implemented for " + ven.DisplayName + "."

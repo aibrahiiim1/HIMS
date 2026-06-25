@@ -296,7 +296,7 @@ func (q *Queries) ListWirelessEvents(ctx context.Context, arg ListWirelessEvents
 }
 
 const listWirelessRadios = `-- name: ListWirelessRadios :many
-SELECT id, controller_device_id, ap_name, radio, band, channel, power_dbm, client_count, source, collected_at FROM wireless_radio_status WHERE controller_device_id = $1 ORDER BY ap_name, radio
+SELECT id, controller_device_id, ap_name, radio, band, channel, power_dbm, client_count, source, collected_at, channel_width FROM wireless_radio_status WHERE controller_device_id = $1 ORDER BY ap_name, radio
 `
 
 func (q *Queries) ListWirelessRadios(ctx context.Context, controllerDeviceID uuid.UUID) ([]WirelessRadioStatus, error) {
@@ -319,6 +319,7 @@ func (q *Queries) ListWirelessRadios(ctx context.Context, controllerDeviceID uui
 			&i.ClientCount,
 			&i.Source,
 			&i.CollectedAt,
+			&i.ChannelWidth,
 		); err != nil {
 			return nil, err
 		}
@@ -619,16 +620,17 @@ func (q *Queries) UpsertWirelessClient(ctx context.Context, arg UpsertWirelessCl
 
 const upsertWirelessRadio = `-- name: UpsertWirelessRadio :one
 INSERT INTO wireless_radio_status
-    (controller_device_id, ap_name, radio, band, channel, power_dbm, client_count, source, collected_at)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8, now())
+    (controller_device_id, ap_name, radio, band, channel, power_dbm, client_count, channel_width, source, collected_at)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, now())
 ON CONFLICT (controller_device_id, ap_name, radio) DO UPDATE SET
     band = EXCLUDED.band,
     channel = EXCLUDED.channel,
     power_dbm = EXCLUDED.power_dbm,
     client_count = EXCLUDED.client_count,
+    channel_width = EXCLUDED.channel_width,
     source = EXCLUDED.source,
     collected_at = now()
-RETURNING id, controller_device_id, ap_name, radio, band, channel, power_dbm, client_count, source, collected_at
+RETURNING id, controller_device_id, ap_name, radio, band, channel, power_dbm, client_count, source, collected_at, channel_width
 `
 
 type UpsertWirelessRadioParams struct {
@@ -639,6 +641,7 @@ type UpsertWirelessRadioParams struct {
 	Channel            *int32    `json:"channel"`
 	PowerDbm           *int32    `json:"power_dbm"`
 	ClientCount        int32     `json:"client_count"`
+	ChannelWidth       string    `json:"channel_width"`
 	Source             string    `json:"source"`
 }
 
@@ -651,6 +654,7 @@ func (q *Queries) UpsertWirelessRadio(ctx context.Context, arg UpsertWirelessRad
 		arg.Channel,
 		arg.PowerDbm,
 		arg.ClientCount,
+		arg.ChannelWidth,
 		arg.Source,
 	)
 	var i WirelessRadioStatus
@@ -665,6 +669,7 @@ func (q *Queries) UpsertWirelessRadio(ctx context.Context, arg UpsertWirelessRad
 		&i.ClientCount,
 		&i.Source,
 		&i.CollectedAt,
+		&i.ChannelWidth,
 	)
 	return i, err
 }

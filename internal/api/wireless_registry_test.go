@@ -56,8 +56,8 @@ func TestWirelessCatalogInvariants(t *testing.T) {
 			t.Errorf("wlVendorByKey(%q) round-trip failed", v.Key)
 		}
 	}
-	// The vendors the operator named must all be present.
-	for _, want := range []string{"ruckus_zd", "extreme_xcc", "ruckus_sz", "unifi", "omada", "aruba"} {
+	// The vendors the operator named must all be present (Aruba split by API family).
+	for _, want := range []string{"ruckus_zd", "extreme_xcc", "ruckus_sz", "unifi", "omada", "aruba_os8", "aruba_os10", "aruba_central"} {
 		if !keys[want] {
 			t.Errorf("catalog is missing required driver %q", want)
 		}
