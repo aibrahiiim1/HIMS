@@ -21,7 +21,7 @@ func TestHTTPBasic_RedirectIsNotSuccess(t *testing.T) {
 		code int
 		want string
 	}{
-		{"200 ok", http.StatusOK, CatSuccess},
+		{"200 public page (no auth enforced)", http.StatusOK, CatWebReachable},
 		{"302 redirect to login", http.StatusFound, CatAuthFailed},
 		{"301 moved", http.StatusMovedPermanently, CatAuthFailed},
 		{"401 unauthorized", http.StatusUnauthorized, CatAuthFailed},
@@ -43,6 +43,42 @@ func TestHTTPBasic_RedirectIsNotSuccess(t *testing.T) {
 				t.Errorf("status %d → category %q, want %q (detail: %s)", tc.code, out.Category, tc.want, out.Detail)
 			}
 		})
+	}
+}
+
+// TestHTTPBasic_AuthEnforcedVsPublic pins the false-positive fix: a 2xx is only a
+// success when the endpoint actually enforces auth (challenges without creds). A
+// camera/NVR web UI that returns 200 to anyone is web_reachable, NOT authenticated,
+// and must never bind a credential.
+func TestHTTPBasic_AuthEnforcedVsPublic(t *testing.T) {
+	// (a) Public page: 200 for ANY request (with or without the Authorization
+	// header) — like a camera login page. Must be web_reachable, never success.
+	pub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer pub.Close()
+	if out := testHTTP(context.Background(), "admin:secret", strings.TrimPrefix(pub.URL, "http://"), 5*time.Second, nil); out.Category != CatWebReachable {
+		t.Errorf("public 200 page → %q, want web_reachable (detail: %s)", out.Category, out.Detail)
+	}
+
+	// (b) Auth-enforcing endpoint: 401 with no Authorization header, 200 with the
+	// correct Basic credentials. The credential genuinely mattered → success.
+	enforced := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u, p, ok := r.BasicAuth()
+		if !ok || u != "admin" || p != "secret" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer enforced.Close()
+	host := strings.TrimPrefix(enforced.URL, "http://")
+	if out := testHTTP(context.Background(), "admin:secret", host, 5*time.Second, nil); out.Category != CatSuccess {
+		t.Errorf("auth-enforced correct creds → %q, want success (detail: %s)", out.Category, out.Detail)
+	}
+	// Wrong creds against the same enforcing endpoint → auth_failed (401).
+	if out := testHTTP(context.Background(), "admin:wrong", host, 5*time.Second, nil); out.Category != CatAuthFailed {
+		t.Errorf("auth-enforced wrong creds → %q, want auth_failed (detail: %s)", out.Category, out.Detail)
 	}
 }
 

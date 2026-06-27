@@ -28,6 +28,13 @@ const (
 	CatUnreachable = "unreachable" // could not connect (port closed / timeout / no route)
 	CatUnsupported = "unsupported" // this tester can't probe that kind
 	CatError       = "error"       // anything else (malformed secret, protocol fault)
+	// CatWebReachable: the web/management page responded 2xx but served the SAME
+	// content WITHOUT credentials — the device does not enforce auth on that
+	// endpoint (e.g. a camera/NVR web UI that loads its login page on 200). This is
+	// proof of REACHABILITY, not AUTHENTICATION: it must never bind a credential or
+	// mark a device managed. Real auth requires an endpoint that challenges
+	// (401/403) without creds and accepts (2xx) with them — or ONVIF/ISAPI.
+	CatWebReachable = "web_reachable"
 	// CatOperationFault: WinRM/NTLM auth SUCCEEDED but the WSMan operation faulted
 	// (legacy WSMan 2.0 / Windows 7 / Server 2008 R2). The credential is valid —
 	// never treat this as a wrong password; the host needs a legacy collector.
@@ -251,12 +258,44 @@ func testHTTP(ctx context.Context, secret, host string, timeout time.Duration, w
 			// redirect as not-authenticated so it never binds.
 			return Outcome{Category: CatAuthFailed, Detail: "HTTP " + resp.Status + " — redirected (HTTP basic not accepted; likely a login/SSO page)"}
 		case resp.StatusCode < 300:
-			return Outcome{Category: CatSuccess, Detail: "HTTP " + resp.Status}
+			// A 2xx is proof of authentication ONLY if the endpoint actually enforces
+			// it. A camera/NVR web UI returns 200 for its login page with ANY (or no)
+			// credentials — counting that as success falsely binds a credential and
+			// marks the device managed via an anonymous page load. Verify by probing
+			// the SAME endpoint with NO credentials: if it is still 2xx, the page is
+			// public → web-reachable, NOT authenticated (never bind). Only when the
+			// no-credential probe is challenged (401/403/redirect) did the credential
+			// actually matter → real success. Cameras/NVR/DVR are authenticated via
+			// the dedicated ONVIF/ISAPI testers instead.
+			if httpAuthEnforced(ctx, client, e.url) {
+				return Outcome{Category: CatSuccess, Detail: "HTTP " + resp.Status + " (authenticated — endpoint challenged without credentials)"}
+			}
+			return Outcome{Category: CatWebReachable, Detail: "HTTP " + resp.Status + " — page served WITHOUT credentials (web-reachable, not authenticated; not bound)"}
 		default:
 			return Outcome{Category: CatError, Detail: "HTTP " + resp.Status}
 		}
 	}
 	return Outcome{Category: CatUnreachable, Detail: "no HTTP/HTTPS response"}
+}
+
+// httpAuthEnforced reports whether url actually requires authentication: a GET
+// with NO Authorization header is denied (401/403 or a redirect to a login
+// page). If the no-credential request is itself 2xx, the content is public and a
+// prior authenticated 2xx proves nothing. A transport error is treated as
+// "not enforced" (conservative — never bind on an unprovable success).
+func httpAuthEnforced(ctx context.Context, client *http.Client, url string) bool {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return false
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	// Denied without creds (401/403) or redirected to a login page (3xx) => the
+	// credential was required. A 2xx without creds => public page (not auth).
+	return resp.StatusCode < 200 || resp.StatusCode >= 300
 }
 
 func testONVIF(ctx context.Context, secret, host string, timeout time.Duration) Outcome {
