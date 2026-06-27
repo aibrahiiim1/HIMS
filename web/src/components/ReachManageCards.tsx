@@ -1,8 +1,22 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { Wifi, WifiOff, AlertTriangle, HelpCircle, ShieldCheck, KeyRound, Bot, ShieldX, XCircle, CircleSlash } from 'lucide-react'
-import { api, type DeviceStatusSummary } from '../api'
+import { Wifi, WifiOff, AlertTriangle, HelpCircle, ShieldCheck, KeyRound, Bot, ShieldX, XCircle, CircleSlash, Lock, Globe } from 'lucide-react'
+import { api, type DeviceStatusSummary, MGMT_BADGE } from '../api'
 import { Panel } from './ui'
+
+// Management states that already have an explicit, curated tile (icon + tone).
+// Any OTHER non-managed state present in the summary is rendered by the catch-all
+// so the breakdown can never silently hide a non-managed device.
+const SHOWN_MGMT = new Set([
+  'managed', 'needs_credential', 'credential_failed', 'not_authorized', 'web_authenticated',
+  'needs_agent', 'agent_offline', 'collection_failed', 'unmanaged',
+])
+
+// nonManaged sums every management state except "managed" — the true count of
+// devices HIMS cannot fully manage (must equal the Unmanaged Devices page total).
+function nonManaged(m: Record<string, number>): number {
+  return Object.entries(m).reduce((sum, [k, v]) => (k === 'managed' ? sum : sum + (v || 0)), 0)
+}
 
 // A small routed stat tile. The number is a bookmarkable drill-down into the
 // Inventory filtered by reachability= or management=.
@@ -59,11 +73,26 @@ export function ReachManageCards() {
               <Tile to="/inventory?management=managed" label="Managed" value={n(m, 'managed')} tone="ok" icon={ShieldCheck} />
               <Tile to="/inventory?management=needs_credential" label="Needs credential" value={n(m, 'needs_credential')} tone={n(m, 'needs_credential') > 0 ? 'warn' : 'muted'} icon={KeyRound} />
               <Tile to="/inventory?management=credential_failed" label="Credential failed" value={n(m, 'credential_failed')} tone={n(m, 'credential_failed') > 0 ? 'crit' : 'muted'} icon={ShieldX} />
+              <Tile to="/inventory?management=not_authorized" label="Not authorized on host" value={n(m, 'not_authorized')} tone={n(m, 'not_authorized') > 0 ? 'crit' : 'muted'} icon={Lock} />
+              <Tile to="/inventory?management=web_authenticated" label="Web authenticated" value={n(m, 'web_authenticated')} tone={n(m, 'web_authenticated') > 0 ? 'warn' : 'muted'} icon={Globe} />
               <Tile to="/inventory?management=needs_agent" label="Needs agent" value={n(m, 'needs_agent')} tone={n(m, 'needs_agent') > 0 ? 'warn' : 'muted'} icon={Bot} />
               <Tile to="/inventory?management=agent_offline" label="Agent offline" value={n(m, 'agent_offline')} tone={n(m, 'agent_offline') > 0 ? 'crit' : 'muted'} icon={Bot} />
               <Tile to="/inventory?management=collection_failed" label="Collection failed" value={n(m, 'collection_failed')} tone={n(m, 'collection_failed') > 0 ? 'crit' : 'muted'} icon={XCircle} />
               <Tile to="/inventory?management=unmanaged" label="Unmanaged" value={n(m, 'unmanaged')} tone="muted" icon={CircleSlash} />
+              {/* Catch-all: render a tile for ANY other non-managed state present in
+                  the summary (e.g. not_attempted, pending_collection, partially_managed)
+                  so the Management breakdown ALWAYS accounts for every non-managed
+                  device — none can be hidden because a tile wasn't hardcoded. */}
+              {Object.keys(m).filter((k) => k !== 'managed' && !SHOWN_MGMT.has(k) && n(m, k) > 0).map((k) => (
+                <Tile key={k} to={`/inventory?management=${k}`} label={MGMT_BADGE[k]?.label ?? k} value={n(m, k)} tone="warn" icon={CircleSlash} />
+              ))}
             </div>
+            {/* Honest reconciliation: total non-managed = sum of every non-managed state. */}
+            {nonManaged(m) > 0 && (
+              <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+                {nonManaged(m)} device{nonManaged(m) === 1 ? '' : 's'} not managed (sum of all states above except Managed). <Link to="/inventory/unmanaged" style={{ color: 'inherit' }}>Open Unmanaged Devices →</Link>
+              </div>
+            )}
           </div>
 
           {/* Cross-axis callouts — the cases that prove the two signals are distinct. */}
