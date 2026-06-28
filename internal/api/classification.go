@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/coralsearesorts/hims/internal/classify"
 	"github.com/coralsearesorts/hims/internal/domain"
@@ -101,6 +103,15 @@ func (s *Server) reclassifyDevice(w http.ResponseWriter, r *http.Request) {
 
 	obs := osdiscovery.Probe(ctx, *d.PrimaryIp, osdiscovery.Options{})
 	evidence := obs.Evidence()
+	// Persist the probed open TCP ports so protocol-shape checks (e.g. a Telnet-only legacy
+	// device: 23 open, 22 closed, no SNMP) can be evaluated later without re-probing.
+	if len(obs.OpenTCP) > 0 {
+		ps := make([]string, len(obs.OpenTCP))
+		for i, p := range obs.OpenTCP {
+			ps[i] = strconv.Itoa(p)
+		}
+		s.upsertFact(ctx, id, "probe.open_tcp", strings.Join(ps, ","))
+	}
 
 	// Authoritative override: if we have a deep OS inventory (a successful
 	// authenticated WinRM/SSH collection), its OS caption is the strongest OS
@@ -212,6 +223,17 @@ func (s *Server) reclassifyDevice(w http.ResponseWriter, r *http.Request) {
 	s.audit(r, "inventory", "device.reclassify", "device", id.String(),
 		"Re-classified "+updated.Name+" → "+res.Category,
 		map[string]any{"category": res.Category, "os_family": res.OSFamily, "confidence": res.Confidence})
+	// Best-effort IF-MIB interface MAC/OUI pass for an SNMP-bound device: classifying it
+	// from SNMP means SNMP authenticates, so capture interface MAC evidence at the same
+	// time (req: collect ifPhysAddress wherever SNMP works). Never blocks/affects the
+	// reclassify result; uses the bound community only (no spray).
+	if updated.CredentialID != nil {
+		if c, derr := s.scanDecrypt(ctx, *updated.CredentialID); derr == nil && c.Kind == domain.CredSNMPv2c {
+			ictx, cancel := context.WithTimeout(ctx, 12*time.Second)
+			_, _ = s.collectSNMPInterfaces(ictx, updated, "", 8*time.Second)
+			cancel()
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"changed": true, "classification": toClassificationDTO(updated)})
 }
 

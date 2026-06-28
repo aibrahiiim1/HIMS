@@ -957,8 +957,8 @@ var genericVendorLabels = map[string]bool{
 // addFingerprintDQ appends the four FP-ext classification-quality issues, derived
 // from each device's STORED raw SNMP identity facts re-matched against the library.
 func (s *Server) addFingerprintDQ(ctx context.Context, devs []db.Device, issues *[]dqIssue) {
-	// Bulk-load the raw SNMP identity facts (one query, all devices).
-	type snmpID struct{ oid, descr, name string }
+	// Bulk-load the raw SNMP identity facts + probed open ports (one query, all devices).
+	type snmpID struct{ oid, descr, name, openTCP string }
 	byDev := map[uuid.UUID]*snmpID{}
 	if rows, err := s.queries.ListSNMPIdentityFacts(ctx); err == nil {
 		for _, f := range rows {
@@ -978,6 +978,8 @@ func (s *Server) addFingerprintDQ(ctx context.Context, devs []db.Device, issues 
 				e.descr = v
 			case "snmp.sysname":
 				e.name = v
+			case "probe.open_tcp":
+				e.openTCP = v
 			}
 		}
 	}
@@ -996,7 +998,15 @@ func (s *Server) addFingerprintDQ(ctx context.Context, devs []db.Device, issues 
 		}
 	}
 
-	var genericVendor, weakSNMP, vendorNoCat, fpNotApplied, noIdentityEvidence []db.Device
+	var genericVendor, weakSNMP, vendorNoCat, fpNotApplied, noIdentityEvidence, telnetOnly []db.Device
+	hasPort := func(csv string, port string) bool {
+		for _, p := range strings.Split(csv, ",") {
+			if strings.TrimSpace(p) == port {
+				return true
+			}
+		}
+		return false
+	}
 	for _, d := range devs {
 		vendor := ""
 		if d.Vendor != nil {
@@ -1024,6 +1034,14 @@ func (s *Server) addFingerprintDQ(ctx context.Context, devs []db.Device, issues 
 		if d.Status == "up" && vendor == "" && !answeredSNMP &&
 			(d.Category == "unknown" || d.Category == string(domain.CatNetworkUnclassified)) {
 			noIdentityEvidence = append(noIdentityEvidence, d)
+		}
+		// Telnet-only legacy device: reachable, Telnet (23) open, SSH (22) NOT open, and
+		// SNMP did not answer — so the only management path is Telnet/CLI (HIMS has no
+		// generic Telnet collector) or a working SNMP community. Labeled explicitly with a
+		// remediation path instead of a vague unknown. (150.0.0.41-44/.134.)
+		if id != nil && d.Status == "up" && !answeredSNMP &&
+			hasPort(id.openTCP, "23") && !hasPort(id.openTCP, "22") {
+			telnetOnly = append(telnetOnly, d)
 		}
 		// A user fingerprint that WOULD match this device's stored evidence but
 		// whose verdict the device doesn't reflect → operator added a rule but
@@ -1057,6 +1075,9 @@ func (s *Server) addFingerprintDQ(ctx context.Context, devs []db.Device, issues 
 	add("vendor_known_but_category_generic", "Vendor known, category unknown",
 		"Devices where the vendor is known but the category is still 'unknown'. Add a fingerprint mapping this vendor's product OID to the right device type.",
 		"warning", vendorNoCat)
+	add("telnet_only_credential_required", "Telnet-only device — credential required",
+		"Reachable legacy devices exposing only Telnet (port 23) — SSH (22) is closed and SNMP did not answer. HIMS has no generic Telnet/CLI collector (Telnet is disabled by default and not attempted without explicit approval), so they cannot be managed yet. Remediation: provide a working SNMP community (preferred) so they can be collected over SNMP, or supply Telnet/CLI credentials and request Telnet collection be enabled. NOT a vague unknown — the protocol shape is known (Telnet-only).",
+		"warning", telnetOnly)
 	add("mac_oui_unavailable", "No identity evidence (MAC/OUI unavailable)",
 		"Reachable hosts with NO identity source: they did not answer SNMP (no sysObjectID/OUI), have no vendor, and are on a remote subnet (no ARP/FDB L2 adjacency) — so MAC, OUI, and vendor cannot be obtained. This is recorded honestly, not left blank. Provide a working credential (correct SNMP community or SSH login) so the host identifies itself, or run discovery from within the host's L2 segment to capture its MAC.",
 		"warning", noIdentityEvidence)

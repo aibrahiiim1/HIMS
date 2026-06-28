@@ -255,6 +255,7 @@ func (s *Server) routes() {
 		r.Post("/devices/{id}/reclassify", s.reclassifyDevice)
 		r.Get("/devices/{id}/os-inventory", s.getOSInventory)
 		r.Post("/devices/{id}/collect-os", s.collectOSInventory)
+		r.Post("/devices/{id}/collect-snmp-interfaces", s.collectSNMPInterfacesHandler) // IF-MIB MAC/OUI pass
 		r.Post("/devices/{id}/collect-vsphere", s.collectVSphere)
 		r.Post("/devices/{id}/collect-cctv", s.collectCCTV)
 		r.Post("/devices/{id}/collect", s.collectDevice) // universal, profile-free deep collect (kind inferred or given)

@@ -26,8 +26,10 @@ import (
 	"github.com/coralsearesorts/hims/internal/domain"
 )
 
-// DefaultPorts is the OS/role-revealing TCP profile probed by default.
-var DefaultPorts = []int{22, 80, 135, 389, 443, 445, 554, 3389, 5985, 5986, 8000, 9100}
+// DefaultPorts is the OS/role-revealing TCP profile probed by default. Includes 23
+// (Telnet) so legacy Telnet-only devices (e.g. old switches/console servers with SSH
+// disabled) are detected as a known protocol shape instead of an evidence-less unknown.
+var DefaultPorts = []int{22, 23, 80, 135, 389, 443, 445, 554, 3389, 5985, 5986, 8000, 9100}
 
 // Options tunes a probe. Zero value is usable (sensible defaults applied).
 type Options struct {

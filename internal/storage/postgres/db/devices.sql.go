@@ -621,7 +621,7 @@ func (q *Queries) ListDevicesByRole(ctx context.Context, role string) ([]Device,
 
 const listSNMPIdentityFacts = `-- name: ListSNMPIdentityFacts :many
 SELECT device_id, key, value FROM device_facts
-WHERE key IN ('snmp.sysobjectid','snmp.sysdescr','snmp.sysname') AND value IS NOT NULL
+WHERE key IN ('snmp.sysobjectid','snmp.sysdescr','snmp.sysname','probe.open_tcp') AND value IS NOT NULL
 `
 
 type ListSNMPIdentityFactsRow struct {
@@ -630,9 +630,9 @@ type ListSNMPIdentityFactsRow struct {
 	Value    *string   `json:"value"`
 }
 
-// Bulk fetch of the raw SNMP system-group identity facts across ALL devices, for
-// Data Quality checks that re-evaluate fingerprints against stored evidence
-// without re-probing. Only the identity keys, not the full fact set.
+// Bulk fetch of the raw SNMP system-group identity facts across ALL devices, plus the
+// probed open-TCP-ports fact, for Data Quality checks that re-evaluate fingerprints /
+// protocol shape against stored evidence without re-probing.
 func (q *Queries) ListSNMPIdentityFacts(ctx context.Context) ([]ListSNMPIdentityFactsRow, error) {
 	rows, err := q.db.Query(ctx, listSNMPIdentityFacts)
 	if err != nil {
