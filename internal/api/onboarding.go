@@ -1,0 +1,436 @@
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/netip"
+	"strings"
+	"time"
+
+	"github.com/coralsearesorts/hims/internal/credtest"
+	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
+	"github.com/google/uuid"
+)
+
+// Manual Device Onboarding — Test Connection + Save (create-or-override). These choreograph
+// the existing credtest / vSphere / create / override / bind / audit / collect infrastructure.
+// Honest by construction: a device is "managed" ONLY when a real collection proves it; a
+// failed/absent test can be saved only as manual_inventory_only (operator-asserted type,
+// never faked as managed). An existing IP is UPDATED (manual authoritative override), never
+// duplicated; discovery evidence/history is preserved and future scans respect the lock.
+
+type onbStep struct {
+	Step   string `json:"step"`
+	Status string `json:"status"` // ok | fail | skipped
+	Detail string `json:"detail"`
+}
+
+type onbCredIn struct {
+	ID     string `json:"id,omitempty"`     // existing credential id
+	Kind   string `json:"kind,omitempty"`   // inline: credential kind
+	Secret string `json:"secret,omitempty"` // inline: secret (user:pass or community)
+	Name   string `json:"name,omitempty"`   // inline: credential name (for save-time create)
+}
+
+type onbTestReq struct {
+	Type       string    `json:"type"`
+	PrimaryIP  string    `json:"primary_ip"`
+	Method     string    `json:"method"`
+	Port       int       `json:"port"`
+	Credential onbCredIn `json:"credential"`
+}
+
+type onbTestResp struct {
+	Steps       []onbStep `json:"steps"`
+	FinalStatus string    `json:"final_status"`
+	Category    string    `json:"category"`
+	Summary     string    `json:"summary"`
+}
+
+// resolveSecret returns the plaintext secret + a display name for either an inline credential
+// or an existing credential id. The secret never leaves the server beyond the probe.
+func (s *Server) resolveSecret(ctx context.Context, c onbCredIn) (secret, kind, name string, err error) {
+	if strings.TrimSpace(c.ID) != "" {
+		id, perr := uuid.Parse(c.ID)
+		if perr != nil {
+			return "", "", "", fmt.Errorf("bad credential id")
+		}
+		cred, gerr := s.queries.GetCredential(ctx, id)
+		if gerr != nil {
+			return "", "", "", fmt.Errorf("credential not found")
+		}
+		cph := s.cipher()
+		if cph == nil {
+			return "", "", "", fmt.Errorf("encryption key not loaded")
+		}
+		plain, oerr := cph.Open(cred.EncryptedBlob, cred.KeyID)
+		if oerr != nil {
+			return "", "", "", fmt.Errorf("could not decrypt credential")
+		}
+		return string(plain), cred.Kind, cred.Name, nil
+	}
+	return c.Secret, c.Kind, c.Name, nil
+}
+
+// testManualDeviceConnection is POST /manual-onboarding/test — protocol-specific Test
+// Connection with step-by-step evidence. Read-only: it never creates a device or credential.
+func (s *Server) testManualDeviceConnection(w http.ResponseWriter, r *http.Request) {
+	var req onbTestReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	t, ok := onbTypeByKey(req.Type)
+	if !ok {
+		http.Error(w, "unknown device type", http.StatusBadRequest)
+		return
+	}
+	var method onbMethod
+	for _, mm := range t.Methods {
+		if mm.Key == req.Method {
+			method = mm
+		}
+	}
+	if method.Key == "" {
+		http.Error(w, "unknown connection method for this type", http.StatusBadRequest)
+		return
+	}
+	ip := strings.TrimSpace(req.PrimaryIP)
+	if _, err := netip.ParseAddr(ip); err != nil {
+		http.Error(w, "invalid IP address", http.StatusBadRequest)
+		return
+	}
+	port := req.Port
+	if port == 0 {
+		port = method.DefaultPort
+	}
+
+	// Manual-only method: no probe — honest manual_inventory_only.
+	if method.TestKind == "manual" {
+		writeJSON(w, http.StatusOK, onbTestResp{
+			Steps:       []onbStep{{Step: "manual", Status: "skipped", Detail: "manual inventory only — no remote management protocol selected"}},
+			FinalStatus: "manual_inventory_only", Category: "manual", Summary: "Will be saved as manual inventory (operator-asserted type, not managed).",
+		})
+		return
+	}
+
+	secret, _, name, err := s.resolveSecret(r.Context(), req.Credential)
+	if err != nil {
+		writeJSON(w, http.StatusOK, onbTestResp{Steps: []onbStep{{Step: "credential", Status: "fail", Detail: err.Error()}}, FinalStatus: "credential_required", Category: "error"})
+		return
+	}
+
+	resp := s.runOnboardProbe(r.Context(), method, ip, port, secret, name)
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// runOnboardProbe runs the right protocol probe and renders step-by-step evidence. vSphere
+// uses a SINGLE login (lockout-safe); everything else uses the shared credtest tester.
+func (s *Server) runOnboardProbe(ctx context.Context, method onbMethod, ip string, port int, secret, name string) onbTestResp {
+	steps := []onbStep{}
+	add := func(step, status, detail string) { steps = append(steps, onbStep{step, status, detail}) }
+
+	if method.TestKind == "vsphere" {
+		u, p := credtest.SplitUserPass(secret)
+		if p == "" {
+			add("credential", "fail", "vSphere needs a username:password credential")
+			return onbTestResp{Steps: steps, FinalStatus: "credential_required", Category: "error"}
+		}
+		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		_, ver, model, vendor, verr := vsphereLoginCollectURL(cctx, fmt.Sprintf("https://%s:%d/sdk", ip, port), u, p)
+		cancel()
+		if verr == nil {
+			add("reachable", "ok", "vSphere SOAP API reachable")
+			add("auth", "ok", "vSphere login succeeded")
+			add("identity", "ok", strings.TrimSpace(vendor+" "+model+" "+ver))
+			return onbTestResp{Steps: steps, FinalStatus: "authenticated", Category: "success", Summary: "Authenticated — saving will collect host + VMs."}
+		}
+		cat, detail := categorizeCollectErr("vsphere", verr.Error())
+		add("reachable", "ok", "443 reached")
+		add("auth", "fail", detail)
+		fs := "credential_failed"
+		if cat != "auth_failed" {
+			fs = cat
+		}
+		return onbTestResp{Steps: steps, FinalStatus: fs, Category: cat, Summary: detail}
+	}
+
+	// credtest covers snmp_v2c/snmp_v3/ssh/winrm/onvif/http_basic (+ redfish/isapi mapped to http_basic).
+	kind := method.TestKind
+	switch kind {
+	case "redfish", "isapi":
+		kind = "http_basic"
+	}
+	opts := credtest.Options{Timeout: 10 * time.Second, CredentialName: name}
+	if port != 0 {
+		opts.WebPorts = []int{port}
+	}
+	out := credtest.Test(ctx, kind, secret, ip, opts)
+
+	final := "error"
+	switch out.Category {
+	case credtest.CatSuccess:
+		add("reachable", "ok", "service reachable")
+		add("auth", "ok", "authenticated")
+		if method.CollectorReady {
+			add("collector", "ok", "deep collector available — saving will collect")
+			final = "authenticated"
+		} else {
+			add("collector", "skipped", "no deep collector for this method yet — identity only")
+			final = "collector_missing"
+		}
+	case credtest.CatWebReachable:
+		add("reachable", "ok", "web reachable")
+		add("auth", "skipped", "endpoint does not enforce auth (HTTP 200 anonymously) — web_reachable, NOT managed")
+		final = "web_reachable"
+	case credtest.CatAuthFailed:
+		add("reachable", "ok", "service reachable")
+		add("auth", "fail", nz(out.Detail, "credential rejected"))
+		final = "credential_failed"
+	case credtest.CatUnreachable:
+		add("reachable", "fail", nz(out.Detail, "port closed / no route"))
+		final = "unreachable"
+	case credtest.CatUnsupported:
+		add("protocol", "fail", "protocol not supported by the tester")
+		final = "protocol_not_supported"
+	case credtest.CatOperationFault:
+		add("reachable", "ok", "service reachable")
+		add("auth", "ok", "authenticated (legacy WSMan operation fault — needs agent collector)")
+		final = "authenticated"
+	default:
+		add("probe", "fail", nz(out.Detail, "probe error"))
+		final = "error"
+	}
+	return onbTestResp{Steps: steps, FinalStatus: final, Category: out.Category, Summary: out.Detail}
+}
+
+// ---- Save ----
+
+type onbSaveReq struct {
+	Type                       string    `json:"type"`
+	Method                     string    `json:"method"`
+	Port                       int       `json:"port"`
+	PrimaryIP                  string    `json:"primary_ip"`
+	Name                       string    `json:"name"`
+	Vendor                     string    `json:"vendor"`
+	Model                      string    `json:"model"`
+	Location                   string    `json:"location"`
+	Criticality                string    `json:"criticality"`
+	ManualClassificationReason string    `json:"manual_classification_reason"`
+	Notes                      string    `json:"notes"`
+	Credential                 onbCredIn `json:"credential"`
+	TestPassed                 bool      `json:"test_passed"`
+	SaveAsManualInventory      bool      `json:"save_as_manual_inventory"`
+	RunCollection              bool      `json:"run_collection"`
+}
+
+type onbSaveResp struct {
+	DeviceID      string `json:"device_id"`
+	Existing      bool   `json:"existing"` // true => an existing scanned device was overridden
+	State         string `json:"state"`    // managed-capable | manual_inventory_only | credential_required
+	CredentialID  string `json:"credential_id,omitempty"`
+	CollectionRun bool   `json:"collection_run"`
+	Message       string `json:"message"`
+}
+
+// saveManualDevice is POST /manual-onboarding/save — create OR override-by-IP, bind the
+// credential, apply manual authoritative classification (locked), audit, and optionally
+// enqueue collection. Never fakes management.
+func (s *Server) saveManualDevice(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	var req onbSaveReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	t, ok := onbTypeByKey(req.Type)
+	if !ok {
+		http.Error(w, "unknown device type", http.StatusBadRequest)
+		return
+	}
+	ip := strings.TrimSpace(req.PrimaryIP)
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
+		http.Error(w, "invalid IP address", http.StatusBadRequest)
+		return
+	}
+	// Gate: a non-managed-capable outcome may only be saved as manual inventory.
+	managedCapable := req.TestPassed && !req.SaveAsManualInventory
+	if !req.TestPassed && !req.SaveAsManualInventory {
+		http.Error(w, "test did not pass — re-test, or set save_as_manual_inventory to save as manual inventory only", http.StatusBadRequest)
+		return
+	}
+
+	// Resolve / create the credential (validated + encrypted) when supplied.
+	var credID *uuid.UUID
+	if cid, cerr := s.resolveOrCreateCredential(ctx, r, req.Credential); cerr != nil {
+		http.Error(w, cerr.Error(), http.StatusBadRequest)
+		return
+	} else if cid != nil {
+		credID = cid
+	}
+
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		name = ip
+	}
+	reason := strings.TrimSpace(req.ManualClassificationReason)
+	if reason == "" {
+		reason = "manual onboarding: operator asserted " + t.DisplayName
+	}
+
+	existing, lookErr := s.queries.LiveDeviceByIP(ctx, &addr)
+	isExisting := lookErr == nil && existing.ID != uuid.Nil
+
+	var devID uuid.UUID
+	if isExisting {
+		// Manual authoritative OVERRIDE — update identity + lock; PRESERVE all discovery
+		// evidence (facts/topology/MAC/ARP/services untouched). Record old→new for audit.
+		devID = existing.ID
+		_, uerr := s.queries.UpdateDevice(ctx, db.UpdateDeviceParams{
+			ID: devID, Name: name, Category: t.Category,
+			Vendor: orCurPtr(req.Vendor, existing.Vendor), Model: orCurPtr(req.Model, existing.Model),
+			Serial: existing.Serial, OsVersion: existing.OsVersion, Hostname: existing.Hostname,
+			Vlan: existing.Vlan, DeviceClass: existing.DeviceClass, Location: orCurPtr(req.Location, existing.Location),
+			LocationID: existing.LocationID, Subtype: t.Subtype, Notes: nz(req.Notes, existing.Notes),
+			Criticality: nz(req.Criticality, existing.Criticality), MonitoringEnabled: existing.MonitoringEnabled,
+			ClassificationLocked: true, ManualClassificationReason: reason,
+		})
+		if uerr != nil {
+			writeErr(w, uerr)
+			return
+		}
+		s.audit(r, "inventory", "manual_classification_override", "device", devID.String(),
+			"Manual override "+ip+": "+existing.Category+" → "+t.Category,
+			map[string]any{"ip": ip, "old_category": existing.Category, "new_category": t.Category, "old_subtype": existing.Subtype, "new_subtype": t.Subtype, "reason": reason, "source_page": t.Group})
+	} else {
+		// New manual device.
+		meta, _ := json.Marshal(map[string]any{"source": "manual", "onboarding_type": t.Type, "test_passed": req.TestPassed})
+		created, cerr := s.queries.CreateDevice(ctx, db.CreateDeviceParams{
+			PrimaryIp: &addr, Name: name, Category: t.Category, Status: "unknown",
+			Vendor: nzPtr(req.Vendor), Model: nzPtr(req.Model), Location: nzPtr(req.Location),
+			Metadata: meta,
+		})
+		if cerr != nil {
+			writeErr(w, cerr)
+			return
+		}
+		devID = created.ID
+		// Stamp subtype + manual lock (CreateDevice doesn't carry them).
+		_, _ = s.queries.UpdateDevice(ctx, db.UpdateDeviceParams{
+			ID: devID, Name: name, Category: t.Category, Vendor: nzPtr(req.Vendor), Model: nzPtr(req.Model),
+			Serial: nil, OsVersion: nil, Hostname: nil, Vlan: nil, DeviceClass: nil, Location: nzPtr(req.Location),
+			LocationID: nil, Subtype: t.Subtype, Notes: nz(req.Notes, ""), Criticality: nz(req.Criticality, "normal"),
+			MonitoringEnabled: true, ClassificationLocked: true, ManualClassificationReason: reason,
+		})
+		s.audit(r, "inventory", "manual_device_added", "device", devID.String(),
+			"Manually added "+t.DisplayName+" "+ip,
+			map[string]any{"ip": ip, "category": t.Category, "subtype": t.Subtype, "reason": reason, "source_page": t.Group, "test_passed": req.TestPassed})
+	}
+
+	// Bind credential ON SUCCESS only (the project rule: bind on a proven/operator credential).
+	if credID != nil {
+		_ = s.queries.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: devID, CredentialID: credID})
+		s.audit(r, "inventory", "manual_credential_bind", "device", devID.String(), "Bound credential to "+name, map[string]any{"ip": ip})
+	}
+
+	resp := onbSaveResp{DeviceID: devID.String(), Existing: isExisting}
+	if credID != nil {
+		resp.CredentialID = credID.String()
+	}
+	// Honest state: managed comes ONLY from collection evidence. We classify + (optionally)
+	// enqueue collection; the device's management state is derived, never set to "managed" here.
+	if managedCapable {
+		resp.State = "managed_capable"
+		if req.RunCollection {
+			if dev, gerr := s.queries.GetDevice(ctx, devID); gerr == nil {
+				resp.CollectionRun = s.kickOnboardCollection(ctx, dev, req.Method)
+			}
+		}
+		resp.Message = "Saved + classified. " + cond(resp.CollectionRun, "Collection enqueued — management state will reflect the result.", "Saved; run collection from the device page.")
+	} else {
+		resp.State = "manual_inventory_only"
+		resp.Message = "Saved as manual inventory only (operator-asserted type, NOT managed). Provide a working credential + Test Connection to manage it."
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// resolveOrCreateCredential returns the credential id to bind: an existing id, or a newly
+// created (validated + encrypted) credential from inline fields. nil when none supplied.
+func (s *Server) resolveOrCreateCredential(ctx context.Context, r *http.Request, c onbCredIn) (*uuid.UUID, error) {
+	if strings.TrimSpace(c.ID) != "" {
+		id, err := uuid.Parse(c.ID)
+		if err != nil {
+			return nil, fmt.Errorf("bad credential id")
+		}
+		return &id, nil
+	}
+	if strings.TrimSpace(c.Secret) == "" {
+		return nil, nil // no credential (e.g. manual-only / anonymous RTSP)
+	}
+	if c.Kind == "" {
+		return nil, fmt.Errorf("credential kind required for an inline credential")
+	}
+	if malformedUserPassSecret(c.Kind, c.Secret) {
+		return nil, fmt.Errorf("a %s credential must be 'username:password' with a non-empty password", c.Kind)
+	}
+	cph := s.cipher()
+	if cph == nil {
+		return nil, fmt.Errorf("encryption key not loaded")
+	}
+	blob, keyID, err := cph.Seal([]byte(c.Secret))
+	if err != nil {
+		return nil, err
+	}
+	nm := strings.TrimSpace(c.Name)
+	if nm == "" {
+		nm = "manual " + c.Kind
+	}
+	cred, err := s.queries.CreateCredential(ctx, db.CreateCredentialParams{
+		Name: nm, Kind: c.Kind, EncryptedBlob: blob, KeyID: keyID,
+		Weak: isWeakSecret(c.Kind, c.Secret), Metadata: []byte("{}"),
+	})
+	if err != nil {
+		return nil, err
+	}
+	s.audit(r, "credential", "credential.create", "credential", cred.ID.String(), "Created credential "+cred.Name+" ("+cred.Kind+") via onboarding", nil)
+	return &cred.ID, nil
+}
+
+// orCurPtr returns &v when v is non-empty, else the current pointer (override-or-keep).
+func orCurPtr(v string, cur *string) *string {
+	if strings.TrimSpace(v) != "" {
+		x := v
+		return &x
+	}
+	return cur
+}
+
+// cond is a tiny string ternary for honest status messages.
+func cond(c bool, a, b string) string {
+	if c {
+		return a
+	}
+	return b
+}
+
+// kickOnboardCollection best-effort enqueues/runs the right collection for a freshly-saved
+// device so its management state reflects real evidence. Errors are non-fatal (the device
+// page can re-run). Never fakes a result.
+func (s *Server) kickOnboardCollection(ctx context.Context, dev db.Device, method string) bool {
+	switch method {
+	case "vsphere":
+		return s.runVSphereCollection(ctx, dev).ok()
+	case "snmp_v2c", "snmp_v3":
+		if _, err := s.collectSNMPInterfaces(ctx, dev, "", 10*time.Second); err == nil {
+			return true
+		}
+	case "windows":
+		if _, ok := s.routeViaSiteAgent(ctx, dev, dev.PrimaryIp.String(), "winrm"); ok {
+			return true
+		}
+	}
+	return false
+}

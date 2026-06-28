@@ -235,6 +235,10 @@ func (s *Server) routes() {
 		r.Get("/devices", s.listDevices)
 		r.Get("/inventory/bmc", s.listBMCInventory)               // iLO/BMC out-of-band controllers + bmc_info
 		r.Get("/devices/category-counts", s.deviceCategoryCounts) // {category: count} for sidebar+page reconciliation
+		r.Get("/manual-onboarding/device-types", s.listManualDeviceTypes)
+		r.Get("/manual-onboarding/device-types/{type}", s.getManualDeviceType)
+		r.Post("/manual-onboarding/test", s.testManualDeviceConnection)
+		r.Post("/manual-onboarding/save", s.saveManualDevice)
 		r.Get("/devices/status-summary", s.deviceStatusSummary)
 		r.Post("/devices/repair-reachability", s.repairManyReachability)
 		r.Post("/devices/{id}/repair-reachability", s.repairOneReachability)
