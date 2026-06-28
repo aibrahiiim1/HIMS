@@ -206,18 +206,27 @@ func (a *Applier) reconcile(ctx context.Context, ip netip.Addr, locationID *uuid
 		// must NOT overwrite the identity the operator pinned. Unlock to let scans
 		// take over again.
 		category, vendor, model, serial, name := create.Category, create.Vendor, create.Model, create.Serial, create.Name
+		// Scan-stability / classification preservation (applies to EVERY device class,
+		// no per-category hardcoding). A non-authoritative scan brought only weak,
+		// UNAUTHENTICATED signals this run — preserve the established identity rather
+		// than letting a transient miss erase it. Two preservation cases:
+		//   (a) sticky infrastructure (wireless controller/switch/router/…) producing a
+		//       different weak guess — keep the known infra identity.
+		//   (b) ANY known category about to be DOWNGRADED to "unknown" — "unknown" is
+		//       the ABSENCE of a classification, never an improvement, so a transient
+		//       miss (e.g. a camera whose RTSP/554 or ONVIF port didn't answer this
+		//       scan window) must not wipe a real category. This is the permanent,
+		//       future-proof guard: every later scan that lacks fresh evidence keeps
+		//       the device's identity.
+		// Volatile fields (status, driver, OS version, hostname) below still refresh,
+		// and a GENUINE reclassification still lands when the scan brings authoritative
+		// evidence (SNMP system-group answered, or a driver/fingerprint/vendor match) —
+		// see Apply's `authoritative`.
+		downgradeToUnknown := create.Category == string(domain.CatUnknown) && existing.Category != string(domain.CatUnknown)
 		switch {
 		case existing.ClassificationLocked:
 			category, vendor, model, serial, name = existing.Category, existing.Vendor, existing.Model, existing.Serial, existing.Name
-		case !authoritative && create.Category != existing.Category && domain.IsStickyInfraCategory(existing.Category):
-			// Scan-stability / classification preservation. A device already known as
-			// managed infrastructure (e.g. a wireless controller) produced only a weak,
-			// UNAUTHENTICATED guess this run — typically a transient SNMP timeout that
-			// left an SSH-banner/open-port "server" inference. Keep the established
-			// identity instead of downgrading it; volatile fields (status, driver, OS
-			// version, hostname) below still refresh. A genuine reclassification still
-			// lands when the scan brings authoritative evidence (SNMP system-group
-			// answered, or a driver/fingerprint match) — see Apply's `authoritative`.
+		case !authoritative && create.Category != existing.Category && (domain.IsStickyInfraCategory(existing.Category) || downgradeToUnknown):
 			category, vendor, model, serial, name = existing.Category, existing.Vendor, existing.Model, existing.Serial, existing.Name
 		}
 		return a.w.UpdateDiscoveredDevice(ctx, db.UpdateDiscoveredDeviceParams{

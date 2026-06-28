@@ -381,6 +381,45 @@ func TestApply_NonInfraNotPreserved(t *testing.T) {
 	}
 }
 
+// TestApply_PreservesKnownCategoryFromUnknownDowngrade is the permanent
+// scan-stability guard for EVERY device class: a weak (non-authoritative) re-scan
+// that classifies a known device as "unknown" — e.g. a camera whose RTSP/554 or
+// ONVIF port didn't answer in this scan window — must NOT erase the established
+// category. "unknown" is the absence of a classification, never an improvement.
+func TestApply_PreservesKnownCategoryFromUnknownDowngrade(t *testing.T) {
+	v := "Hikvision"
+	f := &fakeWriter{existing: &db.Device{ID: uuid.New(), PrimaryIp: &wirelessIP, Category: string(domain.CatCamera), Vendor: &v}}
+	a := New(f)
+	res := weakServerRescan()
+	res.Match.Category = domain.CatUnknown // weak scan saw nothing classifiable this run
+	if _, err := a.Apply(context.Background(), res, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.updated) != 1 || f.updated[0].Category != string(domain.CatCamera) {
+		t.Fatalf("known camera downgraded to unknown on weak rescan: %+v", f.updated)
+	}
+	if f.updated[0].Vendor == nil || *f.updated[0].Vendor != "Hikvision" {
+		t.Fatalf("vendor wiped on unknown downgrade: %v", f.updated[0].Vendor)
+	}
+}
+
+// TestApply_AuthoritativeUnknownStillReclassifies: the escape hatch holds — if an
+// AUTHORITATIVE scan (SNMP answered / driver / vendor) genuinely resolves a device
+// it may still change the category; the guard only blocks WEAK unknown downgrades.
+func TestApply_AuthoritativeReclassifyNotBlocked(t *testing.T) {
+	f := &fakeWriter{existing: &db.Device{ID: uuid.New(), PrimaryIp: &wirelessIP, Category: string(domain.CatCamera)}}
+	a := New(f)
+	res := weakServerRescan()
+	res.Match = driver.Match{Category: domain.CatServer, Confidence: 80}
+	res.Probe.SNMPSysDescr = "Linux host" // authoritative → reclassification allowed
+	if _, err := a.Apply(context.Background(), res, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.updated) != 1 || f.updated[0].Category != string(domain.CatServer) {
+		t.Fatalf("authoritative reclassification was wrongly blocked: %+v", f.updated)
+	}
+}
+
 // TestApply_LockedClassificationStillPreserved is the pre-existing lock contract,
 // re-asserted now that it shares the reconcile switch with sticky preservation.
 func TestApply_LockedClassificationStillPreserved(t *testing.T) {
