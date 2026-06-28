@@ -26,6 +26,7 @@ type bmcInventoryRow struct {
 	Firmware        string   `json:"firmware"`
 	ControllerKind  string   `json:"controller_kind"` // iLO / iDRAC / XClarity / IPMI / Redfish
 	RedfishStatus   string   `json:"redfish_status"`  // collected | not_collected
+	BMCStatus       string   `json:"bmc_status"`      // collected | bmc_credential_required | bmc_auth_failed | not_collected
 	IPMIStatus      string   `json:"ipmi_status"`     // not_collected (no IPMI collector yet)
 	PowerState      string   `json:"power_state"`
 	HealthSummary   string   `json:"health_summary"`
@@ -205,6 +206,28 @@ func (s *Server) listBMCInventory(w http.ResponseWriter, r *http.Request) {
 		}
 		if row.ControllerKind == "" {
 			row.ControllerKind = d.Subtype
+		}
+		// Honest BMC/Redfish collection status — drives the operator's next action. Redfish
+		// needs a WEB credential (http_basic/redfish); an SNMP community (how these iLO are
+		// currently managed) cannot collect controller inventory. We do NOT spray non-iLO
+		// credentials at a controller (iLO/iDRAC lock out on failed logins — the ESXi lesson):
+		//   collected → bmc_info present; bmc_auth_failed → a web credential was rejected;
+		//   bmc_credential_required → no Redfish-capable credential bound; else not_collected.
+		redfishCapable := false
+		if d.CredentialID != nil {
+			if c, e := s.queries.GetCredential(ctx, *d.CredentialID); e == nil {
+				redfishCapable = c.Kind == "http_basic" || c.Kind == "redfish" || c.Kind == "vendor_api"
+			}
+		}
+		switch cs := maps.cred[d.ID]; {
+		case row.RedfishStatus == "collected":
+			row.BMCStatus = "collected"
+		case cs.authRejected:
+			row.BMCStatus = "bmc_auth_failed"
+		case !redfishCapable:
+			row.BMCStatus = "bmc_credential_required"
+		default:
+			row.BMCStatus = "not_collected"
 		}
 		// Evidence-based BMC→server link (serial/UUID/hostname; never IP-guessed).
 		link := linkBMCToServer(row.Serial, s.deviceUUID(ctx, d.ID), row.Hostname, serialIdx, uuidIdx, servers)

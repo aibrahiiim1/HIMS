@@ -250,6 +250,8 @@ func inferControllerKind(d db.Device) string {
 		return "onvif"
 	case domain.CatPBX, domain.CatVoiceGateway:
 		return "cucm"
+	case domain.CatBMC:
+		return "redfish" // out-of-band controller (iLO/iDRAC/XClarity/IPMI) → Redfish collector
 	}
 
 	// Wireless controllers/APs: pick the REST client from the vendor.

@@ -17,6 +17,7 @@ interface BmcRow {
   firmware: string
   controller_kind: string
   redfish_status: string
+  bmc_status: string // collected | bmc_credential_required | bmc_auth_failed | not_collected
   ipmi_status: string
   power_state: string
   health_summary: string
@@ -62,6 +63,7 @@ export function BmcInventory() {
       case 'unlinked': return r.link_state === 'unlinked_bmc'
       case 'redfish_ok': return r.redfish_status === 'collected'
       case 'redfish_no': return r.redfish_status !== 'collected'
+      case 'cred_req': return r.bmc_status === 'bmc_credential_required'
       case 'health_bad': return !!r.health_summary && !/ok/i.test(r.health_summary)
       default: return true
     }
@@ -85,7 +87,7 @@ export function BmcInventory() {
       card('candidate', 'Candidate link', (r) => r.link_state === 'candidate_link', 'warn'),
       card('unlinked', 'Unlinked BMC', (r) => r.link_state === 'unlinked_bmc', 'muted'),
       card('redfish_ok', 'Redfish OK', (r) => r.redfish_status === 'collected', 'ok'),
-      card('redfish_no', 'Redfish not collected', (r) => r.redfish_status !== 'collected', 'muted'),
+      card('cred_req', 'BMC credential required', (r) => r.bmc_status === 'bmc_credential_required', 'warn'),
       card('health_bad', 'Health warning/critical', (r) => !!r.health_summary && !/ok/i.test(r.health_summary), 'crit'),
     ]
   }, [data, filterKey])
@@ -134,7 +136,7 @@ export function BmcInventory() {
                     <td>{fmt(r.model)}</td>
                     <td>{fmt(r.serial)}</td>
                     <td>{fmt(r.firmware)}</td>
-                    <td><span className={`badge badge-${r.redfish_status === 'collected' ? 'up' : 'unknown'}`}>{r.redfish_status}</span></td>
+                    <td><span className={`badge badge-${r.bmc_status === 'collected' ? 'up' : r.bmc_status === 'bmc_auth_failed' ? 'down' : 'warning'}`} title="BMC/Redfish collection status">{r.bmc_status || r.redfish_status}</span></td>
                     <td><span className="badge badge-unknown">{r.ipmi_status}</span></td>
                     <td>{linkBadge(r)}</td>
                     <td className="muted" style={{ fontSize: 12 }} title={r.link_evidence}>{fmt(r.link_evidence)}</td>
