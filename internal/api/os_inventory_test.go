@@ -19,6 +19,11 @@ func TestCategorizeCollectErr(t *testing.T) {
 		{"ssh", "dial 10.0.0.5:22: i/o timeout", "ssh_timeout"},
 		{"ssh", "ssh: handshake failed: no common algorithm for key exchange", "handshake_failed"},
 		{"ssh", "dial tcp: lookup host: no such host", "unreachable"},
+		// vSphere/ESXi govmomi SOAP login rejection — names neither "authentication" nor
+		// "401", so it MUST be matched explicitly or it falls through to collection_error
+		// (the 150.0.0.0/24 ESXi mis-diagnosis). Must classify as a credential problem.
+		{"vsphere", "ServerFaultCode: Cannot complete login due to an incorrect user name or password.", "auth_failed"},
+		{"vmware", "ServerFaultCode: Login failure", "auth_failed"},
 		{"winrm", "some unexpected protocol fault", "collection_error"},
 	}
 	for _, c := range cases {

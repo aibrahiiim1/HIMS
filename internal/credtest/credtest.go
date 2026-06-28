@@ -205,12 +205,38 @@ func snmpGetOK(ctx context.Context, tgt snmp.Target, label string) Outcome {
 
 func testSSH(ctx context.Context, secret, host string, opts Options) Outcome {
 	user, pass := SplitUserPass(secret)
-	err := ssh.CheckAuth(ctx, host, 22, ssh.Creds{Username: user, Password: pass}, opts.LegacyKEX, opts.timeout())
+	creds := ssh.Creds{Username: user, Password: pass}
+	err := ssh.CheckAuth(ctx, host, 22, creds, opts.LegacyKEX, opts.timeout())
+	// Auto-retry with legacy KEX/ciphers + SHA-1 host-key algorithms when the FIRST
+	// (modern) handshake failed at the algorithm-negotiation layer — old switches/servers
+	// only speak diffie-hellman-group1/14-sha1 + CBC + ssh-rsa host keys. This makes the
+	// legacy ladder automatic (no operator toggle) so a legacy host is never reported a
+	// dead "handshake failed" when a legacy negotiation would have connected. Skipped if
+	// the first attempt was already legacy, or failed for a non-handshake reason (auth
+	// rejected, refused, timeout) where a legacy retry cannot help.
+	if err != nil && !opts.LegacyKEX && isHandshakeAlgoError(err.Error()) {
+		err = ssh.CheckAuth(ctx, host, 22, creds, true, opts.timeout())
+	}
 	if err == nil {
 		return Outcome{Category: CatSuccess, Detail: "SSH login ok"}
 	}
 	cat, detail := categorizeErr(err.Error())
 	return Outcome{Category: cat, Detail: detail}
+}
+
+// isHandshakeAlgoError reports whether an SSH error is an algorithm-negotiation
+// failure (key exchange / cipher / host-key / signature algorithm) — the only class a
+// legacy-algorithm retry can fix. An auth rejection, connection refusal, or timeout is
+// excluded (a legacy retry would not change the outcome and only adds load).
+func isHandshakeAlgoError(e string) bool {
+	e = strings.ToLower(e)
+	if !strings.Contains(e, "handshake") {
+		return false
+	}
+	return strings.Contains(e, "no common algorithm") || strings.Contains(e, "key exchange") ||
+		strings.Contains(e, "kex") || strings.Contains(e, "cipher") ||
+		strings.Contains(e, "host key") || strings.Contains(e, "hostkey") ||
+		strings.Contains(e, "signature algorithm") || strings.Contains(e, "no common")
 }
 
 func testHTTP(ctx context.Context, secret, host string, timeout time.Duration, webPorts []int) Outcome {

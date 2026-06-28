@@ -48,6 +48,19 @@ func buildConfig(c Creds, legacyKEX bool, timeout time.Duration) *gossh.ClientCo
 		base.SetDefaults()
 		cfg.KeyExchanges = append(base.KeyExchanges, "diffie-hellman-group14-sha1", "diffie-hellman-group1-sha1")
 		cfg.Ciphers = append(base.Ciphers, "aes128-cbc", "aes256-cbc", "3des-cbc")
+		// Modern x/crypto/ssh no longer offers the SHA-1 host-key algorithms by default,
+		// so a host that only has an ssh-rsa (SHA-1) or ssh-dss host key fails the
+		// handshake with "no common host key algorithm" before auth is even attempted.
+		// Offer the modern algorithms first (preferred) and the legacy SHA-1 ones as a
+		// fallback so old switches/servers complete the host-key exchange. (A host that
+		// advertises ssh-rsa but signs rsa-sha2 — a non-compliant firmware — still cannot
+		// be validated by Go's strict check; that is a server defect, not this gap.)
+		cfg.HostKeyAlgorithms = []string{
+			gossh.KeyAlgoED25519,
+			gossh.KeyAlgoECDSA256, gossh.KeyAlgoECDSA384, gossh.KeyAlgoECDSA521,
+			gossh.KeyAlgoRSASHA256, gossh.KeyAlgoRSASHA512,
+			gossh.KeyAlgoRSA, gossh.KeyAlgoDSA,
+		}
 	}
 	return cfg
 }

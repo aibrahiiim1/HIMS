@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/coralsearesorts/hims/internal/credtest"
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -155,6 +156,10 @@ func (s *Server) createCredential(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "name, kind, and secret are required", http.StatusBadRequest)
 		return
 	}
+	if malformedUserPassSecret(req.Kind, req.Secret) {
+		http.Error(w, "a "+req.Kind+" credential must be 'username:password' with a non-empty password", http.StatusBadRequest)
+		return
+	}
 	blob, keyID, err := cph.Seal([]byte(req.Secret))
 	if err != nil {
 		writeErr(w, err)
@@ -206,6 +211,10 @@ func (s *Server) updateCredential(w http.ResponseWriter, r *http.Request) {
 	}
 	weak := cur.Weak
 	if req.Secret != "" {
+		if malformedUserPassSecret(cur.Kind, req.Secret) {
+			http.Error(w, "a "+cur.Kind+" credential must be 'username:password' with a non-empty password", http.StatusBadRequest)
+			return
+		}
 		cph := s.cipher()
 		if cph == nil {
 			http.Error(w, "encryption key not configured (set HIMS_ENCRYPTION_KEY)", http.StatusServiceUnavailable)
@@ -280,6 +289,21 @@ func isWeakSecret(kind, secret string) bool {
 	switch strings.ToLower(secret) {
 	case "public", "private", "community":
 		return true
+	}
+	return false
+}
+
+// malformedUserPassSecret reports whether a user:password credential is missing its
+// password — the secret has no ':' (so it silently becomes username-only with an empty
+// password) or the password half is blank. Such a credential can NEVER authenticate yet
+// fails opaquely at scan time (the 150.0.0.0/24 ESXi "C0r@lSe@" cred → user="C0r@lSe@",
+// pass=""; and the earlier empty-password SSH cred). SNMP communities (no colon, the whole
+// secret IS the community) are excluded — only user:password protocols are checked.
+func malformedUserPassSecret(kind, secret string) bool {
+	switch credtest.ProtocolForKind(kind) {
+	case "ssh", "winrm", "wmi", "onvif", "http": // user:password protocols (incl. vendor_api/http_basic)
+		_, pass := credtest.SplitUserPass(secret)
+		return pass == ""
 	}
 	return false
 }

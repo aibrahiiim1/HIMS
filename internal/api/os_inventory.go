@@ -136,7 +136,14 @@ func categorizeCollectErr(method, errStr string) (reason, detail string) {
 	case strings.Contains(e, "unable to authenticate") || strings.Contains(e, "permission denied") ||
 		strings.Contains(e, "unauthorized") || strings.Contains(e, "access is denied") ||
 		strings.Contains(e, "authentication") || // ISAPI surfaces "authentication rejected"
-		strings.Contains(e, "401") || strings.Contains(e, "403") || strings.Contains(e, "logon"):
+		strings.Contains(e, "401") || strings.Contains(e, "403") || strings.Contains(e, "logon") ||
+		// vSphere/ESXi SOAP login rejection — a govmomi ServerFaultCode that names neither
+		// "authentication" nor "401". Without these it fell through to a misleading
+		// collection_error (looked like a HIMS/transient bug) instead of an honest auth
+		// failure telling the operator to fix the ESXi credential. (150.0.0.0/24 ESXi.)
+		strings.Contains(e, "incorrect user name or password") || strings.Contains(e, "cannot complete login") ||
+		strings.Contains(e, "incorrect password") || strings.Contains(e, "invalid login") ||
+		strings.Contains(e, "login failure"):
 		return "auth_failed", "authentication rejected — check the bound credential"
 	case strings.Contains(e, "refused") || strings.Contains(e, "actively refused") || strings.Contains(e, "reset"):
 		switch method {
