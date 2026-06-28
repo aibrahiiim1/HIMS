@@ -509,33 +509,62 @@ func Library() []Print {
 
 		// ============================================================
 		// Phase 4 — Compute pack (SC2): server / BMC / virtualization / storage
-		// NOTE ON BMCs: there is no bmc/management_controller device category in this
-		// system; the existing redfish_bmc driver classifies BMCs as "server", so the
-		// management-controller identity is carried by VENDOR + MODEL within the server
-		// category (not a separate category). These prints beat generic HTTP/Linux so a
-		// BMC is never left as a bare web server (Redfish/iLO/iDRAC > generic HTTP).
+		// NOTE ON BMCs: an out-of-band management controller (iLO/iDRAC/XClarity/iBMC/
+		// Redfish) is its OWN device with its own IP, distinct from the server's OS — so
+		// a DEFINITIVE controller identity classifies as "bmc" (own inventory view), while
+		// AMBIGUOUS server agents (PowerEdge/ProLiant/OpenManage, or a bare vendor PEN that
+		// covers both the chassis and its controller) stay "server". A plain server merely
+		// exposing generic HTTP is never called a BMC. These prints beat generic HTTP/Linux.
 		// ============================================================
 
-		// --- Server / BMC enterprise PENs ---
-		p(KindOID, "1.3.6.1.4.1.232", "HPE", "server", 74),                    // HP/HPE ProLiant + iLO (Compaq PEN; NOT the .11 ProCurve switch tree)
-		pm(KindOID, "1.3.6.1.4.1.674.10892.2", "Dell", "server", "iDRAC", 88), // Dell iDRAC (more specific than .674→server / .10892 OpenManage)
-		p(KindOID, "1.3.6.1.4.1.674.10892.1", "Dell", "server", 80),           // Dell OpenManage / PowerEdge server agent
-		p(KindOID, "1.3.6.1.4.1.19046", "Lenovo", "server", 74),               // Lenovo (ThinkSystem / XCC)
-		p(KindOID, "1.3.6.1.4.1.10876", "Supermicro", "server", 74),           // Supermicro
+		// --- Server enterprise PENs (ambiguous chassis-or-controller → server) ---
+		p(KindOID, "1.3.6.1.4.1.232", "HPE", "server", 74),                 // HP/HPE ProLiant + iLO (Compaq PEN; NOT the .11 ProCurve switch tree)
+		pm(KindOID, "1.3.6.1.4.1.674.10892.2", "Dell", "bmc", "iDRAC", 88), // Dell iDRAC (more specific than .674→server / .10892 OpenManage)
+		p(KindOID, "1.3.6.1.4.1.674.10892.1", "Dell", "server", 80),        // Dell OpenManage / PowerEdge server agent
+		p(KindOID, "1.3.6.1.4.1.19046", "Lenovo", "server", 74),            // Lenovo (ThinkSystem / XCC)
+		p(KindOID, "1.3.6.1.4.1.10876", "Supermicro", "server", 74),        // Supermicro
 
-		// --- Server / BMC sysDescr + HTTP markers (management controllers) ---
-		pm(KindService, "iDRAC", "Dell", "server", "iDRAC", 86), // Dell iDRAC
-		p(KindService, "Integrated Dell Remote Access", "Dell", "server", 86),
-		p(KindService, "PowerEdge", "Dell", "server", 80),                          // Dell PowerEdge (server, not iDRAC)
-		pm(KindService, "Integrated Lights-Out", "HPE", "server", "iLO", 86),       // HPE iLO (bare "iLO" omitted from sysDescr — substring-matches kilo/silo)
-		p(KindService, "ProLiant", "HPE", "server", 80),                            // HPE ProLiant (server, not switch)
-		pm(KindService, "XClarity", "Lenovo", "server", "XClarity Controller", 86), // Lenovo XCC
-		p(KindService, "iBMC", "Huawei", "server", 80),                             // Huawei iBMC
+		// --- BMC sysDescr + HTTP markers (DEFINITIVE out-of-band controller identity → bmc) ---
+		pm(KindService, "iDRAC", "Dell", "bmc", "iDRAC", 86), // Dell iDRAC
+		p(KindService, "Integrated Dell Remote Access", "Dell", "bmc", 86),
+		p(KindService, "PowerEdge", "Dell", "server", 80),                       // Dell PowerEdge (server, not iDRAC)
+		pm(KindService, "Integrated Lights-Out", "HPE", "bmc", "iLO", 86),       // HPE iLO (bare "iLO" omitted from sysDescr — substring-matches kilo/silo)
+		p(KindService, "ProLiant", "HPE", "server", 80),                         // HPE ProLiant (server, not switch)
+		pm(KindService, "XClarity", "Lenovo", "bmc", "XClarity Controller", 86), // Lenovo XCC
+		p(KindService, "iBMC", "Huawei", "bmc", 80),                             // Huawei iBMC
 		p(KindService, "Supermicro", "Supermicro", "server", 76),
-		pm(KindHTTP, "iLO", "HPE", "server", "iLO", 84),     // iLO web — beats generic HTTP
-		p(KindHTTP, "iDRAC", "Dell", "server", 84),          // iDRAC web
-		p(KindHTTP, "Redfish", "Generic BMC", "server", 70), // generic Redfish service banner
-		p(KindHTTP, "AMI MegaRAC", "AMI", "server", 72),     // AMI MegaRAC BMC (Supermicro/others)
+		pm(KindHTTP, "iLO", "HPE", "bmc", "iLO", 84),     // iLO web — beats generic HTTP
+		p(KindHTTP, "iDRAC", "Dell", "bmc", 84),          // iDRAC web
+		p(KindHTTP, "Redfish", "Generic BMC", "bmc", 70), // generic Redfish service banner
+		p(KindHTTP, "AMI MegaRAC", "AMI", "bmc", 72),     // AMI MegaRAC BMC (Supermicro/others)
+
+		// ============================================================
+		// Biometric / time-attendance / access-control devices (category: biometric).
+		// Identified by vendor banners/OIDs; a generic attendance hint with no exact vendor
+		// falls back to biometric_device_unclassified (honest, not "unknown").
+		// ============================================================
+		pm(KindHTTP, "ZKTeco", "ZKTeco", "biometric", "ZKTeco device", 86),
+		p(KindService, "ZKTeco", "ZKTeco", "biometric", 86),
+		p(KindHTTP, "ZK Software", "ZKTeco", "biometric", 84),
+		p(KindHTTP, "Suprema", "Suprema", "biometric", 86), // BioStar / Suprema
+		p(KindHTTP, "BioStar", "Suprema", "biometric", 84),
+		p(KindHTTP, "Anviz", "Anviz", "biometric", 84),
+		p(KindHTTP, "Access Control", "Generic", "biometric_device_unclassified", 60), // generic access-control web UI — exact vendor unknown
+		p(KindHTTP, "Attendance", "Generic", "biometric_device_unclassified", 60),     // generic time-attendance web UI
+		p(KindHTTP, "Fingerprint", "Generic", "biometric_device_unclassified", 58),
+
+		// ============================================================
+		// Point-of-sale terminals / POS PCs / payment endpoints (category: pos).
+		// POS is most reliably an OPERATOR/hostname/OS signal; vendor banners where present.
+		// A POS hint with no exact identity falls back to pos_device_unclassified.
+		// ============================================================
+		p(KindService, "Verifone", "Verifone", "pos", 84),
+		p(KindService, "Ingenico", "Ingenico", "pos", 84),
+		p(KindService, "PAX Technology", "PAX", "pos", 82),
+		p(KindHTTP, "Verifone", "Verifone", "pos", 80),
+		p(KindHTTP, "Ingenico", "Ingenico", "pos", 80),
+		p(KindHTTP, "Point of Sale", "Generic", "pos_device_unclassified", 58), // generic POS web UI — exact type unknown
+		p(KindHTTP, "POS Terminal", "Generic", "pos_device_unclassified", 58),
 
 		// --- Virtualization hosts ---
 		p(KindService, "Proxmox", "Proxmox", "virtual_host", 84), // Proxmox VE — beats generic Linux/net-snmp @55-65

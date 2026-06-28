@@ -384,10 +384,10 @@ func topMatch(ev Evidence) (Result, bool) {
 	return res[0], true
 }
 
-// TestPack_BMCsAreServerWithIdentity: iDRAC/iLO/XCC/Redfish classify as the
-// "server" category (no bmc category in this system) but carry a distinct
-// management-controller identity (vendor/model), and beat generic HTTP.
-func TestPack_BMCsAreServerWithIdentity(t *testing.T) {
+// TestPack_BMCsClassifyAsBMC: a DEFINITIVE out-of-band controller identity
+// (iDRAC/iLO/XCC/Redfish) classifies as the "bmc" category — its own inventory view,
+// not mixed with servers — carrying the vendor/model identity, and beats generic HTTP.
+func TestPack_BMCsClassifyAsBMC(t *testing.T) {
 	cases := []struct {
 		name       string
 		ev         Evidence
@@ -403,8 +403,8 @@ func TestPack_BMCsAreServerWithIdentity(t *testing.T) {
 	}
 	for _, c := range cases {
 		top, ok := topMatch(c.ev)
-		if !ok || top.DeviceType != "server" {
-			t.Errorf("%s: expected server, got %+v", c.name, top)
+		if !ok || top.DeviceType != "bmc" {
+			t.Errorf("%s: expected bmc, got %+v", c.name, top)
 			continue
 		}
 		if top.Vendor != c.wantVendor {
@@ -656,14 +656,15 @@ func TestPack_IPPhones(t *testing.T) {
 // persist that classification. This catches a typo'd or unmapped device_type the
 // moment it's added to the catalog.
 func TestLibraryCategoriesAreValid(t *testing.T) {
-	// Mirror of the devices.category CHECK set (keep in sync with migration 000079).
+	// Mirror of the devices.category CHECK set (keep in sync with migration 000092).
 	valid := map[string]bool{}
 	for _, c := range []string{
-		"unknown", "switch", "router", "firewall", "access_point", "wireless_controller",
+		"unknown", "network_device_unclassified", "switch", "router", "firewall", "access_point", "wireless_controller",
 		"server", "virtual_host", "virtual_machine", "storage", "nvr", "dvr", "camera",
 		"printer", "ip_phone", "pbx", "voice_gateway", "database", "directory", "dns",
 		"dhcp", "fingerprint", "endpoint", "ups", "isp_router", "application",
 		"load_balancer", "pdu",
+		"bmc", "biometric", "biometric_device_unclassified", "pos", "pos_device_unclassified",
 	} {
 		valid[c] = true
 	}

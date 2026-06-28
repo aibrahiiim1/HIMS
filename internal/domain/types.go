@@ -123,6 +123,15 @@ const (
 	CatApplication         DeviceCategory = "application"
 	CatLoadBalancer        DeviceCategory = "load_balancer" // F5/Citrix ADC/A10/Kemp
 	CatPDU                 DeviceCategory = "pdu"           // switched/metered rack PDU (distinct from UPS)
+	// Out-of-band management controllers — a SEPARATE device from the server they manage
+	// (own IP), so they belong in their own inventory view, not mixed with servers.
+	CatBMC DeviceCategory = "bmc" // HPE iLO / Dell iDRAC / Lenovo XClarity-IMM / Supermicro IPMI / Redfish
+	// Biometric / time-attendance / access-control devices.
+	CatBiometric             DeviceCategory = "biometric"
+	CatBiometricUnclassified DeviceCategory = "biometric_device_unclassified" // evidence=biometric, exact type unknown
+	// Point-of-sale terminals / POS PCs / payment endpoints.
+	CatPOS             DeviceCategory = "pos"
+	CatPOSUnclassified DeviceCategory = "pos_device_unclassified" // evidence=POS, exact type unknown
 )
 
 // IsStickyInfraCategory reports whether a category is managed network/wireless
