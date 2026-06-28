@@ -59,7 +59,14 @@ func (s *Server) runVSphereCollection(ctx context.Context, d db.Device) vsphereR
 		name       string
 		user, pass string
 	}
-	const maxVSphereCands = 8
+	// ESXi locks the root account after a few failed logins (default:
+	// Security.AccountLockFailures=5 → 15-min lockout). Trying many candidate
+	// credentials against the SOAP API therefore LOCKS OUT the account — after which
+	// even the CORRECT credential is rejected with "incorrect user name or password"
+	// (the 150.0.0.0/24 ESXi case: root authenticated on a single clean attempt but was
+	// rejected mid-spray). So the discovery cap stays well below the lockout threshold,
+	// and (below) a BOUND credential is tried ALONE — never buried under a spray.
+	const maxVSphereCands = 3
 	// VMware/ESXi accepts a user:password over its SOAP API; on ESXi the root
 	// account is the SAME credential used for SSH, so ssh-kind creds are valid
 	// vSphere logins too (the operator commonly stores root/<pw> as an "ssh"
@@ -87,9 +94,14 @@ func (s *Server) runVSphereCollection(ctx context.Context, d db.Device) vsphereR
 			add(c)
 		}
 	}
-	if all, err := s.queries.ListCredentials(ctx); err == nil {
-		for _, c := range all {
-			add(c)
+	// Spray-discover candidates ONLY when nothing is bound. Once a credential is bound
+	// (a prior successful login), try it ALONE — never re-spray, so a settled ESXi host
+	// is not re-locked on every scan and the proven credential is always used first.
+	if len(cands) == 0 {
+		if all, err := s.queries.ListCredentials(ctx); err == nil {
+			for _, c := range all {
+				add(c)
+			}
 		}
 	}
 	if len(cands) == 0 {
