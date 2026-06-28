@@ -9,6 +9,7 @@ export interface InvChild {
   path: string
   categories: string[]
   special?: 'bmc' // a child with a bespoke page instead of the generic grid
+  manualClassify?: boolean // expose the operator manual-classify action on this page
 }
 export interface InvGroup {
   key: string
@@ -17,6 +18,7 @@ export interface InvGroup {
   allPath: string // e.g. "/inventory/compute"
   categories: string[] // union of all child categories (drives the All page + group count)
   children: InvChild[]
+  manualClassify?: boolean // expose the manual-classify action on the All page
 }
 
 export const INVENTORY_GROUPS: InvGroup[] = [
@@ -52,11 +54,12 @@ export const INVENTORY_GROUPS: InvGroup[] = [
     allLabel: 'All Endpoints',
     allPath: '/inventory/endpoints',
     categories: ['endpoint', 'printer', 'biometric', 'biometric_device_unclassified', 'pos', 'pos_device_unclassified', 'ups'],
+    manualClassify: true,
     children: [
-      { label: 'Workstations', path: '/inventory/endpoints/workstations', categories: ['endpoint'] },
+      { label: 'Workstations', path: '/inventory/endpoints/workstations', categories: ['endpoint'], manualClassify: true },
       { label: 'Printers', path: '/inventory/endpoints/printers', categories: ['printer'] },
-      { label: 'Biometric Devices', path: '/inventory/endpoints/biometric', categories: ['biometric', 'biometric_device_unclassified'] },
-      { label: 'Point of Sale', path: '/inventory/endpoints/pos', categories: ['pos', 'pos_device_unclassified'] },
+      { label: 'Biometric Devices', path: '/inventory/endpoints/biometric', categories: ['biometric', 'biometric_device_unclassified'], manualClassify: true },
+      { label: 'Point of Sale', path: '/inventory/endpoints/pos', categories: ['pos', 'pos_device_unclassified'], manualClassify: true },
       { label: 'UPS', path: '/inventory/endpoints/ups', categories: ['ups'] },
     ],
   },

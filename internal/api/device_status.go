@@ -398,6 +398,37 @@ type deviceStatus struct {
 	ServerRole string `json:"server_role,omitempty"`
 	// HostedOn is the parent hypervisor when this device is a discovered guest VM (reverse link).
 	HostedOn *hostRef `json:"hosted_on,omitempty"`
+	// ClassificationSource is HOW the device's category was decided, for operator trust:
+	// manual_override (operator-locked) | fingerprint | snmp | hostname | service | auto.
+	ClassificationSource string `json:"classification_source,omitempty"`
+}
+
+// classificationSource reports how a device's category was decided. A manual lock is
+// authoritative (operator); otherwise it is derived from the strongest stored
+// classification-evidence source. Honest "auto" when no evidence source is recorded.
+func classificationSource(d db.Device) string {
+	if d.ClassificationLocked {
+		return "manual_override"
+	}
+	evs, err := domain.UnmarshalEvidence(d.ClassificationEvidence)
+	if err != nil || len(evs) == 0 {
+		return "auto"
+	}
+	src := strings.ToLower(evs[0].Source) // evidence is stored confidence-sorted (strongest first)
+	switch {
+	case strings.Contains(src, "fingerprint"):
+		return "fingerprint"
+	case strings.Contains(src, "snmp"), strings.Contains(src, "sysobjectid"), strings.Contains(src, "sysdescr"):
+		return "snmp"
+	case strings.Contains(src, "sysname"), strings.Contains(src, "hostname"):
+		return "hostname"
+	case strings.Contains(src, "http"), strings.Contains(src, "ssh"), strings.Contains(src, "service"), strings.Contains(src, "port"):
+		return "service"
+	case src == "":
+		return "auto"
+	default:
+		return src
+	}
 }
 
 // managementReason returns a specific sub-reason for a failure management state, so the UI
@@ -497,12 +528,13 @@ func (m *statusMaps) statusFor(d db.Device) deviceStatus {
 	reach := reachabilityFromStatus(d.Status)
 	state, managedBy := m.deriveManagement(d)
 	st := deviceStatus{
-		Reachability:      reach,
-		Management:        state,
-		ManagedBy:         managedBy,
-		PreviouslyManaged: reach == ReachOffline && len(managedBy) > 0,
-		ManagementReason:  m.managementReason(d, state),
-		ServerRole:        m.serverRole(d),
+		Reachability:         reach,
+		Management:           state,
+		ManagedBy:            managedBy,
+		PreviouslyManaged:    reach == ReachOffline && len(managedBy) > 0,
+		ManagementReason:     m.managementReason(d, state),
+		ServerRole:           m.serverRole(d),
+		ClassificationSource: classificationSource(d),
 	}
 	if h, ok := m.vmParent[d.ID]; ok {
 		hc := h

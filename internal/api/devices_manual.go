@@ -526,15 +526,17 @@ func (s *Server) locationLookup(ctx context.Context) map[string]string {
 // 000004). Manual/CSV input is validated against it so the operator gets a
 // clear 400 with the allowed set instead of a raw DB constraint 500.
 var categoryList = []string{
-	string(domain.CatUnknown), string(domain.CatSwitch), string(domain.CatRouter),
+	string(domain.CatUnknown), string(domain.CatNetworkUnclassified), string(domain.CatSwitch), string(domain.CatRouter),
 	string(domain.CatFirewall), string(domain.CatAccessPoint), string(domain.CatWirelessController),
 	string(domain.CatServer), string(domain.CatVirtualHost), string(domain.CatVirtualMachine),
-	string(domain.CatStorage), string(domain.CatNVR), string(domain.CatCamera),
+	string(domain.CatStorage), string(domain.CatNVR), string(domain.CatDVR), string(domain.CatCamera),
 	string(domain.CatPrinter), string(domain.CatIPPhone), string(domain.CatPBX),
 	string(domain.CatVoiceGateway), string(domain.CatDatabase), string(domain.CatDirectory),
 	string(domain.CatDNS), string(domain.CatDHCP), string(domain.CatFingerprint),
 	string(domain.CatEndpoint), string(domain.CatUPS), string(domain.CatISPRouter),
-	string(domain.CatApplication),
+	string(domain.CatApplication), string(domain.CatLoadBalancer), string(domain.CatPDU),
+	string(domain.CatBMC), string(domain.CatBiometric), string(domain.CatBiometricUnclassified),
+	string(domain.CatPOS), string(domain.CatPOSUnclassified),
 }
 
 func validCategory(c string) bool {

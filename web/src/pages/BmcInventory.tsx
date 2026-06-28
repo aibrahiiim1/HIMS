@@ -5,6 +5,7 @@ import { Cpu } from 'lucide-react'
 import { api } from '../api'
 import { PageHeader, Panel, EmptyState, usePaged, Pager } from '../components/ui'
 import { ManagementBadge } from '../components/StatusBadges'
+import { SummaryCards, type SummaryCard } from '../components/SummaryCards'
 
 interface BmcRow {
   id: string
@@ -19,8 +20,11 @@ interface BmcRow {
   ipmi_status: string
   power_state: string
   health_summary: string
+  link_state: string // linked | candidate_link | unlinked_bmc
   linked_server: string
   linked_server_id?: string
+  link_confidence: number
+  link_evidence: string
   management: string
   managed_by?: string[]
   site: string
@@ -31,10 +35,13 @@ interface BmcRow {
 }
 
 const fmt = (s?: string) => s || '—'
+const CRED_REQUIRED = new Set(['needs_credential', 'credential_failed', 'not_authorized'])
 
 // BmcInventory is the iLO / BMC / iDRAC page: out-of-band management controllers ONLY,
-// never mixed with normal servers (they are their own 'bmc' category). The linked physical
-// server is shown when known, otherwise an honest "unlinked_bmc" — links are never faked.
+// never mixed with normal servers (their own 'bmc' category). Data-driven summary cards
+// reconcile with the table. The physical-server link is the result of an evidence-based
+// pass (serial/UUID/hostname) — linked / candidate_link / honest unlinked_bmc with reason;
+// never faked.
 export function BmcInventory() {
   const { data, isLoading, error } = useQuery({
     queryKey: ['inventory-bmc'],
@@ -43,17 +50,56 @@ export function BmcInventory() {
   const all = data ?? []
   const [q, setQ] = useState('')
   const [vendor, setVendor] = useState('')
+  const [filterKey, setFilterKey] = useState('') // card-driven filter
   const vendors = useMemo(() => Array.from(new Set(all.map((r) => r.vendor).filter(Boolean))).sort(), [data])
+
+  const cardMatch = (r: BmcRow): boolean => {
+    switch (filterKey) {
+      case 'managed': return r.management === 'managed'
+      case 'credreq': return CRED_REQUIRED.has(r.management)
+      case 'linked': return r.link_state === 'linked'
+      case 'candidate': return r.link_state === 'candidate_link'
+      case 'unlinked': return r.link_state === 'unlinked_bmc'
+      case 'redfish_ok': return r.redfish_status === 'collected'
+      case 'redfish_no': return r.redfish_status !== 'collected'
+      case 'health_bad': return !!r.health_summary && !/ok/i.test(r.health_summary)
+      default: return true
+    }
+  }
   const filtered = useMemo(() => {
     const t = q.trim().toLowerCase()
-    return all.filter((r) => (!vendor || r.vendor === vendor) &&
+    return all.filter((r) => (!vendor || r.vendor === vendor) && cardMatch(r) &&
       (!t || r.ip.includes(t) || (r.hostname || '').toLowerCase().includes(t) || (r.model || '').toLowerCase().includes(t)))
-  }, [data, q, vendor])
+  }, [data, q, vendor, filterKey])
   const paged = usePaged(filtered, { pageSize: 15 })
+
+  const cards: SummaryCard[] = useMemo(() => {
+    const c = (f: (r: BmcRow) => boolean) => all.filter(f).length
+    const card = (key: string, label: string, f: (r: BmcRow) => boolean, tone: SummaryCard['tone']): SummaryCard =>
+      ({ label, value: c(f), tone, active: filterKey === key, onClick: () => { setFilterKey(filterKey === key ? '' : key); paged.setPage(0) } })
+    return [
+      { label: 'Total BMC / iLO', value: all.length, tone: 'info', active: filterKey === '', onClick: () => { setFilterKey(''); paged.setPage(0) } },
+      card('managed', 'Managed', (r) => r.management === 'managed', 'ok'),
+      card('credreq', 'Credential required', (r) => CRED_REQUIRED.has(r.management), 'crit'),
+      card('linked', 'Linked to server', (r) => r.link_state === 'linked', 'ok'),
+      card('candidate', 'Candidate link', (r) => r.link_state === 'candidate_link', 'warn'),
+      card('unlinked', 'Unlinked BMC', (r) => r.link_state === 'unlinked_bmc', 'muted'),
+      card('redfish_ok', 'Redfish OK', (r) => r.redfish_status === 'collected', 'ok'),
+      card('redfish_no', 'Redfish not collected', (r) => r.redfish_status !== 'collected', 'muted'),
+      card('health_bad', 'Health warning/critical', (r) => !!r.health_summary && !/ok/i.test(r.health_summary), 'crit'),
+    ]
+  }, [data, filterKey])
+
+  const linkBadge = (r: BmcRow) => {
+    if (r.link_state === 'linked') return <Link className="cell-name" to={r.linked_server_id ? `/devices/${r.linked_server_id}` : '#'} title={r.link_evidence}>{r.linked_server} <span className="muted">({r.link_confidence}%)</span></Link>
+    if (r.link_state === 'candidate_link') return <Link className="badge badge-warning" to={r.linked_server_id ? `/devices/${r.linked_server_id}` : '#'} title={r.link_evidence} style={{ textDecoration: 'none' }}>candidate: {r.linked_server} ({r.link_confidence}%)</Link>
+    return <span className="badge badge-unknown" title={r.link_evidence}>unlinked_bmc</span>
+  }
 
   return (
     <div>
-      <PageHeader title="iLO / BMC / iDRAC" subtitle="Out-of-band management controllers (HPE iLO, Dell iDRAC, Lenovo XClarity/IMM, Supermicro IPMI, Redfish)" icon={Cpu} />
+      <PageHeader title="iLO / BMC / iDRAC" subtitle="Out-of-band management controllers (HPE iLO, Dell iDRAC, Lenovo XClarity/IMM, Huawei iBMC, Supermicro IPMI, Redfish)" icon={Cpu} />
+      {data && all.length > 0 && <SummaryCards cards={cards} />}
       <Panel title="Out-of-band controllers" subtitle={`${filtered.length} of ${all.length} controller(s)`} pad={false}>
         {isLoading && <div className="loading">Loading…</div>}
         {error && <div style={{ padding: 16 }}><div className="error-msg">Failed to load: {(error as Error).message}</div></div>}
@@ -76,7 +122,7 @@ export function BmcInventory() {
               <thead>
                 <tr>
                   <th>IP</th><th>Hostname</th><th>Vendor</th><th>Model</th><th>Serial</th><th>Firmware</th>
-                  <th>Redfish</th><th>IPMI</th><th>Linked server</th><th>Health</th><th>Management</th><th>Last collected</th><th>Evidence</th>
+                  <th>Redfish</th><th>IPMI</th><th>Linked server</th><th>Link evidence</th><th>Health</th><th>Management</th><th>Last collected</th><th>Evidence</th>
                 </tr>
               </thead>
               <tbody>
@@ -90,9 +136,8 @@ export function BmcInventory() {
                     <td>{fmt(r.firmware)}</td>
                     <td><span className={`badge badge-${r.redfish_status === 'collected' ? 'up' : 'unknown'}`}>{r.redfish_status}</span></td>
                     <td><span className="badge badge-unknown">{r.ipmi_status}</span></td>
-                    <td>{r.linked_server
-                      ? <Link className="cell-name" to={r.linked_server_id ? `/devices/${r.linked_server_id}` : '#'}>{r.linked_server}</Link>
-                      : <span className="badge badge-warning" title="No BMC→server link established; not faked">unlinked_bmc</span>}</td>
+                    <td>{linkBadge(r)}</td>
+                    <td className="muted" style={{ fontSize: 12 }} title={r.link_evidence}>{fmt(r.link_evidence)}</td>
                     <td>{r.health_summary ? <span className={`badge badge-${/ok/i.test(r.health_summary) ? 'up' : 'warning'}`}>{r.health_summary}{r.power_state ? ` · ${r.power_state}` : ''}</span> : <span className="muted">—</span>}</td>
                     <td><ManagementBadge value={r.management} managedBy={r.managed_by} /></td>
                     <td className="mono">{fmt(r.last_collected)}</td>

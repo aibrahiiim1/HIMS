@@ -165,6 +165,7 @@ export interface Device {
   previously_managed?: boolean // offline now, but has a working method on record
   management_reason?: string // specific failure sub-reason (e.g. wmi_namespace_broken) for precise remediation
   server_role?: string // virtual_host_esxi | virtual_host_hyperv | virtual_machine | physical_server | unknown_server
+  classification_source?: string // manual_override | fingerprint | snmp | hostname | service | auto
   hosted_on?: { id: string; name: string; ip?: string } // parent hypervisor when this device is a discovered VM
   // Operator-editable management attributes (Edit Device).
   subtype?: string

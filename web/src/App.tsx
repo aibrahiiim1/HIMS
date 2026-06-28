@@ -194,11 +194,11 @@ function Shell({ me, onLogout }: { me?: AuthMe; onLogout: () => void }) {
                 the iLO/BMC child uses the bespoke BmcInventory page. Existing per-type pages
                 (/servers, /firewalls, /cameras, …) are untouched. */}
             {INVENTORY_GROUPS.map((g) => (
-              <Route key={g.allPath} path={g.allPath} element={<GroupInventory title={g.allLabel} categories={g.categories} />} />
+              <Route key={g.allPath} path={g.allPath} element={<GroupInventory title={g.allLabel} categories={g.categories} allowManualClassify={g.manualClassify} />} />
             ))}
             {INVENTORY_GROUPS.flatMap((g) => g.children).map((c) => (
               <Route key={c.path} path={c.path}
-                element={c.special === 'bmc' ? <BmcInventory /> : <GroupInventory title={c.label} categories={c.categories} />} />
+                element={c.special === 'bmc' ? <BmcInventory /> : <GroupInventory title={c.label} categories={c.categories} allowManualClassify={c.manualClassify} />} />
             ))}
             <Route path="/locations" element={<Locations />} />
             <Route path="/coverage" element={<Coverage />} />
