@@ -68,6 +68,36 @@ func (s *Server) StartCollectionSelfHeal(ctx context.Context, interval time.Dura
 			slog.Info("collection self-heal re-collected stranded transient failures",
 				"count", healed, "candidates", len(cands))
 		}
+
+		// Enqueue-gap reconciler: a reachable Windows-like host can land in inventory
+		// with NO collect_os job EVER (a from-zero scan that couldn't enqueue — agent
+		// briefly offline, a routing race, a dispatch miss). Self-heal above only
+		// re-runs FAILED jobs, so such a host stays "not_attempted" forever. This pass
+		// gives each one its FIRST attempt via the same site-agent routing the scan
+		// uses. windowsLike() is re-checked in Go so only agent-collectable hosts are
+		// routed; routeViaSiteAgent dedups + needs a site agent, and a host leaves this
+		// set once it has any job — so at most one reconciler attempt per host (no
+		// credential spray, no loop). This permanently closes the enqueue gap for all
+		// future scans, not just the current one.
+		gapCands, gerr := s.queries.ListNeverAttemptedAgentCandidates(sctx)
+		if gerr != nil {
+			slog.Warn("never-attempted reconciler query failed", "error", gerr)
+			return
+		}
+		enqueued := 0
+		for _, c := range gapCands {
+			dev, derr := s.queries.GetDevice(sctx, c.ID)
+			if derr != nil || !windowsLike(dev) {
+				continue
+			}
+			if _, ok := s.routeViaSiteAgent(sctx, dev, c.Ip, "winrm"); ok {
+				enqueued++
+			}
+		}
+		if enqueued > 0 {
+			slog.Info("collection reconciler enqueued first attempt for never-attempted hosts",
+				"count", enqueued, "candidates", len(gapCands))
+		}
 	}
 	sweep()
 	go func() {

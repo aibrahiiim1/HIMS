@@ -570,6 +570,22 @@ type Querier interface {
 	ListNVRStorage(ctx context.Context, nvrDeviceID uuid.UUID) ([]NvrStorage, error)
 	ListNeighbors(ctx context.Context, deviceID uuid.UUID) ([]Neighbor, error)
 	ListNetworksByHost(ctx context.Context, hostDeviceID uuid.UUID) ([]VhNetwork, error)
+	// Permanent enqueue-gap safety net (companion to ListSelfHealCandidates). A
+	// reachable, Windows-like host can end up in inventory with NO collect_os job ever
+	// created — a from-zero scan that couldn't enqueue (agent briefly offline, a
+	// routing race, or a dispatch miss) leaves it stuck "not_attempted" forever, since
+	// self-heal only re-runs FAILED jobs. This finds those hosts so a background sweep
+	// can enqueue the FIRST attempt. Tight safety, mirroring self-heal:
+	//   - Windows-like only (os_family windows OR category endpoint) — the agent path.
+	//   - Reachable now (status 'up') — never chase an offline host.
+	//   - NEVER attempted: no collect_os agent_job has EVER existed for it.
+	//   - No os_inventory evidence (not already managed by some other path).
+	//   - No collect_os job currently in flight (no duplicate).
+	// A host enqueued here gains a job and thus leaves this set after one pass: if that
+	// job auth-fails it is excluded from self-heal too (no re-spray); if it fails
+	// transiently, self-heal owns it from then on. So each host gets at most ONE
+	// reconciler-driven attempt — no loop, no credential spray, no lockout risk.
+	ListNeverAttemptedAgentCandidates(ctx context.Context) ([]ListNeverAttemptedAgentCandidatesRow, error)
 	// Alerts worth notifying about: still open or escalated, opened recently.
 	ListNotifiableAlerts(ctx context.Context) ([]ListNotifiableAlertsRow, error)
 	ListNotificationChannels(ctx context.Context) ([]NotificationChannel, error)

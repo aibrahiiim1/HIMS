@@ -555,6 +555,64 @@ func (q *Queries) ListDevicesWithActiveAgentJobs(ctx context.Context) ([]*uuid.U
 	return items, nil
 }
 
+const listNeverAttemptedAgentCandidates = `-- name: ListNeverAttemptedAgentCandidates :many
+SELECT d.id, host(d.primary_ip)::text AS ip
+FROM devices d
+WHERE d.deleted_at IS NULL
+  AND d.primary_ip IS NOT NULL
+  AND d.status = 'up'
+  AND (d.os_family = 'windows' OR d.category = 'endpoint')
+  AND NOT EXISTS (
+    SELECT 1 FROM agent_jobs aj WHERE aj.device_id = d.id AND aj.kind = 'collect_os'
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM os_inventory oi WHERE oi.device_id = d.id AND oi.collection_method <> ''
+  )
+ORDER BY d.updated_at
+LIMIT 50
+`
+
+type ListNeverAttemptedAgentCandidatesRow struct {
+	ID uuid.UUID `json:"id"`
+	Ip string    `json:"ip"`
+}
+
+// Permanent enqueue-gap safety net (companion to ListSelfHealCandidates). A
+// reachable, Windows-like host can end up in inventory with NO collect_os job ever
+// created — a from-zero scan that couldn't enqueue (agent briefly offline, a
+// routing race, or a dispatch miss) leaves it stuck "not_attempted" forever, since
+// self-heal only re-runs FAILED jobs. This finds those hosts so a background sweep
+// can enqueue the FIRST attempt. Tight safety, mirroring self-heal:
+//   - Windows-like only (os_family windows OR category endpoint) — the agent path.
+//   - Reachable now (status 'up') — never chase an offline host.
+//   - NEVER attempted: no collect_os agent_job has EVER existed for it.
+//   - No os_inventory evidence (not already managed by some other path).
+//   - No collect_os job currently in flight (no duplicate).
+//
+// A host enqueued here gains a job and thus leaves this set after one pass: if that
+// job auth-fails it is excluded from self-heal too (no re-spray); if it fails
+// transiently, self-heal owns it from then on. So each host gets at most ONE
+// reconciler-driven attempt — no loop, no credential spray, no lockout risk.
+func (q *Queries) ListNeverAttemptedAgentCandidates(ctx context.Context) ([]ListNeverAttemptedAgentCandidatesRow, error) {
+	rows, err := q.db.Query(ctx, listNeverAttemptedAgentCandidates)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListNeverAttemptedAgentCandidatesRow{}
+	for rows.Next() {
+		var i ListNeverAttemptedAgentCandidatesRow
+		if err := rows.Scan(&i.ID, &i.Ip); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRecentAgentJobsAll = `-- name: ListRecentAgentJobsAll :many
 SELECT id, agent_id, device_id, kind, protocol, target, status, category, error, created_at, dispatched_at, finished_at
 FROM agent_jobs ORDER BY created_at DESC LIMIT $1
