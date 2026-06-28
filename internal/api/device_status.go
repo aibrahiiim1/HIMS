@@ -443,6 +443,14 @@ func (m *statusMaps) managementReason(d db.Device, state string) string {
 		}
 		return ""
 	}
+	// credential_failed on a virtual_host (ESXi) — the vSphere credential is wrong (the
+	// host rejected it). Give ESXi-specific remediation instead of the generic "fix the
+	// rejected credential": the operator must supply the correct ESXi root password
+	// (e.g. 150.0.0.20, whose root password differs from the other hosts). NOT a spray
+	// target — HIMS tries the bound credential alone to avoid ESXi root lockout.
+	if state == MgmtCredentialFailed && d.Category == string(domain.CatVirtualHost) {
+		return "vsphere_credential_required"
+	}
 	if state != MgmtCollectionFailed {
 		return ""
 	}

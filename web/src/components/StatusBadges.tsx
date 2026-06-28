@@ -20,6 +20,7 @@ const REASON_HINT: Record<string, string> = {
   winrm_access_denied: 'valid credential, WinRM session denied (UAC token filter / not local admin / RootSDDL) — host-side, not a wrong password',
   wmi_access_denied: 'valid credential, WMI/DCOM access denied — grant DCOM+WMI rights / set LocalAccountTokenFilterPolicy, or enable WinRM if 5985 closed',
   winrm_and_wmi_denied: 'valid credential, BOTH WinRM session AND WMI/DCOM access denied — grant remote rights / LocalAccountTokenFilterPolicy on the host',
+  vsphere_credential_required: 'ESXi rejected the credential — provide the correct root password for THIS host (it differs from the other ESXi); not a spray target (lockout-safe)',
 }
 
 export function ManagementBadge({ value, managedBy, reason }: { value?: string; managedBy?: string[]; reason?: string }) {
