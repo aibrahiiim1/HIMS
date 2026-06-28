@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom'
 import { HardDrive, Server, Boxes, Database, Network } from 'lucide-react'
 import { api, type VHost } from '../api'
 import { PageHeader, Panel, Kpi, EmptyState, usePaged, Pager } from '../components/ui'
+import { AddDeviceButton } from '../components/AddDeviceButton'
 import { ManagementBadge } from '../components/StatusBadges'
 
 function fmtBytes(n?: number): string {
@@ -40,7 +41,8 @@ export function VirtualHosts() {
 
   return (
     <div>
-      <PageHeader title="Virtual Hosts" subtitle="ESXi and Hyper-V hypervisors — VMs, storage, networks and collection health" icon={HardDrive} />
+      <PageHeader title="Virtual Hosts" subtitle="ESXi and Hyper-V hypervisors — VMs, storage, networks and collection health" icon={HardDrive}
+        actions={<AddDeviceButton defaultType="virtual_host_esxi" label="Add Virtual Host" />} />
       <div className="kpi-grid">
         <Kpi label="Hosts" value={all.length} icon={HardDrive} tone="info" />
         <Kpi label="ESXi" value={esxi} icon={Server} tone="default" />

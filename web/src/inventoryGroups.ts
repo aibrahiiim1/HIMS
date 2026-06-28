@@ -10,6 +10,7 @@ export interface InvChild {
   categories: string[]
   special?: 'bmc' // a child with a bespoke page instead of the generic grid
   manualClassify?: boolean // expose the operator manual-classify action on this page
+  onboardType?: string // manual-onboarding registry key for this page's "Add <Type>" button
 }
 export interface InvGroup {
   key: string
@@ -29,11 +30,11 @@ export const INVENTORY_GROUPS: InvGroup[] = [
     allPath: '/inventory/network',
     categories: ['switch', 'router', 'isp_router', 'firewall', 'wireless_controller', 'access_point'],
     children: [
-      { label: 'Switches', path: '/inventory/network/switches', categories: ['switch'] },
-      { label: 'Routers', path: '/inventory/network/routers', categories: ['router', 'isp_router'] },
-      { label: 'Firewalls', path: '/inventory/network/firewalls', categories: ['firewall'] },
-      { label: 'Wireless Controllers', path: '/inventory/network/wireless-controllers', categories: ['wireless_controller'] },
-      { label: 'Access Points', path: '/inventory/network/access-points', categories: ['access_point'] },
+      { label: 'Switches', path: '/inventory/network/switches', categories: ['switch'] , onboardType: 'switch' },
+      { label: 'Routers', path: '/inventory/network/routers', categories: ['router', 'isp_router'] , onboardType: 'router' },
+      { label: 'Firewalls', path: '/inventory/network/firewalls', categories: ['firewall'] , onboardType: 'firewall' },
+      { label: 'Wireless Controllers', path: '/inventory/network/wireless-controllers', categories: ['wireless_controller'] , onboardType: 'wireless_controller' },
+      { label: 'Access Points', path: '/inventory/network/access-points', categories: ['access_point'] , onboardType: 'access_point' },
     ],
   },
   {
@@ -43,8 +44,8 @@ export const INVENTORY_GROUPS: InvGroup[] = [
     allPath: '/inventory/compute',
     categories: ['server', 'virtual_host', 'virtual_machine', 'bmc'],
     children: [
-      { label: 'Servers', path: '/inventory/compute/servers', categories: ['server'] },
-      { label: 'Virtual Hosts', path: '/inventory/compute/virtual-hosts', categories: ['virtual_host', 'virtual_machine'] },
+      { label: 'Servers', path: '/inventory/compute/servers', categories: ['server'] , onboardType: 'server' },
+      { label: 'Virtual Hosts', path: '/inventory/compute/virtual-hosts', categories: ['virtual_host', 'virtual_machine'] , onboardType: 'virtual_host_esxi' },
       { label: 'iLO / BMC / iDRAC', path: '/inventory/compute/bmc', categories: ['bmc'], special: 'bmc' },
     ],
   },
@@ -56,11 +57,11 @@ export const INVENTORY_GROUPS: InvGroup[] = [
     categories: ['endpoint', 'printer', 'biometric', 'biometric_device_unclassified', 'pos', 'pos_device_unclassified', 'ups'],
     manualClassify: true,
     children: [
-      { label: 'Workstations', path: '/inventory/endpoints/workstations', categories: ['endpoint'], manualClassify: true },
-      { label: 'Printers', path: '/inventory/endpoints/printers', categories: ['printer'] },
-      { label: 'Biometric Devices', path: '/inventory/endpoints/biometric', categories: ['biometric', 'biometric_device_unclassified'], manualClassify: true },
-      { label: 'Point of Sale', path: '/inventory/endpoints/pos', categories: ['pos', 'pos_device_unclassified'], manualClassify: true },
-      { label: 'UPS', path: '/inventory/endpoints/ups', categories: ['ups'] },
+      { label: 'Workstations', path: '/inventory/endpoints/workstations', categories: ['endpoint'], manualClassify: true , onboardType: 'endpoint' },
+      { label: 'Printers', path: '/inventory/endpoints/printers', categories: ['printer'] , onboardType: 'printer' },
+      { label: 'Biometric Devices', path: '/inventory/endpoints/biometric', categories: ['biometric', 'biometric_device_unclassified'], manualClassify: true , onboardType: 'biometric_zkteco' },
+      { label: 'Point of Sale', path: '/inventory/endpoints/pos', categories: ['pos', 'pos_device_unclassified'], manualClassify: true , onboardType: 'pos' },
+      { label: 'UPS', path: '/inventory/endpoints/ups', categories: ['ups'] , onboardType: 'ups' },
     ],
   },
   {
@@ -70,8 +71,8 @@ export const INVENTORY_GROUPS: InvGroup[] = [
     allPath: '/inventory/security',
     categories: ['camera', 'nvr', 'dvr'],
     children: [
-      { label: 'Cameras', path: '/inventory/security/cameras', categories: ['camera'] },
-      { label: 'NVR / DVR', path: '/inventory/security/nvr', categories: ['nvr', 'dvr'] },
+      { label: 'Cameras', path: '/inventory/security/cameras', categories: ['camera'] , onboardType: 'camera' },
+      { label: 'NVR / DVR', path: '/inventory/security/nvr', categories: ['nvr', 'dvr'] , onboardType: 'nvr' },
     ],
   },
   {
@@ -81,8 +82,8 @@ export const INVENTORY_GROUPS: InvGroup[] = [
     allPath: '/inventory/voice',
     categories: ['pbx', 'voice_gateway', 'ip_phone'],
     children: [
-      { label: 'PBX / Call Managers', path: '/inventory/voice/pbx', categories: ['pbx', 'voice_gateway'] },
-      { label: 'IP Phones', path: '/inventory/voice/phones', categories: ['ip_phone'] },
+      { label: 'PBX / Call Managers', path: '/inventory/voice/pbx', categories: ['pbx', 'voice_gateway'] , onboardType: 'pbx' },
+      { label: 'IP Phones', path: '/inventory/voice/phones', categories: ['ip_phone'] , onboardType: 'ip_phone' },
     ],
   },
 ]

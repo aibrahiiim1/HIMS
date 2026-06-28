@@ -6,6 +6,7 @@ import { Login } from './pages/Login'
 import { DeviceList } from './pages/DeviceList'
 import { GroupInventory } from './pages/GroupInventory'
 import { BmcInventory } from './pages/BmcInventory'
+import { AddDeviceButton } from './components/AddDeviceButton'
 import { INVENTORY_GROUPS } from './inventoryGroups'
 import { Dashboard } from './pages/Dashboard'
 import { EndpointIntelligence } from './pages/EndpointIntelligence'
@@ -126,9 +127,9 @@ function Shell({ me, onLogout }: { me?: AuthMe; onLogout: () => void }) {
             <Route path="/discovery/jobs/:jobId/results" element={<ScanJobResults />} />
             <Route path="/discovery/jobs/:jobId/live" element={<LiveDiscovery />} />
             <Route path="/discovery/results" element={<ScanResultsRedirect />} />
-            <Route path="/" element={<DeviceList category="switch" title="Switches" detailBase="/devices" headerExtra={<AddVirtualButton type="switch" label="Switch" />} />} />
-            <Route path="/servers" element={<DeviceList category="server,virtual_host,virtual_machine" title="Servers" detailBase="/servers" showRole headerExtra={<AddVirtualButton type="server" label="Server" />} />} />
-            <Route path="/firewalls" element={<DeviceList category="firewall" title="Firewalls" detailBase="/firewalls" headerExtra={<AddVirtualButton type="firewall" label="Firewall" />} />} />
+            <Route path="/" element={<DeviceList category="switch" title="Switches" detailBase="/devices" headerExtra={<><AddDeviceButton defaultType="switch" label="Add Switch" /><AddVirtualButton type="switch" label="Switch" /></>} />} />
+            <Route path="/servers" element={<DeviceList category="server,virtual_host,virtual_machine" title="Servers" detailBase="/servers" showRole headerExtra={<><AddDeviceButton defaultType="server" label="Add Server" /><AddVirtualButton type="server" label="Server" /></>} />} />
+            <Route path="/firewalls" element={<DeviceList category="firewall" title="Firewalls" detailBase="/firewalls" headerExtra={<><AddDeviceButton defaultType="firewall" label="Add Firewall" /><AddVirtualButton type="firewall" label="Firewall" /></>} />} />
             <Route path="/devices/virtual/new" element={<VirtualDeviceForm />} />
             <Route path="/devices/virtual/:id/edit" element={<VirtualDeviceForm />} />
             <Route path="/devices/:id" element={<DeviceDetailDispatch />} />
@@ -137,17 +138,17 @@ function Shell({ me, onLogout }: { me?: AuthMe; onLogout: () => void }) {
             <Route path="/virtual-hosts/:id" element={<VirtualHostDetail />} />
             <Route path="/firewalls/:id" element={<FirewallDetail />} />
             <Route path="/cameras" element={<Cameras />} />
-            <Route path="/nvrs" element={<DeviceList category="nvr,dvr" title="NVR / DVR" detailBase="/cctv" headerExtra={<AddVirtualButton type="nvr" label="NVR" />} preContent={<CctvOps />} />} />
+            <Route path="/nvrs" element={<DeviceList category="nvr,dvr" title="NVR / DVR" detailBase="/cctv" headerExtra={<><AddDeviceButton defaultType="nvr" label="Add NVR / DVR" /><AddVirtualButton type="nvr" label="NVR" /></>} preContent={<CctvOps />} />} />
             <Route path="/cctv/:id" element={<CctvDetail />} />
             <Route path="/wlan" element={<WirelessControllers />} />
             <Route path="/wlan/:id" element={<WirelessDetail />} />
-            <Route path="/workstations" element={<DeviceList category="endpoint" title="Workstations" detailBase="/workstations" headerExtra={<AddVirtualButton type="endpoint" label="Workstation" />} />} />
+            <Route path="/workstations" element={<DeviceList category="endpoint" title="Workstations" detailBase="/workstations" headerExtra={<><AddDeviceButton defaultType="endpoint" label="Add Workstation" /><AddVirtualButton type="endpoint" label="Workstation" /></>} />} />
             <Route path="/workstations/:id" element={<EndpointDetail />} />
-            <Route path="/printers" element={<DeviceList category="printer" title="Printers" detailBase="/printers" headerExtra={<AddVirtualButton type="printer" label="Printer" />} />} />
+            <Route path="/printers" element={<DeviceList category="printer" title="Printers" detailBase="/printers" headerExtra={<><AddDeviceButton defaultType="printer" label="Add Printer" /><AddVirtualButton type="printer" label="Printer" /></>} />} />
             <Route path="/printers/:id" element={<PrinterDetail />} />
-            <Route path="/ups" element={<DeviceList category="ups" title="UPS Units" detailBase="/ups" headerExtra={<AddVirtualButton type="ups" label="UPS" />} />} />
+            <Route path="/ups" element={<DeviceList category="ups" title="UPS Units" detailBase="/ups" headerExtra={<><AddDeviceButton defaultType="ups" label="Add UPS" /><AddVirtualButton type="ups" label="UPS" /></>} />} />
             <Route path="/ups/:id" element={<UPSDetail />} />
-            <Route path="/pbx" element={<DeviceList category="pbx" title="Call Managers / PBX" detailBase="/pbx" />} />
+            <Route path="/pbx" element={<DeviceList category="pbx" title="Call Managers / PBX" detailBase="/pbx" headerExtra={<AddDeviceButton defaultType="pbx" label="Add PBX / Voice Gateway" />} />} />
             <Route path="/pbx/:id" element={<PbxDetail />} />
             {/* Conceptual split: Missing Classification (don't know WHAT it is) vs
                 Unmanaged (can't access it). /unknown kept as a redirect for old links. */}
@@ -194,11 +195,11 @@ function Shell({ me, onLogout }: { me?: AuthMe; onLogout: () => void }) {
                 the iLO/BMC child uses the bespoke BmcInventory page. Existing per-type pages
                 (/servers, /firewalls, /cameras, …) are untouched. */}
             {INVENTORY_GROUPS.map((g) => (
-              <Route key={g.allPath} path={g.allPath} element={<GroupInventory title={g.allLabel} categories={g.categories} allowManualClassify={g.manualClassify} />} />
+              <Route key={g.allPath} path={g.allPath} element={<GroupInventory title={g.allLabel} categories={g.categories} allowManualClassify={g.manualClassify} addLabel="Add Device" />} />
             ))}
             {INVENTORY_GROUPS.flatMap((g) => g.children).map((c) => (
               <Route key={c.path} path={c.path}
-                element={c.special === 'bmc' ? <BmcInventory /> : <GroupInventory title={c.label} categories={c.categories} allowManualClassify={c.manualClassify} />} />
+                element={c.special === 'bmc' ? <BmcInventory /> : <GroupInventory title={c.label} categories={c.categories} allowManualClassify={c.manualClassify} onboardType={c.onboardType} addLabel={'Add ' + c.label.replace(/s$/, '')} />} />
             ))}
             <Route path="/locations" element={<Locations />} />
             <Route path="/coverage" element={<Coverage />} />

@@ -6,6 +6,7 @@ import { api } from '../api'
 import { PageHeader, Panel, EmptyState, usePaged, Pager } from '../components/ui'
 import { ManagementBadge } from '../components/StatusBadges'
 import { SummaryCards, type SummaryCard } from '../components/SummaryCards'
+import { AddDeviceButton } from '../components/AddDeviceButton'
 
 interface BmcRow {
   id: string
@@ -100,7 +101,8 @@ export function BmcInventory() {
 
   return (
     <div>
-      <PageHeader title="iLO / BMC / iDRAC" subtitle="Out-of-band management controllers (HPE iLO, Dell iDRAC, Lenovo XClarity/IMM, Huawei iBMC, Supermicro IPMI, Redfish)" icon={Cpu} />
+      <PageHeader title="iLO / BMC / iDRAC" subtitle="Out-of-band management controllers (HPE iLO, Dell iDRAC, Lenovo XClarity/IMM, Huawei iBMC, Supermicro IPMI, Redfish)" icon={Cpu}
+        actions={<AddDeviceButton defaultType="bmc" label="Add iLO / BMC" />} />
       {data && all.length > 0 && <SummaryCards cards={cards} />}
       <Panel title="Out-of-band controllers" subtitle={`${filtered.length} of ${all.length} controller(s)`} pad={false}>
         {isLoading && <div className="loading">Loading…</div>}

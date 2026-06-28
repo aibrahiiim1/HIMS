@@ -8,6 +8,7 @@ import { ManagementBadge } from '../components/StatusBadges'
 import { DeleteAllToggle } from '../components/DeleteAllToggle'
 import { EditDevice } from '../components/EditDevice'
 import { AddVirtualButton } from '../components/AddVirtualButton'
+import { AddDeviceButton } from '../components/AddDeviceButton'
 import { ExportDevicesButton } from '../components/ExportDevicesButton'
 
 const isOnline = (d: Device) => (d.status || '').toLowerCase() === 'up' || (d.reachability || '') === 'online'
@@ -90,6 +91,7 @@ export function Cameras() {
         actions={
           <>
             <ExportDevicesButton devices={filtered} filename="cameras" />
+            <AddDeviceButton defaultType="camera" label="Add Camera" />
             <AddVirtualButton type="camera" label="Camera" />
             <DeleteAllToggle ids={filtered.map((d) => d.id)} fullInventory={false}
               scope={(q.trim() || statusF !== 'all' || mgmtF !== 'all' || vendorF !== 'all') ? 'filtered cameras' : 'all cameras'}

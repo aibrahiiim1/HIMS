@@ -7,6 +7,7 @@ import { PageHeader, Panel, EmptyState, colorFor, usePaged, Pager } from '../com
 import { ManagementBadge } from '../components/StatusBadges'
 import { SummaryCards, type SummaryCard } from '../components/SummaryCards'
 import { ManualClassify } from '../components/ManualClassify'
+import { AddDeviceButton } from '../components/AddDeviceButton'
 import { deviceTypeLabel } from '../inventoryGroups'
 
 const DETAIL_BASE: Record<string, string> = {
@@ -38,7 +39,7 @@ const SOURCE_TONE: Record<string, string> = {
 // a mixed-type table (Device Type + Subtype distinguish server/vhost/BMC/…), data-driven
 // clickable summary cards (counts reconcile with the table), the required filters, the
 // classification source, and an operator manual-classify action. Nothing is hardcoded.
-export function GroupInventory({ title, subtitle, categories, allowManualClassify }: { title: string; subtitle?: string; categories: string[]; allowManualClassify?: boolean }) {
+export function GroupInventory({ title, subtitle, categories, allowManualClassify, onboardType, addLabel }: { title: string; subtitle?: string; categories: string[]; allowManualClassify?: boolean; onboardType?: string; addLabel?: string }) {
   const catParam = categories.join(',')
   const { data, isLoading, error } = useQuery({
     queryKey: ['group-inventory', catParam],
@@ -119,7 +120,8 @@ export function GroupInventory({ title, subtitle, categories, allowManualClassif
 
   return (
     <div>
-      <PageHeader title={title} subtitle={subtitle ?? 'Data-driven view of the inventory classification model'} icon={Boxes} />
+      <PageHeader title={title} subtitle={subtitle ?? 'Data-driven view of the inventory classification model'} icon={Boxes}
+        actions={<AddDeviceButton defaultType={onboardType} label={addLabel ?? 'Add Device'} />} />
       {data && all.length > 0 && <SummaryCards cards={cards} />}
       <Panel title={title} subtitle={`${filtered.length} of ${all.length} device(s)`} pad={false}>
         {isLoading && <div className="loading">Loading…</div>}
