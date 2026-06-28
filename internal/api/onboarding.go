@@ -76,6 +76,28 @@ func (s *Server) resolveSecret(ctx context.Context, c onbCredIn) (secret, kind, 
 	return c.Secret, c.Kind, c.Name, nil
 }
 
+// lookupManualDeviceIP is GET /manual-onboarding/lookup?ip=<ip> — does this IP already exist?
+// Lets the wizard warn UP FRONT that a manual add will OVERRIDE the existing device (lock the
+// classification, preserve discovery evidence, audit), never duplicate. Read-only.
+func (s *Server) lookupManualDeviceIP(w http.ResponseWriter, r *http.Request) {
+	ipStr := strings.TrimSpace(r.URL.Query().Get("ip"))
+	addr, err := netip.ParseAddr(ipStr)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"exists": false})
+		return
+	}
+	dev, lerr := s.queries.LiveDeviceByIP(r.Context(), &addr)
+	if lerr != nil || dev.ID == uuid.Nil {
+		writeJSON(w, http.StatusOK, map[string]any{"exists": false})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"exists": true, "device_id": dev.ID.String(), "name": dev.Name,
+		"category": dev.Category, "subtype": dev.Subtype,
+		"classification_locked": dev.ClassificationLocked,
+	})
+}
+
 // testManualDeviceConnection is POST /manual-onboarding/test — protocol-specific Test
 // Connection with step-by-step evidence. Read-only: it never creates a device or credential.
 func (s *Server) testManualDeviceConnection(w http.ResponseWriter, r *http.Request) {

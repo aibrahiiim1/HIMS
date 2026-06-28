@@ -237,6 +237,7 @@ func (s *Server) routes() {
 		r.Get("/devices/category-counts", s.deviceCategoryCounts) // {category: count} for sidebar+page reconciliation
 		r.Get("/manual-onboarding/device-types", s.listManualDeviceTypes)
 		r.Get("/manual-onboarding/device-types/{type}", s.getManualDeviceType)
+		r.Get("/manual-onboarding/lookup", s.lookupManualDeviceIP)
 		r.Post("/manual-onboarding/test", s.testManualDeviceConnection)
 		r.Post("/manual-onboarding/save", s.saveManualDevice)
 		r.Get("/devices/status-summary", s.deviceStatusSummary)
