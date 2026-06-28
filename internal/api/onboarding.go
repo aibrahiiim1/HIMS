@@ -164,22 +164,27 @@ func (s *Server) runOnboardProbe(ctx context.Context, method onbMethod, ip strin
 		id := zkteco.Probe(ctx, ip, port, secret) // secret = optional communication key
 		if id.Connected {
 			add("reachable", "ok", fmt.Sprintf("TCP %d reachable", port))
-			add("auth", "ok", cond(id.AuthUsed, "authenticated with communication key", "connected (no communication key required)"))
+			add("auth", "ok", cond(strings.TrimSpace(secret) != "", "authenticated with the supplied communication key", "authenticated with the SDK default key (0) — no operator secret needed"))
 			ident := strings.TrimSpace(id.DeviceName + " " + id.Serial + " " + id.Firmware)
 			add("identity", cond(ident != "", "ok", "skipped"), nz(ident, "device exposed no identity fields"))
 			return onbTestResp{Steps: steps, FinalStatus: "implemented_collected", Category: "success", Summary: "ZKTeco identity collected — saving will classify biometric/zkteco and bind."}
 		}
 		st := "auth_failed"
-		if strings.HasPrefix(id.Reason, "unreachable") {
+		switch {
+		case strings.HasPrefix(id.Reason, "unreachable"):
 			st = "unreachable"
-		} else if strings.HasPrefix(id.Reason, "protocol") {
+		case strings.HasPrefix(id.Reason, "protocol"):
 			st = "protocol_not_supported"
+		case strings.HasPrefix(id.Reason, "zkteco_comm_key_required"):
+			st = "zkteco_comm_key_required" // non-default key set; not managed, not a hard failure
+		case strings.HasPrefix(id.Reason, "credential_failed"):
+			st = "credential_failed"
 		}
 		add("reachable", cond(st == "unreachable", "fail", "ok"), id.Reason)
-		if st == "auth_failed" {
+		if st != "unreachable" && st != "protocol_not_supported" {
 			add("auth", "fail", id.Reason)
 		}
-		return onbTestResp{Steps: steps, FinalStatus: st, Category: st, Summary: id.Reason}
+		return onbTestResp{Steps: steps, FinalStatus: st, Category: cond(st == "zkteco_comm_key_required", "auth_failed", st), Summary: id.Reason}
 	}
 
 	// credtest covers snmp_v2c/snmp_v3/ssh/winrm/onvif/http_basic (+ redfish/isapi mapped to http_basic).

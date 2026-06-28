@@ -93,9 +93,12 @@ func header(command, sessionID, replyID uint16, data []byte) []byte {
 }
 
 // makeCommKey derives the CMD_AUTH payload from the device communication key + session id
-// (the ZK comm-key algorithm). Only used when a key is configured on the device.
+// (the ZK comm-key algorithm, as used by pyzk / the ZK SDK). The third output byte is the
+// ticks value itself — NOT the scrambled byte. This was live-validated against real ZKTeco
+// hardware: with key=0 (the SDK default) this exact payload yields CMD_ACK_OK, which is how
+// IP-only tools authenticate without the operator entering any secret.
 func makeCommKey(key, sessionID uint32) []byte {
-	const ticks = 50
+	const ticks byte = 50
 	k := uint32(0)
 	for i := uint(0); i < 32; i++ {
 		if key&(1<<i) != 0 {
@@ -113,8 +116,7 @@ func makeCommKey(key, sessionID uint32) []byte {
 	b[3] ^= 'O'
 	// swap the two 16-bit halves
 	b = []byte{b[2], b[3], b[0], b[1]}
-	var tick byte = ticks & 0xff
-	return []byte{b[0] ^ tick, b[1] ^ tick, b[2], tick ^ b[3]}
+	return []byte{b[0] ^ ticks, b[1] ^ ticks, ticks, b[3] ^ ticks}
 }
 
 type reply struct {
@@ -203,14 +205,20 @@ func Probe(ctx context.Context, host string, port int, commKey string) Identity 
 	}
 	authUsed := false
 	if rp.command == cmdACKUnauth {
-		// 2) AUTH with the communication key.
-		if strings.TrimSpace(commKey) == "" {
-			return Identity{Reason: "auth_failed: device requires a communication key"}
-		}
+		// 2) AUTH. ZKTeco devices answer CONNECT with ACK_UNAUTH and expect a CMD_AUTH derived
+		// from the communication key. The SDK default key is 0, so a device that was never
+		// given a custom key authenticates with key=0 and NO operator secret — this is exactly
+		// how IP-only tools connect. We therefore default an empty key to 0; only if 0 is also
+		// rejected is a real non-default key actually required.
+		key := parseCommKey(commKey) // "" or "0" → 0 (the SDK default)
 		authUsed = true
-		rp, err = send(cmdAuth, makeCommKey(parseCommKey(commKey), uint32(sessionID)))
+		rp, err = send(cmdAuth, makeCommKey(key, uint32(sessionID)))
 		if err != nil || rp.command != cmdACKOK {
-			return Identity{Reason: "auth_failed: communication key rejected"}
+			if strings.TrimSpace(commKey) == "" {
+				// The device has a NON-default communication key set; the operator must supply it.
+				return Identity{Reason: "zkteco_comm_key_required: device rejected the default key (0)"}
+			}
+			return Identity{Reason: "credential_failed: communication key rejected"}
 		}
 	} else if rp.command != cmdACKOK {
 		return Identity{Reason: "auth_failed: device rejected the connection"}

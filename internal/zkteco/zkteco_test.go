@@ -9,8 +9,12 @@ import (
 )
 
 // fakeZK is a minimal in-memory ZK device speaking the TCP framing, enough to validate the
-// connector's connect → identity → disconnect flow without a real device.
-func fakeZK(t *testing.T, requireAuth bool) (string, func()) {
+// connector's connect → (auth) → identity → disconnect flow without a real device. When
+// expectedKey is non-nil the device requires CMD_AUTH and VALIDATES the payload against
+// makeCommKey(*expectedKey, session) — so the default-key-0 path and the comm-key-required
+// path are both exercised (the real-hardware makeCommKey correctness is proven separately by
+// the gated TestZKParity live harness).
+func fakeZK(t *testing.T, expectedKey *uint32) (string, func()) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -34,7 +38,7 @@ func fakeZK(t *testing.T, requireAuth bool) (string, func()) {
 		}
 		defer conn.Close()
 		const session = 0x4321
-		authed := !requireAuth
+		authed := expectedKey == nil
 		for {
 			top := make([]byte, 8)
 			if _, e := readFull(conn, top); e != nil {
@@ -53,8 +57,14 @@ func fakeZK(t *testing.T, requireAuth bool) (string, func()) {
 			case cmd == cmdConnect:
 				reply(conn, cmdACKOK, session, nil)
 			case cmd == cmdAuth:
-				authed = true
-				reply(conn, cmdACKOK, session, nil)
+				// Validate the comm-key payload the connector sent.
+				want := makeCommKey(*expectedKey, session)
+				if string(data) == string(want) {
+					authed = true
+					reply(conn, cmdACKOK, session, nil)
+				} else {
+					reply(conn, cmdACKUnauth, session, nil)
+				}
 			case cmd == cmdOptionsRRQ:
 				name := strings.TrimRight(string(data), "\x00")
 				val := map[string]string{"~SerialNumber": "~SerialNumber=ZK123456", "~DeviceName": "~DeviceName=ProFaceX", "~Platform": "~Platform=ZMM220"}[name]
@@ -72,14 +82,19 @@ func fakeZK(t *testing.T, requireAuth bool) (string, func()) {
 	return ln.Addr().String(), func() { ln.Close() }
 }
 
-func TestZKProbe_NoAuth(t *testing.T) {
-	addr, stop := fakeZK(t, false)
-	defer stop()
+func hostPort(addr string) (string, int) {
 	host, portStr, _ := net.SplitHostPort(addr)
-	var p int
+	p := 0
 	for _, c := range portStr {
 		p = p*10 + int(c-'0')
 	}
+	return host, p
+}
+
+func TestZKProbe_NoAuth(t *testing.T) {
+	addr, stop := fakeZK(t, nil)
+	defer stop()
+	host, p := hostPort(addr)
 	id := Probe(context.Background(), host, p, "")
 	if !id.Connected {
 		t.Fatalf("expected connected, got reason=%q", id.Reason)
@@ -92,32 +107,44 @@ func TestZKProbe_NoAuth(t *testing.T) {
 	}
 }
 
-func TestZKProbe_AuthRequired_NoKey(t *testing.T) {
-	addr, stop := fakeZK(t, true)
+// TestZKProbe_DefaultKey0 proves PARITY with IP-only SDK tools: a device that answers
+// ACK_UNAUTH but uses the SDK default communication key (0) authenticates with NO operator
+// secret, then yields identity.
+func TestZKProbe_DefaultKey0(t *testing.T) {
+	var zero uint32 // 0
+	addr, stop := fakeZK(t, &zero)
 	defer stop()
-	host, portStr, _ := net.SplitHostPort(addr)
-	var p int
-	for _, c := range portStr {
-		p = p*10 + int(c-'0')
+	host, p := hostPort(addr)
+	id := Probe(context.Background(), host, p, "") // no key supplied
+	if !id.Connected || !id.AuthUsed {
+		t.Fatalf("expected connected via default key 0, got connected=%v reason=%q", id.Connected, id.Reason)
 	}
-	// no comm key supplied → honest auth_failed (device requires a key)
-	id := Probe(context.Background(), host, p, "")
-	if id.Connected || !strings.Contains(id.Reason, "communication key") {
-		t.Errorf("expected auth_failed needing key, got connected=%v reason=%q", id.Connected, id.Reason)
+	if id.Serial != "ZK123456" {
+		t.Errorf("identity mismatch: %+v", id)
 	}
 }
 
-func TestZKProbe_AuthRequired_WithKey(t *testing.T) {
-	addr, stop := fakeZK(t, true)
+// TestZKProbe_NonDefaultKey_NoKey: a device with a NON-default key rejects key=0, so an
+// onboarding with no key reports comm-key-required (never connected, never fabricated).
+func TestZKProbe_NonDefaultKey_NoKey(t *testing.T) {
+	key := uint32(123456)
+	addr, stop := fakeZK(t, &key)
 	defer stop()
-	host, portStr, _ := net.SplitHostPort(addr)
-	var p int
-	for _, c := range portStr {
-		p = p*10 + int(c-'0')
+	host, p := hostPort(addr)
+	id := Probe(context.Background(), host, p, "")
+	if id.Connected || !strings.Contains(id.Reason, "zkteco_comm_key_required") {
+		t.Errorf("expected zkteco_comm_key_required, got connected=%v reason=%q", id.Connected, id.Reason)
 	}
+}
+
+func TestZKProbe_NonDefaultKey_WithKey(t *testing.T) {
+	key := uint32(123456)
+	addr, stop := fakeZK(t, &key)
+	defer stop()
+	host, p := hostPort(addr)
 	id := Probe(context.Background(), host, p, "123456")
 	if !id.Connected || !id.AuthUsed {
-		t.Errorf("expected connected via auth, got %+v", id)
+		t.Errorf("expected connected via supplied key, got %+v", id)
 	}
 }
 

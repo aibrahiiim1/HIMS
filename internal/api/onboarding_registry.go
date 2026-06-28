@@ -159,13 +159,13 @@ func onboardingCatalog() []onbType {
 		{Type: "biometric_zkteco", Category: "biometric", Subtype: "zkteco", DisplayName: "Biometric Device — ZKTeco", AddLabel: "Add Biometric Device", Group: "endpoints",
 			Vendors: []string{"ZKTeco"},
 			Methods: []onbMethod{
-				ms(m("zkteco", "ZKTeco protocol (TCP 4370)", "", "zkteco", 4370, true, "read-only identity: serial/firmware/device name (attendance/users intentionally out of scope)"), "implemented_tested"),
+				ms(m("zkteco", "ZKTeco protocol (TCP 4370)", "", "zkteco", 4370, true, "read-only identity: serial/firmware/device name (attendance/users intentionally out of scope); no secret needed for default-key devices"), "implemented_collected"),
 				ms(m("http_basic", "HTTP/HTTPS web UI", "http_basic", "http_basic", 80, false, "identity-only fallback for web-enabled models"), "implemented_live_validation_pending"),
 				m("manual", "Manual inventory only", "", "manual", 0, false, "operator fallback"),
 			},
 			BaseFields: baseFields(nil), LockOnSave: true,
-			Capabilities: []onbCapability{cap("identity", "Serial/firmware/device name", "implemented_tested", "native ZK/4370 protocol; live-validated to the auth challenge on real hardware — full identity collection needs the device communication key"), cap("attendance", "Attendance/user logs", "unsupported_by_device", "intentionally out of scope (read-only identity only)")},
-			Notes:        "ZKTeco is a REAL connector: native TCP/4370 protocol handshake (+ communication key). Live-validated against real devices (reaches the auth challenge). If the device has a communication key it must be supplied (stored encrypted) to collect identity; attendance/user data is intentionally NOT collected."},
+			Capabilities: []onbCapability{cap("identity", "Serial/firmware/device name", "implemented_collected", "native ZK/4370 protocol; live-collected real serial/firmware/device-name from real hardware. Default SDK key (0) is used automatically — no operator secret needed; a non-default key (if set) is supplied + stored encrypted"), cap("attendance", "Attendance/user logs", "unsupported_by_device", "intentionally out of scope (read-only identity only)")},
+			Notes:        "ZKTeco is a REAL connector: native TCP/4370 protocol handshake + CMD_AUTH using the SDK default communication key (0), matching IP-only SDK tools — no operator secret required for default-key devices. Live-collected real identity from production devices. If a device has a NON-default communication key it is supplied once and stored encrypted; attendance/user data is intentionally NOT collected."},
 		{Type: "biometric_hikvision", Category: "biometric", Subtype: "hikvision_access", DisplayName: "Biometric / Access — Hikvision", AddLabel: "Add Hikvision Biometric", Group: "endpoints",
 			Vendors:      []string{"Hikvision"},
 			Methods:      []onbMethod{ms(m("isapi", "ISAPI (HTTP Digest)", "http_basic", "isapi", 80, true, "ISAPI client proven on Hikvision CCTV; no real Hikvision biometric/access device validated"), "implemented_live_validation_pending"), ms(m("http_basic", "HTTP/HTTPS", "http_basic", "http_basic", 80, false, "identity-only"), "implemented_live_validation_pending"), m("manual", "Manual inventory only", "", "manual", 0, false, "")},
@@ -233,12 +233,6 @@ func methodStatus(m onbMethod) string {
 		return "manual_inventory_only"
 	case strings.Contains(strings.ToLower(m.Note), "external") || m.TestKind == "ipmi":
 		return "external_dependency_required"
-	case m.TestKind == "zkteco":
-		// The ZK protocol connector is implemented + unit-tested AND live-validated against
-		// real ZKTeco hardware to the auth challenge, but no device has been fully identity-
-		// collected in-product (the test devices require a communication key). Honest:
-		// implemented_tested — NOT implemented_collected (that needs a real collected device).
-		return "implemented_tested"
 	case m.CollectorReady:
 		return "implemented_collected" // real deep collector exists for this method+type
 	default:
