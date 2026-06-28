@@ -996,7 +996,7 @@ func (s *Server) addFingerprintDQ(ctx context.Context, devs []db.Device, issues 
 		}
 	}
 
-	var genericVendor, weakSNMP, vendorNoCat, fpNotApplied []db.Device
+	var genericVendor, weakSNMP, vendorNoCat, fpNotApplied, noIdentityEvidence []db.Device
 	for _, d := range devs {
 		vendor := ""
 		if d.Vendor != nil {
@@ -1014,6 +1014,16 @@ func (s *Server) addFingerprintDQ(ctx context.Context, devs []db.Device, issues 
 		}
 		if vendor != "" && d.Category == "unknown" {
 			vendorNoCat = append(vendorNoCat, d)
+		}
+		// MAC/OUI + vendor identity is genuinely UNAVAILABLE: the host is reachable but
+		// no identity source produced anything — it did not answer SNMP (no sysObjectID
+		// PEN), has no vendor, and is unclassified. On a remote subnet there is also no L2
+		// adjacency (ARP/FDB), so neither MAC nor OUI can be obtained until an
+		// authenticated protocol (SNMP/SSH) works. Recorded honestly here (with the reason)
+		// instead of being left silently blank — provide a working credential to identify.
+		if d.Status == "up" && vendor == "" && !answeredSNMP &&
+			(d.Category == "unknown" || d.Category == string(domain.CatNetworkUnclassified)) {
+			noIdentityEvidence = append(noIdentityEvidence, d)
 		}
 		// A user fingerprint that WOULD match this device's stored evidence but
 		// whose verdict the device doesn't reflect → operator added a rule but
@@ -1047,6 +1057,9 @@ func (s *Server) addFingerprintDQ(ctx context.Context, devs []db.Device, issues 
 	add("vendor_known_but_category_generic", "Vendor known, category unknown",
 		"Devices where the vendor is known but the category is still 'unknown'. Add a fingerprint mapping this vendor's product OID to the right device type.",
 		"warning", vendorNoCat)
+	add("mac_oui_unavailable", "No identity evidence (MAC/OUI unavailable)",
+		"Reachable hosts with NO identity source: they did not answer SNMP (no sysObjectID/OUI), have no vendor, and are on a remote subnet (no ARP/FDB L2 adjacency) — so MAC, OUI, and vendor cannot be obtained. This is recorded honestly, not left blank. Provide a working credential (correct SNMP community or SSH login) so the host identifies itself, or run discovery from within the host's L2 segment to capture its MAC.",
+		"warning", noIdentityEvidence)
 	add("custom_fingerprint_not_applied", "Custom fingerprint not applied",
 		"One of your own vendor fingerprints matches these devices' stored SNMP evidence, but their current classification doesn't reflect it. Re-scan or Re-classify them so the rule takes effect.",
 		"warning", fpNotApplied)
