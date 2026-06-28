@@ -66,7 +66,10 @@ func checksum(buf []byte) uint16 {
 	return uint16(c)
 }
 
-// header builds a command packet (with checksum) wrapped in the TCP top header.
+// header builds a command packet (with checksum) wrapped in the TCP top header. Matching the
+// ZK protocol (pyzk): the checksum is computed over the buffer with the CURRENT reply_id, then
+// the SENT reply_id is incremented (wrapping at USHRT_MAX). Real devices validate this exact
+// sequence and silently drop a packet whose checksum was computed over a different reply_id.
 func header(command, sessionID, replyID uint16, data []byte) []byte {
 	buf := make([]byte, 8+len(data))
 	binary.LittleEndian.PutUint16(buf[0:], command)
@@ -76,6 +79,11 @@ func header(command, sessionID, replyID uint16, data []byte) []byte {
 	copy(buf[8:], data)
 	cs := checksum(buf)
 	binary.LittleEndian.PutUint16(buf[2:], cs)
+	sent := replyID + 1
+	if sent >= ushrtMax {
+		sent -= ushrtMax
+	}
+	binary.LittleEndian.PutUint16(buf[6:], sent)
 	top := make([]byte, 8+len(buf))
 	binary.LittleEndian.PutUint16(top[0:], tcpMagic1)
 	binary.LittleEndian.PutUint16(top[2:], tcpMagic2)
@@ -112,6 +120,7 @@ func makeCommKey(key, sessionID uint32) []byte {
 type reply struct {
 	command   uint16
 	sessionID uint16
+	replyID   uint16
 	data      []byte
 }
 
@@ -136,6 +145,7 @@ func recv(conn net.Conn, timeout time.Duration) (reply, error) {
 	return reply{
 		command:   binary.LittleEndian.Uint16(pkt[0:]),
 		sessionID: binary.LittleEndian.Uint16(pkt[4:]),
+		replyID:   binary.LittleEndian.Uint16(pkt[6:]),
 		data:      pkt[8:],
 	}, nil
 }
@@ -169,31 +179,36 @@ func Probe(ctx context.Context, host string, port int, commKey string) Identity 
 	}
 	defer conn.Close()
 
-	var replyID uint16
-	send := func(command uint16, sessionID uint16, data []byte) (reply, error) {
+	// ZK reply_id starts at USHRT_MAX-1; session_id + reply_id are then taken from each
+	// response (the device drives the sequence). The checksum must follow this exactly.
+	replyID := uint16(ushrtMax - 1)
+	sessionID := uint16(0)
+	send := func(command uint16, data []byte) (reply, error) {
 		_ = conn.SetWriteDeadline(time.Now().Add(timeout))
 		if _, werr := conn.Write(header(command, sessionID, replyID, data)); werr != nil {
 			return reply{}, werr
 		}
-		replyID++
-		return recv(conn, timeout)
+		rp, rerr := recv(conn, timeout)
+		if rerr == nil {
+			sessionID = rp.sessionID
+			replyID = rp.replyID
+		}
+		return rp, rerr
 	}
 
 	// 1) CONNECT
-	rp, err := send(cmdConnect, 0, nil)
+	rp, err := send(cmdConnect, nil)
 	if err != nil {
-		return Identity{Reason: "protocol: no/!invalid handshake response"}
+		return Identity{Reason: "protocol: no/invalid handshake response"}
 	}
-	sessionID := rp.sessionID
 	authUsed := false
 	if rp.command == cmdACKUnauth {
-		// 2) AUTH with the communication key (if supplied).
-		key := parseCommKey(commKey)
-		if key == 0 && strings.TrimSpace(commKey) == "" {
+		// 2) AUTH with the communication key.
+		if strings.TrimSpace(commKey) == "" {
 			return Identity{Reason: "auth_failed: device requires a communication key"}
 		}
 		authUsed = true
-		rp, err = send(cmdAuth, sessionID, makeCommKey(key, uint32(sessionID)))
+		rp, err = send(cmdAuth, makeCommKey(parseCommKey(commKey), uint32(sessionID)))
 		if err != nil || rp.command != cmdACKOK {
 			return Identity{Reason: "auth_failed: communication key rejected"}
 		}
@@ -203,26 +218,26 @@ func Probe(ctx context.Context, host string, port int, commKey string) Identity 
 
 	id := Identity{Connected: true, AuthUsed: authUsed}
 	// 3) identity (read-only) — best-effort; absence is honest, never fabricated.
-	if v := readOption(send, sessionID, "~SerialNumber"); v != "" {
+	if v := readOption(send, "~SerialNumber"); v != "" {
 		id.Serial = v
 	}
-	if v := readOption(send, sessionID, "~DeviceName"); v != "" {
+	if v := readOption(send, "~DeviceName"); v != "" {
 		id.DeviceName = v
 	}
-	if v := readOption(send, sessionID, "~Platform"); v != "" {
+	if v := readOption(send, "~Platform"); v != "" {
 		id.Platform = v
 	}
-	if rp, err := send(cmdGetVersion, sessionID, nil); err == nil && rp.command == cmdACKOK {
+	if rp, err := send(cmdGetVersion, nil); err == nil && rp.command == cmdACKOK {
 		id.Firmware = cleanStr(rp.data)
 	}
 	// 4) disconnect (best-effort)
-	_, _ = send(cmdExit, sessionID, nil)
+	_, _ = send(cmdExit, nil)
 	return id
 }
 
 // readOption sends CMD_OPTIONS_RRQ for an option name and returns the value after '='.
-func readOption(send func(uint16, uint16, []byte) (reply, error), sessionID uint16, name string) string {
-	rp, err := send(cmdOptionsRRQ, sessionID, []byte(name+"\x00"))
+func readOption(send func(uint16, []byte) (reply, error), name string) string {
+	rp, err := send(cmdOptionsRRQ, []byte(name+"\x00"))
 	if err != nil || rp.command != cmdACKOK {
 		return ""
 	}

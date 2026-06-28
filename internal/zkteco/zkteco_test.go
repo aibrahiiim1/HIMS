@@ -122,14 +122,22 @@ func TestZKProbe_AuthRequired_WithKey(t *testing.T) {
 }
 
 func TestZKChecksumRoundTrip(t *testing.T) {
-	// A header's embedded checksum must validate over the (command,0,session,reply,data) buf.
-	pkt := header(cmdConnect, 0, 0, nil)
+	// The ZK protocol (validated live against real hardware): the checksum is computed over
+	// the buffer with the CURRENT reply_id, while the SENT reply_id is incremented. Verify
+	// both: the embedded checksum is over reply_id=N, and the sent reply field is N+1.
+	const N uint16 = 5
+	pkt := header(cmdConnect, 0, N, nil)
 	body := pkt[8:] // strip tcp top
-	got := binary.LittleEndian.Uint16(body[2:])
+	embedded := binary.LittleEndian.Uint16(body[2:])
+	sentReply := binary.LittleEndian.Uint16(body[6:])
+	if sentReply != N+1 {
+		t.Errorf("sent reply_id = %d, want %d (N+1)", sentReply, N+1)
+	}
 	tmp := make([]byte, len(body))
 	copy(tmp, body)
-	binary.LittleEndian.PutUint16(tmp[2:], 0)
-	if want := checksum(tmp); want != got {
-		t.Errorf("checksum mismatch embedded=%d recompute=%d", got, want)
+	binary.LittleEndian.PutUint16(tmp[2:], 0) // zero checksum field
+	binary.LittleEndian.PutUint16(tmp[6:], N) // checksum is over reply_id=N, not the sent N+1
+	if want := checksum(tmp); want != embedded {
+		t.Errorf("checksum mismatch embedded=%d recompute(over N)=%d", embedded, want)
 	}
 }

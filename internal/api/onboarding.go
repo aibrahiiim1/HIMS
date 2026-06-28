@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/coralsearesorts/hims/internal/credtest"
+	"github.com/coralsearesorts/hims/internal/domain"
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
 	"github.com/coralsearesorts/hims/internal/zkteco"
 	"github.com/google/uuid"
@@ -287,6 +288,15 @@ func (s *Server) saveManualDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// ZKTeco: a supplied communication key must be PERSISTED (sealed) as a credential so
+	// future collection jobs can re-authenticate — not lost after the test. Tag it as a
+	// 'zkteco' credential kind so resolveOrCreateCredential encrypts + binds it.
+	if req.Method == "zkteco" && strings.TrimSpace(req.Credential.Secret) != "" && strings.TrimSpace(req.Credential.ID) == "" {
+		req.Credential.Kind = "zkteco"
+		if strings.TrimSpace(req.Credential.Name) == "" {
+			req.Credential.Name = "ZKTeco comm key " + ip
+		}
+	}
 	// Resolve / create the credential (validated + encrypted) when supplied.
 	var credID *uuid.UUID
 	if cid, cerr := s.resolveOrCreateCredential(ctx, r, req.Credential); cerr != nil {
@@ -479,6 +489,17 @@ func (s *Server) kickOnboardCollection(ctx context.Context, dev db.Device, metho
 func (s *Server) collectZKTecoIdentity(ctx context.Context, dev db.Device, commKey string) bool {
 	if dev.PrimaryIp == nil {
 		return false
+	}
+	// For future re-collection (no inline key), use the bound zkteco credential (decrypted
+	// in-memory) so the stored communication key is reused — never logged or returned.
+	if strings.TrimSpace(commKey) == "" && dev.CredentialID != nil {
+		if c, err := s.queries.GetCredential(ctx, *dev.CredentialID); err == nil && c.Kind == string(domain.CredZKTeco) {
+			if cph := s.cipher(); cph != nil {
+				if plain, oerr := cph.Open(c.EncryptedBlob, c.KeyID); oerr == nil {
+					commKey = string(plain)
+				}
+			}
+		}
 	}
 	id := zkteco.Probe(ctx, dev.PrimaryIp.String(), 4370, commKey)
 	if !id.Connected {

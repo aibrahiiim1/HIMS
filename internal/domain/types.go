@@ -61,6 +61,7 @@ const (
 	CredLDAP      CredentialKind = "ldap"
 	CredWMI       CredentialKind = "wmi"     // Windows WMI/DCOM (legacy Windows fallback)
 	CredWindows   CredentialKind = "windows" // unified Windows login — system uses WinRM, WMI/DCOM, or the relay agent as needed
+	CredZKTeco    CredentialKind = "zkteco"  // ZKTeco device communication key (sealed; native TCP/4370 protocol)
 )
 
 // Credential is an encrypted secret. EncryptedBlob is never logged or

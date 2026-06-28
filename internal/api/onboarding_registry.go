@@ -158,8 +158,8 @@ func onboardingCatalog() []onbType {
 				m("manual", "Manual inventory only", "", "manual", 0, false, "operator fallback"),
 			},
 			BaseFields: baseFields(nil), LockOnSave: true,
-			Capabilities: []onbCapability{cap("identity", "Serial/firmware/device name", "implemented_collected", "native ZK protocol"), cap("attendance", "Attendance/user logs", "unsupported_by_device", "intentionally out of scope (read-only identity only)")},
-			Notes:        "ZKTeco is a REAL connector: native TCP/4370 protocol handshake (+ optional communication key) and read-only identity. Attendance/user data is intentionally NOT collected."},
+			Capabilities: []onbCapability{cap("identity", "Serial/firmware/device name", "implemented_tested", "native ZK/4370 protocol; live-validated to the auth challenge on real hardware — full identity collection needs the device communication key"), cap("attendance", "Attendance/user logs", "unsupported_by_device", "intentionally out of scope (read-only identity only)")},
+			Notes:        "ZKTeco is a REAL connector: native TCP/4370 protocol handshake (+ communication key). Live-validated against real devices (reaches the auth challenge). If the device has a communication key it must be supplied (stored encrypted) to collect identity; attendance/user data is intentionally NOT collected."},
 		{Type: "biometric_hikvision", Category: "biometric", Subtype: "hikvision_access", DisplayName: "Biometric / Access — Hikvision", AddLabel: "Add Hikvision Biometric", Group: "endpoints",
 			Vendors:      []string{"Hikvision"},
 			Methods:      []onbMethod{m("isapi", "ISAPI (HTTP Digest)", "http_basic", "isapi", 80, true, ""), m("http_basic", "HTTP/HTTPS", "http_basic", "http_basic", 80, false, "identity-only"), m("manual", "Manual inventory only", "", "manual", 0, false, "")},
@@ -223,6 +223,12 @@ func methodStatus(m onbMethod) string {
 		return "manual_inventory_only"
 	case strings.Contains(strings.ToLower(m.Note), "external") || m.TestKind == "ipmi":
 		return "external_dependency_required"
+	case m.TestKind == "zkteco":
+		// The ZK protocol connector is implemented + unit-tested AND live-validated against
+		// real ZKTeco hardware to the auth challenge, but no device has been fully identity-
+		// collected in-product (the test devices require a communication key). Honest:
+		// implemented_tested — NOT implemented_collected (that needs a real collected device).
+		return "implemented_tested"
 	case m.CollectorReady:
 		return "implemented_collected" // real deep collector exists for this method+type
 	default:
