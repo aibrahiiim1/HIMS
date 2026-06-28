@@ -67,6 +67,15 @@ func TestWindowsFinalCat(t *testing.T) {
 		// a UAC access-denied (the .49/.50 storm guard — native/WinRM-shell would collect later).
 		{"native timeout + wmi access-denied stays retryable", "winrm_connect_timeout", "winrm_negotiate_error", "wmi_access_denied", "winrm_connect_timeout"},
 		{"native negotiate + wmi access-denied stays retryable", "winrm_negotiate_error", "winrm_negotiate_error", "wmi_access_denied", "winrm_negotiate_error"},
+		// Durable WMI verdict outranks a WinRM CONNECT-TIMEOUT (port 5985 closed). When WMI/DCOM
+		// reached the host and denied access, a WinRM connect-timeout means WinRM is closed/filtered
+		// (the host is provably up), NOT load — so the host settles not_authorized with the right
+		// host-side remediation instead of looping on a misleading collection_failed (.161/.194).
+		{"wmi access-denied wins over winrm connect-timeout (5985 closed)", "winrm_connect_timeout", "winrm_connect_timeout", "wmi_access_denied", "wmi_access_denied"},
+		{"wmi auth-failed wins over winrm connect-timeout", "winrm_connect_timeout", "", "wmi_auth_failed", "wmi_auth_failed"},
+		{"wmi access-denied wins when native timeout + no winrm rung", "winrm_connect_timeout", "", "wmi_access_denied", "wmi_access_denied"},
+		// ...but a single NEGOTIATE error (recoverable) still keeps it retryable (storm guard).
+		{"wmi access-denied yields to winrm negotiate (recoverable)", "winrm_connect_timeout", "winrm_negotiate_error", "wmi_access_denied", "winrm_connect_timeout"},
 		// Broken WMI repository is DEFINITIVE/terminal — it must outrank a transient WinRM
 		// negotiate/timeout (the .10 case: WinRM legacy-negotiates AND WMI is broken → settle
 		// terminal namespace_unavailable, never loop on the transient). Distinct from the UAC

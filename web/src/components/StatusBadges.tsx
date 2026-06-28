@@ -17,6 +17,9 @@ const REASON_HINT: Record<string, string> = {
   credential_or_wmi_access: 'credential issue: one credential rejected, another authenticated but lacked WMI rights — verify credentials/WMI rights',
   wmi_collection_failed: 'agent reached host but WMI/DCOM collection failed — check DCOM/RPC/WMI permissions',
   transport_unreachable: 'agent could not reach WinRM/RPC — check host firewall/listener',
+  winrm_access_denied: 'valid credential, WinRM session denied (UAC token filter / not local admin / RootSDDL) — host-side, not a wrong password',
+  wmi_access_denied: 'valid credential, WMI/DCOM access denied — grant DCOM+WMI rights / set LocalAccountTokenFilterPolicy, or enable WinRM if 5985 closed',
+  winrm_and_wmi_denied: 'valid credential, BOTH WinRM session AND WMI/DCOM access denied — grant remote rights / LocalAccountTokenFilterPolicy on the host',
 }
 
 export function ManagementBadge({ value, managedBy, reason }: { value?: string; managedBy?: string[]; reason?: string }) {

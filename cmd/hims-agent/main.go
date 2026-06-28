@@ -39,7 +39,7 @@ import (
 	"github.com/coralsearesorts/hims/internal/osinv"
 )
 
-const agentVersion = "1.2.18"
+const agentVersion = "1.2.19"
 
 // agentMaxConcurrent bounds how many collection jobs the agent runs in parallel
 // per poll. The HIMS server already caps how many jobs it dispatches to one agent
@@ -478,6 +478,19 @@ func windowsFinalCat(nativeCat, winrmCat, wmiCat string) string {
 	if wmiCat == osinv.WMINamespaceUnavailable {
 		return wmiCat
 	}
+	// A durable WMI/DCOM verdict (wmi_access_denied = valid credential but NOT authorized;
+	// wmi_auth_failed = wrong credential) proves the host was REACHED over RPC/DCOM and the
+	// credential was evaluated. If the WinRM rungs only CONNECT-TIMED-OUT (port 5985 not
+	// answering) — i.e. NOT a negotiate error — the host is provably up (WMI reached it), so
+	// that timeout means WinRM is closed/filtered, NOT transiently busy. The durable WMI
+	// verdict is the truth and must OUTRANK the connect timeout so the host settles
+	// not_authorized / auth_failed (with the right host-side remediation) instead of looping
+	// on a misleading transient collection_failed. A WinRM NEGOTIATE error is still left
+	// transient (the storm guard below) — that genuinely can recover once load clears.
+	if (wmiCat == osinv.WMIAccessDenied || wmiCat == osinv.WMIAuthFailed) &&
+		nativeCat != osinv.WinRMNegotiateError && winrmCat != osinv.WinRMNegotiateError {
+		return wmiCat
+	}
 	if isTransientWinRM(nativeCat) {
 		return nativeCat
 	}
@@ -557,12 +570,22 @@ $s=New-PSSession -ComputerName $t -Credential $c -Authentication Negotiate -Sess
 try {
   $out=Invoke-Command -Session $s -ScriptBlock {
     # Runs LOCALLY on the target with the full admin token (bypasses remote UAC filtering).
-    $os=Get-CimInstance Win32_OperatingSystem; $cs=Get-CimInstance Win32_ComputerSystem; $bios=Get-CimInstance Win32_BIOS
-    $cpu=@(Get-CimInstance Win32_Processor)
+    # Cmdlet compatibility: Get-CimInstance exists only on PowerShell 3.0+. Legacy hosts
+    # (Windows 7 / Server 2008 R2 ship PowerShell 2.0) have ONLY Get-WmiObject; PowerShell
+    # 7+ has ONLY Get-CimInstance. Pick whichever is present so the SAME native-WinRM path
+    # (which authenticates fine on these hosts) collects across every Windows version — the
+    # legacy hosts that previously failed "Get-CimInstance is not recognized" now collect.
+    # NOTE: the helper must NOT be named with a built-in ALIAS (PowerShell resolves aliases
+    # BEFORE functions) — e.g. "gi" is Get-Item, so a helper called GI is silently shadowed.
+    # "HimsInv" has no alias collision on PS 2.0 or 5.1.
+    $cim=[bool](Get-Command Get-CimInstance -ErrorAction SilentlyContinue)
+    function HimsInv([string]$cls){ if($cim){ Get-CimInstance -ClassName $cls } else { Get-WmiObject -Class $cls } }
+    $os=HimsInv Win32_OperatingSystem; $cs=HimsInv Win32_ComputerSystem; $bios=HimsInv Win32_BIOS
+    $cpu=@(HimsInv Win32_Processor)
     $cores=($cpu|Measure-Object NumberOfCores -Sum).Sum; if(-not $cores){$cores=($cpu|Measure-Object NumberOfLogicalProcessors -Sum).Sum}
-    $disks=@(Get-CimInstance Win32_LogicalDisk|?{$_.DriveType -eq 3}|%{@{name=$_.DeviceID;filesystem=$_.FileSystem;total_bytes=[int64]$_.Size;free_bytes=[int64]$_.FreeSpace;size_bytes=[int64]$_.Size}})
-    $nics=@(Get-CimInstance Win32_NetworkAdapterConfiguration|?{$_.IPEnabled}|%{@{name=$_.Description;mac=$_.MACAddress;ip_addresses=(@($_.IPAddress)-join',');gateway=(@($_.DefaultIPGateway)-join',');dns_servers=(@($_.DNSServerSearchOrder)-join',');dhcp_enabled=[bool]$_.DHCPEnabled}})
-    $svc=@(Get-CimInstance Win32_Service|%{@{name=$_.Name;display_name=$_.DisplayName;status=$_.State;start_type=$_.StartMode;account=$_.StartName}})
+    $disks=@(HimsInv Win32_LogicalDisk|?{$_.DriveType -eq 3}|%{@{name=$_.DeviceID;filesystem=$_.FileSystem;total_bytes=[int64]$_.Size;free_bytes=[int64]$_.FreeSpace;size_bytes=[int64]$_.Size}})
+    $nics=@(HimsInv Win32_NetworkAdapterConfiguration|?{$_.IPEnabled}|%{@{name=$_.Description;mac=$_.MACAddress;ip_addresses=(@($_.IPAddress)-join',');gateway=(@($_.DefaultIPGateway)-join',');dns_servers=(@($_.DNSServerSearchOrder)-join',');dhcp_enabled=[bool]$_.DHCPEnabled}})
+    $svc=@(HimsInv Win32_Service|%{@{name=$_.Name;display_name=$_.DisplayName;status=$_.State;start_type=$_.StartMode;account=$_.StartName}})
     $procs=@(); try { $procs=@(Get-Process|Sort-Object WS -Descending|Select-Object -First 50|%{@{name=$_.ProcessName;pid=[int]$_.Id;mem_bytes=[int64]$_.WS}}) } catch {}
     $sw=@(); $swnote=''
     try {

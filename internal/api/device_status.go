@@ -416,6 +416,33 @@ type deviceStatus struct {
 // never host-WMI-broken. Host-WMI-broken is reserved for "a credential authenticated, hit the
 // namespace failure, and NO credential was rejected" — the failure is then truly host-side.
 func (m *statusMaps) managementReason(d db.Device, state string) string {
+	// not_authorized: a valid credential was REACHED + evaluated but the host denied access.
+	// Distinguish WHICH transport denied so the operator gets exact host-side remediation
+	// (WinRM session denial vs WMI/DCOM access denial vs both) instead of a generic label.
+	if state == MgmtNotAuthorized {
+		ts := m.test[d.ID]
+		if ts == nil {
+			return ""
+		}
+		winrmDenied, wmiDenied := false, false
+		for _, cat := range ts.kindCategory {
+			switch cat {
+			case "access_denied": // native PSRP / WinRM-shell: session denied
+				winrmDenied = true
+			case "wmi_access_denied": // WMI/DCOM over RPC: namespace/DCOM access denied
+				wmiDenied = true
+			}
+		}
+		switch {
+		case winrmDenied && wmiDenied:
+			return "winrm_and_wmi_denied"
+		case wmiDenied:
+			return "wmi_access_denied"
+		case winrmDenied:
+			return "winrm_access_denied"
+		}
+		return ""
+	}
 	if state != MgmtCollectionFailed {
 		return ""
 	}
