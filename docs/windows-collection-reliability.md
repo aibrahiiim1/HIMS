@@ -36,7 +36,10 @@ it advances to the next candidate unless the listener is silent (`cmd/hims-agent
    Negotiate auth), not the Go library: Microsoft's client does NTLM/Kerberos (SPNEGO) +
    WSMan message-encryption negotiation correctly and does NOT emit "401 invalid content
    type" under scan-storm load. The inventory script runs LOCALLY in the remote runspace
-   (full token), bypassing the UAC remote-token filter. Writes `winrm-native`.
+   (full token), bypassing the UAC remote-token filter. It selects the available WMI cmdlet
+   at runtime (`Get-CimInstance` on PS 3.0+, `Get-WmiObject` on legacy PowerShell 2.0 —
+   Windows 7 / Server 2008 R2) so the same rung collects every Windows version; see §8.
+   Writes `winrm-native`.
 1. **Go WinRM command shell** (`collectWinRM`, `masterzen/winrm` + `go-ntlmssp`) — kept as
    a fallback (e.g. PowerShell/PSRP unavailable on the agent host). Writes `winrm-agent`.
 2. **WMI / DCOM** (`collectWMI`, `Get-WmiObject` over RPC/135) — for hosts with WinRM
@@ -223,3 +226,60 @@ transport is exhausted** (never a premature terminal). A local-admin host with n
 domain credential and UAC filtering still needs an operator action (set
 `LocalAccountTokenFilterPolicy`, or provide a host-authorized credential) — but HIMS will
 have honestly tried everything first.
+
+---
+
+## 8. `172.21.60.0/24` re-discovery (2026-06-28) — 7 "unmanaged" endpoints, all collected
+
+A re-discovery surfaced 7 endpoints HIMS had not collected. Deep root-cause + an external
+native-WinRM parity test (`Test-WSMan` + `Invoke-Command` with the same `dpm@` credential)
+showed **all 7 were collectable by HIMS** — none host-side. Final live state: all 7 managed
+(5 `winrm-native`, 2 `wmi`). Fixes: agent **v1.2.19** + the never-attempted reconciler.
+
+- **`.155`** — a real **enqueue gap**: a reachable Windows host that never had a `collect_os`
+  job at all (self-heal only re-runs *failed* jobs, so it was never picked up). Fixed by the
+  **never-attempted reconciler** (`ListNeverAttemptedAgentCandidates` + a pass in
+  `StartCollectionSelfHeal`): it enqueues the FIRST attempt for any reachable Windows-like
+  host with no job and no inventory, at most once per host (no spray, no loop). Now managed
+  via `winrm-native` (Windows 10 Pro).
+- **`.134`/`.136`/`.137`/`.231`** — **Windows 7 / PowerShell 2.0.** WinRM was OPEN and the
+  `dpm` credential AUTHENTICATED, but the native PSRP scriptblock called `Get-CimInstance`,
+  which does **not exist on PowerShell 2.0** ("term is not recognized"). This was a HIMS
+  agent bug, not host-side. Now managed via `winrm-native`.
+- **`.161`/`.194`** — WinRM 5985 genuinely **closed**, but DCOM/RPC (135) open. Collected
+  over **WMI/DCOM with the `dpm` DOMAIN credential** (`administrator_Local` is UAC-denied
+  there; `dpm` is authorized). Now managed via `wmi`. **They were initially mis-diagnosed as
+  host-side because the first parity check tested only WinRM** — see the rules below.
+
+> **⚠️ Correction (2026-06-28):** Do **not** document `.161`/`.194` as host-side. They are
+> proven collectable by HIMS through WMI/DCOM with the correct domain credential, even though
+> WinRM 5985 is closed.
+
+### Rules for declaring a Windows host "host-side" (authoritative)
+
+1. **WinRM being closed does NOT mean the host is unmanageable.** A closed/filtered 5985 only
+   rules out the WinRM rungs — it says nothing about WMI/DCOM (RPC/135), which is a separate
+   transport. A host with WinRM off is routinely fully managed over WMI/DCOM.
+2. **If DCOM/WMI (RPC/135) is open, HIMS MUST try the WMI/DCOM rung with ALL valid
+   credentials** before concluding anything. The short-circuit rule (§1) already guarantees
+   every non-`auth_failed` WinRM outcome falls through to WMI/DCOM.
+3. **A WMI/DCOM failure from ONE credential must NOT be generalized as host-side** if another
+   credential may succeed. `wmi_access_denied` from a LOCAL admin (`.\administrator`, UAC
+   token-filtered) does not imply the host is denied — the DOMAIN admin (`dpm`) commonly is
+   authorized over the same DCOM path. Derive state from the full credential × transport
+   attempt set, never from one rejected credential.
+4. **Domain-credential success over WMI/DCOM fully manages a host even when WinRM 5985 is
+   closed.** `collection_method = wmi` with valid `os_inventory` is durable `managed`
+   evidence (§4.1) — equal to `winrm-native`. `.161`/`.194` are exactly this.
+5. **Windows 7 / Server 2008 R2 (PowerShell 2.0) require `Get-WmiObject`, not
+   `Get-CimInstance`.** CIM cmdlets exist only on PS 3.0+; PS 7+ has only CIM. The native
+   PSRP scriptblock (`collectWinRMNative`) selects the available cmdlet at runtime
+   (`Get-Command Get-CimInstance` → CIM, else WMI) via a helper named **`HimsInv`** — it must
+   NOT be named `GI`, because PowerShell resolves the built-in `gi`/`Get-Item` ALIAS *before*
+   a same-named function, silently shadowing it.
+6. **External parity checks MUST exercise the SAME route and the SAME protocol ladder before
+   declaring host-side.** Testing only WinRM (`Test-WSMan`) is insufficient when WinRM is
+   closed — you must also test WMI/DCOM (`Get-WmiObject -ComputerName … -Credential …`) with
+   every candidate credential, mirroring what the agent does. A host is host-side ONLY when
+   every credential × every transport (WinRM native/shell + WMI/DCOM) has been tried and all
+   returned a durable authorization denial — with no successful parity result contradicting it.
