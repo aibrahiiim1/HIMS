@@ -90,34 +90,39 @@ type CredentialGroup struct {
 type DeviceCategory string
 
 const (
-	CatUnknown            DeviceCategory = "unknown"
-	CatSwitch             DeviceCategory = "switch"
-	CatRouter             DeviceCategory = "router"
-	CatFirewall           DeviceCategory = "firewall"
-	CatAccessPoint        DeviceCategory = "access_point"
-	CatWirelessController DeviceCategory = "wireless_controller"
-	CatServer             DeviceCategory = "server"
-	CatVirtualHost        DeviceCategory = "virtual_host"
-	CatVirtualMachine     DeviceCategory = "virtual_machine"
-	CatStorage            DeviceCategory = "storage"
-	CatNVR                DeviceCategory = "nvr"
-	CatDVR                DeviceCategory = "dvr"
-	CatCamera             DeviceCategory = "camera"
-	CatPrinter            DeviceCategory = "printer"
-	CatIPPhone            DeviceCategory = "ip_phone"
-	CatPBX                DeviceCategory = "pbx"
-	CatVoiceGateway       DeviceCategory = "voice_gateway"
-	CatDatabase           DeviceCategory = "database"
-	CatDirectory          DeviceCategory = "directory"
-	CatDNS                DeviceCategory = "dns"
-	CatDHCP               DeviceCategory = "dhcp"
-	CatFingerprint        DeviceCategory = "fingerprint"
-	CatEndpoint           DeviceCategory = "endpoint"
-	CatUPS                DeviceCategory = "ups"
-	CatISPRouter          DeviceCategory = "isp_router"
-	CatApplication        DeviceCategory = "application"
-	CatLoadBalancer       DeviceCategory = "load_balancer" // F5/Citrix ADC/A10/Kemp
-	CatPDU                DeviceCategory = "pdu"           // switched/metered rack PDU (distinct from UPS)
+	CatUnknown DeviceCategory = "unknown"
+	// CatNetworkUnclassified: the device answered SNMP (it IS a managed network device)
+	// but no fingerprint/keyword pinned its exact type. An HONEST label distinct from a
+	// bare "unknown" (which means no signal at all) — so an SNMP-managed device is never
+	// reported as a vague unknown. A vendor fingerprint for its sysObjectID promotes it.
+	CatNetworkUnclassified DeviceCategory = "network_device_unclassified"
+	CatSwitch              DeviceCategory = "switch"
+	CatRouter              DeviceCategory = "router"
+	CatFirewall            DeviceCategory = "firewall"
+	CatAccessPoint         DeviceCategory = "access_point"
+	CatWirelessController  DeviceCategory = "wireless_controller"
+	CatServer              DeviceCategory = "server"
+	CatVirtualHost         DeviceCategory = "virtual_host"
+	CatVirtualMachine      DeviceCategory = "virtual_machine"
+	CatStorage             DeviceCategory = "storage"
+	CatNVR                 DeviceCategory = "nvr"
+	CatDVR                 DeviceCategory = "dvr"
+	CatCamera              DeviceCategory = "camera"
+	CatPrinter             DeviceCategory = "printer"
+	CatIPPhone             DeviceCategory = "ip_phone"
+	CatPBX                 DeviceCategory = "pbx"
+	CatVoiceGateway        DeviceCategory = "voice_gateway"
+	CatDatabase            DeviceCategory = "database"
+	CatDirectory           DeviceCategory = "directory"
+	CatDNS                 DeviceCategory = "dns"
+	CatDHCP                DeviceCategory = "dhcp"
+	CatFingerprint         DeviceCategory = "fingerprint"
+	CatEndpoint            DeviceCategory = "endpoint"
+	CatUPS                 DeviceCategory = "ups"
+	CatISPRouter           DeviceCategory = "isp_router"
+	CatApplication         DeviceCategory = "application"
+	CatLoadBalancer        DeviceCategory = "load_balancer" // F5/Citrix ADC/A10/Kemp
+	CatPDU                 DeviceCategory = "pdu"           // switched/metered rack PDU (distinct from UPS)
 )
 
 // IsStickyInfraCategory reports whether a category is managed network/wireless

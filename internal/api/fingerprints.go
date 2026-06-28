@@ -71,7 +71,12 @@ func (s *Server) reclassifyFingerprint(ctx context.Context, d db.Device, obs osd
 		source:     "vendor_fingerprint:" + top.Kind,
 		detail:     top.Vendor + " / " + top.DeviceType + " (" + top.Kind + ":" + top.Pattern + ")",
 	}
-	if top.Confidence >= 85 {
+	// An SNMP enterprise PEN (KindOID) unambiguously identifies the VENDOR even at
+	// moderate confidence — the OID prefix .1.3.6.1.4.1.<PEN> IS the vendor's assigned
+	// number (e.g. .43 = 3Com). So set the vendor for any OID match, and for other
+	// (banner-based) matches only at high confidence where they're reliable. This is why
+	// 150.0.0.100 (3Com PEN .43, conf 76) now shows vendor 3Com/HPE, not blank.
+	if top.Confidence >= 85 || top.Kind == fingerprint.KindOID {
 		out.vendor = top.Vendor
 		// Precedence: the winning fingerprint's EXPLICIT model wins; otherwise the
 		// model is derived from sysDescr (the VE6120 built-in path).

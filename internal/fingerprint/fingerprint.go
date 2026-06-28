@@ -340,6 +340,11 @@ func Library() []Print {
 		p(KindOID, "1.3.6.1.4.1.41112", "Ubiquiti", "wireless", 78),
 		p(KindOID, "1.3.6.1.4.1.4526", "Netgear", "switch", 70),
 		p(KindOID, "1.3.6.1.4.1.1588", "Brocade", "switch", 75),
+		// 3Com PEN .43 (Baseline/SuperStack switches; now HPE/H3C lineage) and H3C PEN
+		// .25506 — both switches. (150.0.0.100 = 3Com Baseline Switch 2928-SFP Plus,
+		// sysObjectID .1.3.6.1.4.1.43.1.8.72 — was 'unknown' for lack of this prefix.)
+		p(KindOID, "1.3.6.1.4.1.43", "3Com/HPE", "switch", 76),
+		p(KindOID, "1.3.6.1.4.1.25506", "H3C/HPE", "switch", 78),
 		p(KindOID, "1.3.6.1.4.1.6876", "VMware", "virtual_host", 85),
 		p(KindOID, "1.3.6.1.4.1.8072", "Net-SNMP (Linux)", "server", 65),
 		p(KindOID, "1.3.6.1.4.1.311", "Microsoft", "server", 68),

@@ -86,6 +86,23 @@ func SNMPSysDescr(sysDescr string) []domain.ClassificationEvidence {
 		return []domain.ClassificationEvidence{ev(domain.EvidenceSourceSNMPSysDescr, sysDescr, string(domain.CatSwitch), domain.OSFamilyNetwork, "", 78)}
 	case strings.Contains(d, "linux"):
 		return []domain.ClassificationEvidence{ev(domain.EvidenceSourceSNMPSysDescr, sysDescr, string(domain.CatServer), domain.OSFamilyLinux, "", 70)}
+	// Generic device-class keywords — catch vendors with no specific rule above (e.g.
+	// "3Com Baseline Switch 2928", "MikroTik RouterOS"). Lower confidence than the named
+	// vendors, but enough to classify a switch/router/firewall/AP instead of "unknown".
+	case strings.Contains(d, "firewall"):
+		return []domain.ClassificationEvidence{ev(domain.EvidenceSourceSNMPSysDescr, sysDescr, string(domain.CatFirewall), domain.OSFamilyNetwork, "", 68)}
+	case strings.Contains(d, "router"):
+		return []domain.ClassificationEvidence{ev(domain.EvidenceSourceSNMPSysDescr, sysDescr, string(domain.CatRouter), domain.OSFamilyNetwork, "", 66)}
+	case strings.Contains(d, "switch"):
+		return []domain.ClassificationEvidence{ev(domain.EvidenceSourceSNMPSysDescr, sysDescr, string(domain.CatSwitch), domain.OSFamilyNetwork, "", 66)}
+	case strings.Contains(d, "access point") || strings.Contains(d, "wireless ap"):
+		return []domain.ClassificationEvidence{ev(domain.EvidenceSourceSNMPSysDescr, sysDescr, string(domain.CatAccessPoint), domain.OSFamilyNetwork, "", 64)}
+	}
+	// SNMP ANSWERED with a sysDescr but matched no rule: it is a real SNMP-managed network
+	// device, so label it network_device_unclassified (honest) rather than vague "unknown".
+	// Low confidence so any later fingerprint/keyword match wins. (req: 150.0.0.0/24 .100.)
+	if strings.TrimSpace(sysDescr) != "" {
+		return []domain.ClassificationEvidence{ev(domain.EvidenceSourceSNMPSysDescr, sysDescr, string(domain.CatNetworkUnclassified), domain.OSFamilyNetwork, "", 30)}
 	}
 	return nil
 }

@@ -146,6 +146,13 @@ func TestOSFamily_FromSignals(t *testing.T) {
 		{"cisco ios", SNMPSysDescr("Cisco IOS Software, C2960 Software"), string(domain.CatSwitch), domain.OSFamilyNetwork},
 		{"fortigate", SNMPSysDescr("FortiGate-60F v7.2.5"), string(domain.CatFirewall), domain.OSFamilyNetwork},
 		{"iis windows", HTTPServer("Microsoft-IIS/10.0", ""), string(domain.CatServer), domain.OSFamilyWindows},
+		// Generic keyword: a vendor with no specific rule but "Switch" in sysDescr (3Com
+		// Baseline Switch 2928 @ 150.0.0.100) classifies as a switch, not unknown.
+		{"generic switch (3Com)", SNMPSysDescr("3Com Baseline Switch 2928-SFP Plus Software Version 5.20"), string(domain.CatSwitch), domain.OSFamilyNetwork},
+		{"generic router (mikrotik)", SNMPSysDescr("MikroTik RouterOS 6.49 (router)"), string(domain.CatRouter), domain.OSFamilyNetwork},
+		// SNMP answered but no keyword/fingerprint match → honest network_device_unclassified,
+		// never vague unknown.
+		{"snmp answered, unmatched", SNMPSysDescr("AcmeWidget 9000 appliance"), string(domain.CatNetworkUnclassified), domain.OSFamilyNetwork},
 	}
 	for _, c := range cases {
 		r := FromEvidence(c.ev)

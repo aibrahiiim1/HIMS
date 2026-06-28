@@ -118,6 +118,20 @@ func (s *Server) reclassifyDevice(w http.ResponseWriter, r *http.Request) {
 	if !hasCaption && d.OsVersion != nil && *d.OsVersion != "" {
 		evidence = append(evidence, classify.SNMPSysDescr(*d.OsVersion)...)
 	}
+	// Some SNMP-only devices store sysDescr ONLY as a device fact (snmp.sysdescr), not in
+	// os_version — e.g. a community bound AFTER discovery never wrote os_version. Feed that
+	// fact into the same keyword/fallback classifier so an SNMP-answered device (e.g. the
+	// 3Com "Baseline Switch 2928" at 150.0.0.100) is classified, never left vague unknown.
+	if !hasCaption && (d.OsVersion == nil || *d.OsVersion == "") {
+		if facts, ferr := s.queries.ListDeviceFacts(ctx, d.ID); ferr == nil {
+			for _, f := range facts {
+				if f.Key == "snmp.sysdescr" && f.Value != nil && strings.TrimSpace(*f.Value) != "" {
+					evidence = append(evidence, classify.SNMPSysDescr(*f.Value)...)
+					break
+				}
+			}
+		}
+	}
 	res := classify.FromEvidence(evidence)
 
 	// Vendor-fingerprint override (req #5: fingerprints must affect reclassify too).
