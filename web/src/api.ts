@@ -152,6 +152,7 @@ export interface Device {
   cctv_credential_id?: string | null // CCTV (ONVIF/ISAPI) web credential, kept separate so SNMP can't overwrite it
   location_id?: string | null
   last_discovery_at?: string | null
+  last_monitoring_at?: string | null
   vlan?: string | null
   device_class?: string | null
   location?: string | null

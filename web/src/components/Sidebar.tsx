@@ -3,6 +3,8 @@ import { NavLink, useLocation } from 'react-router-dom'
 import { ChevronDown, ChevronRight, Boxes } from 'lucide-react'
 import { NAV, type NavItem, type NavLeaf, type BadgeKey } from '../nav'
 import type { BadgeCounts } from '../hooks/useBadges'
+import { useCategoryCounts } from '../hooks/useCategoryCounts'
+import { PATH_CATEGORIES, sumCounts } from '../inventoryGroups'
 
 const BADGE_TONE: Record<BadgeKey, string> = {
   alerts: '',            // default = crit/red
@@ -25,8 +27,12 @@ function matches(pathname: string, to: string): boolean {
   return pathname === to || pathname.startsWith(to + '/')
 }
 
-function Leaf({ leaf, counts, onNavigate }: { leaf: NavLeaf; counts: BadgeCounts; onNavigate: () => void }) {
+function Leaf({ leaf, counts, catCounts, onNavigate }: { leaf: NavLeaf; counts: BadgeCounts; catCounts?: Record<string, number>; onNavigate: () => void }) {
   const Icon = leaf.icon
+  // Data-driven inventory count: shown only for paths whose page is the category-driven
+  // grid, so the number equals that page's row count (same {category:count} source).
+  const cats = PATH_CATEGORIES[leaf.to]
+  const n = cats ? sumCounts(catCounts, cats) : undefined
   return (
     <NavLink
       to={leaf.to}
@@ -37,11 +43,12 @@ function Leaf({ leaf, counts, onNavigate }: { leaf: NavLeaf; counts: BadgeCounts
       {Icon && <span className="nav-ico"><Icon size={15} /></span>}
       <span className="nav-label">{leaf.label}</span>
       <Badge k={leaf.badge} counts={counts} />
+      {typeof n === 'number' && <span className="nav-badge tone-neutral">{n > 999 ? '999+' : n}</span>}
     </NavLink>
   )
 }
 
-function ParentItem({ item, counts, onNavigate }: { item: NavItem; counts: BadgeCounts; onNavigate: () => void }) {
+function ParentItem({ item, counts, catCounts, onNavigate }: { item: NavItem; counts: BadgeCounts; catCounts?: Record<string, number>; onNavigate: () => void }) {
   const loc = useLocation()
   const Icon = item.icon
   const children = item.children ?? []
@@ -64,7 +71,7 @@ function ParentItem({ item, counts, onNavigate }: { item: NavItem; counts: Badge
       {open && (
         <div className="nav-children">
           {children.map((c) => (
-            <Leaf key={c.to + c.label} leaf={c} counts={counts} onNavigate={onNavigate} />
+            <Leaf key={c.to + c.label} leaf={c} counts={counts} catCounts={catCounts} onNavigate={onNavigate} />
           ))}
         </div>
       )}
@@ -72,11 +79,11 @@ function ParentItem({ item, counts, onNavigate }: { item: NavItem; counts: Badge
   )
 }
 
-function Item({ item, counts, onNavigate }: { item: NavItem; counts: BadgeCounts; onNavigate: () => void }) {
+function Item({ item, counts, catCounts, onNavigate }: { item: NavItem; counts: BadgeCounts; catCounts?: Record<string, number>; onNavigate: () => void }) {
   const Icon = item.icon
 
   if (item.children && item.children.length) {
-    return <ParentItem item={item} counts={counts} onNavigate={onNavigate} />
+    return <ParentItem item={item} counts={counts} catCounts={catCounts} onNavigate={onNavigate} />
   }
 
   return (
@@ -107,6 +114,7 @@ function Group({ title, children }: { title: string; children: React.ReactNode }
 }
 
 export function Sidebar({ counts, onNavigate }: { counts: BadgeCounts; onNavigate: () => void }) {
+  const catCounts = useCategoryCounts().data
   return (
     <aside className="rail">
       <div className="rail-brand">
@@ -120,7 +128,7 @@ export function Sidebar({ counts, onNavigate }: { counts: BadgeCounts; onNavigat
         {NAV.map((g) => (
           <Group key={g.title} title={g.title}>
             {g.items.map((it) => (
-              <Item key={it.label} item={it} counts={counts} onNavigate={onNavigate} />
+              <Item key={it.label} item={it} counts={counts} catCounts={catCounts} onNavigate={onNavigate} />
             ))}
           </Group>
         ))}

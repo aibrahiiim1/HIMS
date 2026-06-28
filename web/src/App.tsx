@@ -4,6 +4,9 @@ import { BrowserRouter, Route, Routes, Navigate } from 'react-router-dom'
 import { api, setUnauthorizedHandler, type AuthMe } from './api'
 import { Login } from './pages/Login'
 import { DeviceList } from './pages/DeviceList'
+import { GroupInventory } from './pages/GroupInventory'
+import { BmcInventory } from './pages/BmcInventory'
+import { INVENTORY_GROUPS } from './inventoryGroups'
 import { Dashboard } from './pages/Dashboard'
 import { EndpointIntelligence } from './pages/EndpointIntelligence'
 import { Discovery } from './pages/Discovery'
@@ -186,6 +189,17 @@ function Shell({ me, onLogout }: { me?: AuthMe; onLogout: () => void }) {
             <Route path="/mibs" element={<Mibs />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/inventory" element={<Inventory />} />
+            {/* Data-driven inventory group + per-category pages (single source: inventoryGroups.ts).
+                "All <Group>" = union of the group's categories; children = their own categories;
+                the iLO/BMC child uses the bespoke BmcInventory page. Existing per-type pages
+                (/servers, /firewalls, /cameras, …) are untouched. */}
+            {INVENTORY_GROUPS.map((g) => (
+              <Route key={g.allPath} path={g.allPath} element={<GroupInventory title={g.allLabel} categories={g.categories} />} />
+            ))}
+            {INVENTORY_GROUPS.flatMap((g) => g.children).map((c) => (
+              <Route key={c.path} path={c.path}
+                element={c.special === 'bmc' ? <BmcInventory /> : <GroupInventory title={c.label} categories={c.categories} />} />
+            ))}
             <Route path="/locations" element={<Locations />} />
             <Route path="/coverage" element={<Coverage />} />
             <Route path="/action-center" element={<ActionCenter />} />

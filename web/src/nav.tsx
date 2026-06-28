@@ -68,37 +68,50 @@ export const NAV: NavGroup[] = [
       {
         label: 'Network Devices', icon: Layers,
         children: [
+          { label: 'All Network', to: '/inventory/network', icon: Layers },
           { label: 'Switches', to: '/', icon: Network },
+          { label: 'Routers', to: '/inventory/network/routers', icon: RouteIcon },
           { label: 'Firewalls', to: '/firewalls', icon: Flame },
-          { label: 'Wireless', to: '/wlan', icon: Wifi },
+          { label: 'Wireless Controllers', to: '/wlan', icon: Wifi },
+          { label: 'Access Points', to: '/inventory/network/access-points', icon: Wifi },
         ],
       },
       {
         label: 'Compute', icon: Cpu,
         children: [
+          { label: 'All Compute', to: '/inventory/compute', icon: Layers },
           { label: 'Servers', to: '/servers', icon: Server },
           { label: 'Virtual Hosts', to: '/virtual-hosts', icon: HardDrive },
+          { label: 'iLO / BMC / iDRAC', to: '/inventory/compute/bmc', icon: Cpu },
         ],
       },
       {
         label: 'Endpoints & Peripherals', icon: MonitorSmartphone,
         children: [
+          { label: 'All Endpoints', to: '/inventory/endpoints', icon: Layers },
           { label: 'Endpoint Intelligence', to: '/endpoint-intelligence', icon: ChartLine },
           { label: 'Workstations', to: '/workstations', icon: Laptop },
           { label: 'Printers', to: '/printers', icon: Plug },
+          { label: 'Biometric Devices', to: '/inventory/endpoints/biometric', icon: ScanLine },
+          { label: 'Point of Sale', to: '/inventory/endpoints/pos', icon: DollarSign },
           { label: 'UPS', to: '/ups', icon: BatteryCharging },
         ],
       },
       {
         label: 'Security & Surveillance', icon: ShieldAlert,
         children: [
+          { label: 'All Security & Surveillance', to: '/inventory/security', icon: Layers },
           { label: 'Cameras', to: '/cameras', icon: Camera },
           { label: 'NVRs', to: '/nvrs', icon: Video },
         ],
       },
       {
         label: 'Voice', icon: Phone,
-        children: [{ label: 'PBX / Voice', to: '/pbx', icon: Phone }],
+        children: [
+          { label: 'All Voice', to: '/inventory/voice', icon: Layers },
+          { label: 'PBX / Voice', to: '/pbx', icon: Phone },
+          { label: 'IP Phones', to: '/inventory/voice/phones', icon: Phone },
+        ],
       },
       // Conceptual split: classification problems vs access/management problems.
       { label: 'Missing Classification', icon: CircleHelp, to: '/inventory/missing-classification', badge: 'unknown' },

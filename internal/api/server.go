@@ -233,7 +233,8 @@ func (s *Server) routes() {
 
 		// --- Devices --------------------------------------------------
 		r.Get("/devices", s.listDevices)
-		r.Get("/inventory/bmc", s.listBMCInventory) // iLO/BMC out-of-band controllers + bmc_info
+		r.Get("/inventory/bmc", s.listBMCInventory)               // iLO/BMC out-of-band controllers + bmc_info
+		r.Get("/devices/category-counts", s.deviceCategoryCounts) // {category: count} for sidebar+page reconciliation
 		r.Get("/devices/status-summary", s.deviceStatusSummary)
 		r.Post("/devices/repair-reachability", s.repairManyReachability)
 		r.Post("/devices/{id}/repair-reachability", s.repairOneReachability)
