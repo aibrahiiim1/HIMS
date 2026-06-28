@@ -13,9 +13,10 @@ import (
 // default port), the base + method fields, and an HONEST capability/collector status. The
 // frontend builds the whole wizard (type → address → method → credential → test → save) from
 // this; the test + save endpoints choreograph the existing credtest/create/override/bind/
-// audit/collect infrastructure. Nothing here fabricates capability: a type whose deep
-// collector does not exist (e.g. ZKTeco native protocol) is marked collector_pending and can
-// only be saved as manual_inventory_only until a real collector proves management.
+// audit/collect infrastructure. Nothing here fabricates capability: every method carries an
+// EXPLICIT status (implemented_collected / implemented_tested / external_dependency_required /
+// manual_inventory_only) — never a vague "collector_pending". A failed/unsupported test can
+// only be saved as manual_inventory_only until a real protocol test/collection proves it.
 
 type onbField struct {
 	Key         string   `json:"key"`
