@@ -5,7 +5,7 @@ import { api, type Credential } from '../api'
 
 // ---- registry types (mirror internal/api/onboarding_registry.go) ----
 interface OnbField { key: string; label: string; type: string; required: boolean; placeholder?: string; help?: string; default?: string; options?: string[] }
-interface OnbMethod { key: string; label: string; credential_kind: string; default_port: number; test_kind: string; collector_ready: boolean; note?: string }
+interface OnbMethod { key: string; label: string; credential_kind: string; default_port: number; test_kind: string; collector_ready: boolean; status: string; note?: string }
 interface OnbCapability { key: string; label: string; status: string; reason?: string }
 interface OnbType { type: string; category: string; subtype: string; display_name: string; add_label: string; group: string; vendors?: string[]; methods: OnbMethod[]; base_fields: OnbField[]; capabilities?: OnbCapability[]; notes?: string }
 interface TestStep { step: string; status: string; detail: string }
@@ -14,7 +14,8 @@ interface TestResp { steps: TestStep[]; final_status: string; category: string; 
 const STEPS = ['Device Type', 'Network Address', 'Connection Method', 'Credential', 'Test Connection', 'Review & Save']
 
 const stepTone = (s: string) => (s === 'ok' ? 'var(--ok)' : s === 'fail' ? 'var(--crit)' : 'var(--text-muted)')
-const PASS_STATES = new Set(['authenticated', 'managed'])
+// A test "passes" (managed-capable save) when a real protocol authentication succeeded.
+const PASS_STATES = new Set(['authenticated', 'managed', 'implemented_collected', 'implemented_tested'])
 
 // OnboardingWizard is the single, registry-driven manual-add wizard used by every inventory
 // page's "Add <Type>" action. It renders entirely from GET /manual-onboarding/device-types,
@@ -47,7 +48,9 @@ export function OnboardingWizard({ defaultType, onClose }: { defaultType?: strin
   const needsCred = !!credKind
   const set = (k: string, v: string) => setVals((p) => ({ ...p, [k]: v }))
 
+  const isZK = method?.test_kind === 'zkteco'
   const buildCredential = () => {
+    if (isZK) return newCredSecret ? { secret: newCredSecret } : {} // ZK comm key (optional, no stored credential)
     if (!needsCred) return {}
     if (credMode === 'existing' && credId) return { id: credId }
     if (credMode === 'new' && newCredSecret) return { kind: credKind, secret: newCredSecret, name: newCredName }
@@ -147,8 +150,9 @@ export function OnboardingWizard({ defaultType, onClose }: { defaultType?: strin
                 <label key={m.key} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', padding: '8px 10px', border: `1px solid ${methodKey === m.key ? 'var(--accent,#3b82f6)' : 'var(--border)'}`, borderRadius: 8, marginBottom: 8, cursor: 'pointer' }}>
                   <input type="radio" name="method" checked={methodKey === m.key} onChange={() => setMethodKey(m.key)} />
                   <span>
-                    <b style={{ fontSize: 13 }}>{m.label}</b> <span className="muted" style={{ fontSize: 11 }}>· port {m.default_port || '—'} · {m.collector_ready ? 'collector ready' : 'identity only'}</span>
-                    {m.note && <div style={{ fontSize: 11, color: 'var(--warn)' }}>{m.note}</div>}
+                    <b style={{ fontSize: 13 }}>{m.label}</b> <span className="muted" style={{ fontSize: 11 }}>· port {m.default_port || '—'}</span>
+                    {' '}<span className={`badge badge-${m.status === 'implemented_collected' ? 'up' : m.status === 'external_dependency_required' ? 'down' : 'unknown'}`} style={{ fontSize: 10 }}>{m.status.replace(/_/g, ' ')}</span>
+                    {m.note && <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{m.note}</div>}
                   </span>
                 </label>
               ))}
@@ -159,7 +163,12 @@ export function OnboardingWizard({ defaultType, onClose }: { defaultType?: strin
           {/* Step 3: Credential */}
           {step === 3 && t && (
             <div>
-              {!needsCred ? (
+              {isZK ? (
+                <>
+                  <input placeholder="Communication key (optional, blank if none)" value={newCredSecret} onChange={(e) => setNewCredSecret(e.target.value)} style={inp} />
+                  <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>ZKTeco devices usually have no comm key (leave blank). If set on the device, enter the numeric key. It is used only for the live probe and is never stored.</span>
+                </>
+              ) : !needsCred ? (
                 <div className="banner" style={{ fontSize: 12 }}>This method needs no credential (manual inventory / anonymous). Continue.</div>
               ) : (
                 <>

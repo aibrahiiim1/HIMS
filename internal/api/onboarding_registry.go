@@ -33,9 +33,10 @@ type onbMethod struct {
 	Label          string `json:"label"`           // "Redfish (HTTPS)"
 	CredentialKind string `json:"credential_kind"` // domain cred kind; "" = no credential (manual/RTSP-anon)
 	DefaultPort    int    `json:"default_port"`
-	TestKind       string `json:"test_kind"`       // credtest kind OR special: vsphere|redfish|onvif|isapi|manual|icmp
+	TestKind       string `json:"test_kind"`       // credtest kind OR special: vsphere|redfish|onvif|isapi|zkteco|manual
 	CollectorReady bool   `json:"collector_ready"` // a real deep collector exists for this method+type
-	Note           string `json:"note,omitempty"`  // honest note when collector not ready
+	Status         string `json:"status"`          // explicit: implemented_collected|implemented_tested|implemented_live_validation_pending|external_dependency_required|manual_inventory_only
+	Note           string `json:"note,omitempty"`  // honest note / external dependency reason
 }
 
 type onbCapability struct {
@@ -100,7 +101,7 @@ func onboardingCatalog() []onbType {
 			m("ssh", "SSH CLI", "ssh", "ssh", 22, true, ""),
 		}
 	}
-	return []onbType{
+	cat := []onbType{
 		// ---- Network ----
 		{Type: "switch", Category: "switch", Subtype: "", DisplayName: "Switch", AddLabel: "Add Switch", Group: "network",
 			Vendors: []string{"Cisco", "Aruba/HPE", "Huawei", "Juniper", "Extreme", "Arista", "MikroTik", "Netgear", "3Com/HPE", "Other"},
@@ -144,10 +145,39 @@ func onboardingCatalog() []onbType {
 		{Type: "ups", Category: "ups", Subtype: "", DisplayName: "UPS", AddLabel: "Add UPS", Group: "endpoints",
 			Vendors: []string{"APC", "Eaton", "Vertiv", "CyberPower", "Other"}, Methods: []onbMethod{m("snmp_v2c", "SNMP v2c (UPS-MIB)", "snmp_v2c", "snmp_v2c", 161, true, "")}, BaseFields: baseFields(nil), LockOnSave: true},
 		{Type: "biometric_zkteco", Category: "biometric", Subtype: "zkteco", DisplayName: "Biometric Device — ZKTeco", AddLabel: "Add Biometric Device", Group: "endpoints",
-			Vendors:    []string{"ZKTeco", "Anviz", "Suprema", "Hikvision (access)", "Dahua (access)", "Other"},
-			Methods:    []onbMethod{m("http_basic", "HTTP/HTTPS web UI", "http_basic", "http_basic", 80, false, "identity-only: a native ZKTeco-protocol collector is pending — onboards as biometric/zkteco, manual_inventory_only until a collector exists"), m("snmp_v2c", "SNMP v2c (if enabled)", "snmp_v2c", "snmp_v2c", 161, false, "rarely enabled on biometric devices"), m("manual", "Manual inventory only", "", "manual", 0, false, "record identity without remote management")},
-			BaseFields: baseFields(nil), Capabilities: []onbCapability{cap("identity", "Device identity", "collector_pending", "native ZKTeco/attendance protocol collector not implemented yet"), cap("attendance", "Attendance records", "not_implemented", "never faked")}, LockOnSave: true,
-			Notes: "Honest gate: ZKTeco native-protocol collection is not implemented. Manual add registers the device as biometric/zkteco and binds a credential; it stays manual_inventory_only (NOT managed) until a real collector proves it."},
+			Vendors: []string{"ZKTeco"},
+			Methods: []onbMethod{
+				m("zkteco", "ZKTeco protocol (TCP 4370)", "", "zkteco", 4370, true, "read-only identity: serial/firmware/device name (attendance/users intentionally out of scope)"),
+				m("http_basic", "HTTP/HTTPS web UI", "http_basic", "http_basic", 80, false, "identity-only fallback for web-enabled models"),
+				m("manual", "Manual inventory only", "", "manual", 0, false, "operator fallback"),
+			},
+			BaseFields: baseFields(nil), LockOnSave: true,
+			Capabilities: []onbCapability{cap("identity", "Serial/firmware/device name", "implemented_collected", "native ZK protocol"), cap("attendance", "Attendance/user logs", "unsupported_by_device", "intentionally out of scope (read-only identity only)")},
+			Notes:        "ZKTeco is a REAL connector: native TCP/4370 protocol handshake (+ optional communication key) and read-only identity. Attendance/user data is intentionally NOT collected."},
+		{Type: "biometric_hikvision", Category: "biometric", Subtype: "hikvision_access", DisplayName: "Biometric / Access — Hikvision", AddLabel: "Add Hikvision Biometric", Group: "endpoints",
+			Vendors:      []string{"Hikvision"},
+			Methods:      []onbMethod{m("isapi", "ISAPI (HTTP Digest)", "http_basic", "isapi", 80, true, ""), m("http_basic", "HTTP/HTTPS", "http_basic", "http_basic", 80, false, "identity-only"), m("manual", "Manual inventory only", "", "manual", 0, false, "")},
+			BaseFields:   baseFields(nil),
+			Capabilities: []onbCapability{cap("identity", "Model/serial/firmware", "implemented_tested", "ISAPI deviceInfo")}, LockOnSave: true},
+		{Type: "biometric_dahua", Category: "biometric", Subtype: "dahua_access", DisplayName: "Biometric / Access — Dahua", AddLabel: "Add Dahua Biometric", Group: "endpoints",
+			Vendors:    []string{"Dahua"},
+			Methods:    []onbMethod{m("http_basic", "HTTP/HTTPS (Digest)", "http_basic", "http_basic", 80, false, "identity via web auth"), m("onvif", "ONVIF", "onvif", "onvif", 80, true, ""), m("manual", "Manual inventory only", "", "manual", 0, false, "")},
+			BaseFields: baseFields(nil), LockOnSave: true},
+		{Type: "biometric_suprema", Category: "biometric", Subtype: "suprema", DisplayName: "Biometric — Suprema (BioStar)", AddLabel: "Add Suprema Biometric", Group: "endpoints",
+			Vendors:      []string{"Suprema"},
+			Methods:      []onbMethod{m("http_basic", "BioStar local API (HTTPS)", "http_basic", "http_basic", 443, false, "BioStar2 device API auth test"), m("manual", "Manual inventory only", "", "manual", 0, false, "")},
+			BaseFields:   baseFields(nil),
+			Capabilities: []onbCapability{cap("identity", "Device identity", "external_dependency_required", "deep Suprema/BioStar inventory needs the BioStar2 server API/SDK; HTTPS auth test is available now")}, LockOnSave: true},
+		{Type: "biometric_anviz", Category: "biometric", Subtype: "anviz", DisplayName: "Biometric — Anviz", AddLabel: "Add Anviz Biometric", Group: "endpoints",
+			Vendors:      []string{"Anviz"},
+			Methods:      []onbMethod{m("http_basic", "HTTP/HTTPS web UI", "http_basic", "http_basic", 80, false, "identity via web auth"), m("manual", "Manual inventory only", "", "manual", 0, false, "")},
+			BaseFields:   baseFields(nil),
+			Capabilities: []onbCapability{cap("identity", "Device identity", "external_dependency_required", "deep Anviz inventory needs the Anviz SDK/cloud API; web auth test is available now")}, LockOnSave: true},
+		{Type: "biometric_generic", Category: "biometric_device_unclassified", Subtype: "", DisplayName: "Biometric / Access — Generic", AddLabel: "Add Biometric Device", Group: "endpoints",
+			Vendors:    []string{"Generic", "Other"},
+			Methods:    []onbMethod{m("http_basic", "HTTP/HTTPS", "http_basic", "http_basic", 80, false, "identity via web auth"), m("snmp_v2c", "SNMP v2c (if enabled)", "snmp_v2c", "snmp_v2c", 161, true, ""), m("manual", "Manual inventory only", "", "manual", 0, false, "")},
+			BaseFields: baseFields(nil), LockOnSave: true,
+			Notes: "Unknown vendor → classified biometric_device_unclassified (honest), never a fabricated vendor."},
 		{Type: "pos", Category: "pos", Subtype: "", DisplayName: "Point of Sale", AddLabel: "Add POS Device", Group: "endpoints",
 			Vendors:    []string{"Verifone", "Ingenico", "PAX", "Generic Windows POS", "Other"},
 			Methods:    []onbMethod{m("windows", "Windows (WinRM → WMI/DCOM)", "windows", "winrm", 5985, true, ""), m("ssh", "SSH", "ssh", "ssh", 22, true, ""), m("snmp_v2c", "SNMP v2c", "snmp_v2c", "snmp_v2c", 161, true, ""), m("http_basic", "HTTP/HTTPS", "http_basic", "http_basic", 443, false, "identity-only"), m("manual", "Manual inventory only", "", "manual", 0, false, "for POS terminals with no remote management")},
@@ -169,6 +199,28 @@ func onboardingCatalog() []onbType {
 			Vendors:    []string{"Cisco CUCM", "Alcatel OmniPCX", "Avaya", "Other"},
 			Methods:    []onbMethod{m("vendor_api", "CUCM AXL / vendor API", "vendor_api", "http_basic", 443, true, "CUCM via existing AXL collector"), m("ssh", "SSH/CLI", "ssh", "ssh", 22, true, ""), m("snmp_v2c", "SNMP v2c", "snmp_v2c", "snmp_v2c", 161, false, "identity-only")},
 			BaseFields: baseFields(nil), LockOnSave: true},
+	}
+	for ti := range cat {
+		for mi := range cat[ti].Methods {
+			cat[ti].Methods[mi].Status = methodStatus(cat[ti].Methods[mi])
+		}
+	}
+	return cat
+}
+
+// methodStatus derives the explicit, honest status of a connection method from whether a
+// real collector exists, its test kind, and any external-dependency note — never the vague
+// "collector_pending"/"not implemented".
+func methodStatus(m onbMethod) string {
+	switch {
+	case m.TestKind == "manual":
+		return "manual_inventory_only"
+	case strings.Contains(strings.ToLower(m.Note), "external") || m.TestKind == "ipmi":
+		return "external_dependency_required"
+	case m.CollectorReady:
+		return "implemented_collected" // real deep collector exists for this method+type
+	default:
+		return "implemented_tested" // protocol Test Connection works; deep identity collection is partial
 	}
 }
 

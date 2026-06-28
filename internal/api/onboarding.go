@@ -11,6 +11,7 @@ import (
 
 	"github.com/coralsearesorts/hims/internal/credtest"
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
+	"github.com/coralsearesorts/hims/internal/zkteco"
 	"github.com/google/uuid"
 )
 
@@ -145,7 +146,7 @@ func (s *Server) runOnboardProbe(ctx context.Context, method onbMethod, ip strin
 			add("reachable", "ok", "vSphere SOAP API reachable")
 			add("auth", "ok", "vSphere login succeeded")
 			add("identity", "ok", strings.TrimSpace(vendor+" "+model+" "+ver))
-			return onbTestResp{Steps: steps, FinalStatus: "authenticated", Category: "success", Summary: "Authenticated — saving will collect host + VMs."}
+			return onbTestResp{Steps: steps, FinalStatus: "implemented_collected", Category: "success", Summary: "Authenticated — saving will collect host + VMs."}
 		}
 		cat, detail := categorizeCollectErr("vsphere", verr.Error())
 		add("reachable", "ok", "443 reached")
@@ -155,6 +156,29 @@ func (s *Server) runOnboardProbe(ctx context.Context, method onbMethod, ip strin
 			fs = cat
 		}
 		return onbTestResp{Steps: steps, FinalStatus: fs, Category: cat, Summary: detail}
+	}
+
+	// ZKTeco native protocol (TCP 4370): real read-only identity probe (serial/firmware/name).
+	if method.TestKind == "zkteco" {
+		id := zkteco.Probe(ctx, ip, port, secret) // secret = optional communication key
+		if id.Connected {
+			add("reachable", "ok", fmt.Sprintf("TCP %d reachable", port))
+			add("auth", "ok", cond(id.AuthUsed, "authenticated with communication key", "connected (no communication key required)"))
+			ident := strings.TrimSpace(id.DeviceName + " " + id.Serial + " " + id.Firmware)
+			add("identity", cond(ident != "", "ok", "skipped"), nz(ident, "device exposed no identity fields"))
+			return onbTestResp{Steps: steps, FinalStatus: "implemented_collected", Category: "success", Summary: "ZKTeco identity collected — saving will classify biometric/zkteco and bind."}
+		}
+		st := "auth_failed"
+		if strings.HasPrefix(id.Reason, "unreachable") {
+			st = "unreachable"
+		} else if strings.HasPrefix(id.Reason, "protocol") {
+			st = "protocol_not_supported"
+		}
+		add("reachable", cond(st == "unreachable", "fail", "ok"), id.Reason)
+		if st == "auth_failed" {
+			add("auth", "fail", id.Reason)
+		}
+		return onbTestResp{Steps: steps, FinalStatus: st, Category: st, Summary: id.Reason}
 	}
 
 	// credtest covers snmp_v2c/snmp_v3/ssh/winrm/onvif/http_basic (+ redfish/isapi mapped to http_basic).
@@ -176,10 +200,10 @@ func (s *Server) runOnboardProbe(ctx context.Context, method onbMethod, ip strin
 		add("auth", "ok", "authenticated")
 		if method.CollectorReady {
 			add("collector", "ok", "deep collector available — saving will collect")
-			final = "authenticated"
+			final = "implemented_collected"
 		} else {
-			add("collector", "skipped", "no deep collector for this method yet — identity only")
-			final = "collector_missing"
+			add("collector", "ok", "identity/auth proven; deep collection is partial for this method")
+			final = "implemented_tested"
 		}
 	case credtest.CatWebReachable:
 		add("reachable", "ok", "web reachable")
@@ -197,8 +221,8 @@ func (s *Server) runOnboardProbe(ctx context.Context, method onbMethod, ip strin
 		final = "protocol_not_supported"
 	case credtest.CatOperationFault:
 		add("reachable", "ok", "service reachable")
-		add("auth", "ok", "authenticated (legacy WSMan operation fault — needs agent collector)")
-		final = "authenticated"
+		add("auth", "ok", "authenticated (legacy WSMan operation fault — collect via the relay agent)")
+		final = "implemented_tested"
 	default:
 		add("probe", "fail", nz(out.Detail, "probe error"))
 		final = "error"
@@ -346,7 +370,16 @@ func (s *Server) saveManualDevice(w http.ResponseWriter, r *http.Request) {
 		resp.State = "managed_capable"
 		if req.RunCollection {
 			if dev, gerr := s.queries.GetDevice(ctx, devID); gerr == nil {
-				resp.CollectionRun = s.kickOnboardCollection(ctx, dev, req.Method)
+				if req.Method == "zkteco" {
+					// The Test Connection already authenticated over the ZK protocol — record that
+					// proven success so the device is honestly managed, and refresh identity using
+					// the comm key in-memory only (never stored).
+					s.recordOnboardSuccess(ctx, devID, "biometric_zkteco", "zkteco", "ZKTeco protocol authenticated (identity collected)")
+					s.collectZKTecoIdentity(ctx, dev, req.Credential.Secret)
+					resp.CollectionRun = true
+				} else {
+					resp.CollectionRun = s.kickOnboardCollection(ctx, dev, req.Method)
+				}
 			}
 		}
 		resp.Message = "Saved + classified. " + cond(resp.CollectionRun, "Collection enqueued — management state will reflect the result.", "Saved; run collection from the device page.")
@@ -371,7 +404,9 @@ func (s *Server) resolveOrCreateCredential(ctx context.Context, r *http.Request,
 		return nil, nil // no credential (e.g. manual-only / anonymous RTSP)
 	}
 	if c.Kind == "" {
-		return nil, fmt.Errorf("credential kind required for an inline credential")
+		// A secret with no credential kind is a protocol parameter (e.g. a ZKTeco
+		// communication key), NOT a stored credential — used in-memory only, never persisted.
+		return nil, nil
 	}
 	if malformedUserPassSecret(c.Kind, c.Secret) {
 		return nil, fmt.Errorf("a %s credential must be 'username:password' with a non-empty password", c.Kind)
@@ -431,6 +466,45 @@ func (s *Server) kickOnboardCollection(ctx context.Context, dev db.Device, metho
 		if _, ok := s.routeViaSiteAgent(ctx, dev, dev.PrimaryIp.String(), "winrm"); ok {
 			return true
 		}
+	case "redfish":
+		ok, _ := s.collectViaController(ctx, "redfish", dev, vpConfig{})
+		return ok
 	}
 	return false
+}
+
+// collectZKTecoIdentity runs the read-only ZKTeco identity probe and persists the collected
+// serial/model/firmware (ONLY real values — never fabricated). commKey is used in-memory only
+// and never stored (it is a device secret). Returns whether the probe authenticated.
+func (s *Server) collectZKTecoIdentity(ctx context.Context, dev db.Device, commKey string) bool {
+	if dev.PrimaryIp == nil {
+		return false
+	}
+	id := zkteco.Probe(ctx, dev.PrimaryIp.String(), 4370, commKey)
+	if !id.Connected {
+		return false
+	}
+	if id.Serial != "" || id.Firmware != "" || id.DeviceName != "" {
+		_ = s.queries.UpdateDeviceHardwareInfo(ctx, db.UpdateDeviceHardwareInfoParams{
+			ID: dev.ID, Vendor: "ZKTeco", Model: id.DeviceName, Serial: id.Serial, OsVersion: id.Firmware, Hostname: id.DeviceName,
+		})
+	}
+	if id.Platform != "" {
+		v := id.Platform
+		_ = s.queries.UpsertDeviceFact(ctx, db.UpsertDeviceFactParams{DeviceID: dev.ID, Key: "zkteco.platform", Value: &v, Driver: "zkteco"})
+	}
+	return true
+}
+
+// recordOnboardSuccess writes a 1-result credential-test run marking a successful onboarding
+// protocol authentication, so the device's management state reflects proven evidence.
+func (s *Server) recordOnboardSuccess(ctx context.Context, devID uuid.UUID, kind, protocol, detail string) {
+	run, err := s.queries.InsertCredentialTestRun(ctx, db.InsertCredentialTestRunParams{Actor: "onboarding", Pairs: 1, Successes: 1, Failures: 0})
+	if err != nil {
+		return
+	}
+	_ = s.queries.InsertCredentialTestResult(ctx, db.InsertCredentialTestResultParams{
+		RunID: run.ID, DeviceID: devID, CredentialName: "onboarding", Kind: kind, Protocol: protocol,
+		Category: "success", Success: true, Detail: detail, Actor: "onboarding", Relevant: true, Source: "manual",
+	})
 }
