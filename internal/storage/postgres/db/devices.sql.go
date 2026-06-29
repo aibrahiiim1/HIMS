@@ -949,6 +949,22 @@ func (q *Queries) SetDeviceDriver(ctx context.Context, arg SetDeviceDriverParams
 	return err
 }
 
+const setDeviceSubtype = `-- name: SetDeviceSubtype :exec
+UPDATE devices SET subtype = $2, updated_at = now() WHERE id = $1
+`
+
+type SetDeviceSubtypeParams struct {
+	ID      uuid.UUID `json:"id"`
+	Subtype string    `json:"subtype"`
+}
+
+// Refine a device's subtype within its category (e.g. Alcatel OmniPCX) without
+// disturbing classification, lock, or any other field. Used by discovery + onboarding.
+func (q *Queries) SetDeviceSubtype(ctx context.Context, arg SetDeviceSubtypeParams) error {
+	_, err := q.db.Exec(ctx, setDeviceSubtype, arg.ID, arg.Subtype)
+	return err
+}
+
 const setDeviceWebOverride = `-- name: SetDeviceWebOverride :exec
 UPDATE devices SET web_scheme_pref = $2, web_port_pref = $3, web_alt_ports = $4, web_notes = $5, web_pref_proto = $6, updated_at = now() WHERE id = $1
 `

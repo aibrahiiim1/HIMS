@@ -430,6 +430,12 @@ func (s *Server) saveManualDevice(w http.ResponseWriter, r *http.Request) {
 		reason = "manual onboarding: operator asserted " + t.DisplayName
 	}
 
+	// Vendor-specific telnet onboarding refines the PBX subtype (e.g. Alcatel OmniPCX).
+	subtype := t.Subtype
+	if req.Method == "omnipcx" {
+		subtype = "alcatel_omnipcx"
+	}
+
 	existing, lookErr := s.queries.LiveDeviceByIP(ctx, &addr)
 	isExisting := lookErr == nil && existing.ID != uuid.Nil
 
@@ -443,7 +449,7 @@ func (s *Server) saveManualDevice(w http.ResponseWriter, r *http.Request) {
 			Vendor: orCurPtr(req.Vendor, existing.Vendor), Model: orCurPtr(req.Model, existing.Model),
 			Serial: existing.Serial, OsVersion: existing.OsVersion, Hostname: existing.Hostname,
 			Vlan: existing.Vlan, DeviceClass: existing.DeviceClass, Location: orCurPtr(req.Location, existing.Location),
-			LocationID: existing.LocationID, Subtype: t.Subtype, Notes: nz(req.Notes, existing.Notes),
+			LocationID: existing.LocationID, Subtype: subtype, Notes: nz(req.Notes, existing.Notes),
 			Criticality: nz(req.Criticality, existing.Criticality), MonitoringEnabled: existing.MonitoringEnabled,
 			ClassificationLocked: true, ManualClassificationReason: reason,
 		})
@@ -453,7 +459,7 @@ func (s *Server) saveManualDevice(w http.ResponseWriter, r *http.Request) {
 		}
 		s.audit(r, "inventory", "manual_classification_override", "device", devID.String(),
 			"Manual override "+ip+": "+existing.Category+" → "+t.Category,
-			map[string]any{"ip": ip, "old_category": existing.Category, "new_category": t.Category, "old_subtype": existing.Subtype, "new_subtype": t.Subtype, "reason": reason, "source_page": t.Group})
+			map[string]any{"ip": ip, "old_category": existing.Category, "new_category": t.Category, "old_subtype": existing.Subtype, "new_subtype": subtype, "reason": reason, "source_page": t.Group})
 	} else {
 		// New manual device.
 		meta, _ := json.Marshal(map[string]any{"source": "manual", "onboarding_type": t.Type, "test_passed": req.TestPassed})
@@ -471,12 +477,12 @@ func (s *Server) saveManualDevice(w http.ResponseWriter, r *http.Request) {
 		_, _ = s.queries.UpdateDevice(ctx, db.UpdateDeviceParams{
 			ID: devID, Name: name, Category: t.Category, Vendor: nzPtr(req.Vendor), Model: nzPtr(req.Model),
 			Serial: nil, OsVersion: nil, Hostname: nil, Vlan: nil, DeviceClass: nil, Location: nzPtr(req.Location),
-			LocationID: nil, Subtype: t.Subtype, Notes: nz(req.Notes, ""), Criticality: nz(req.Criticality, "normal"),
+			LocationID: nil, Subtype: subtype, Notes: nz(req.Notes, ""), Criticality: nz(req.Criticality, "normal"),
 			MonitoringEnabled: true, ClassificationLocked: true, ManualClassificationReason: reason,
 		})
 		s.audit(r, "inventory", "manual_device_added", "device", devID.String(),
 			"Manually added "+t.DisplayName+" "+ip,
-			map[string]any{"ip": ip, "category": t.Category, "subtype": t.Subtype, "reason": reason, "source_page": t.Group, "test_passed": req.TestPassed})
+			map[string]any{"ip": ip, "category": t.Category, "subtype": subtype, "reason": reason, "source_page": t.Group, "test_passed": req.TestPassed})
 	}
 
 	// Bind credential ON SUCCESS only (the project rule: bind on a proven/operator credential).

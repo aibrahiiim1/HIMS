@@ -618,6 +618,12 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 						classNote = "SNMP identity probe did not confirm this device this run (transient failure) — preserved known classification \"" + dev.Category + "\" instead of the weaker guess \"" + fresh + "\"; collection attempted via the device's known identity."
 					}
 				}
+				// Discovery-refined subtype (e.g. alcatel_omnipcx) — enrichment within the
+				// category, leaves classification/lock/other fields untouched. Never fabricated.
+				if r.Subtype != "" && dev.Subtype != r.Subtype {
+					_ = s.queries.SetDeviceSubtype(ctx, db.SetDeviceSubtypeParams{ID: dev.ID, Subtype: r.Subtype})
+					dev.Subtype = r.Subtype
+				}
 				// Persist every credential auth attempt (success + failure + reason)
 				// to credential-test history → feeds Coverage / Data Quality.
 				// Pipeline attempts already carry their own Source ("subnet"/"default").

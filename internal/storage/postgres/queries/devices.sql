@@ -115,6 +115,11 @@ DELETE FROM devices WHERE id = ANY($1::uuid[]);
 -- Bind-on-success: record the credential that last authenticated.
 UPDATE devices SET credential_id = $2, updated_at = now() WHERE id = $1;
 
+-- name: SetDeviceSubtype :exec
+-- Refine a device's subtype within its category (e.g. Alcatel OmniPCX) without
+-- disturbing classification, lock, or any other field. Used by discovery + onboarding.
+UPDATE devices SET subtype = $2, updated_at = now() WHERE id = $1;
+
 -- name: SetDeviceCCTVCredential :exec
 -- Bind the WEB credential that last authenticated for CCTV (ONVIF/ISAPI)
 -- collection. Kept separate from credential_id so an SNMP discovery/monitor

@@ -133,6 +133,9 @@ type HostResult struct {
 	// applied over the driver's generic identity when a specific fingerprint hits.
 	Vendor string
 	Model  string
+	// Subtype is a discovery-refined device subtype within the category (e.g.
+	// "alcatel_omnipcx" for a detected OmniPCX). Empty = leave the subtype untouched.
+	Subtype string
 	// Classification is the Phase-3 explainable-classification record: the evidence
 	// channels, the fingerprint(s) that won, and the candidates that were considered
 	// but rejected (with reasons). Nil until applyFingerprints runs. Persisted into
@@ -544,7 +547,7 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 	if hasPortN(r.OpenPorts, 23) && strings.Contains(strings.ToLower(r.Probe.Hints["telnet_banner"]), "omnipcx") {
 		// Honest detection from the banner alone — even with no working credential.
 		r.Match = driver.Match{Category: domain.CatPBX, Confidence: 80}
-		r.Vendor, r.Model = "Alcatel-Lucent", "OmniPCX Enterprise"
+		r.Vendor, r.Model, r.Subtype = "Alcatel-Lucent", "OmniPCX Enterprise", "alcatel_omnipcx"
 		if r.BoundCred == nil {
 			for _, cand := range candidates {
 				if cand.Kind != domain.CredCLI {
