@@ -44,12 +44,24 @@ RETURNING *;
 -- previously site-less device — e.g. first found by an unscoped CIDR scan, later
 -- re-scanned under a site) but never OVERWRITES an operator-set location:
 -- COALESCE keeps any existing value. A NULL fill arg (site-less scan) is a no-op.
+-- Identity fields (hostname/vendor/model/serial/os_version) are COALESCE(NULLIF(…))
+-- guarded: a scan only REPLACES them with newer, non-empty evidence and can NEVER
+-- blank a previously-collected real value. A weak/old/no-identity scan (e.g. SNMP that
+-- exposes no OS string) preserves the last good identity. category/driver/status stay
+-- volatile (category has its own preservation guard in reconcile()).
 UPDATE devices SET
-    hostname = $2, name = $3, vendor = $4, model = $5, serial = $6,
-    os_version = $7, category = $8, driver = $9, status = $10,
+    hostname = COALESCE(NULLIF(sqlc.narg('hostname')::text, ''), hostname),
+    name = sqlc.arg('name'),
+    vendor = COALESCE(NULLIF(sqlc.narg('vendor')::text, ''), vendor),
+    model = COALESCE(NULLIF(sqlc.narg('model')::text, ''), model),
+    serial = COALESCE(NULLIF(sqlc.narg('serial')::text, ''), serial),
+    os_version = COALESCE(NULLIF(sqlc.narg('os_version')::text, ''), os_version),
+    category = sqlc.arg('category'),
+    driver = sqlc.narg('driver'),
+    status = sqlc.arg('status'),
     location_id = COALESCE(location_id, sqlc.narg('fill_location')),
     last_discovery_at = now(), updated_at = now()
-WHERE id = $1
+WHERE id = sqlc.arg('id')
 RETURNING *;
 
 -- name: UpdateDevice :one

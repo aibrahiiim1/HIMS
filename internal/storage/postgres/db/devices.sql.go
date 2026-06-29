@@ -1270,16 +1270,22 @@ func (q *Queries) UpdateDeviceHardwareInfo(ctx context.Context, arg UpdateDevice
 
 const updateDiscoveredDevice = `-- name: UpdateDiscoveredDevice :one
 UPDATE devices SET
-    hostname = $2, name = $3, vendor = $4, model = $5, serial = $6,
-    os_version = $7, category = $8, driver = $9, status = $10,
-    location_id = COALESCE(location_id, $11),
+    hostname = COALESCE(NULLIF($1::text, ''), hostname),
+    name = $2,
+    vendor = COALESCE(NULLIF($3::text, ''), vendor),
+    model = COALESCE(NULLIF($4::text, ''), model),
+    serial = COALESCE(NULLIF($5::text, ''), serial),
+    os_version = COALESCE(NULLIF($6::text, ''), os_version),
+    category = $7,
+    driver = $8,
+    status = $9,
+    location_id = COALESCE(location_id, $10),
     last_discovery_at = now(), updated_at = now()
-WHERE id = $1
+WHERE id = $11
 RETURNING id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason, is_virtual, cctv_credential_id, web_scheme_pref, web_port_pref, web_alt_ports, web_notes, web_last_ok, web_last_ok_at, web_last_proto, web_last_scheme, web_last_port, web_last_credential_id, web_pref_proto
 `
 
 type UpdateDiscoveredDeviceParams struct {
-	ID           uuid.UUID  `json:"id"`
 	Hostname     *string    `json:"hostname"`
 	Name         string     `json:"name"`
 	Vendor       *string    `json:"vendor"`
@@ -1290,6 +1296,7 @@ type UpdateDiscoveredDeviceParams struct {
 	Driver       *string    `json:"driver"`
 	Status       string     `json:"status"`
 	FillLocation *uuid.UUID `json:"fill_location"`
+	ID           uuid.UUID  `json:"id"`
 }
 
 // Reconcile path: refresh a live device's mutable identity fields on
@@ -1298,9 +1305,13 @@ type UpdateDiscoveredDeviceParams struct {
 // previously site-less device — e.g. first found by an unscoped CIDR scan, later
 // re-scanned under a site) but never OVERWRITES an operator-set location:
 // COALESCE keeps any existing value. A NULL fill arg (site-less scan) is a no-op.
+// Identity fields (hostname/vendor/model/serial/os_version) are COALESCE(NULLIF(…))
+// guarded: a scan only REPLACES them with newer, non-empty evidence and can NEVER
+// blank a previously-collected real value. A weak/old/no-identity scan (e.g. SNMP that
+// exposes no OS string) preserves the last good identity. category/driver/status stay
+// volatile (category has its own preservation guard in reconcile()).
 func (q *Queries) UpdateDiscoveredDevice(ctx context.Context, arg UpdateDiscoveredDeviceParams) (Device, error) {
 	row := q.db.QueryRow(ctx, updateDiscoveredDevice,
-		arg.ID,
 		arg.Hostname,
 		arg.Name,
 		arg.Vendor,
@@ -1311,6 +1322,7 @@ func (q *Queries) UpdateDiscoveredDevice(ctx context.Context, arg UpdateDiscover
 		arg.Driver,
 		arg.Status,
 		arg.FillLocation,
+		arg.ID,
 	)
 	var i Device
 	err := row.Scan(
