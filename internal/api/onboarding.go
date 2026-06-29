@@ -11,6 +11,8 @@ import (
 
 	"github.com/coralsearesorts/hims/internal/credtest"
 	"github.com/coralsearesorts/hims/internal/domain"
+	"github.com/coralsearesorts/hims/internal/isapi"
+	rf "github.com/coralsearesorts/hims/internal/redfish"
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
 	"github.com/coralsearesorts/hims/internal/zkteco"
 	"github.com/google/uuid"
@@ -209,12 +211,68 @@ func (s *Server) runOnboardProbe(ctx context.Context, method onbMethod, ip strin
 		return onbTestResp{Steps: steps, FinalStatus: st, Category: cond(st == "zkteco_comm_key_required", "auth_failed", st), Summary: id.Reason}
 	}
 
-	// credtest covers snmp_v2c/snmp_v3/ssh/winrm/onvif/http_basic (+ redfish/isapi mapped to http_basic).
-	kind := method.TestKind
-	switch kind {
-	case "redfish", "isapi":
-		kind = "http_basic"
+	// Real Redfish probe (BMC / iLO / iDRAC / XClarity / iBMC): login + read identity over the
+	// Redfish HTTP/JSON API (read-only). A real protocol test — NOT a generic web auth.
+	if method.TestKind == "redfish" {
+		u, p := credtest.SplitUserPass(secret)
+		if p == "" {
+			add("credential", "fail", "Redfish needs a username:password credential")
+			return onbTestResp{Steps: steps, FinalStatus: "credential_required", Category: "error"}
+		}
+		cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		client := rf.NewClient(fmt.Sprintf("https://%s:%d", ip, port), u, p, nil)
+		// The Redfish service root (/redfish/v1) is ANONYMOUS and leaks the vendor; /Systems
+		// REQUIRES auth. Gate on /Systems so an anonymous root read can never be mistaken for a
+		// successful login (which would be a fake "managed" state).
+		var sysColl map[string]any
+		if aerr := client.GetJSON(cctx, "/redfish/v1/Systems", &sysColl); aerr != nil {
+			cancel()
+			cat, detail := categorizeCollectErr("redfish", aerr.Error())
+			fs := cond(cat == "auth_failed", "credential_failed", cat)
+			add("reachable", cond(fs == "unreachable", "fail", "ok"), cond(fs == "unreachable", detail, "Redfish root reachable; /Systems requires auth"))
+			if fs != "unreachable" {
+				add("auth", "fail", detail)
+			}
+			return onbTestResp{Steps: steps, FinalStatus: fs, Category: cat, Summary: detail}
+		}
+		facts, _ := rf.Collect(cctx, client)
+		cancel()
+		add("reachable", "ok", "Redfish service reachable")
+		add("auth", "ok", "Redfish login succeeded (/Systems authorized)")
+		ident := strings.TrimSpace(facts.Vendor + " " + facts.Model + " " + facts.Serial)
+		add("identity", cond(ident != "", "ok", "skipped"), nz(ident, "BMC exposed no identity fields"))
+		return onbTestResp{Steps: steps, FinalStatus: "implemented_collected", Category: "success", Summary: "Redfish authenticated + identity collected — saving will classify bmc + link to its server."}
 	}
+
+	// Real ISAPI probe (Hikvision / OEM camera + access devices): read /ISAPI System deviceInfo
+	// with digest auth (read-only) — a real protocol identity read, not generic web auth.
+	if method.TestKind == "isapi" {
+		u, p := credtest.SplitUserPass(secret)
+		if p == "" {
+			add("credential", "fail", "ISAPI needs a username:password credential")
+			return onbTestResp{Steps: steps, FinalStatus: "credential_required", Category: "error"}
+		}
+		cctx, cancel := context.WithTimeout(ctx, 25*time.Second)
+		info, ierr := isapi.CollectDeviceInfo(cctx, ip, u, p, nil, nil)
+		cancel()
+		if ierr == nil {
+			add("reachable", "ok", "ISAPI endpoint reachable"+cond(info.Endpoint != "", " ("+info.Endpoint+")", ""))
+			add("auth", "ok", "ISAPI digest auth succeeded")
+			ident := strings.TrimSpace(info.Manufacturer + " " + info.Model + " " + info.Serial + " " + info.Firmware)
+			add("identity", cond(ident != "", "ok", "skipped"), nz(ident, "device exposed no identity fields"))
+			return onbTestResp{Steps: steps, FinalStatus: "implemented_collected", Category: "success", Summary: "ISAPI device identity collected."}
+		}
+		cat, detail := categorizeCollectErr("isapi", ierr.Error())
+		fs := cond(cat == "auth_failed", "credential_failed", cat)
+		add("reachable", cond(fs == "unreachable", "fail", "ok"), cond(fs == "unreachable", detail, "ISAPI endpoint reachable"))
+		if fs != "unreachable" {
+			add("auth", "fail", detail)
+		}
+		return onbTestResp{Steps: steps, FinalStatus: fs, Category: cat, Summary: detail}
+	}
+
+	// credtest covers snmp_v2c/snmp_v3/ssh/winrm/onvif/http_basic/vendor_api.
+	kind := method.TestKind
 	opts := credtest.Options{Timeout: 10 * time.Second, CredentialName: name}
 	if port != 0 {
 		opts.WebPorts = []int{port}
@@ -414,8 +472,32 @@ func (s *Server) saveManualDevice(w http.ResponseWriter, r *http.Request) {
 					s.recordOnboardSuccess(ctx, devID, "biometric_zkteco", "zkteco", "ZKTeco protocol authenticated (identity collected)")
 					s.collectZKTecoIdentity(ctx, dev, req.Credential.Secret)
 					resp.CollectionRun = true
+				} else if s.kickOnboardCollection(ctx, dev, req.Method) {
+					// A real deep collector ran (snmp/redfish/onvif/isapi/ssh/windows/vsphere) —
+					// it wrote real evidence + identity, so the device is honestly managed.
+					resp.CollectionRun = true
 				} else {
-					resp.CollectionRun = s.kickOnboardCollection(ctx, dev, req.Method)
+					// No deep collector for this method (e.g. http_basic / vendor_api). Re-verify
+					// the protocol Test Connection SERVER-SIDE (never trust the client flag) and,
+					// only if it genuinely authenticates, record the proven access → managed.
+					var mo onbMethod
+					for _, mm := range t.Methods {
+						if mm.Key == req.Method {
+							mo = mm
+						}
+					}
+					if mo.Key != "" && mo.TestKind != "manual" {
+						secret, _, cname, _ := s.resolveSecret(ctx, req.Credential)
+						p := req.Port
+						if p == 0 {
+							p = mo.DefaultPort
+						}
+						pr := s.runOnboardProbe(ctx, mo, ip, p, secret, cname)
+						if pr.FinalStatus == "implemented_collected" || pr.FinalStatus == "implemented_tested" {
+							s.recordOnboardSuccess(ctx, devID, t.Type, mo.TestKind, "manual onboarding: "+mo.TestKind+" authenticated ("+pr.Summary+")")
+							resp.CollectionRun = true
+						}
+					}
 				}
 			}
 		}
@@ -506,6 +588,17 @@ func (s *Server) kickOnboardCollection(ctx context.Context, dev db.Device, metho
 	case "redfish":
 		ok, _ := s.collectViaController(ctx, "redfish", dev, vpConfig{})
 		return ok
+	case "onvif":
+		ok, _ := s.collectViaController(ctx, "onvif", dev, vpConfig{})
+		return ok
+	case "isapi":
+		var creds []uuid.UUID
+		if dev.CredentialID != nil {
+			creds = []uuid.UUID{*dev.CredentialID}
+		}
+		return s.runCCTVCollection(ctx, dev, creds, "onboarding").ok()
+	case "ssh":
+		return s.collectSSHCLI(ctx, dev, "", "", false, nil).OK
 	}
 	return false
 }
