@@ -12,6 +12,7 @@ import (
 	"github.com/coralsearesorts/hims/internal/credtest"
 	"github.com/coralsearesorts/hims/internal/domain"
 	"github.com/coralsearesorts/hims/internal/isapi"
+	"github.com/coralsearesorts/hims/internal/omnipcx"
 	rf "github.com/coralsearesorts/hims/internal/redfish"
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
 	"github.com/coralsearesorts/hims/internal/zkteco"
@@ -269,6 +270,35 @@ func (s *Server) runOnboardProbe(ctx context.Context, method onbMethod, ip strin
 			add("auth", "fail", detail)
 		}
 		return onbTestResp{Steps: steps, FinalStatus: fs, Category: cat, Summary: detail}
+	}
+
+	// Real Alcatel OmniPCX Enterprise probe (telnet, no SSH): mtcl login → read the software
+	// identity banner (read-only). Directory/phone-sets are an honest external dependency.
+	if method.TestKind == "omnipcx" {
+		u, p := credtest.SplitUserPass(secret)
+		if p == "" {
+			add("credential", "fail", "OmniPCX needs a username:password (CLI) credential, e.g. mtcl:mtcl")
+			return onbTestResp{Steps: steps, FinalStatus: "credential_required", Category: "error"}
+		}
+		id := omnipcx.Probe(ctx, ip, port, u, p)
+		if id.Connected {
+			add("reachable", "ok", fmt.Sprintf("telnet %d reachable", port))
+			add("auth", "ok", "OmniPCX login succeeded (CPU role "+nz(id.CPURole, "?")+")")
+			add("identity", "ok", strings.TrimSpace(id.Vendor+" "+id.Model+" "+id.OSVersion()))
+			return onbTestResp{Steps: steps, FinalStatus: "implemented_collected", Category: "success", Summary: "OmniPCX software identity collected. Directory/phone-sets need OmniVista 8770 — see capabilities."}
+		}
+		st := "credential_failed"
+		switch {
+		case strings.HasPrefix(id.Reason, "unreachable"):
+			st = "unreachable"
+		case strings.HasPrefix(id.Reason, "protocol"):
+			st = "protocol_not_supported"
+		}
+		add("reachable", cond(st == "unreachable", "fail", "ok"), id.Reason)
+		if st == "credential_failed" {
+			add("auth", "fail", id.Reason)
+		}
+		return onbTestResp{Steps: steps, FinalStatus: st, Category: st, Summary: id.Reason}
 	}
 
 	// credtest covers snmp_v2c/snmp_v3/ssh/winrm/onvif/http_basic/vendor_api.
@@ -599,8 +629,48 @@ func (s *Server) kickOnboardCollection(ctx context.Context, dev db.Device, metho
 		return s.runCCTVCollection(ctx, dev, creds, "onboarding").ok()
 	case "ssh":
 		return s.collectSSHCLI(ctx, dev, "", "", false, nil).OK
+	case "omnipcx":
+		return s.collectOmniPCXIdentity(ctx, dev)
 	}
 	return false
+}
+
+// collectOmniPCXIdentity logs into the OmniPCX over telnet using the bound CLI credential
+// (decrypted in-memory, never logged/returned), reads the software-identity banner, persists
+// real vendor/model/version + facts, and records the proven login so the PBX is honestly
+// managed. Read-only — no configuration commands. Returns false if it can't authenticate.
+func (s *Server) collectOmniPCXIdentity(ctx context.Context, dev db.Device) bool {
+	if dev.PrimaryIp == nil || dev.CredentialID == nil {
+		return false
+	}
+	cph := s.cipher()
+	if cph == nil {
+		return false
+	}
+	c, err := s.queries.GetCredential(ctx, *dev.CredentialID)
+	if err != nil {
+		return false
+	}
+	plain, oerr := cph.Open(c.EncryptedBlob, c.KeyID)
+	if oerr != nil {
+		return false
+	}
+	user, pass := credtest.SplitUserPass(string(plain))
+	id := omnipcx.Probe(ctx, dev.PrimaryIp.String(), 23, user, pass)
+	if !id.Connected {
+		return false
+	}
+	_ = s.queries.UpdateDeviceHardwareInfo(ctx, db.UpdateDeviceHardwareInfoParams{
+		ID: dev.ID, Vendor: id.Vendor, Model: id.Model, Serial: nz(derefStr(dev.Serial), ""), OsVersion: id.OSVersion(), Hostname: derefStr(dev.Hostname),
+	})
+	for k, v := range map[string]string{"omnipcx.cpu_role": id.CPURole, "omnipcx.delivery": id.Delivery, "omnipcx.patch": id.Patch, "omnipcx.country": id.Country} {
+		if v != "" {
+			val := v
+			_ = s.queries.UpsertDeviceFact(ctx, db.UpsertDeviceFactParams{DeviceID: dev.ID, Key: k, Value: &val, Driver: "omnipcx"})
+		}
+	}
+	s.recordOnboardSuccess(ctx, dev.ID, "pbx", "omnipcx", "OmniPCX telnet login authenticated — "+id.OSVersion())
+	return true
 }
 
 // collectZKTecoIdentity runs the read-only ZKTeco identity probe and persists the collected

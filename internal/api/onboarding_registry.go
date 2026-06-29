@@ -211,8 +211,13 @@ func onboardingCatalog() []onbType {
 			Vendors: []string{"Cisco", "Yealink", "Grandstream", "Polycom", "Other"}, Methods: []onbMethod{m("snmp_v2c", "SNMP v2c", "snmp_v2c", "snmp_v2c", 161, false, "identity-only"), m("http_basic", "HTTP/HTTPS", "http_basic", "http_basic", 80, false, "identity-only"), m("manual", "Manual inventory only", "", "manual", 0, false, "")}, BaseFields: baseFields(nil), LockOnSave: true},
 		{Type: "pbx", Category: "pbx", Subtype: "", DisplayName: "PBX / Voice Gateway", AddLabel: "Add PBX / Voice Gateway", Group: "voice",
 			Vendors:    []string{"Cisco CUCM", "Alcatel OmniPCX", "Avaya", "Other"},
-			Methods:    []onbMethod{m("vendor_api", "CUCM AXL / vendor API", "vendor_api", "http_basic", 443, true, "CUCM via existing AXL collector"), m("ssh", "SSH/CLI", "ssh", "ssh", 22, true, ""), m("snmp_v2c", "SNMP v2c", "snmp_v2c", "snmp_v2c", 161, false, "identity-only")},
-			BaseFields: baseFields(nil), LockOnSave: true},
+			Methods:    []onbMethod{m("snmp_v2c", "SNMP v2c", "snmp_v2c", "snmp_v2c", 161, true, "identity + interfaces (works on most PBX/voice systems)"), m("omnipcx", "Alcatel OmniPCX (telnet)", "cli", "omnipcx", 23, true, "mtcl login → real software version/identity; directory/phone-sets need OmniVista 8770"), m("vendor_api", "Cisco CUCM AXL / vendor API", "vendor_api", "http_basic", 443, true, "Cisco only — CUCM via existing AXL collector"), m("ssh", "SSH/CLI", "ssh", "ssh", 22, true, "")},
+			BaseFields: baseFields(nil), LockOnSave: true,
+			Capabilities: []onbCapability{
+				cap("identity", "Vendor / model / software version", "implemented_collected", "SNMP + (Alcatel) OmniPCX telnet banner — live-validated"),
+				cap("directory", "Users / extensions directory", "external_dependency_required", "lives in the call-server DB; needs OmniVista 8770 or an LDAP export — the restricted mtcl shell cannot bulk-export safely (no fabricated entries)"),
+				cap("phone_sets", "Registered phone sets / handsets", "external_dependency_required", "call-server DB — OmniVista 8770 / OXE management; not exposed over the mtcl telnet shell"),
+			}},
 	}
 	for ti := range cat {
 		for mi := range cat[ti].Methods {
