@@ -23,6 +23,7 @@ type Fingerprint struct {
 	WinRM bool // 5985/5986 open → winrm
 	HTTP  bool // 80/443/8000 open → http_basic / onvif / vendor_api
 	LDAP  bool // 389/636 open → ldap
+	CLI   bool // 23 open → cli (telnet-only devices, e.g. Alcatel OmniPCX)
 }
 
 // Allows reports whether a credential kind is viable for this fingerprint.
@@ -38,6 +39,8 @@ func (f Fingerprint) Allows(k domain.CredentialKind) bool {
 		return f.HTTP
 	case domain.CredLDAP:
 		return f.LDAP
+	case domain.CredCLI:
+		return f.CLI
 	}
 	return false
 }

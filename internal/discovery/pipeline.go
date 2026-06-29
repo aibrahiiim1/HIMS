@@ -33,7 +33,9 @@ import (
 	"github.com/coralsearesorts/hims/internal/driver/swsnmp"
 	"github.com/coralsearesorts/hims/internal/fingerprint"
 	"github.com/coralsearesorts/hims/internal/isapi"
+	"github.com/coralsearesorts/hims/internal/omnipcx"
 	"github.com/coralsearesorts/hims/internal/snmp"
+	"github.com/coralsearesorts/hims/internal/telnet"
 )
 
 // CredAttempt records one credential↔host authentication attempt during a scan,
@@ -74,6 +76,7 @@ func fingerprintFromPorts(ports []int) credresolver.Fingerprint {
 		WinRM: hasPortN(ports, 5985) || hasPortN(ports, 5986),
 		HTTP:  anyWebPort(ports),
 		LDAP:  hasPortN(ports, 389) || hasPortN(ports, 636),
+		CLI:   hasPortN(ports, 23), // telnet-only devices (Alcatel OmniPCX)
 	}
 }
 
@@ -363,6 +366,16 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 			r.Probe.Hints["ssh_banner"] = sshBanner
 		}
 	}
+	// Telnet pre-login banner (unauthenticated) — legacy CLI devices print a vendor
+	// banner before the login prompt. Used to honestly detect Alcatel OmniPCX (telnet-only).
+	if hasPortN(r.OpenPorts, 23) {
+		if tb := grabTelnetBanner(ctx, ip, cfg.PortTimeout); tb != "" {
+			if r.Probe.Hints == nil {
+				r.Probe.Hints = map[string]string{}
+			}
+			r.Probe.Hints["telnet_banner"] = tb
+		}
+	}
 
 	// Step 2c: Protocol plan — decide the expected protocol(s) and which credential
 	// kinds are worth testing for THIS target. This is what stops the scan from
@@ -493,6 +506,9 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 			if cand.Kind == domain.CredSNMPv2c || cand.Kind == domain.CredSNMPv3 {
 				continue
 			}
+			if cand.Kind == domain.CredCLI {
+				continue // telnet CLI is handled by the OmniPCX step below (not a credtest proto)
+			}
 			// Protocol-plan gate: only test credential kinds that are RELEVANT to
 			// this candidate (don't WinRM/ONVIF/SSH-probe a host the evidence says
 			// is something else). The open-port gate stays as a second guard.
@@ -518,6 +534,56 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 				break
 			}
 			emit(string(cand.Kind)+"_failed", string(cand.Kind), "failed", out.Category)
+		}
+	}
+
+	// Step 3d: Alcatel OmniPCX (telnet-only). Detect it HONESTLY from its unauthenticated
+	// pre-login banner; if a scoped CLI credential authenticates over the OmniPCX telnet
+	// protocol, bind it + capture real software identity → managed pbx. Banner-only (no working
+	// credential) = credential_required; an attempted-but-rejected CLI cred = credential_failed.
+	if hasPortN(r.OpenPorts, 23) && strings.Contains(strings.ToLower(r.Probe.Hints["telnet_banner"]), "omnipcx") {
+		// Honest detection from the banner alone — even with no working credential.
+		r.Match = driver.Match{Category: domain.CatPBX, Confidence: 80}
+		r.Vendor, r.Model = "Alcatel-Lucent", "OmniPCX Enterprise"
+		if r.BoundCred == nil {
+			for _, cand := range candidates {
+				if cand.Kind != domain.CredCLI {
+					continue
+				}
+				dec, derr := cfg.Decrypt(ctx, cand.ID)
+				if derr != nil || dec.Community == "" {
+					continue
+				}
+				emit("omnipcx_attempt_started", "omnipcx", "started", "")
+				u, p := credtest.SplitUserPass(dec.Community)
+				id := omnipcx.Probe(ctx, ip.String(), 23, u, p)
+				att := CredAttempt{CredentialID: cand.ID, Kind: cand.Kind, Protocol: "omnipcx", Relevant: true}
+				if id.Connected {
+					att.Success, att.Category, att.Detail = true, "success", "OmniPCX "+id.OSVersion()
+					r.CredAttempts = append(r.CredAttempts, att)
+					c := cand
+					r.BoundCred = &c
+					r.Vendor, r.Model = id.Vendor, id.Model
+					if r.Facts == nil {
+						r.Facts = &driver.Facts{KV: map[string]string{}}
+					}
+					r.Facts.Vendor, r.Facts.Model, r.Facts.OSVersion = id.Vendor, id.Model, id.OSVersion()
+					if id.CPURole != "" {
+						r.Facts.KV["omnipcx.cpu_role"] = id.CPURole
+					}
+					emit("omnipcx_success", "omnipcx", "success", id.OSVersion())
+					break
+				}
+				att.Category = "auth_failed"
+				if strings.HasPrefix(id.Reason, "unreachable") {
+					att.Category = "unreachable"
+				} else if strings.HasPrefix(id.Reason, "protocol") {
+					att.Category = "unsupported"
+				}
+				att.Detail = id.Reason
+				r.CredAttempts = append(r.CredAttempts, att)
+				emit("omnipcx_failed", "omnipcx", "failed", att.Category)
+			}
 		}
 	}
 
@@ -733,6 +799,24 @@ func grabSSHBanner(ctx context.Context, ip netip.Addr, timeout time.Duration) st
 	buf := make([]byte, 256)
 	n, _ := conn.Read(buf)
 	return strings.TrimSpace(string(buf[:n]))
+}
+
+// grabTelnetBanner reads the unauthenticated pre-login banner from telnet/23 (decoding IAC),
+// up to the login prompt. Legacy CLI devices print a vendor banner here (e.g. Alcatel OmniPCX:
+// "Welcome to … / Alcatel OmniPCX Enterprise / login:"). No credentials are sent.
+func grabTelnetBanner(ctx context.Context, ip netip.Addr, timeout time.Duration) string {
+	if timeout <= 0 {
+		timeout = 1500 * time.Millisecond
+	}
+	dctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+	c, err := telnet.Dial(dctx, net.JoinHostPort(ip.String(), "23"), timeout)
+	if err != nil {
+		return ""
+	}
+	defer c.Close()
+	banner, _ := c.ReadUntil(3*time.Second, "login:", "ogin:", "username:", "password:")
+	return strings.TrimSpace(banner)
 }
 
 // --- Transport helpers --------------------------------------------------------

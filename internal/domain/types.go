@@ -62,6 +62,7 @@ const (
 	CredWMI       CredentialKind = "wmi"     // Windows WMI/DCOM (legacy Windows fallback)
 	CredWindows   CredentialKind = "windows" // unified Windows login — system uses WinRM, WMI/DCOM, or the relay agent as needed
 	CredZKTeco    CredentialKind = "zkteco"  // ZKTeco device communication key (sealed; native TCP/4370 protocol)
+	CredCLI       CredentialKind = "cli"     // generic CLI login (user:password) for telnet-only devices, e.g. Alcatel OmniPCX mtcl
 )
 
 // Credential is an encrypted secret. EncryptedBlob is never logged or
