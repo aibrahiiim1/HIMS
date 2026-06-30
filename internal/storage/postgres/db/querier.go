@@ -506,6 +506,12 @@ type Querier interface {
 	// Devices with a reachable IP but no monitoring check yet — the seeder turns
 	// each into a default TCP check (port chosen by category + os_family).
 	ListDevicesNeedingDefaultCheck(ctx context.Context) ([]ListDevicesNeedingDefaultCheckRow, error)
+	// SNMP-managed infrastructure (category in the arg list) with a BOUND SNMP
+	// credential but no SNMP check yet. The seeder adds a SUPPLEMENTAL sysUpTime
+	// check for each — real SNMP-layer health that degrades to "warning" (never
+	// offline) and authenticates with the device's own credential, so it can never
+	// raise a false-down alert.
+	ListDevicesNeedingSNMPHealthCheck(ctx context.Context, categories []string) ([]ListDevicesNeedingSNMPHealthCheckRow, error)
 	// Device ids with an in-flight collect_os job (queued or dispatched). Feeds the
 	// pending_collection management state so an in-flight host is not misreported as a
 	// terminal failure from its stale direct-probe attempt.
@@ -522,6 +528,8 @@ type Querier interface {
 	// ---- Monitoring state for evaluation --------------------------------------
 	// The evaluator's input: every enabled check joined to its device so rules
 	// can filter by category and alerts can carry a readable device name.
+	// SUPPLEMENTAL checks (e.g. SNMP sysUpTime health) are EXCLUDED — they only
+	// degrade a device to "warning" for visibility and must NEVER raise an alert.
 	ListEnabledChecksWithDevice(ctx context.Context) ([]ListEnabledChecksWithDeviceRow, error)
 	// State-based rules — evaluated by the device-state evaluator (api/alert_state.go), not checks.
 	ListEnabledStateRules(ctx context.Context) ([]AlertRule, error)
@@ -603,6 +611,10 @@ type Querier interface {
 	ListOSServices(ctx context.Context, deviceID uuid.UUID) ([]OsService, error)
 	// --- software ---
 	ListOSSoftware(ctx context.Context, deviceID uuid.UUID) ([]OsSoftware, error)
+	// Cameras an NVR/DVR reports OFFLINE, with the recorder + the reason (network
+	// unreachable / credential error / …), so Data Quality surfaces every disconnected
+	// camera and WHY — not just an online/offline flag.
+	ListOfflineNVRChannels(ctx context.Context) ([]ListOfflineNVRChannelsRow, error)
 	ListOpenStateAlertsByRule(ctx context.Context, ruleID uuid.UUID) ([]ListOpenStateAlertsByRuleRow, error)
 	ListPbxPhones(ctx context.Context, deviceID uuid.UUID) ([]PbxPhone, error)
 	ListPermissions(ctx context.Context) ([]Permission, error)
@@ -622,9 +634,9 @@ type Querier interface {
 	// is what bounds the thundering herd: the server never hands one agent more than
 	// the cap of concurrent collect jobs.
 	ListRunnableAgentJobs(ctx context.Context, arg ListRunnableAgentJobsParams) ([]AgentJob, error)
-	// Bulk fetch of the raw SNMP system-group identity facts across ALL devices, for
-	// Data Quality checks that re-evaluate fingerprints against stored evidence
-	// without re-probing. Only the identity keys, not the full fact set.
+	// Bulk fetch of the raw SNMP system-group identity facts across ALL devices, plus the
+	// probed open-TCP-ports fact, for Data Quality checks that re-evaluate fingerprints /
+	// protocol shape against stored evidence without re-probing.
 	ListSNMPIdentityFacts(ctx context.Context) ([]ListSNMPIdentityFactsRow, error)
 	ListSSHCliResults(ctx context.Context, deviceID uuid.UUID) ([]SshCliResult, error)
 	// Devices stranded in a TERMINAL transient collect_os failure that should be
@@ -647,6 +659,12 @@ type Querier interface {
 	ListSubnetsByLocation(ctx context.Context, locationID uuid.UUID) ([]Subnet, error)
 	ListSystems(ctx context.Context) ([]System, error)
 	ListTopologyLinks(ctx context.Context, localDeviceID uuid.UUID) ([]TopologyLink, error)
+	// BMC/iLO devices whose last SNMP-collected overall health is not OK (Degraded/Failed),
+	// for the Data Quality "server hardware health" surface and the Action Center. Evidence-
+	// only: reads the stored bmc.snmp_health fact (written by the SNMP collector, source=snmp)
+	// plus its observed_at; it NEVER re-probes here, so a stale-but-bad read still shows with
+	// its real age. "Unknown" is treated as non-actionable and excluded.
+	ListUnhealthyBMC(ctx context.Context) ([]ListUnhealthyBMCRow, error)
 	// MACs learned in a switch FDB that map to NO inventory device: not a known device
 	// NIC (interfaces/os_nics/vm_nics) AND whose ARP-derived IP (if any) is not an
 	// inventory device's primary IP. One row per (mac) — the EDGE port (fewest MACs)
@@ -825,6 +843,9 @@ type Querier interface {
 	// value never wipes an existing driver — collection only ENRICHES, so the
 	// Inventory "Driver" column populates without clobbering a classifier's value.
 	SetDeviceDriver(ctx context.Context, arg SetDeviceDriverParams) error
+	// Refine a device's subtype within its category (e.g. Alcatel OmniPCX) without
+	// disturbing classification, lock, or any other field. Used by discovery + onboarding.
+	SetDeviceSubtype(ctx context.Context, arg SetDeviceSubtypeParams) error
 	// Operator-set per-device web-access override: preferred scheme/port, alternate
 	// ports (comma-separated), preferred protocol, and a free-text note. Collectors
 	// try these first.
@@ -911,6 +932,11 @@ type Querier interface {
 	// previously site-less device — e.g. first found by an unscoped CIDR scan, later
 	// re-scanned under a site) but never OVERWRITES an operator-set location:
 	// COALESCE keeps any existing value. A NULL fill arg (site-less scan) is a no-op.
+	// Identity fields (hostname/vendor/model/serial/os_version) are COALESCE(NULLIF(…))
+	// guarded: a scan only REPLACES them with newer, non-empty evidence and can NEVER
+	// blank a previously-collected real value. A weak/old/no-identity scan (e.g. SNMP that
+	// exposes no OS string) preserves the last good identity. category/driver/status stay
+	// volatile (category has its own preservation guard in reconcile()).
 	UpdateDiscoveredDevice(ctx context.Context, arg UpdateDiscoveredDeviceParams) (Device, error)
 	UpdateDiscoveryJobStatus(ctx context.Context, arg UpdateDiscoveryJobStatusParams) error
 	UpdateDiscoveryResult(ctx context.Context, arg UpdateDiscoveryResultParams) error
@@ -972,6 +998,9 @@ type Querier interface {
 	UpsertServerStorage(ctx context.Context, arg UpsertServerStorageParams) error
 	UpsertSetting(ctx context.Context, arg UpsertSettingParams) error
 	UpsertSnooze(ctx context.Context, arg UpsertSnoozeParams) error
+	// Register a SUPPLEMENTAL SNMP sysUpTime health check (role=supplemental → it
+	// surfaces SNMP health as a "warning" and never flips the device offline).
+	UpsertSupplementalSNMPCheck(ctx context.Context, arg UpsertSupplementalSNMPCheckParams) (MonitoringCheck, error)
 	// ---- Topology links ------------------------------------------------------
 	UpsertTopologyLink(ctx context.Context, arg UpsertTopologyLinkParams) error
 	UpsertUPSStatus(ctx context.Context, arg UpsertUPSStatusParams) error

@@ -80,8 +80,13 @@ func (s *Server) collectILOviaSNMP(ctx context.Context, dev db.Device) bool {
 		ID: dev.ID, Vendor: "HPE", Model: model, Serial: serial, OsVersion: fw, Hostname: derefStr(dev.Hostname),
 	})
 	facts := map[string]string{"bmc.source": "snmp", "bmc.controller": controller}
+	// Only write a RECOGNIZED health state (OK/Degraded/Failed). A value of 1 ("other")
+	// maps to Unknown — a weak read — and must never overwrite a prior known-good/known-bad
+	// value, so we leave the existing bmc.snmp_health fact (and its observed_at age) intact.
 	if hv, ok := snmp.PDUInt64(get(oidCpqHeCondition)); ok {
-		facts["bmc.snmp_health"] = cpqHealth(hv)
+		if h := cpqHealth(hv); h != "Unknown" {
+			facts["bmc.snmp_health"] = h
+		}
 	}
 	for k, v := range facts {
 		if v != "" {

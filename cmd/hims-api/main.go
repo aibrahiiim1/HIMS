@@ -223,6 +223,11 @@ func run(ctx context.Context, serviceMode, logPath string) error {
 	// the storm that caused it has passed (never auth failures, never already-managed
 	// hosts, bounded rounds). Runs on startup, then every 5 minutes.
 	srv.StartCollectionSelfHeal(ctx, 5*time.Minute)
+	// Refresh HPE iLO/BMC identity + overall hardware health over each controller's
+	// BOUND SNMP credential so Failed/Degraded servers surface without manual collect.
+	// Bound-cred only (no spray), no Redfish fallback, never clobbers proven identity;
+	// health flows through the bmc.snmp_health fact the BMC page + DQ already read.
+	srv.StartBMCHealthRefresh(ctx, 10*time.Minute)
 	if err := srv.BootstrapAdmin(ctx, os.Getenv("HIMS_ADMIN_USER"), os.Getenv("HIMS_ADMIN_PASSWORD")); err != nil {
 		slog.Error("admin bootstrap failed", "error", err)
 	}

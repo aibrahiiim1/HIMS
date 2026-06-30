@@ -176,6 +176,19 @@ SELECT * FROM device_facts WHERE device_id = $1 ORDER BY key;
 SELECT device_id, key, value FROM device_facts
 WHERE key IN ('snmp.sysobjectid','snmp.sysdescr','snmp.sysname','probe.open_tcp') AND value IS NOT NULL;
 
+-- name: ListUnhealthyBMC :many
+-- BMC/iLO devices whose last SNMP-collected overall health is not OK (Degraded/Failed),
+-- for the Data Quality "server hardware health" surface and the Action Center. Evidence-
+-- only: reads the stored bmc.snmp_health fact (written by the SNMP collector, source=snmp)
+-- plus its observed_at; it NEVER re-probes here, so a stale-but-bad read still shows with
+-- its real age. "Unknown" is treated as non-actionable and excluded.
+SELECT d.id, d.name, d.primary_ip, f.value AS health, f.observed_at
+FROM devices d
+JOIN device_facts f ON f.device_id = d.id AND f.key = 'bmc.snmp_health'
+WHERE d.deleted_at IS NULL AND d.category = 'bmc'
+  AND f.value IS NOT NULL AND lower(f.value) <> 'ok' AND lower(f.value) <> 'unknown'
+ORDER BY d.primary_ip;
+
 -- name: AddDeviceRole :exec
 INSERT INTO device_roles (device_id, role, source)
 VALUES ($1, $2, $3)

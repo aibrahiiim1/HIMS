@@ -653,6 +653,54 @@ func (q *Queries) ListSNMPIdentityFacts(ctx context.Context) ([]ListSNMPIdentity
 	return items, nil
 }
 
+const listUnhealthyBMC = `-- name: ListUnhealthyBMC :many
+SELECT d.id, d.name, d.primary_ip, f.value AS health, f.observed_at
+FROM devices d
+JOIN device_facts f ON f.device_id = d.id AND f.key = 'bmc.snmp_health'
+WHERE d.deleted_at IS NULL AND d.category = 'bmc'
+  AND f.value IS NOT NULL AND lower(f.value) <> 'ok' AND lower(f.value) <> 'unknown'
+ORDER BY d.primary_ip
+`
+
+type ListUnhealthyBMCRow struct {
+	ID         uuid.UUID   `json:"id"`
+	Name       string      `json:"name"`
+	PrimaryIp  *netip.Addr `json:"primary_ip"`
+	Health     *string     `json:"health"`
+	ObservedAt time.Time   `json:"observed_at"`
+}
+
+// BMC/iLO devices whose last SNMP-collected overall health is not OK (Degraded/Failed),
+// for the Data Quality "server hardware health" surface and the Action Center. Evidence-
+// only: reads the stored bmc.snmp_health fact (written by the SNMP collector, source=snmp)
+// plus its observed_at; it NEVER re-probes here, so a stale-but-bad read still shows with
+// its real age. "Unknown" is treated as non-actionable and excluded.
+func (q *Queries) ListUnhealthyBMC(ctx context.Context) ([]ListUnhealthyBMCRow, error) {
+	rows, err := q.db.Query(ctx, listUnhealthyBMC)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListUnhealthyBMCRow{}
+	for rows.Next() {
+		var i ListUnhealthyBMCRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.PrimaryIp,
+			&i.Health,
+			&i.ObservedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const liveDeviceByIP = `-- name: LiveDeviceByIP :one
 SELECT id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason, is_virtual, cctv_credential_id, web_scheme_pref, web_port_pref, web_alt_ports, web_notes, web_last_ok, web_last_ok_at, web_last_proto, web_last_scheme, web_last_port, web_last_credential_id, web_pref_proto FROM devices
 WHERE primary_ip = $1 AND deleted_at IS NULL

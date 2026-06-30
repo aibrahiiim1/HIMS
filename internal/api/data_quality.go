@@ -209,6 +209,39 @@ func (s *Server) dataQuality(w http.ResponseWriter, r *http.Request) {
 		addDQ("nvr_camera_offline", "NVR/DVR cameras offline", desc, "warning", list, len(rows))
 	}
 
+	// --- BMC / server hardware health (iLO overall condition over SNMP) ------
+	// Surfaces controllers whose last SNMP-collected cpqHeMibCondition is non-OK. Real,
+	// device-reported health — not a synthetic alert; it flows through this existing DQ
+	// surface (and the BMC page card), not a paging channel.
+	if rows, err := s.queries.ListUnhealthyBMC(ctx); err == nil && len(rows) > 0 {
+		failed, degraded := 0, 0
+		list := []dqDevice{}
+		for _, r := range rows {
+			h := strings.TrimSpace(derefStr(r.Health))
+			if strings.EqualFold(h, "failed") {
+				failed++
+			} else {
+				degraded++
+			}
+			ip := ""
+			if r.PrimaryIp != nil && r.PrimaryIp.IsValid() {
+				ip = r.PrimaryIp.String()
+			}
+			if len(list) < dqSampleCap {
+				list = append(list, dqDevice{
+					ID: r.ID.String(), Name: r.Name, PrimaryIP: ip, Category: "bmc",
+					Note: "iLO overall health: " + h + " (SNMP, observed " + r.ObservedAt.Format("2006-01-02 15:04") + ")",
+				})
+			}
+		}
+		sev := "info"
+		if failed > 0 {
+			sev = "warning"
+		}
+		desc := fmt.Sprintf("HPE iLO / BMC controllers reporting a non-OK overall hardware condition over SNMP: %d failed, %d degraded. Open the controller's iLO web UI to see which subsystem (power/fan/temperature/disk) is unhealthy. Source: cpqHeMibCondition, refreshed automatically over the bound SNMP credential.", failed, degraded)
+		addDQ("bmc_health_bad", "Server hardware health (iLO)", desc, sev, list, len(rows))
+	}
+
 	// --- Wireless controller collection quality (WC-P5) ----------------------
 	s.addWirelessDQ(ctx, devs, &issues, staleBefore)
 
