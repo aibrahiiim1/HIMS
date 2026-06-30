@@ -50,12 +50,31 @@ func TestParseInputProxyChannels(t *testing.T) {
 
 func TestParseInputProxyStatus(t *testing.T) {
 	xml := `<InputProxyChannelStatusList>
-	  <InputProxyChannelStatus><id>1</id><online>true</online></InputProxyChannelStatus>
-	  <InputProxyChannelStatus><id>2</id><online>false</online></InputProxyChannelStatus>
+	  <InputProxyChannelStatus><id>1</id><sourceInputPortDescriptor><ipAddress>172.21.210.48</ipAddress></sourceInputPortDescriptor><online>true</online><chanDetectResult>connect</chanDetectResult></InputProxyChannelStatus>
+	  <InputProxyChannelStatus><id>3</id><sourceInputPortDescriptor><ipAddress>172.21.210.47</ipAddress></sourceInputPortDescriptor><online>false</online><chanDetectResult>netUnreachable</chanDetectResult></InputProxyChannelStatus>
+	  <InputProxyChannelStatus><id>4</id><sourceInputPortDescriptor><ipAddress>172.21.210.45</ipAddress></sourceInputPortDescriptor><online>false</online><chanDetectResult>errorUserNameOrPasswd</chanDetectResult></InputProxyChannelStatus>
 	</InputProxyChannelStatusList>`
 	st := parseInputProxyStatus([]byte(xml))
-	if st[1] != true || st[2] != false {
-		t.Fatalf("status = %+v", st)
+	if !st[1].Online || st[1].Detect != "connect" || st[1].IP != "172.21.210.48" {
+		t.Fatalf("ch1 = %+v", st[1])
+	}
+	if st[3].Online || st[3].Detect != "netUnreachable" {
+		t.Fatalf("ch3 = %+v", st[3])
+	}
+	if st[4].Online || st[4].Detect != "errorUserNameOrPasswd" {
+		t.Fatalf("ch4 = %+v", st[4])
+	}
+	// reason mapping
+	off := false
+	if (Channel{Online: &off, DetectResult: "netUnreachable"}).OfflineReason() != "network unreachable" {
+		t.Errorf("network reason")
+	}
+	if (Channel{Online: &off, DetectResult: "errorUserNameOrPasswd"}).OfflineReason() != "credential error" {
+		t.Errorf("credential reason")
+	}
+	on := true
+	if (Channel{Online: &on, DetectResult: "connect"}).OfflineReason() != "" {
+		t.Errorf("online should have no reason")
 	}
 }
 

@@ -163,7 +163,7 @@ func (q *Queries) ListLinkedCameraDeviceIDs(ctx context.Context) ([]*uuid.UUID, 
 }
 
 const listNVRChannels = `-- name: ListNVRChannels :many
-SELECT id, nvr_device_id, channel_no, camera_name, camera_ip, camera_device_id, status, last_seen_at, enabled, recording, resolution FROM nvr_channels WHERE nvr_device_id = $1 ORDER BY channel_no
+SELECT id, nvr_device_id, channel_no, camera_name, camera_ip, camera_device_id, status, last_seen_at, enabled, recording, resolution, detect_reason FROM nvr_channels WHERE nvr_device_id = $1 ORDER BY channel_no
 `
 
 func (q *Queries) ListNVRChannels(ctx context.Context, nvrDeviceID uuid.UUID) ([]NvrChannel, error) {
@@ -187,6 +187,7 @@ func (q *Queries) ListNVRChannels(ctx context.Context, nvrDeviceID uuid.UUID) ([
 			&i.Enabled,
 			&i.Recording,
 			&i.Resolution,
+			&i.DetectReason,
 		); err != nil {
 			return nil, err
 		}
@@ -222,6 +223,56 @@ func (q *Queries) ListNVRStorage(ctx context.Context, nvrDeviceID uuid.UUID) ([]
 			&i.Property,
 			&i.Source,
 			&i.LastSeenAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOfflineNVRChannels = `-- name: ListOfflineNVRChannels :many
+SELECT ch.nvr_device_id, nvr.name AS nvr_name, ch.channel_no,
+       COALESCE(host(ch.camera_ip),'')::text AS camera_ip,
+       COALESCE(ch.camera_name,'')::text AS camera_name,
+       ch.detect_reason
+FROM nvr_channels ch
+JOIN devices nvr ON nvr.id = ch.nvr_device_id AND nvr.deleted_at IS NULL
+WHERE ch.status = 'offline'
+ORDER BY nvr.name, ch.channel_no
+`
+
+type ListOfflineNVRChannelsRow struct {
+	NvrDeviceID  uuid.UUID `json:"nvr_device_id"`
+	NvrName      string    `json:"nvr_name"`
+	ChannelNo    int32     `json:"channel_no"`
+	CameraIp     string    `json:"camera_ip"`
+	CameraName   string    `json:"camera_name"`
+	DetectReason string    `json:"detect_reason"`
+}
+
+// Cameras an NVR/DVR reports OFFLINE, with the recorder + the reason (network
+// unreachable / credential error / …), so Data Quality surfaces every disconnected
+// camera and WHY — not just an online/offline flag.
+func (q *Queries) ListOfflineNVRChannels(ctx context.Context) ([]ListOfflineNVRChannelsRow, error) {
+	rows, err := q.db.Query(ctx, listOfflineNVRChannels)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListOfflineNVRChannelsRow{}
+	for rows.Next() {
+		var i ListOfflineNVRChannelsRow
+		if err := rows.Scan(
+			&i.NvrDeviceID,
+			&i.NvrName,
+			&i.ChannelNo,
+			&i.CameraIp,
+			&i.CameraName,
+			&i.DetectReason,
 		); err != nil {
 			return nil, err
 		}
@@ -446,8 +497,8 @@ func (q *Queries) UpsertCameraInfo(ctx context.Context, arg UpsertCameraInfoPara
 }
 
 const upsertNVRChannel = `-- name: UpsertNVRChannel :one
-INSERT INTO nvr_channels (nvr_device_id, channel_no, camera_name, camera_ip, camera_device_id, status, enabled, recording, resolution)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+INSERT INTO nvr_channels (nvr_device_id, channel_no, camera_name, camera_ip, camera_device_id, status, enabled, recording, resolution, detect_reason)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 ON CONFLICT (nvr_device_id, channel_no) DO UPDATE SET
     camera_name = EXCLUDED.camera_name,
     camera_ip = EXCLUDED.camera_ip,
@@ -461,8 +512,9 @@ ON CONFLICT (nvr_device_id, channel_no) DO UPDATE SET
     enabled = EXCLUDED.enabled,
     recording = EXCLUDED.recording,
     resolution = EXCLUDED.resolution,
+    detect_reason = EXCLUDED.detect_reason,
     last_seen_at = now()
-RETURNING id, nvr_device_id, channel_no, camera_name, camera_ip, camera_device_id, status, last_seen_at, enabled, recording, resolution
+RETURNING id, nvr_device_id, channel_no, camera_name, camera_ip, camera_device_id, status, last_seen_at, enabled, recording, resolution, detect_reason
 `
 
 type UpsertNVRChannelParams struct {
@@ -475,6 +527,7 @@ type UpsertNVRChannelParams struct {
 	Enabled        bool        `json:"enabled"`
 	Recording      *bool       `json:"recording"`
 	Resolution     string      `json:"resolution"`
+	DetectReason   string      `json:"detect_reason"`
 }
 
 func (q *Queries) UpsertNVRChannel(ctx context.Context, arg UpsertNVRChannelParams) (NvrChannel, error) {
@@ -488,6 +541,7 @@ func (q *Queries) UpsertNVRChannel(ctx context.Context, arg UpsertNVRChannelPara
 		arg.Enabled,
 		arg.Recording,
 		arg.Resolution,
+		arg.DetectReason,
 	)
 	var i NvrChannel
 	err := row.Scan(
@@ -502,6 +556,7 @@ func (q *Queries) UpsertNVRChannel(ctx context.Context, arg UpsertNVRChannelPara
 		&i.Enabled,
 		&i.Recording,
 		&i.Resolution,
+		&i.DetectReason,
 	)
 	return i, err
 }

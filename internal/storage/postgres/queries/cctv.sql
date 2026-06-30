@@ -34,6 +34,19 @@ ON CONFLICT (device_id) DO UPDATE SET
 -- name: ListNVRChannels :many
 SELECT * FROM nvr_channels WHERE nvr_device_id = $1 ORDER BY channel_no;
 
+-- name: ListOfflineNVRChannels :many
+-- Cameras an NVR/DVR reports OFFLINE, with the recorder + the reason (network
+-- unreachable / credential error / …), so Data Quality surfaces every disconnected
+-- camera and WHY — not just an online/offline flag.
+SELECT ch.nvr_device_id, nvr.name AS nvr_name, ch.channel_no,
+       COALESCE(host(ch.camera_ip),'')::text AS camera_ip,
+       COALESCE(ch.camera_name,'')::text AS camera_name,
+       ch.detect_reason
+FROM nvr_channels ch
+JOIN devices nvr ON nvr.id = ch.nvr_device_id AND nvr.deleted_at IS NULL
+WHERE ch.status = 'offline'
+ORDER BY nvr.name, ch.channel_no;
+
 -- name: FindNVRsForCamera :many
 -- Path Finder: which NVR/DVR(s) record this camera device, with the channel +
 -- recording status, so a camera's path shows the recorder it feeds.
@@ -55,8 +68,8 @@ SELECT count(*)::bigint AS total, count(camera_device_id)::bigint AS linked
 FROM nvr_channels WHERE nvr_device_id = $1;
 
 -- name: UpsertNVRChannel :one
-INSERT INTO nvr_channels (nvr_device_id, channel_no, camera_name, camera_ip, camera_device_id, status, enabled, recording, resolution)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+INSERT INTO nvr_channels (nvr_device_id, channel_no, camera_name, camera_ip, camera_device_id, status, enabled, recording, resolution, detect_reason)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 ON CONFLICT (nvr_device_id, channel_no) DO UPDATE SET
     camera_name = EXCLUDED.camera_name,
     camera_ip = EXCLUDED.camera_ip,
@@ -70,6 +83,7 @@ ON CONFLICT (nvr_device_id, channel_no) DO UPDATE SET
     enabled = EXCLUDED.enabled,
     recording = EXCLUDED.recording,
     resolution = EXCLUDED.resolution,
+    detect_reason = EXCLUDED.detect_reason,
     last_seen_at = now()
 RETURNING *;
 

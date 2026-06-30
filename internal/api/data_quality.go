@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
@@ -174,6 +175,39 @@ func (s *Server) dataQuality(w http.ResponseWriter, r *http.Request) {
 	// device that an operator's own (user) fingerprint would re-classify but which
 	// hasn't been re-scanned since the rule was added.
 	s.addFingerprintDQ(ctx, devs, &issues)
+
+	// --- NVR/DVR camera channel health (per-camera offline + reason) ---------
+	if rows, err := s.queries.ListOfflineNVRChannels(ctx); err == nil && len(rows) > 0 {
+		netN, credN, otherN := 0, 0, 0
+		list := []dqDevice{}
+		for _, r := range rows {
+			reason := strings.TrimSpace(r.DetectReason)
+			if reason == "" {
+				reason = "offline"
+			}
+			switch {
+			case strings.Contains(reason, "network"):
+				netN++
+			case strings.Contains(reason, "credential"):
+				credN++
+			default:
+				otherN++
+			}
+			name := strings.TrimSpace(r.CameraName)
+			if name == "" {
+				name = r.CameraIp
+			}
+			if len(list) < dqSampleCap {
+				list = append(list, dqDevice{
+					ID: r.NvrDeviceID.String(), Name: nz(name, fmt.Sprintf("channel %d", r.ChannelNo)),
+					PrimaryIP: r.CameraIp, Category: "camera",
+					Note: r.NvrName + " ch" + strconv.Itoa(int(r.ChannelNo)) + " — " + reason,
+				})
+			}
+		}
+		desc := fmt.Sprintf("Cameras the NVR/DVR reports offline: %d unreachable on the network, %d reachable but credential error (re-enter the camera password on the recorder), %d other. The system now tracks each camera's real link state + reason.", netN, credN, otherN)
+		addDQ("nvr_camera_offline", "NVR/DVR cameras offline", desc, "warning", list, len(rows))
+	}
 
 	// --- Wireless controller collection quality (WC-P5) ----------------------
 	s.addWirelessDQ(ctx, devs, &issues, staleBefore)

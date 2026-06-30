@@ -37,13 +37,39 @@ type TimeInfo struct {
 
 // Channel is one camera/input on the recorder.
 type Channel struct {
-	No         int
-	Name       string
-	IP         string
-	Online     *bool  // nil = status not reported
-	Enabled    bool   // configured/enabled in the recorder
-	Resolution string // analog inputs: resDesc, e.g. "1080P25" ("" = no signal)
-	Recording  *bool  // nil = recording state not reported; from record/tracks
+	No           int
+	Name         string
+	IP           string
+	Online       *bool  // nil = status not reported
+	DetectResult string // chanDetectResult: connect | netUnreachable | errorUserNameOrPasswd | offline | …
+	Enabled      bool   // configured/enabled in the recorder
+	Resolution   string // analog inputs: resDesc, e.g. "1080P25" ("" = no signal)
+	Recording    *bool  // nil = recording state not reported; from record/tracks
+}
+
+// OfflineReason maps the recorder's raw chanDetectResult to a clear, operator-facing reason.
+// Empty string = online / no issue.
+func (c Channel) OfflineReason() string {
+	if c.Online != nil && *c.Online {
+		return ""
+	}
+	switch strings.TrimSpace(c.DetectResult) {
+	case "", "connect":
+		if c.Online != nil && !*c.Online {
+			return "offline"
+		}
+		return ""
+	case "netUnreachable", "networkAbnormal", "offline", "timeout":
+		return "network unreachable"
+	case "errorUserNameOrPasswd", "userOrPasswordError", "authError":
+		return "credential error"
+	case "IPConflict":
+		return "IP conflict"
+	case "notSupport", "videoLoss":
+		return strings.TrimSpace(c.DetectResult)
+	default:
+		return strings.TrimSpace(c.DetectResult)
+	}
 }
 
 // HDD is one storage device on the recorder.
@@ -161,10 +187,14 @@ func Collect(ctx context.Context, ip, user, pass string, doer Doer, prefer []str
 	}
 	// IP-camera channel online status (NVRs): the camera-behind-the-channel link state.
 	if b, ok := probe("/ISAPI/ContentMgmt/InputProxy/channels/status"); ok {
-		for no, online := range parseInputProxyStatus(b) {
+		for no, st := range parseInputProxyStatus(b) {
 			if ch := chByNo[no]; ch != nil {
-				o := online
+				o := st.Online
 				ch.Online = &o
+				ch.DetectResult = st.Detect
+				if ch.IP == "" && st.IP != "" {
+					ch.IP = st.IP
+				}
 			}
 		}
 	}
@@ -303,20 +333,35 @@ func parseRecordTracks(b []byte) map[int]bool {
 	return out
 }
 
-func parseInputProxyStatus(b []byte) map[int]bool {
+// chStatus is one channel's live link state from the InputProxy status walk.
+type chStatus struct {
+	Online bool
+	Detect string // chanDetectResult diagnostic code
+	IP     string // camera IP behind the channel
+}
+
+func parseInputProxyStatus(b []byte) map[int]chStatus {
 	type st struct {
 		ID     string `xml:"id"`
 		Online string `xml:"online"`
+		Detect string `xml:"chanDetectResult"`
+		Src    struct {
+			IP string `xml:"ipAddress"`
+		} `xml:"sourceInputPortDescriptor"`
 	}
 	var doc struct {
 		St []st `xml:"InputProxyChannelStatus"`
 	}
-	out := map[int]bool{}
+	out := map[int]chStatus{}
 	if xml.Unmarshal(b, &doc) != nil {
 		return out
 	}
 	for _, s := range doc.St {
-		out[atoi(s.ID)] = strings.EqualFold(strings.TrimSpace(s.Online), "true")
+		out[atoi(s.ID)] = chStatus{
+			Online: strings.EqualFold(strings.TrimSpace(s.Online), "true"),
+			Detect: strings.TrimSpace(s.Detect),
+			IP:     strings.TrimSpace(s.Src.IP),
+		}
 	}
 	return out
 }
