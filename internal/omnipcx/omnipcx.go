@@ -4,10 +4,13 @@
 // which carries the real software version/release/patch/country/CPU-role — enough to identify
 // + manage the PBX honestly. It issues NO configuration commands.
 //
-// SCOPE: identity only. The user/extension DIRECTORY and registered phone SETS live in the
-// call-server database, reachable only through the interactive `mgr` tool or OmniVista 8770 /
-// an LDAP export — NOT safely scriptable over the restricted mtcl telnet shell (which blocks
-// general shell commands). That data is an honest external dependency, never fabricated here.
+// SCOPE: identity only. The user/extension DIRECTORY and registered phone SETS are NOT
+// available over this path — VERIFIED live against a real OXE: the mtcl telnet account exposes
+// no usable command shell (the session echoes input but there is no prompt and no command —
+// mgr/ls/cat/echo/whoami — executes or returns output), and SNMP exposes only identity (2
+// status OIDs under .1.3.6.1.4.1.637, no telephony tables). The directory/sets live in the
+// call-server DB reachable only via OmniVista 8770 / the OXE management (CSTA) API — an honest
+// external dependency, never fabricated here.
 package omnipcx
 
 import (

@@ -215,8 +215,8 @@ func onboardingCatalog() []onbType {
 			BaseFields: baseFields(nil), LockOnSave: true,
 			Capabilities: []onbCapability{
 				cap("identity", "Vendor / model / software version", "implemented_collected", "SNMP + (Alcatel) OmniPCX telnet banner — live-validated"),
-				cap("directory", "Users / extensions directory", "external_dependency_required", "lives in the call-server DB; needs OmniVista 8770 or an LDAP export — the restricted mtcl shell cannot bulk-export safely (no fabricated entries)"),
-				cap("phone_sets", "Registered phone sets / handsets", "external_dependency_required", "call-server DB — OmniVista 8770 / OXE management; not exposed over the mtcl telnet shell"),
+				cap("directory", "Users / extensions directory", "external_dependency_required", "VERIFIED live: the mtcl telnet account exposes NO command shell (login banner only — no prompt, no command executes), and SNMP exposes identity only (2 status OIDs under .637, no telephony tables). The user/extension directory lives in the call-server DB, reachable only via OmniVista 8770 / the OXE management (CSTA) API. No data is fabricated."),
+				cap("phone_sets", "Registered phone sets / handsets", "external_dependency_required", "VERIFIED live: not exposed over the mtcl telnet shell or SNMP; requires OmniVista 8770 / OXE management (CSTA, port 2533)."),
 			}},
 	}
 	for ti := range cat {

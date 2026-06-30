@@ -25,6 +25,17 @@ const (
 	se    = 240 // subnegotiation end
 )
 
+// Telnet options we negotiate to get a working interactive shell (RFC 857/858/1091).
+const (
+	optEcho     = 1  // server echoes our input
+	optSGA      = 3  // suppress go-ahead (char-at-a-time)
+	optTermType = 24 // terminal type
+)
+
+// termType is what we report when the server asks (RFC 1091). A generic VT100 is
+// universally accepted and enough to get a cooked shell from legacy systems.
+var termType = []byte("VT100")
+
 // Client is a telnet session over one TCP connection. Not safe for concurrent use.
 type Client struct {
 	conn net.Conn
@@ -70,16 +81,37 @@ func (c *Client) readDecoded(timeout time.Duration) ([]byte, error) {
 				break
 			}
 			opt := raw[i+2]
-			resp := byte(wont) // refuse: respond to DO/DONT with WONT
-			if cmd == will || cmd == wont {
-				resp = dont // refuse: respond to WILL/WONT with DONT
+			var resp byte
+			switch {
+			case cmd == will && (opt == optEcho || opt == optSGA):
+				resp = doCmd // ACCEPT server echo + suppress-go-ahead → a real interactive shell
+			case cmd == will:
+				resp = dont // decline other server offers
+			case cmd == doCmd && opt == optTermType:
+				resp = will // we WILL send a terminal type (server then SB-SENDs)
+			case cmd == doCmd && opt == optSGA:
+				resp = will // we also suppress go-ahead
+			case cmd == doCmd:
+				resp = wont // we won't do other things the server asks of us
+			default: // wont / dont — acknowledge by mirroring the refusal
+				resp = wont
+				if cmd == dont {
+					resp = wont
+				}
 			}
 			_, _ = c.conn.Write([]byte{iac, resp, opt})
 			i += 3
-		case sb: // skip subnegotiation up to IAC SE
+		case sb: // subnegotiation: answer TERMINAL-TYPE SEND, else skip to IAC SE
 			j := i + 2
 			for j+1 < n && !(raw[j] == iac && raw[j+1] == se) {
 				j++
+			}
+			// SB <opt> <sub...> IAC SE — TERMINAL-TYPE SEND(1) → reply IS(0) VT100.
+			if j > i+3 && raw[i+2] == optTermType && raw[i+3] == 1 {
+				reply := []byte{iac, sb, optTermType, 0}
+				reply = append(reply, termType...)
+				reply = append(reply, iac, se)
+				_, _ = c.conn.Write(reply)
 			}
 			i = j + 2
 		default: // 2-byte command we don't care about
