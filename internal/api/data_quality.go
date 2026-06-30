@@ -87,7 +87,15 @@ func (s *Server) dataQuality(w http.ResponseWriter, r *http.Request) {
 		if d.Category == "unknown" {
 			unknownCat = append(unknownCat, d)
 		}
-		if d.LastDiscoveryAt == nil || d.LastDiscoveryAt.Before(staleBefore) {
+		// "Not seen recently" requires that NEITHER discovery NOR monitoring observed the
+		// device within the window. A device actively monitored every poll is seen — even if
+		// it never went through a discovery scan (last_discovery_at stays NULL). Using
+		// discovery alone wrongly flagged the whole monitored fleet as stale.
+		lastSeen := d.LastDiscoveryAt
+		if d.LastMonitoringAt != nil && (lastSeen == nil || d.LastMonitoringAt.After(*lastSeen)) {
+			lastSeen = d.LastMonitoringAt
+		}
+		if lastSeen == nil || lastSeen.Before(staleBefore) {
 			stale = append(stale, d)
 		}
 		// Weakly auto-classified devices (scored but below the confidence bar) —
