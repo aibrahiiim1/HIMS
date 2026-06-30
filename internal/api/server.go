@@ -243,6 +243,7 @@ func (s *Server) routes() {
 		r.Get("/devices", s.listDevices)
 		r.Get("/inventory/bmc", s.listBMCInventory)               // iLO/BMC out-of-band controllers + bmc_info
 		r.Get("/devices/category-counts", s.deviceCategoryCounts) // {category: count} for sidebar+page reconciliation
+		r.Get("/devices/offline-counts", s.deviceOfflineCounts)   // {category: offline_count} for the red sidebar "disconnected" badge
 		r.Get("/manual-onboarding/device-types", s.listManualDeviceTypes)
 		r.Get("/manual-onboarding/device-types/{type}", s.getManualDeviceType)
 		r.Get("/manual-onboarding/lookup", s.lookupManualDeviceIP)

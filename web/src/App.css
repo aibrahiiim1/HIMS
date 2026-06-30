@@ -270,6 +270,8 @@ button { font-family: inherit; }
 .nav-badge.tone-warn { background: var(--warn); }
 .nav-badge.tone-info { background: var(--brand); }
 .nav-badge.tone-neutral { background: #475569; }
+/* Offline / disconnected device count — red, so it stands out from the neutral total. */
+.nav-badge.tone-offline { background: var(--crit); color: #fff; box-shadow: 0 0 0 1px rgba(239,68,68,.35); }
 
 /* nested children */
 .nav-children {

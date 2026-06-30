@@ -4,6 +4,7 @@ import { ChevronDown, ChevronRight, Boxes } from 'lucide-react'
 import { NAV, type NavItem, type NavLeaf, type BadgeKey } from '../nav'
 import type { BadgeCounts } from '../hooks/useBadges'
 import { useCategoryCounts } from '../hooks/useCategoryCounts'
+import { useOfflineCounts } from '../hooks/useOfflineCounts'
 import { PATH_CATEGORIES, sumCounts } from '../inventoryGroups'
 
 const BADGE_TONE: Record<BadgeKey, string> = {
@@ -27,7 +28,16 @@ function matches(pathname: string, to: string): boolean {
   return pathname === to || pathname.startsWith(to + '/')
 }
 
-function Leaf({ leaf, counts, catCounts, onNavigate }: { leaf: NavLeaf; counts: BadgeCounts; catCounts?: Record<string, number>; onNavigate: () => void }) {
+// OfflineBadge is the red "disconnected" count for an inventory item/group, summed over its
+// device categories. Hidden when 0 (nothing offline).
+function OfflineBadge({ categories, offlineCounts }: { categories?: string[]; offlineCounts?: Record<string, number> }) {
+  if (!categories || categories.length === 0) return null
+  const n = sumCounts(offlineCounts, categories)
+  if (!n || n <= 0) return null
+  return <span className="nav-badge tone-offline" title={`${n} offline / disconnected`}>{n > 99 ? '99+' : n}</span>
+}
+
+function Leaf({ leaf, counts, catCounts, offlineCounts, onNavigate }: { leaf: NavLeaf; counts: BadgeCounts; catCounts?: Record<string, number>; offlineCounts?: Record<string, number>; onNavigate: () => void }) {
   const Icon = leaf.icon
   // Data-driven inventory count: shown only for paths whose page is the category-driven
   // grid, so the number equals that page's row count (same {category:count} source).
@@ -43,17 +53,20 @@ function Leaf({ leaf, counts, catCounts, onNavigate }: { leaf: NavLeaf; counts: 
       {Icon && <span className="nav-ico"><Icon size={15} /></span>}
       <span className="nav-label">{leaf.label}</span>
       <Badge k={leaf.badge} counts={counts} />
+      <OfflineBadge categories={leaf.categories} offlineCounts={offlineCounts} />
       {typeof n === 'number' && <span className="nav-badge tone-neutral">{n > 999 ? '999+' : n}</span>}
     </NavLink>
   )
 }
 
-function ParentItem({ item, counts, catCounts, onNavigate }: { item: NavItem; counts: BadgeCounts; catCounts?: Record<string, number>; onNavigate: () => void }) {
+function ParentItem({ item, counts, catCounts, offlineCounts, onNavigate }: { item: NavItem; counts: BadgeCounts; catCounts?: Record<string, number>; offlineCounts?: Record<string, number>; onNavigate: () => void }) {
   const loc = useLocation()
   const Icon = item.icon
   const children = item.children ?? []
   const childActive = children.some((c) => matches(loc.pathname, c.to))
   const [open, setOpen] = useState(childActive)
+  // Group offline badge = union of all children's categories (collapsed-state visibility).
+  const groupCats = item.categories ?? children.flatMap((c) => c.categories ?? [])
 
   return (
     <div>
@@ -66,12 +79,13 @@ function ParentItem({ item, counts, catCounts, onNavigate }: { item: NavItem; co
         <span className="nav-ico"><Icon size={18} /></span>
         <span className="nav-label">{item.label}</span>
         <Badge k={item.badge} counts={counts} />
+        <OfflineBadge categories={groupCats} offlineCounts={offlineCounts} />
         <ChevronRight size={15} className="chev" />
       </button>
       {open && (
         <div className="nav-children">
           {children.map((c) => (
-            <Leaf key={c.to + c.label} leaf={c} counts={counts} catCounts={catCounts} onNavigate={onNavigate} />
+            <Leaf key={c.to + c.label} leaf={c} counts={counts} catCounts={catCounts} offlineCounts={offlineCounts} onNavigate={onNavigate} />
           ))}
         </div>
       )}
@@ -79,11 +93,11 @@ function ParentItem({ item, counts, catCounts, onNavigate }: { item: NavItem; co
   )
 }
 
-function Item({ item, counts, catCounts, onNavigate }: { item: NavItem; counts: BadgeCounts; catCounts?: Record<string, number>; onNavigate: () => void }) {
+function Item({ item, counts, catCounts, offlineCounts, onNavigate }: { item: NavItem; counts: BadgeCounts; catCounts?: Record<string, number>; offlineCounts?: Record<string, number>; onNavigate: () => void }) {
   const Icon = item.icon
 
   if (item.children && item.children.length) {
-    return <ParentItem item={item} counts={counts} catCounts={catCounts} onNavigate={onNavigate} />
+    return <ParentItem item={item} counts={counts} catCounts={catCounts} offlineCounts={offlineCounts} onNavigate={onNavigate} />
   }
 
   return (
@@ -96,6 +110,7 @@ function Item({ item, counts, catCounts, onNavigate }: { item: NavItem; counts: 
       <span className="nav-ico"><Icon size={18} /></span>
       <span className="nav-label">{item.label}</span>
       <Badge k={item.badge} counts={counts} />
+      <OfflineBadge categories={item.categories} offlineCounts={offlineCounts} />
     </NavLink>
   )
 }
@@ -115,6 +130,7 @@ function Group({ title, children }: { title: string; children: React.ReactNode }
 
 export function Sidebar({ counts, onNavigate }: { counts: BadgeCounts; onNavigate: () => void }) {
   const catCounts = useCategoryCounts().data
+  const offlineCounts = useOfflineCounts().data
   return (
     <aside className="rail">
       <div className="rail-brand">
@@ -128,7 +144,7 @@ export function Sidebar({ counts, onNavigate }: { counts: BadgeCounts; onNavigat
         {NAV.map((g) => (
           <Group key={g.title} title={g.title}>
             {g.items.map((it) => (
-              <Item key={it.label} item={it} counts={counts} catCounts={catCounts} onNavigate={onNavigate} />
+              <Item key={it.label} item={it} counts={counts} catCounts={catCounts} offlineCounts={offlineCounts} onNavigate={onNavigate} />
             ))}
           </Group>
         ))}

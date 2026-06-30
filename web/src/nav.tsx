@@ -15,12 +15,16 @@ export interface NavLeaf {
   to: string
   icon?: ComponentType<{ size?: number | string; className?: string }>
   badge?: BadgeKey
+  // Device categories this item lists — drives a red "offline/disconnected" count badge
+  // (sum of offline devices across these categories). A group's count = union of its children.
+  categories?: string[]
 }
 export interface NavItem {
   label: string
   icon: ComponentType<{ size?: number | string; className?: string }>
   to?: string
   badge?: BadgeKey
+  categories?: string[]
   children?: NavLeaf[]
 }
 export interface NavGroup {
@@ -69,20 +73,20 @@ export const NAV: NavGroup[] = [
         label: 'Network Devices', icon: Layers,
         children: [
           { label: 'All Network', to: '/inventory/network', icon: Layers },
-          { label: 'Switches', to: '/', icon: Network },
-          { label: 'Routers', to: '/inventory/network/routers', icon: RouteIcon },
-          { label: 'Firewalls', to: '/firewalls', icon: Flame },
-          { label: 'Wireless Controllers', to: '/wlan', icon: Wifi },
-          { label: 'Access Points', to: '/inventory/network/access-points', icon: Wifi },
+          { label: 'Switches', to: '/', icon: Network, categories: ['switch'] },
+          { label: 'Routers', to: '/inventory/network/routers', icon: RouteIcon, categories: ['router', 'isp_router'] },
+          { label: 'Firewalls', to: '/firewalls', icon: Flame, categories: ['firewall'] },
+          { label: 'Wireless Controllers', to: '/wlan', icon: Wifi, categories: ['wireless_controller'] },
+          { label: 'Access Points', to: '/inventory/network/access-points', icon: Wifi, categories: ['access_point'] },
         ],
       },
       {
         label: 'Compute', icon: Cpu,
         children: [
           { label: 'All Compute', to: '/inventory/compute', icon: Layers },
-          { label: 'Servers', to: '/servers', icon: Server },
-          { label: 'Virtual Hosts', to: '/virtual-hosts', icon: HardDrive },
-          { label: 'iLO / BMC / iDRAC', to: '/inventory/compute/bmc', icon: Cpu },
+          { label: 'Servers', to: '/servers', icon: Server, categories: ['server'] },
+          { label: 'Virtual Hosts', to: '/virtual-hosts', icon: HardDrive, categories: ['virtual_host'] },
+          { label: 'iLO / BMC / iDRAC', to: '/inventory/compute/bmc', icon: Cpu, categories: ['bmc'] },
         ],
       },
       {
@@ -90,27 +94,27 @@ export const NAV: NavGroup[] = [
         children: [
           { label: 'All Endpoints', to: '/inventory/endpoints', icon: Layers },
           { label: 'Endpoint Intelligence', to: '/endpoint-intelligence', icon: ChartLine },
-          { label: 'Workstations', to: '/workstations', icon: Laptop },
-          { label: 'Printers', to: '/printers', icon: Plug },
-          { label: 'Biometric Devices', to: '/inventory/endpoints/biometric', icon: ScanLine },
-          { label: 'Point of Sale', to: '/inventory/endpoints/pos', icon: DollarSign },
-          { label: 'UPS', to: '/ups', icon: BatteryCharging },
+          { label: 'Workstations', to: '/workstations', icon: Laptop, categories: ['endpoint'] },
+          { label: 'Printers', to: '/printers', icon: Plug, categories: ['printer'] },
+          { label: 'Biometric Devices', to: '/inventory/endpoints/biometric', icon: ScanLine, categories: ['biometric', 'biometric_device_unclassified'] },
+          { label: 'Point of Sale', to: '/inventory/endpoints/pos', icon: DollarSign, categories: ['pos', 'pos_device_unclassified'] },
+          { label: 'UPS', to: '/ups', icon: BatteryCharging, categories: ['ups'] },
         ],
       },
       {
         label: 'Security & Surveillance', icon: ShieldAlert,
         children: [
           { label: 'All Security & Surveillance', to: '/inventory/security', icon: Layers },
-          { label: 'Cameras', to: '/cameras', icon: Camera },
-          { label: 'NVRs', to: '/nvrs', icon: Video },
+          { label: 'Cameras', to: '/cameras', icon: Camera, categories: ['camera'] },
+          { label: 'NVRs', to: '/nvrs', icon: Video, categories: ['nvr', 'dvr'] },
         ],
       },
       {
         label: 'Voice', icon: Phone,
         children: [
           { label: 'All Voice', to: '/inventory/voice', icon: Layers },
-          { label: 'PBX / Voice', to: '/pbx', icon: Phone },
-          { label: 'IP Phones', to: '/inventory/voice/phones', icon: Phone },
+          { label: 'PBX / Voice', to: '/pbx', icon: Phone, categories: ['pbx', 'voice_gateway'] },
+          { label: 'IP Phones', to: '/inventory/voice/phones', icon: Phone, categories: ['ip_phone'] },
         ],
       },
       // Conceptual split: classification problems vs access/management problems.
