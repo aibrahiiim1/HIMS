@@ -273,6 +273,7 @@ func (s *Server) routes() {
 		r.Post("/devices/{id}/collect-os", s.collectOSInventory)
 		r.Post("/devices/{id}/collect-snmp-interfaces", s.collectSNMPInterfacesHandler) // IF-MIB MAC/OUI pass
 		r.Post("/devices/{id}/collect-vsphere", s.collectVSphere)
+		r.Post("/devices/{id}/collect-bmc-snmp", s.collectBMCSNMP) // HPE iLO identity/health over SNMP (Redfish stays gated)
 		r.Post("/devices/{id}/collect-cctv", s.collectCCTV)
 		r.Post("/devices/{id}/collect", s.collectDevice) // universal, profile-free deep collect (kind inferred or given)
 		r.Post("/cctv/collect-fleet", s.collectCCTVFleet)

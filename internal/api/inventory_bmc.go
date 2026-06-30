@@ -205,6 +205,25 @@ func (s *Server) listBMCInventory(w http.ResponseWriter, r *http.Request) {
 			if !b.LastSeenAt.IsZero() {
 				row.LastCollected = b.LastSeenAt.Format("2006-01-02 15:04")
 			}
+		} else {
+			// No Redfish controller inventory — surface what SNMP (CPQ MIBs) collected
+			// (iLO firmware + overall health), WITHOUT claiming Redfish. redfish_status stays
+			// not_collected; this is honest SNMP-sourced enrichment, not a Redfish identity.
+			if row.Firmware == "" {
+				row.Firmware = derefStr(d.OsVersion)
+			}
+			if facts, ferr := s.queries.ListDeviceFacts(ctx, d.ID); ferr == nil {
+				for _, f := range facts {
+					switch f.Key {
+					case "bmc.snmp_health":
+						row.HealthSummary = derefStr(f.Value)
+					case "bmc.controller":
+						if row.ControllerKind == "" {
+							row.ControllerKind = derefStr(f.Value)
+						}
+					}
+				}
+			}
 		}
 		if row.ControllerKind == "" {
 			row.ControllerKind = d.Subtype
