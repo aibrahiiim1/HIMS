@@ -146,7 +146,7 @@ export function CctvDetail() {
   // ---- NVR/DVR: full multi-tab console --------------------------------------
   const tabs: { key: Tab; label: string; icon: typeof Camera }[] = [
     { key: 'overview', label: 'Overview', icon: Activity },
-    { key: 'channels', label: `Channels / Cameras${channels.length ? ` (${channels.length})` : ''}`, icon: Video },
+    { key: 'channels', label: `Camera Health${channels.length ? ` (${channels.length})` : ''}`, icon: Video },
     { key: 'storage', label: `Storage / HDD${storage.length ? ` (${storage.length})` : ''}`, icon: HardDrive },
     { key: 'recording', label: 'Recording', icon: Disc },
     { key: 'network', label: 'Network / Streams', icon: Network },
@@ -443,51 +443,104 @@ function WebAccessForm({ deviceId, data: d }: { deviceId: string; data: DeviceWe
 // IP / channel number / status) and pagination, so a recorder with many channels
 // stays usable. A channel whose camera IP matched an already-discovered camera
 // device links to that device.
+// reasonKind buckets a channel's offline reason for filtering + summary cards.
+function reasonKind(x: NVRChannel): 'online' | 'network' | 'credential' | 'other' {
+  if ((x.status || '').toLowerCase() === 'online') return 'online'
+  const r = (x.detect_reason || '').toLowerCase()
+  if (r.includes('network')) return 'network'
+  if (r.includes('credential')) return 'credential'
+  return 'other'
+}
+
+type ChFilter = 'all' | 'online' | 'offline' | 'network' | 'credential'
+
 function ChannelsTab({ channels, chOnline }: { channels: NVRChannel[]; chOnline: number }) {
   const [q, setQ] = useState('')
+  const [filter, setFilter] = useState<ChFilter>('all')
   const [page, setPage] = useState(0)
   const PAGE = 25
+
+  // Read-only Camera Health summary, computed from the collected channel statuses.
+  const sum = useMemo(() => {
+    const s = { total: channels.length, online: 0, offline: 0, network: 0, credential: 0, other: 0 }
+    for (const x of channels) {
+      const k = reasonKind(x)
+      if (k === 'online') s.online++
+      else { s.offline++; if (k === 'network') s.network++; else if (k === 'credential') s.credential++; else s.other++ }
+    }
+    return s
+  }, [channels])
+
   const filtered = useMemo(() => {
     const t = q.trim().toLowerCase()
-    if (!t) return channels
-    return channels.filter((x) =>
-      (x.camera_name || '').toLowerCase().includes(t) ||
-      (x.camera_ip || '').toLowerCase().includes(t) ||
-      String(x.channel_no).includes(t) ||
-      (x.status || '').toLowerCase().includes(t))
-  }, [channels, q])
+    return channels.filter((x) => {
+      const k = reasonKind(x)
+      if (filter === 'online' && k !== 'online') return false
+      if (filter === 'offline' && k === 'online') return false
+      if (filter === 'network' && k !== 'network') return false
+      if (filter === 'credential' && k !== 'credential') return false
+      if (!t) return true
+      return (x.camera_name || '').toLowerCase().includes(t) ||
+        (x.camera_ip || '').toLowerCase().includes(t) ||
+        String(x.channel_no).includes(t) ||
+        (x.status || '').toLowerCase().includes(t) ||
+        (x.detect_reason || '').toLowerCase().includes(t)
+    })
+  }, [channels, q, filter])
   const pages = Math.max(1, Math.ceil(filtered.length / PAGE))
   const cur = Math.min(page, pages - 1)
   const rows = filtered.slice(cur * PAGE, cur * PAGE + PAGE)
 
+  const card = (label: string, value: number, tone: string, f: ChFilter) => (
+    <button onClick={() => { setFilter(f); setPage(0) }}
+      style={{ flex: '1 1 110px', textAlign: 'left', background: filter === f ? 'var(--surface-2,#1b2731)' : 'var(--bg,#0d1117)', border: `1px solid ${filter === f ? tone : 'var(--border,#2a3a47)'}`, borderRadius: 8, padding: '8px 12px', cursor: 'pointer' }}>
+      <div style={{ fontSize: 20, fontWeight: 700, color: tone }}>{value}</div>
+      <div className="muted" style={{ fontSize: 11 }}>{label}</div>
+    </button>
+  )
+
   return (
-    <Panel title="Channels / Cameras" icon={Video} subtitle={channels.length ? `${chOnline}/${channels.length} online` : undefined} pad={false}>
+    <Panel title="Camera Health" icon={Video} subtitle={channels.length ? `${chOnline}/${channels.length} online` : undefined} pad={false}>
       {channels.length === 0 ? (
         <EmptyState icon={Video} title="No channels collected" message="Run Collect — channels populate from ISAPI /ContentMgmt/InputProxy/channels. If the recorder exposes none, it will report empty." />
       ) : (
         <>
-          <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', gap: 10, flexWrap: 'wrap' }}>
-            <input placeholder="Search name / IP / channel / status…" value={q}
+          {/* Read-only summary cards (click to filter) */}
+          <div className="row" style={{ gap: 8, padding: '12px', flexWrap: 'wrap' }}>
+            {card('Total', sum.total, 'var(--text,#cbd5e1)', 'all')}
+            {card('Online', sum.online, 'var(--ok,#22c55e)', 'online')}
+            {card('Offline', sum.offline, sum.offline ? 'var(--crit,#ef4444)' : 'var(--text-muted,#64748b)', 'offline')}
+            {card('Network issues', sum.network, sum.network ? 'var(--warn,#f59e0b)' : 'var(--text-muted,#64748b)', 'network')}
+            {card('Credential issues', sum.credential, sum.credential ? 'var(--warn,#f59e0b)' : 'var(--text-muted,#64748b)', 'credential')}
+          </div>
+          <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', padding: '0 12px 10px', gap: 10, flexWrap: 'wrap' }}>
+            <input placeholder="Search name / IP / channel / reason…" value={q}
               onChange={(e) => { setQ(e.target.value); setPage(0) }}
               style={{ padding: '6px 10px', border: '1px solid #2a3a47', borderRadius: 6, fontSize: 13, width: 320, maxWidth: '100%' }} />
-            <span className="muted" style={{ fontSize: 13 }}>{filtered.length} of {channels.length}</span>
+            <span className="muted" style={{ fontSize: 13 }}>{filtered.length} of {channels.length}{filter !== 'all' ? ` · filter: ${filter}` : ''}</span>
           </div>
           <table className="data-table">
-            <thead><tr><th>Ch</th><th>Camera name</th><th>Camera IP</th><th>Resolution</th><th>Recording</th><th>Linked device</th><th>Status</th></tr></thead>
+            <thead><tr><th>Ch</th><th>Camera name</th><th>Camera IP</th><th>Status</th><th>Reason</th><th>Recording</th><th>Linked device</th></tr></thead>
             <tbody>
-              {rows.map((x: NVRChannel) => (
-                <tr key={x.id}>
-                  <td className="cell-name">{x.channel_no}</td>
-                  <td>{x.camera_name || '—'}</td>
-                  <td className="mono">{x.camera_ip || '—'}</td>
-                  <td className="mono">{x.resolution || <span className="muted">—</span>}</td>
-                  <td>{x.recording == null
-                    ? <span className="muted">—</span>
-                    : <StatusPill status={x.recording ? 'up' : 'unknown'} label={x.recording ? 'Recording' : 'Off'} />}</td>
-                  <td>{x.camera_device_id ? <Link className="cell-name" to={`/cctv/${x.camera_device_id}`}>camera device</Link> : <span className="muted">—</span>}</td>
-                  <td><StatusPill status={chStatus(x.status)} label={x.status} /></td>
-                </tr>
-              ))}
+              {rows.map((x: NVRChannel) => {
+                const k = reasonKind(x)
+                const reason = k === 'online' ? '' : (x.detect_reason || 'offline')
+                return (
+                  <tr key={x.id}>
+                    <td className="cell-name">{x.channel_no}</td>
+                    <td>{x.camera_name || '—'}</td>
+                    <td className="mono">{x.camera_ip || '—'}</td>
+                    <td><StatusPill status={chStatus(x.status)} label={x.status} /></td>
+                    <td>{reason
+                      ? <span style={{ color: k === 'credential' || k === 'network' ? 'var(--warn,#f59e0b)' : 'var(--crit,#ef4444)', fontSize: 13 }}>{reason}</span>
+                      : <span className="muted">—</span>}</td>
+                    <td>{x.recording == null
+                      ? <span className="muted">—</span>
+                      : <StatusPill status={x.recording ? 'up' : 'unknown'} label={x.recording ? 'Recording' : 'Off'} />}</td>
+                    <td>{x.camera_device_id ? <Link className="cell-name" to={`/cctv/${x.camera_device_id}`}>camera device</Link> : <span className="muted">—</span>}</td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
           {pages > 1 && (

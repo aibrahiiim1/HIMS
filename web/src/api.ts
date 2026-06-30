@@ -1293,6 +1293,7 @@ export interface NVRChannel {
   enabled?: boolean
   recording?: boolean | null // true/false = recording on/off; null = not reported
   resolution?: string // analog signal descriptor, e.g. "1080P25"; "" = no signal
+  detect_reason?: string // why offline: "network unreachable" | "credential error" | "IP conflict" | raw code; "" = online/ok
   last_seen_at?: string
 }
 
