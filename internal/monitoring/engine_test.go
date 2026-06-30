@@ -17,15 +17,17 @@ import (
 
 // fakeRepo is an in-memory Repo for engine tests.
 type fakeRepo struct {
-	due       []db.MonitoringCheck
-	devices   map[uuid.UUID]db.Device
-	byDevice  map[uuid.UUID][]db.MonitoringCheck
-	samples   []db.InsertMonitoringSampleParams
-	recorded  []db.RecordMonitoringResultParams
-	devStatus map[uuid.UUID]string
-	needSeed  []db.ListDevicesNeedingDefaultCheckRow
-	upserts   []db.UpsertMonitoringCheckParams
-	creds     map[uuid.UUID]db.Credential
+	due         []db.MonitoringCheck
+	devices     map[uuid.UUID]db.Device
+	byDevice    map[uuid.UUID][]db.MonitoringCheck
+	samples     []db.InsertMonitoringSampleParams
+	recorded    []db.RecordMonitoringResultParams
+	devStatus   map[uuid.UUID]string
+	needSeed    []db.ListDevicesNeedingDefaultCheckRow
+	upserts     []db.UpsertMonitoringCheckParams
+	needSNMP    []db.ListDevicesNeedingSNMPHealthCheckRow
+	snmpUpserts []db.UpsertSupplementalSNMPCheckParams
+	creds       map[uuid.UUID]db.Credential
 }
 
 func (f *fakeRepo) ListDueMonitoringChecks(context.Context) ([]db.MonitoringCheck, error) {
@@ -68,6 +70,13 @@ func (f *fakeRepo) ListDevicesNeedingDefaultCheck(context.Context) ([]db.ListDev
 }
 func (f *fakeRepo) UpsertMonitoringCheck(_ context.Context, arg db.UpsertMonitoringCheckParams) (db.MonitoringCheck, error) {
 	f.upserts = append(f.upserts, arg)
+	return db.MonitoringCheck{}, nil
+}
+func (f *fakeRepo) ListDevicesNeedingSNMPHealthCheck(context.Context, []string) ([]db.ListDevicesNeedingSNMPHealthCheckRow, error) {
+	return f.needSNMP, nil
+}
+func (f *fakeRepo) UpsertSupplementalSNMPCheck(_ context.Context, arg db.UpsertSupplementalSNMPCheckParams) (db.MonitoringCheck, error) {
+	f.snmpUpserts = append(f.snmpUpserts, arg)
 	return db.MonitoringCheck{}, nil
 }
 func (f *fakeRepo) GetCredential(_ context.Context, id uuid.UUID) (db.Credential, error) {
@@ -189,6 +198,22 @@ func TestRunDue_WindowsLivenessFallback(t *testing.T) {
 	}
 	if f.devStatus[devID] != string(StatusUp) {
 		t.Fatalf("device status = %q; want up", f.devStatus[devID])
+	}
+}
+
+func TestSeedSNMPHealthChecks(t *testing.T) {
+	id := uuid.New()
+	f := &fakeRepo{needSNMP: []db.ListDevicesNeedingSNMPHealthCheckRow{{ID: id, Category: "switch"}}}
+	e := NewEngine(f, NewPoller(nil, time.Second), nil)
+	n, err := e.SeedSNMPHealthChecks(context.Background())
+	if err != nil || n != 1 {
+		t.Fatalf("SeedSNMPHealthChecks = %d,%v; want 1,nil", n, err)
+	}
+	if len(f.snmpUpserts) != 1 || f.snmpUpserts[0].DeviceID != id {
+		t.Fatalf("snmp upsert = %+v", f.snmpUpserts)
+	}
+	if f.snmpUpserts[0].Oid == nil || *f.snmpUpserts[0].Oid != SysUpTimeOID {
+		t.Fatalf("snmp check OID = %v; want sysUpTime", f.snmpUpserts[0].Oid)
 	}
 }
 

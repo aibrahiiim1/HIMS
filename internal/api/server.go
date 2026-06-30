@@ -122,6 +122,14 @@ func (s *Server) StartMonitoring(ctx context.Context, tick time.Duration) {
 		} else if n > 0 {
 			slog.Info("monitoring seeded default checks", "count", n)
 		}
+		// Deepen health for SNMP-managed infrastructure: a supplemental SNMP
+		// sysUpTime check (warning-only, never offline) on devices with a bound
+		// SNMP credential — real SNMP-layer health beyond bare TCP reachability.
+		if n, err := s.mon.SeedSNMPHealthChecks(ctx); err != nil {
+			slog.Warn("snmp health-check seed failed", "error", err)
+		} else if n > 0 {
+			slog.Info("seeded supplemental snmp health checks", "count", n)
+		}
 		if n, err := s.seedDefaultAlertRules(ctx); err != nil {
 			slog.Warn("alert-rule seed failed", "error", err)
 		} else if n > 0 {

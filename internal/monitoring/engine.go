@@ -29,6 +29,8 @@ type Repo interface {
 	UpdateDeviceMonitoringStatus(ctx context.Context, arg db.UpdateDeviceMonitoringStatusParams) error
 	ListDevicesNeedingDefaultCheck(ctx context.Context) ([]db.ListDevicesNeedingDefaultCheckRow, error)
 	UpsertMonitoringCheck(ctx context.Context, arg db.UpsertMonitoringCheckParams) (db.MonitoringCheck, error)
+	ListDevicesNeedingSNMPHealthCheck(ctx context.Context, categories []string) ([]db.ListDevicesNeedingSNMPHealthCheckRow, error)
+	UpsertSupplementalSNMPCheck(ctx context.Context, arg db.UpsertSupplementalSNMPCheckParams) (db.MonitoringCheck, error)
 	GetCredential(ctx context.Context, id uuid.UUID) (db.Credential, error)
 }
 
@@ -92,6 +94,38 @@ func (e *Engine) SeedDefaults(ctx context.Context) (int, error) {
 	}
 	if n > 0 {
 		e.log.Info("seeded default monitoring checks", "count", n)
+	}
+	return n, nil
+}
+
+// SNMPHealthCategories are SNMP-managed infrastructure that benefit from a
+// supplemental SNMP health check beyond bare TCP reachability.
+var SNMPHealthCategories = []string{"switch", "router", "firewall", "ups", "printer", "wireless_controller", "access_point", "pdu", "load_balancer"}
+
+// SeedSNMPHealthChecks adds a SUPPLEMENTAL SNMP sysUpTime check to every SNMP-
+// managed infrastructure device that has a BOUND SNMP credential but no SNMP check
+// yet. "Supplemental" means it deepens health visibility (SNMP agent down, or a
+// device reboot seen as a sysUpTime reset) and can only degrade the device to
+// "warning" — it NEVER flips it offline. It authenticates with the device's own
+// bound credential, so it cannot raise a false-down alert. Idempotent.
+func (e *Engine) SeedSNMPHealthChecks(ctx context.Context) (int, error) {
+	rows, err := e.repo.ListDevicesNeedingSNMPHealthCheck(ctx, SNMPHealthCategories)
+	if err != nil {
+		return 0, err
+	}
+	oid := SysUpTimeOID
+	n := 0
+	for _, d := range rows {
+		if _, err := e.repo.UpsertSupplementalSNMPCheck(ctx, db.UpsertSupplementalSNMPCheckParams{
+			DeviceID: d.ID, Oid: &oid, IntervalSeconds: 120, DownThreshold: 2,
+		}); err != nil {
+			e.log.Warn("seed snmp health check failed", "device", d.ID, "error", err)
+			continue
+		}
+		n++
+	}
+	if n > 0 {
+		e.log.Info("seeded supplemental snmp health checks", "count", n)
 	}
 	return n, nil
 }

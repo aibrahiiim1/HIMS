@@ -110,6 +110,31 @@ WHERE primary_ip IS NOT NULL
   AND NOT EXISTS (SELECT 1 FROM monitoring_checks c WHERE c.device_id = devices.id)
 LIMIT 1000;
 
+-- name: ListDevicesNeedingSNMPHealthCheck :many
+-- SNMP-managed infrastructure (category in the arg list) with a BOUND SNMP
+-- credential but no SNMP check yet. The seeder adds a SUPPLEMENTAL sysUpTime
+-- check for each — real SNMP-layer health that degrades to "warning" (never
+-- offline) and authenticates with the device's own credential, so it can never
+-- raise a false-down alert.
+SELECT d.id, d.primary_ip, d.category
+FROM devices d
+JOIN credentials c ON c.id = d.credential_id
+WHERE d.deleted_at IS NULL
+  AND d.primary_ip IS NOT NULL
+  AND c.kind LIKE 'snmp%'
+  AND d.category = ANY(@categories::text[])
+  AND NOT EXISTS (SELECT 1 FROM monitoring_checks m WHERE m.device_id = d.id AND m.kind = 'snmp')
+LIMIT 2000;
+
+-- name: UpsertSupplementalSNMPCheck :one
+-- Register a SUPPLEMENTAL SNMP sysUpTime health check (role=supplemental → it
+-- surfaces SNMP health as a "warning" and never flips the device offline).
+INSERT INTO monitoring_checks (device_id, kind, target_port, oid, interval_seconds, down_threshold, enabled, role)
+VALUES ($1, 'snmp', 161, @oid, @interval_seconds, @down_threshold, true, 'supplemental')
+ON CONFLICT (device_id, kind, target_port) DO UPDATE SET
+    oid = EXCLUDED.oid, role = 'supplemental', enabled = true, updated_at = now()
+RETURNING *;
+
 -- name: DeleteDeviceReachabilityChecks :exec
 -- Remove a device's TCP reachability checks so a fresh, evidence-based one can
 -- replace them (used when a scan re-points the check at a port the host

@@ -128,6 +128,49 @@ func (q *Queries) ListDevicesNeedingDefaultCheck(ctx context.Context) ([]ListDev
 	return items, nil
 }
 
+const listDevicesNeedingSNMPHealthCheck = `-- name: ListDevicesNeedingSNMPHealthCheck :many
+SELECT d.id, d.primary_ip, d.category
+FROM devices d
+JOIN credentials c ON c.id = d.credential_id
+WHERE d.deleted_at IS NULL
+  AND d.primary_ip IS NOT NULL
+  AND c.kind LIKE 'snmp%'
+  AND d.category = ANY($1::text[])
+  AND NOT EXISTS (SELECT 1 FROM monitoring_checks m WHERE m.device_id = d.id AND m.kind = 'snmp')
+LIMIT 2000
+`
+
+type ListDevicesNeedingSNMPHealthCheckRow struct {
+	ID        uuid.UUID   `json:"id"`
+	PrimaryIp *netip.Addr `json:"primary_ip"`
+	Category  string      `json:"category"`
+}
+
+// SNMP-managed infrastructure (category in the arg list) with a BOUND SNMP
+// credential but no SNMP check yet. The seeder adds a SUPPLEMENTAL sysUpTime
+// check for each — real SNMP-layer health that degrades to "warning" (never
+// offline) and authenticates with the device's own credential, so it can never
+// raise a false-down alert.
+func (q *Queries) ListDevicesNeedingSNMPHealthCheck(ctx context.Context, categories []string) ([]ListDevicesNeedingSNMPHealthCheckRow, error) {
+	rows, err := q.db.Query(ctx, listDevicesNeedingSNMPHealthCheck, categories)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListDevicesNeedingSNMPHealthCheckRow{}
+	for rows.Next() {
+		var i ListDevicesNeedingSNMPHealthCheckRow
+		if err := rows.Scan(&i.ID, &i.PrimaryIp, &i.Category); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDueMonitoringChecks = `-- name: ListDueMonitoringChecks :many
 SELECT id, device_id, kind, target_port, oid, interval_seconds, down_threshold, enabled, last_run_at, last_status, last_latency_ms, consecutive_failures, created_at, updated_at, role FROM monitoring_checks
 WHERE enabled
@@ -567,6 +610,51 @@ func (q *Queries) UpsertMonitoringCheck(ctx context.Context, arg UpsertMonitorin
 		arg.IntervalSeconds,
 		arg.DownThreshold,
 		arg.Enabled,
+	)
+	var i MonitoringCheck
+	err := row.Scan(
+		&i.ID,
+		&i.DeviceID,
+		&i.Kind,
+		&i.TargetPort,
+		&i.Oid,
+		&i.IntervalSeconds,
+		&i.DownThreshold,
+		&i.Enabled,
+		&i.LastRunAt,
+		&i.LastStatus,
+		&i.LastLatencyMs,
+		&i.ConsecutiveFailures,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Role,
+	)
+	return i, err
+}
+
+const upsertSupplementalSNMPCheck = `-- name: UpsertSupplementalSNMPCheck :one
+INSERT INTO monitoring_checks (device_id, kind, target_port, oid, interval_seconds, down_threshold, enabled, role)
+VALUES ($1, 'snmp', 161, $2, $3, $4, true, 'supplemental')
+ON CONFLICT (device_id, kind, target_port) DO UPDATE SET
+    oid = EXCLUDED.oid, role = 'supplemental', enabled = true, updated_at = now()
+RETURNING id, device_id, kind, target_port, oid, interval_seconds, down_threshold, enabled, last_run_at, last_status, last_latency_ms, consecutive_failures, created_at, updated_at, role
+`
+
+type UpsertSupplementalSNMPCheckParams struct {
+	DeviceID        uuid.UUID `json:"device_id"`
+	Oid             *string   `json:"oid"`
+	IntervalSeconds int32     `json:"interval_seconds"`
+	DownThreshold   int32     `json:"down_threshold"`
+}
+
+// Register a SUPPLEMENTAL SNMP sysUpTime health check (role=supplemental → it
+// surfaces SNMP health as a "warning" and never flips the device offline).
+func (q *Queries) UpsertSupplementalSNMPCheck(ctx context.Context, arg UpsertSupplementalSNMPCheckParams) (MonitoringCheck, error) {
+	row := q.db.QueryRow(ctx, upsertSupplementalSNMPCheck,
+		arg.DeviceID,
+		arg.Oid,
+		arg.IntervalSeconds,
+		arg.DownThreshold,
 	)
 	var i MonitoringCheck
 	err := row.Scan(
