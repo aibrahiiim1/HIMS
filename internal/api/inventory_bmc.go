@@ -25,6 +25,7 @@ type bmcInventoryRow struct {
 	Serial          string   `json:"serial"`
 	Firmware        string   `json:"firmware"`
 	ControllerKind  string   `json:"controller_kind"` // iLO / iDRAC / XClarity / IPMI / Redfish
+	Reachability    string   `json:"reachability"`    // online | offline | warning | unknown (so the list shows live status)
 	RedfishStatus   string   `json:"redfish_status"`  // collected | not_collected
 	BMCStatus       string   `json:"bmc_status"`      // collected | bmc_credential_required | bmc_auth_failed | not_collected
 	IPMIStatus      string   `json:"ipmi_status"`     // not_collected (no IPMI collector yet)
@@ -172,7 +173,8 @@ func (s *Server) listBMCInventory(w http.ResponseWriter, r *http.Request) {
 			ID: d.ID.String(), Hostname: derefStr(d.Hostname), Vendor: derefStr(d.Vendor),
 			Model: derefStr(d.Model), Serial: derefStr(d.Serial),
 			ManagementState: st.Management, ManagedBy: st.ManagedBy, Site: derefStr(d.Location),
-			IPMIStatus: "not_collected", RedfishStatus: "not_collected",
+			Reachability: st.Reachability,
+			IPMIStatus:   "not_collected", RedfishStatus: "not_collected",
 		}
 		if d.PrimaryIp != nil {
 			row.IP = d.PrimaryIp.String()

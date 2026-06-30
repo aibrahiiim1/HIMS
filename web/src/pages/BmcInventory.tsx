@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom'
 import { Cpu } from 'lucide-react'
 import { api } from '../api'
 import { PageHeader, Panel, EmptyState, usePaged, Pager } from '../components/ui'
-import { ManagementBadge } from '../components/StatusBadges'
+import { ManagementBadge, ReachabilityBadge } from '../components/StatusBadges'
 import { SummaryCards, type SummaryCard } from '../components/SummaryCards'
 import { AddDeviceButton } from '../components/AddDeviceButton'
 
@@ -17,6 +17,7 @@ interface BmcRow {
   serial: string
   firmware: string
   controller_kind: string
+  reachability: string // online | offline | warning | unknown
   redfish_status: string
   bmc_status: string // collected | bmc_credential_required | bmc_auth_failed | not_collected
   ipmi_status: string
@@ -57,6 +58,7 @@ export function BmcInventory() {
 
   const cardMatch = (r: BmcRow): boolean => {
     switch (filterKey) {
+      case 'offline': return r.reachability === 'offline'
       case 'managed': return r.management === 'managed'
       case 'credreq': return CRED_REQUIRED.has(r.management)
       case 'linked': return r.link_state === 'linked'
@@ -82,6 +84,7 @@ export function BmcInventory() {
       ({ label, value: c(f), tone, active: filterKey === key, onClick: () => { setFilterKey(filterKey === key ? '' : key); paged.setPage(0) } })
     return [
       { label: 'Total BMC / iLO', value: all.length, tone: 'info', active: filterKey === '', onClick: () => { setFilterKey(''); paged.setPage(0) } },
+      card('offline', 'Offline', (r) => r.reachability === 'offline', 'crit'),
       card('managed', 'Managed', (r) => r.management === 'managed', 'ok'),
       card('credreq', 'Credential required', (r) => CRED_REQUIRED.has(r.management), 'crit'),
       card('linked', 'Linked to server', (r) => r.link_state === 'linked', 'ok'),
@@ -125,7 +128,7 @@ export function BmcInventory() {
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>IP</th><th>Hostname</th><th>Vendor</th><th>Model</th><th>Serial</th><th>Firmware</th>
+                  <th>IP</th><th>Status</th><th>Hostname</th><th>Vendor</th><th>Model</th><th>Serial</th><th>Firmware</th>
                   <th>Redfish</th><th>IPMI</th><th>Linked server</th><th>Link evidence</th><th>Health</th><th>Management</th><th>Last collected</th><th>Evidence</th>
                 </tr>
               </thead>
@@ -133,6 +136,7 @@ export function BmcInventory() {
                 {paged.slice.map((r) => (
                   <tr key={r.id}>
                     <td className="mono"><Link className="cell-name" to={`/devices/${r.id}`}>{r.ip}</Link></td>
+                    <td><ReachabilityBadge value={r.reachability} /></td>
                     <td>{fmt(r.hostname)}</td>
                     <td>{fmt(r.vendor)}</td>
                     <td>{fmt(r.model)}</td>

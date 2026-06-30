@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom'
 import { Boxes } from 'lucide-react'
 import { api, type Device } from '../api'
 import { PageHeader, Panel, EmptyState, colorFor, usePaged, Pager } from '../components/ui'
-import { ManagementBadge } from '../components/StatusBadges'
+import { ManagementBadge, ReachabilityBadge } from '../components/StatusBadges'
 import { SummaryCards, type SummaryCard } from '../components/SummaryCards'
 import { ManualClassify } from '../components/ManualClassify'
 import { AddDeviceButton } from '../components/AddDeviceButton'
@@ -53,10 +53,11 @@ export function GroupInventory({ title, subtitle, categories, allowManualClassif
   const [mgmt, setMgmt] = useState('')
   const [site, setSite] = useState('')
   const [proto, setProto] = useState('')
+  const [reach, setReach] = useState('')
   const [credReq, setCredReq] = useState(false)
   const [manualOnly, setManualOnly] = useState(false)
   const [q, setQ] = useState('')
-  const reset = () => { setType(''); setSubtype(''); setVendor(''); setMgmt(''); setSite(''); setProto(''); setCredReq(false); setManualOnly(false) }
+  const reset = () => { setType(''); setSubtype(''); setVendor(''); setMgmt(''); setSite(''); setProto(''); setReach(''); setCredReq(false); setManualOnly(false) }
 
   const opts = useMemo(() => {
     const uniq = (xs: (string | undefined | null)[]) => Array.from(new Set(xs.filter((x): x is string => !!x))).sort()
@@ -79,22 +80,29 @@ export function GroupInventory({ title, subtitle, categories, allowManualClassif
       (!mgmt || d.management === mgmt) &&
       (!site || d.location === site) &&
       (!proto || (d.managed_by ?? []).includes(proto)) &&
+      (!reach || (d.reachability ?? 'unknown') === reach) &&
       (!credReq || CRED_REQUIRED.has(d.management ?? '')) &&
       (!manualOnly || d.classification_source === 'manual_override') &&
       (!t || displayName(d).toLowerCase().includes(t) || (d.primary_ip ?? '').includes(t) ||
         (d.hostname ?? '').toLowerCase().includes(t) || (d.model ?? '').toLowerCase().includes(t)),
     )
-  }, [data, type, subtype, vendor, mgmt, site, proto, credReq, manualOnly, q])
+  }, [data, type, subtype, vendor, mgmt, site, proto, reach, credReq, manualOnly, q])
   const paged = usePaged(filtered, { pageSize: 15 })
 
   // Data-driven, clickable summary cards. Counts come from `all` (the same source as the
   // table), so a card value equals the table count when that card's filter is applied.
   const cards: SummaryCard[] = useMemo(() => {
     const cnt = (f: (d: Device) => boolean) => all.filter(f).length
-    const noFilter = !type && !subtype && !vendor && !mgmt && !site && !proto && !credReq && !manualOnly
+    const noFilter = !type && !subtype && !vendor && !mgmt && !site && !proto && !reach && !credReq && !manualOnly
     const list: SummaryCard[] = [
       { label: 'Total', value: all.length, tone: 'info', active: noFilter, onClick: reset },
     ]
+    // Reachability first — so an operator sees at a glance how many devices are offline.
+    const offline = cnt((d) => (d.reachability ?? '') === 'offline')
+    list.push(
+      { label: 'Online', value: cnt((d) => (d.reachability ?? '') === 'online'), tone: 'ok', active: reach === 'online', onClick: () => { reset(); setReach(reach === 'online' ? '' : 'online'); paged.setPage(0) } },
+      { label: 'Offline', value: offline, tone: offline > 0 ? 'crit' : 'muted', active: reach === 'offline', onClick: () => { reset(); setReach(reach === 'offline' ? '' : 'offline'); paged.setPage(0) } },
+    )
     for (const c of opts.types) {
       list.push({ label: deviceTypeLabel(c), value: cnt((d) => d.category === c), tone: 'muted', active: type === c, onClick: () => { reset(); setType(type === c ? '' : c); paged.setPage(0) } })
     }
@@ -145,7 +153,7 @@ export function GroupInventory({ title, subtitle, categories, allowManualClassif
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>Device</th><th>IP</th><th>Device Type</th><th>Subtype</th><th>Vendor</th><th>Model</th>
+                  <th>Device</th><th>IP</th><th>Status</th><th>Device Type</th><th>Subtype</th><th>Vendor</th><th>Model</th>
                   <th>Management</th><th>Primary protocol</th><th>Site</th><th>Last seen</th><th>Last collected</th><th>Confidence</th><th>Source</th>
                   {allowManualClassify && <th></th>}
                 </tr>
@@ -160,6 +168,7 @@ export function GroupInventory({ title, subtitle, categories, allowManualClassif
                       </div>
                     </td>
                     <td className="mono">{d.primary_ip ?? '—'}</td>
+                    <td><ReachabilityBadge value={d.reachability} /></td>
                     <td><span className="badge" style={{ background: colorFor(d.category), color: '#fff' }}>{deviceTypeLabel(d.category)}</span></td>
                     <td>{d.subtype || <span className="muted">—</span>}</td>
                     <td>{d.vendor ?? '—'}</td>
