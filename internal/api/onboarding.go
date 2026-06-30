@@ -192,7 +192,10 @@ func (s *Server) runOnboardProbe(ctx context.Context, method onbMethod, ip strin
 			add("auth", "ok", cond(strings.TrimSpace(secret) != "", "authenticated with the supplied communication key", "authenticated with the SDK default key (0) — no operator secret needed"))
 			ident := strings.TrimSpace(id.DeviceName + " " + id.Serial + " " + id.Firmware)
 			add("identity", cond(ident != "", "ok", "skipped"), nz(ident, "device exposed no identity fields"))
-			return onbTestResp{Steps: steps, FinalStatus: "implemented_collected", Category: "success", Summary: "ZKTeco identity collected — saving will classify biometric/zkteco and bind."}
+			if en := zkteco.ReadEnrollment(ctx, ip, port, secret); en.Connected && (en.Users > 0 || en.Fingers > 0) {
+				add("enrollment", "ok", fmt.Sprintf("%d/%d users, %d/%d fingerprints, %d records (read-only — no names/templates)", en.Users, en.UsersCap, en.Fingers, en.FingersCap, en.Records))
+			}
+			return onbTestResp{Steps: steps, FinalStatus: "implemented_collected", Category: "success", Summary: "ZKTeco identity + enrollment collected — saving classifies biometric/zkteco and binds."}
 		}
 		st := "auth_failed"
 		switch {
@@ -709,6 +712,19 @@ func (s *Server) collectZKTecoIdentity(ctx context.Context, dev db.Device, commK
 	if id.Platform != "" {
 		v := id.Platform
 		_ = s.queries.UpsertDeviceFact(ctx, db.UpsertDeviceFactParams{DeviceID: dev.ID, Key: "zkteco.platform", Value: &v, Driver: "zkteco"})
+	}
+	// Read-only enrollment SUMMARY (counts only — no names, templates, or attendance logs):
+	// how many users + fingerprints are enrolled, and capacity. Real fleet-management data.
+	if en := zkteco.ReadEnrollment(ctx, dev.PrimaryIp.String(), 4370, commKey); en.Connected {
+		facts := map[string]int{
+			"zkteco.users_enrolled": en.Users, "zkteco.fingerprints_enrolled": en.Fingers,
+			"zkteco.attendance_records": en.Records, "zkteco.users_capacity": en.UsersCap,
+			"zkteco.fingerprints_capacity": en.FingersCap, "zkteco.records_capacity": en.RecordsCap,
+		}
+		for k, v := range facts {
+			val := fmt.Sprintf("%d", v)
+			_ = s.queries.UpsertDeviceFact(ctx, db.UpsertDeviceFactParams{DeviceID: dev.ID, Key: k, Value: &val, Driver: "zkteco"})
+		}
 	}
 	return true
 }

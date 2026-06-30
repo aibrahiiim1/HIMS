@@ -71,6 +71,16 @@ func fakeZK(t *testing.T, expectedKey *uint32) (string, func()) {
 				reply(conn, cmdACKOK, session, []byte(val))
 			case cmd == cmdGetVersion:
 				reply(conn, cmdACKOK, session, []byte("Ver 6.60 Apr 2 2020"))
+			case cmd == cmdGetFreeSizes:
+				buf := make([]byte, 80) // 20 int32 fields
+				put := func(i int, v uint32) { binary.LittleEndian.PutUint32(buf[i*4:], v) }
+				put(4, 7)      // users
+				put(6, 9)      // fingers
+				put(8, 3)      // records
+				put(14, 500)   // users cap
+				put(15, 1000)  // fingers cap
+				put(16, 50000) // records cap
+				reply(conn, cmdACKOK, session, buf)
 			case cmd == cmdExit:
 				reply(conn, cmdACKOK, session, nil)
 				return
@@ -145,6 +155,22 @@ func TestZKProbe_NonDefaultKey_WithKey(t *testing.T) {
 	id := Probe(context.Background(), host, p, "123456")
 	if !id.Connected || !id.AuthUsed {
 		t.Errorf("expected connected via supplied key, got %+v", id)
+	}
+}
+
+func TestReadEnrollment(t *testing.T) {
+	addr, stop := fakeZK(t, nil)
+	defer stop()
+	host, p := hostPort(addr)
+	e := ReadEnrollment(context.Background(), host, p, "")
+	if !e.Connected {
+		t.Fatalf("expected connected, reason=%q", e.Reason)
+	}
+	if e.Users != 7 || e.Fingers != 9 || e.Records != 3 {
+		t.Errorf("counts mismatch: %+v", e)
+	}
+	if e.UsersCap != 500 || e.FingersCap != 1000 || e.RecordsCap != 50000 {
+		t.Errorf("capacity mismatch: %+v", e)
 	}
 }
 

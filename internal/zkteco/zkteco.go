@@ -19,16 +19,17 @@ import (
 )
 
 const (
-	cmdConnect    = 1000
-	cmdExit       = 1001
-	cmdAuth       = 1102
-	cmdGetVersion = 1100
-	cmdOptionsRRQ = 11
-	cmdACKOK      = 2000
-	cmdACKUnauth  = 2005
-	tcpMagic1     = 0x5050
-	tcpMagic2     = 0x7d82
-	ushrtMax      = 65535
+	cmdConnect      = 1000
+	cmdExit         = 1001
+	cmdAuth         = 1102
+	cmdGetVersion   = 1100
+	cmdOptionsRRQ   = 11
+	cmdGetFreeSizes = 50 // device status/capacity buffer (enrolled users/fingers/records counts)
+	cmdACKOK        = 2000
+	cmdACKUnauth    = 2005
+	tcpMagic1       = 0x5050
+	tcpMagic2       = 0x7d82
+	ushrtMax        = 65535
 )
 
 // Identity is what a safe ZKTeco identity probe can read. Empty fields = the device did not
@@ -170,6 +171,59 @@ func readFull(conn net.Conn, b []byte) (int, error) {
 // for devices with no communication key. Returns Identity.Connected=false with an honest
 // Reason on failure — never fabricated values.
 func Probe(ctx context.Context, host string, port int, commKey string) Identity {
+	s, authUsed, reason := connect(ctx, host, port, commKey)
+	if s == nil {
+		return Identity{Reason: reason}
+	}
+	defer s.close()
+
+	id := Identity{Connected: true, AuthUsed: authUsed}
+	// identity (read-only) — best-effort; absence is honest, never fabricated.
+	if v := readOption(s.send, "~SerialNumber"); v != "" {
+		id.Serial = v
+	}
+	if v := readOption(s.send, "~DeviceName"); v != "" {
+		id.DeviceName = v
+	}
+	if v := readOption(s.send, "~Platform"); v != "" {
+		id.Platform = v
+	}
+	if rp, err := s.send(cmdGetVersion, nil); err == nil && rp.command == cmdACKOK {
+		id.Firmware = cleanStr(rp.data)
+	}
+	return id
+}
+
+// session is an authenticated ZK protocol connection. The device drives the
+// session_id + reply_id sequence; the checksum must follow it exactly.
+type session struct {
+	conn      net.Conn
+	timeout   time.Duration
+	replyID   uint16
+	sessionID uint16
+}
+
+func (s *session) send(command uint16, data []byte) (reply, error) {
+	_ = s.conn.SetWriteDeadline(time.Now().Add(s.timeout))
+	if _, werr := s.conn.Write(header(command, s.sessionID, s.replyID, data)); werr != nil {
+		return reply{}, werr
+	}
+	rp, rerr := recv(s.conn, s.timeout)
+	if rerr == nil {
+		s.sessionID = rp.sessionID
+		s.replyID = rp.replyID
+	}
+	return rp, rerr
+}
+
+func (s *session) close() {
+	_, _ = s.send(cmdExit, nil)
+	_ = s.conn.Close()
+}
+
+// connect dials, performs CMD_CONNECT and (if challenged) CMD_AUTH with the comm key (default
+// 0). Returns the session + whether auth was used, or (nil, false, honest reason) on failure.
+func connect(ctx context.Context, host string, port int, commKey string) (*session, bool, string) {
 	if port == 0 {
 		port = 4370
 	}
@@ -177,70 +231,76 @@ func Probe(ctx context.Context, host string, port int, commKey string) Identity 
 	d := net.Dialer{Timeout: timeout}
 	conn, err := d.DialContext(ctx, "tcp", net.JoinHostPort(host, fmt.Sprintf("%d", port)))
 	if err != nil {
-		return Identity{Reason: "unreachable: " + condProto(err)}
+		return nil, false, "unreachable: " + condProto(err)
 	}
-	defer conn.Close()
+	s := &session{conn: conn, timeout: timeout, replyID: ushrtMax - 1}
 
-	// ZK reply_id starts at USHRT_MAX-1; session_id + reply_id are then taken from each
-	// response (the device drives the sequence). The checksum must follow this exactly.
-	replyID := uint16(ushrtMax - 1)
-	sessionID := uint16(0)
-	send := func(command uint16, data []byte) (reply, error) {
-		_ = conn.SetWriteDeadline(time.Now().Add(timeout))
-		if _, werr := conn.Write(header(command, sessionID, replyID, data)); werr != nil {
-			return reply{}, werr
-		}
-		rp, rerr := recv(conn, timeout)
-		if rerr == nil {
-			sessionID = rp.sessionID
-			replyID = rp.replyID
-		}
-		return rp, rerr
-	}
-
-	// 1) CONNECT
-	rp, err := send(cmdConnect, nil)
+	rp, err := s.send(cmdConnect, nil)
 	if err != nil {
-		return Identity{Reason: "protocol: no/invalid handshake response"}
+		_ = conn.Close()
+		return nil, false, "protocol: no/invalid handshake response"
 	}
 	authUsed := false
 	if rp.command == cmdACKUnauth {
-		// 2) AUTH. ZKTeco devices answer CONNECT with ACK_UNAUTH and expect a CMD_AUTH derived
-		// from the communication key. The SDK default key is 0, so a device that was never
-		// given a custom key authenticates with key=0 and NO operator secret — this is exactly
-		// how IP-only tools connect. We therefore default an empty key to 0; only if 0 is also
-		// rejected is a real non-default key actually required.
-		key := parseCommKey(commKey) // "" or "0" → 0 (the SDK default)
+		// ZKTeco answers CONNECT with ACK_UNAUTH; the SDK default key is 0, so an empty key
+		// defaults to 0 (parity with IP-only tools). Only if 0 is rejected is a real key needed.
+		key := parseCommKey(commKey)
 		authUsed = true
-		rp, err = send(cmdAuth, makeCommKey(key, uint32(sessionID)))
+		rp, err = s.send(cmdAuth, makeCommKey(key, uint32(s.sessionID)))
 		if err != nil || rp.command != cmdACKOK {
+			_ = conn.Close()
 			if strings.TrimSpace(commKey) == "" {
-				// The device has a NON-default communication key set; the operator must supply it.
-				return Identity{Reason: "zkteco_comm_key_required: device rejected the default key (0)"}
+				return nil, false, "zkteco_comm_key_required: device rejected the default key (0)"
 			}
-			return Identity{Reason: "credential_failed: communication key rejected"}
+			return nil, false, "credential_failed: communication key rejected"
 		}
 	} else if rp.command != cmdACKOK {
-		return Identity{Reason: "auth_failed: device rejected the connection"}
+		_ = conn.Close()
+		return nil, false, "auth_failed: device rejected the connection"
 	}
+	return s, authUsed, ""
+}
 
-	id := Identity{Connected: true, AuthUsed: authUsed}
-	// 3) identity (read-only) — best-effort; absence is honest, never fabricated.
-	if v := readOption(send, "~SerialNumber"); v != "" {
-		id.Serial = v
+// Enrollment is the device's read-only enrollment summary: how many users + fingerprints are
+// enrolled (and stored attendance-record count). NO user records, names, templates, or
+// attendance logs are read here — counts only.
+type Enrollment struct {
+	Connected  bool
+	Users      int
+	Fingers    int
+	Records    int
+	UsersCap   int
+	FingersCap int
+	RecordsCap int
+	Reason     string
+}
+
+// ReadEnrollment connects (read-only) and reads CMD_GET_FREE_SIZES — the device's capacity/usage
+// buffer — returning the enrolled user + fingerprint counts. Counts only; no personal data.
+func ReadEnrollment(ctx context.Context, host string, port int, commKey string) Enrollment {
+	s, _, reason := connect(ctx, host, port, commKey)
+	if s == nil {
+		return Enrollment{Reason: reason}
 	}
-	if v := readOption(send, "~DeviceName"); v != "" {
-		id.DeviceName = v
+	defer s.close()
+
+	rp, err := s.send(cmdGetFreeSizes, nil)
+	if err != nil || rp.command != cmdACKOK || len(rp.data) < 80 {
+		return Enrollment{Connected: true, Reason: "enrollment sizes not exposed by this device"}
 	}
-	if v := readOption(send, "~Platform"); v != "" {
-		id.Platform = v
+	// The buffer is an array of little-endian int32 status fields (pyzk read_sizes layout):
+	// users at index 4, fingerprints at 6, attendance records at 8.
+	field := func(i int) int {
+		if (i+1)*4 > len(rp.data) {
+			return 0
+		}
+		return int(int32(binary.LittleEndian.Uint32(rp.data[i*4:])))
 	}
-	if rp, err := send(cmdGetVersion, nil); err == nil && rp.command == cmdACKOK {
-		id.Firmware = cleanStr(rp.data)
+	return Enrollment{
+		Connected: true,
+		Users:     field(4), Fingers: field(6), Records: field(8),
+		UsersCap: field(14), FingersCap: field(15), RecordsCap: field(16),
 	}
-	// 4) disconnect (best-effort)
-	_, _ = send(cmdExit, nil)
-	return id
 }
 
 // readOption sends CMD_OPTIONS_RRQ for an option name and returns the value after '='.
