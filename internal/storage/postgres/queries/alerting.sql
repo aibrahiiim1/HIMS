@@ -27,12 +27,14 @@ DELETE FROM alert_rules WHERE id = $1;
 -- name: ListEnabledChecksWithDevice :many
 -- The evaluator's input: every enabled check joined to its device so rules
 -- can filter by category and alerts can carry a readable device name.
+-- SUPPLEMENTAL checks (e.g. SNMP sysUpTime health) are EXCLUDED — they only
+-- degrade a device to "warning" for visibility and must NEVER raise an alert.
 SELECT c.id, c.device_id, c.kind, c.target_port, c.last_status, c.consecutive_failures,
        d.name AS device_name, d.category AS device_category, d.primary_ip AS device_ip,
        d.location_id AS device_location_id
 FROM monitoring_checks c
 JOIN devices d ON d.id = c.device_id
-WHERE c.enabled;
+WHERE c.enabled AND c.role IS DISTINCT FROM 'supplemental';
 
 -- ---- Alerts ---------------------------------------------------------------
 

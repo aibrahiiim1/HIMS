@@ -717,7 +717,7 @@ SELECT c.id, c.device_id, c.kind, c.target_port, c.last_status, c.consecutive_fa
        d.location_id AS device_location_id
 FROM monitoring_checks c
 JOIN devices d ON d.id = c.device_id
-WHERE c.enabled
+WHERE c.enabled AND c.role IS DISTINCT FROM 'supplemental'
 `
 
 type ListEnabledChecksWithDeviceRow struct {
@@ -736,6 +736,8 @@ type ListEnabledChecksWithDeviceRow struct {
 // ---- Monitoring state for evaluation --------------------------------------
 // The evaluator's input: every enabled check joined to its device so rules
 // can filter by category and alerts can carry a readable device name.
+// SUPPLEMENTAL checks (e.g. SNMP sysUpTime health) are EXCLUDED — they only
+// degrade a device to "warning" for visibility and must NEVER raise an alert.
 func (q *Queries) ListEnabledChecksWithDevice(ctx context.Context) ([]ListEnabledChecksWithDeviceRow, error) {
 	rows, err := q.db.Query(ctx, listEnabledChecksWithDevice)
 	if err != nil {
