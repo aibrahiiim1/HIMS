@@ -12,6 +12,22 @@ import (
 	"github.com/google/uuid"
 )
 
+const deleteStaleBMCComponents = `-- name: DeleteStaleBMCComponents :exec
+DELETE FROM bmc_components
+WHERE device_id = $1 AND last_seen_at < $2 AND collection_source = $3
+`
+
+type DeleteStaleBMCComponentsParams struct {
+	DeviceID         uuid.UUID `json:"device_id"`
+	LastSeenAt       time.Time `json:"last_seen_at"`
+	CollectionSource string    `json:"collection_source"`
+}
+
+func (q *Queries) DeleteStaleBMCComponents(ctx context.Context, arg DeleteStaleBMCComponentsParams) error {
+	_, err := q.db.Exec(ctx, deleteStaleBMCComponents, arg.DeviceID, arg.LastSeenAt, arg.CollectionSource)
+	return err
+}
+
 const deleteStaleBMCSensors = `-- name: DeleteStaleBMCSensors :exec
 DELETE FROM bmc_sensors
 WHERE device_id = $1 AND last_seen_at < $2 AND collection_source = $3
@@ -29,7 +45,7 @@ func (q *Queries) DeleteStaleBMCSensors(ctx context.Context, arg DeleteStaleBMCS
 }
 
 const getBMCInfo = `-- name: GetBMCInfo :one
-SELECT device_id, vendor, controller_kind, model, serial, firmware_version, power_state, health, last_seen_at FROM bmc_info WHERE device_id = $1
+SELECT device_id, vendor, controller_kind, model, serial, firmware_version, power_state, health, last_seen_at, cpu_model, cpu_count, cpu_cores, memory_gib, bios_version FROM bmc_info WHERE device_id = $1
 `
 
 func (q *Queries) GetBMCInfo(ctx context.Context, deviceID uuid.UUID) (BmcInfo, error) {
@@ -45,8 +61,50 @@ func (q *Queries) GetBMCInfo(ctx context.Context, deviceID uuid.UUID) (BmcInfo, 
 		&i.PowerState,
 		&i.Health,
 		&i.LastSeenAt,
+		&i.CpuModel,
+		&i.CpuCount,
+		&i.CpuCores,
+		&i.MemoryGib,
+		&i.BiosVersion,
 	)
 	return i, err
+}
+
+const listBMCComponents = `-- name: ListBMCComponents :many
+SELECT id, device_id, kind, name, model, serial, status, capacity_bytes, detail, collection_source, last_seen_at FROM bmc_components WHERE device_id = $1
+ORDER BY CASE kind WHEN 'cpu' THEN 1 WHEN 'memory' THEN 2 WHEN 'controller' THEN 3 WHEN 'volume' THEN 4 WHEN 'drive' THEN 5 ELSE 6 END, name
+`
+
+func (q *Queries) ListBMCComponents(ctx context.Context, deviceID uuid.UUID) ([]BmcComponent, error) {
+	rows, err := q.db.Query(ctx, listBMCComponents, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []BmcComponent{}
+	for rows.Next() {
+		var i BmcComponent
+		if err := rows.Scan(
+			&i.ID,
+			&i.DeviceID,
+			&i.Kind,
+			&i.Name,
+			&i.Model,
+			&i.Serial,
+			&i.Status,
+			&i.CapacityBytes,
+			&i.Detail,
+			&i.CollectionSource,
+			&i.LastSeenAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listBMCSensors = `-- name: ListBMCSensors :many
@@ -84,9 +142,53 @@ func (q *Queries) ListBMCSensors(ctx context.Context, deviceID uuid.UUID) ([]Bmc
 	return items, nil
 }
 
+const upsertBMCComponent = `-- name: UpsertBMCComponent :exec
+INSERT INTO bmc_components (device_id, kind, name, model, serial, status, capacity_bytes, detail, collection_source, last_seen_at)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+ON CONFLICT (device_id, kind, name) DO UPDATE SET
+    model = EXCLUDED.model,
+    serial = EXCLUDED.serial,
+    status = EXCLUDED.status,
+    capacity_bytes = EXCLUDED.capacity_bytes,
+    detail = EXCLUDED.detail,
+    collection_source = EXCLUDED.collection_source,
+    last_seen_at = EXCLUDED.last_seen_at
+`
+
+type UpsertBMCComponentParams struct {
+	DeviceID         uuid.UUID `json:"device_id"`
+	Kind             string    `json:"kind"`
+	Name             string    `json:"name"`
+	Model            *string   `json:"model"`
+	Serial           *string   `json:"serial"`
+	Status           *string   `json:"status"`
+	CapacityBytes    int64     `json:"capacity_bytes"`
+	Detail           []byte    `json:"detail"`
+	CollectionSource string    `json:"collection_source"`
+	LastSeenAt       time.Time `json:"last_seen_at"`
+}
+
+// One detailed Redfish hardware item (cpu | memory | controller | volume | drive).
+func (q *Queries) UpsertBMCComponent(ctx context.Context, arg UpsertBMCComponentParams) error {
+	_, err := q.db.Exec(ctx, upsertBMCComponent,
+		arg.DeviceID,
+		arg.Kind,
+		arg.Name,
+		arg.Model,
+		arg.Serial,
+		arg.Status,
+		arg.CapacityBytes,
+		arg.Detail,
+		arg.CollectionSource,
+		arg.LastSeenAt,
+	)
+	return err
+}
+
 const upsertBMCInfo = `-- name: UpsertBMCInfo :exec
-INSERT INTO bmc_info (device_id, vendor, controller_kind, model, serial, firmware_version, power_state, health, last_seen_at)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+INSERT INTO bmc_info (device_id, vendor, controller_kind, model, serial, firmware_version, power_state, health,
+    cpu_model, cpu_count, cpu_cores, memory_gib, bios_version, last_seen_at)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
 ON CONFLICT (device_id) DO UPDATE SET
     vendor = EXCLUDED.vendor,
     controller_kind = EXCLUDED.controller_kind,
@@ -95,6 +197,11 @@ ON CONFLICT (device_id) DO UPDATE SET
     firmware_version = EXCLUDED.firmware_version,
     power_state = EXCLUDED.power_state,
     health = EXCLUDED.health,
+    cpu_model = EXCLUDED.cpu_model,
+    cpu_count = EXCLUDED.cpu_count,
+    cpu_cores = EXCLUDED.cpu_cores,
+    memory_gib = EXCLUDED.memory_gib,
+    bios_version = EXCLUDED.bios_version,
     last_seen_at = EXCLUDED.last_seen_at
 `
 
@@ -107,6 +214,11 @@ type UpsertBMCInfoParams struct {
 	FirmwareVersion *string   `json:"firmware_version"`
 	PowerState      *string   `json:"power_state"`
 	Health          *string   `json:"health"`
+	CpuModel        *string   `json:"cpu_model"`
+	CpuCount        int32     `json:"cpu_count"`
+	CpuCores        int32     `json:"cpu_cores"`
+	MemoryGib       float64   `json:"memory_gib"`
+	BiosVersion     *string   `json:"bios_version"`
 	LastSeenAt      time.Time `json:"last_seen_at"`
 }
 
@@ -120,6 +232,11 @@ func (q *Queries) UpsertBMCInfo(ctx context.Context, arg UpsertBMCInfoParams) er
 		arg.FirmwareVersion,
 		arg.PowerState,
 		arg.Health,
+		arg.CpuModel,
+		arg.CpuCount,
+		arg.CpuCores,
+		arg.MemoryGib,
+		arg.BiosVersion,
 		arg.LastSeenAt,
 	)
 	return err

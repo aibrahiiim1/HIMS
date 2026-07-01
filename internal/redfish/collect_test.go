@@ -36,10 +36,23 @@ var hpeRoutes = map[string]string{
 		"Status":{"Health":"OK","State":"Enabled"},
 		"ProcessorSummary":{"Count":2,"Model":"Intel Xeon Gold 6130"},
 		"MemorySummary":{"TotalSystemMemoryGiB":256},
+		"Processors":{"@odata.id":"/redfish/v1/Systems/1/Processors"},
+		"Memory":{"@odata.id":"/redfish/v1/Systems/1/Memory"},
 		"Storage":{"@odata.id":"/redfish/v1/Systems/1/Storage"}}`,
-	"/redfish/v1/Systems/1/Storage": `{"Members":[{"@odata.id":"/redfish/v1/Systems/1/Storage/DA000"}]}`,
-	"/redfish/v1/Systems/1/Storage/DA000": `{"Name":"Smart Array P408i","Status":{"Health":"OK"},
+	"/redfish/v1/Systems/1/Processors":   `{"Members":[{"@odata.id":"/redfish/v1/Systems/1/Processors/1"}]}`,
+	"/redfish/v1/Systems/1/Processors/1": `{"Socket":"Proc 1","Model":"Intel Xeon Gold 6130","TotalCores":16,"TotalThreads":32,"MaxSpeedMHz":2100,"Status":{"Health":"OK"}}`,
+	"/redfish/v1/Systems/1/Memory":       `{"Members":[{"@odata.id":"/redfish/v1/Systems/1/Memory/1"},{"@odata.id":"/redfish/v1/Systems/1/Memory/2"}]}`,
+	"/redfish/v1/Systems/1/Memory/1":     `{"DeviceLocator":"DIMM 1","CapacityMiB":16384,"MemoryDeviceType":"DDR4","OperatingSpeedMhz":2666,"Status":{"Health":"OK"}}`,
+	"/redfish/v1/Systems/1/Memory/2":     `{"DeviceLocator":"DIMM 2","CapacityMiB":0}`,
+	"/redfish/v1/Systems/1/Storage":      `{"Members":[{"@odata.id":"/redfish/v1/Systems/1/Storage/DA000"}]}`,
+	"/redfish/v1/Systems/1/Storage/DA000": `{"Name":"Smart Array P408i",
+		"StorageControllers":[{"Name":"Smart Array P408i-a","Model":"P408i-a SR Gen10","FirmwareVersion":"3.53","Status":{"Health":"OK"},"SupportedRAIDTypes":["RAID0","RAID1","RAID5"]}],
+		"Volumes":{"@odata.id":"/redfish/v1/Systems/1/Storage/DA000/Volumes"},
 		"Drives":[{"@odata.id":"/d/1"},{"@odata.id":"/d/2"}]}`,
+	"/redfish/v1/Systems/1/Storage/DA000/Volumes": `{"Members":[{"@odata.id":"/v/1"}]}`,
+	"/v/1":                  `{"Name":"OS Volume","RAIDType":"RAID1","CapacityBytes":960197124096,"Status":{"Health":"OK"}}`,
+	"/d/1":                  `{"Name":"Drive 1","Model":"EG000600JWFUV","SerialNumber":"S1","MediaType":"HDD","Protocol":"SAS","CapacityBytes":600127266816,"RotationSpeedRPM":10000,"Status":{"Health":"OK"}}`,
+	"/d/2":                  `{"Name":"Drive 2","Model":"VK000480GWTHA","SerialNumber":"S2","MediaType":"SSD","Protocol":"SATA","CapacityBytes":480103981056,"Status":{"Health":"OK"}}`,
 	"/redfish/v1/Chassis":   `{"Members":[{"@odata.id":"/redfish/v1/Chassis/1"}]}`,
 	"/redfish/v1/Chassis/1": `{"Thermal":{"@odata.id":"/redfish/v1/Chassis/1/Thermal"},"Power":{"@odata.id":"/redfish/v1/Chassis/1/Power"}}`,
 	"/redfish/v1/Chassis/1/Thermal": `{"Temperatures":[{"Name":"01-Inlet","ReadingCelsius":21,"Status":{"Health":"OK"}}],
@@ -82,8 +95,32 @@ func TestCollect_HPEiLO(t *testing.T) {
 		t.Fatalf("cpu/mem = %d / %v", f.ProcessorCount, f.MemoryGiB)
 	}
 	if countKind(f.Sensors, "fan") != 2 || countKind(f.Sensors, "psu") != 1 ||
-		countKind(f.Sensors, "temperature") != 1 || countKind(f.Sensors, "storage") != 1 {
+		countKind(f.Sensors, "temperature") != 1 {
 		t.Fatalf("sensor mix wrong: %+v", f.Sensors)
+	}
+	// Detailed inventory: 1 CPU (16 cores), 1 populated DIMM (empty slot skipped),
+	// 1 RAID controller, 1 volume (RAID1), 2 physical drives (HDD + SSD).
+	kinds := map[string]int{}
+	for _, c := range f.Components {
+		kinds[c.Kind]++
+	}
+	if kinds["cpu"] != 1 || kinds["memory"] != 1 || kinds["controller"] != 1 || kinds["volume"] != 1 || kinds["drive"] != 2 {
+		t.Fatalf("component mix wrong: %+v", f.Components)
+	}
+	if f.ProcessorCores != 16 {
+		t.Fatalf("cpu cores = %d, want 16", f.ProcessorCores)
+	}
+	var raid1, ssd bool
+	for _, c := range f.Components {
+		if c.Kind == "volume" && c.Detail["raid"] == "RAID1" {
+			raid1 = true
+		}
+		if c.Kind == "drive" && c.Detail["media"] == "SSD" && c.Detail["protocol"] == "SATA" {
+			ssd = true
+		}
+	}
+	if !raid1 || !ssd {
+		t.Fatalf("RAID/media detail not captured: raid1=%v ssd=%v; %+v", raid1, ssd, f.Components)
 	}
 	// The critical fan must carry its status through.
 	var critical bool

@@ -200,6 +200,7 @@ type Querier interface {
 	DeleteStaleARP(ctx context.Context, arg DeleteStaleARPParams) error
 	// Prune APs for a controller not refreshed in the latest collection of a source.
 	DeleteStaleAccessPoints(ctx context.Context, arg DeleteStaleAccessPointsParams) error
+	DeleteStaleBMCComponents(ctx context.Context, arg DeleteStaleBMCComponentsParams) error
 	DeleteStaleBMCSensors(ctx context.Context, arg DeleteStaleBMCSensorsParams) error
 	DeleteStaleDatastores(ctx context.Context, arg DeleteStaleDatastoresParams) error
 	DeleteStaleHAMembers(ctx context.Context, arg DeleteStaleHAMembersParams) error
@@ -451,6 +452,7 @@ type Querier interface {
 	// Deep filtering: any subset of category / actor / entity_type / action / free
 	// text (summary) / time range. NULL args are ignored.
 	ListAuditLogFiltered(ctx context.Context, arg ListAuditLogFilteredParams) ([]AuditLog, error)
+	ListBMCComponents(ctx context.Context, deviceID uuid.UUID) ([]BmcComponent, error)
 	ListBMCSensors(ctx context.Context, deviceID uuid.UUID) ([]BmcSensor, error)
 	// BMC/iLO/iDRAC controllers that are detected/reachable but have NO authenticated Redfish
 	// inventory (no bmc_info row). This is the "full hardware inventory gap": the honest reason
@@ -959,6 +961,8 @@ type Querier interface {
 	// ---- ARP entries ---------------------------------------------------------
 	UpsertARP(ctx context.Context, arg UpsertARPParams) error
 	UpsertAccessPoint(ctx context.Context, arg UpsertAccessPointParams) (AccessPoint, error)
+	// One detailed Redfish hardware item (cpu | memory | controller | volume | drive).
+	UpsertBMCComponent(ctx context.Context, arg UpsertBMCComponentParams) error
 	UpsertBMCInfo(ctx context.Context, arg UpsertBMCInfoParams) error
 	UpsertBMCSensor(ctx context.Context, arg UpsertBMCSensorParams) error
 	// Enriched read-only camera facts from ISAPI (NIC + time + firmware/serial).

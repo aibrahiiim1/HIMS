@@ -94,8 +94,9 @@ type Facts struct {
 	HAMembers      []HAMemberSnap
 	Licenses       []LicenseSnap
 	// BMC out-of-band inventory + health (Redfish: iLO/iDRAC).
-	BMC        *BMCSnap
-	BMCSensors []BMCSensorSnap
+	BMC           *BMCSnap
+	BMCSensors    []BMCSensorSnap
+	BMCComponents []BMCComponentSnap
 	// Virtual machines (vSphere host→VM map).
 	VMs []VMSnap
 	// Camera inventory (ONVIF).
@@ -247,6 +248,23 @@ type BMCSnap struct {
 	FirmwareVersion string
 	PowerState      string
 	Health          string
+	CPUModel        string
+	CPUCount        int
+	CPUCores        int
+	MemoryGiB       float64
+	BiosVersion     string
+}
+
+// BMCComponentSnap is one detailed Redfish hardware item (cpu | memory | controller |
+// volume | drive) with its kind-specific detail map.
+type BMCComponentSnap struct {
+	Kind          string
+	Name          string
+	Model         string
+	Serial        string
+	Status        string
+	CapacityBytes int64
+	Detail        map[string]string
 }
 
 // BMCSensorSnap is one fan / PSU / temperature / storage health reading.

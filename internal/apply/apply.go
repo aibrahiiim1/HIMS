@@ -14,6 +14,7 @@ package apply
 
 import (
 	"context"
+	"encoding/json"
 	"net/netip"
 	"sort"
 	"strings"
@@ -67,6 +68,8 @@ type Writer interface {
 	UpsertBMCInfo(ctx context.Context, arg db.UpsertBMCInfoParams) error
 	UpsertBMCSensor(ctx context.Context, arg db.UpsertBMCSensorParams) error
 	DeleteStaleBMCSensors(ctx context.Context, arg db.DeleteStaleBMCSensorsParams) error
+	UpsertBMCComponent(ctx context.Context, arg db.UpsertBMCComponentParams) error
+	DeleteStaleBMCComponents(ctx context.Context, arg db.DeleteStaleBMCComponentsParams) error
 
 	UpsertVM(ctx context.Context, arg db.UpsertVMParams) (db.VirtualMachine, error)
 	UpsertCameraInfo(ctx context.Context, arg db.UpsertCameraInfoParams) (db.CameraInfo, error)
@@ -597,7 +600,9 @@ func (a *Applier) applyBMC(ctx context.Context, devID uuid.UUID, f *driver.Facts
 	_ = a.w.UpsertBMCInfo(ctx, db.UpsertBMCInfoParams{
 		DeviceID: devID, Vendor: nonEmpty(b.Vendor), ControllerKind: nonEmpty(b.ControllerKind),
 		Model: nonEmpty(b.Model), Serial: nonEmpty(b.Serial), FirmwareVersion: nonEmpty(b.FirmwareVersion),
-		PowerState: nonEmpty(b.PowerState), Health: nonEmpty(b.Health), LastSeenAt: poll,
+		PowerState: nonEmpty(b.PowerState), Health: nonEmpty(b.Health),
+		CpuModel: nonEmpty(b.CPUModel), CpuCount: int32(b.CPUCount), CpuCores: int32(b.CPUCores),
+		MemoryGib: b.MemoryGiB, BiosVersion: nonEmpty(b.BiosVersion), LastSeenAt: poll,
 	})
 	for _, s := range f.BMCSensors {
 		_ = a.w.UpsertBMCSensor(ctx, db.UpsertBMCSensorParams{
@@ -608,6 +613,25 @@ func (a *Applier) applyBMC(ctx context.Context, devID uuid.UUID, f *driver.Facts
 	}
 	if len(f.BMCSensors) > 0 {
 		_ = a.w.DeleteStaleBMCSensors(ctx, db.DeleteStaleBMCSensorsParams{DeviceID: devID, LastSeenAt: poll, CollectionSource: "redfish"})
+	}
+	for _, cp := range f.BMCComponents {
+		var detail []byte
+		if len(cp.Detail) > 0 {
+			if bb, err := json.Marshal(cp.Detail); err == nil {
+				detail = bb
+			}
+		}
+		if detail == nil {
+			detail = []byte("{}")
+		}
+		_ = a.w.UpsertBMCComponent(ctx, db.UpsertBMCComponentParams{
+			DeviceID: devID, Kind: cp.Kind, Name: cp.Name, Model: nonEmpty(cp.Model), Serial: nonEmpty(cp.Serial),
+			Status: nonEmpty(cp.Status), CapacityBytes: cp.CapacityBytes, Detail: detail,
+			CollectionSource: "redfish", LastSeenAt: poll,
+		})
+	}
+	if len(f.BMCComponents) > 0 {
+		_ = a.w.DeleteStaleBMCComponents(ctx, db.DeleteStaleBMCComponentsParams{DeviceID: devID, LastSeenAt: poll, CollectionSource: "redfish"})
 	}
 }
 

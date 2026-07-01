@@ -818,6 +818,23 @@ export interface BMCInfo {
   firmware_version?: string | null
   power_state?: string | null
   health?: string | null
+  cpu_model?: string | null
+  cpu_count?: number
+  cpu_cores?: number
+  memory_gib?: number
+  bios_version?: string | null
+}
+
+// BMCComponent is one detailed Redfish hardware item: cpu | memory | controller | volume | drive.
+export interface BMCComponent {
+  id: string
+  kind: string
+  name: string
+  model?: string | null
+  serial?: string | null
+  status?: string | null
+  capacity_bytes: number
+  detail: Record<string, string>
 }
 
 export interface BMCSensor {

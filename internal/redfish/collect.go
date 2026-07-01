@@ -2,6 +2,7 @@ package redfish
 
 import (
 	"context"
+	"fmt"
 	"strings"
 )
 
@@ -18,8 +19,25 @@ type BMCFacts struct {
 	Health          string // OK | Warning | Critical
 	ProcessorCount  int
 	ProcessorModel  string
+	ProcessorCores  int
 	MemoryGiB       float64
 	Sensors         []Sensor
+	Components      []Component // detailed CPU / DIMM / RAID controller / volume / drive inventory
+}
+
+// Component is one detailed hardware item collected over authenticated Redfish: a
+// processor, a memory module, a storage (RAID) controller, a volume (RAID array), or a
+// physical drive. Detail carries the kind-specific fields (cores/speed, media/protocol,
+// raid level, firmware…) as strings so the model stays flat and honest — only what the
+// device reported is present.
+type Component struct {
+	Kind          string            // cpu | memory | controller | volume | drive
+	Name          string            // socket/locator/name (stable within kind)
+	Model         string            //
+	Serial        string            //
+	Status        string            // OK | Warning | Critical | (raw)
+	CapacityBytes int64             // DIMM/drive/volume capacity; 0 for CPU
+	Detail        map[string]string //
 }
 
 // Sensor is one fan / PSU / temperature / drive-or-storage health reading.
@@ -67,7 +85,73 @@ type computerSystem struct {
 	MemorySum struct {
 		TotalSystemMemoryGiB float64 `json:"TotalSystemMemoryGiB"`
 	} `json:"MemorySummary"`
-	Storage odataRef `json:"Storage"`
+	Processors odataRef `json:"Processors"`
+	Memory     odataRef `json:"Memory"`
+	Storage    odataRef `json:"Storage"`
+	Oem        struct {
+		Hpe struct {
+			Links struct {
+				SmartStorage odataRef `json:"SmartStorage"`
+			} `json:"Links"`
+		} `json:"Hpe"`
+	} `json:"Oem"`
+}
+
+// --- detailed inventory schema (only the fields we read) --------------------
+
+type processor struct {
+	Name           string `json:"Name"`
+	Socket         string `json:"Socket"`
+	Model          string `json:"Model"`
+	Manufacturer   string `json:"Manufacturer"`
+	ProcessorType  string `json:"ProcessorType"`
+	InstructionSet string `json:"InstructionSet"`
+	TotalCores     int    `json:"TotalCores"`
+	TotalThreads   int    `json:"TotalThreads"`
+	MaxSpeedMHz    int    `json:"MaxSpeedMHz"`
+	Status         status `json:"Status"`
+}
+type memoryModule struct {
+	Name              string `json:"Name"`
+	DeviceLocator     string `json:"DeviceLocator"`
+	MemoryDeviceType  string `json:"MemoryDeviceType"`
+	Manufacturer      string `json:"Manufacturer"`
+	PartNumber        string `json:"PartNumber"`
+	SerialNumber      string `json:"SerialNumber"`
+	CapacityMiB       int64  `json:"CapacityMiB"`
+	OperatingSpeedMhz int    `json:"OperatingSpeedMhz"`
+	Status            status `json:"Status"`
+}
+type storageDetail struct {
+	Name               string `json:"Name"`
+	StorageControllers []struct {
+		Name               string   `json:"Name"`
+		Model              string   `json:"Model"`
+		Manufacturer       string   `json:"Manufacturer"`
+		FirmwareVersion    string   `json:"FirmwareVersion"`
+		SupportedRAIDTypes []string `json:"SupportedRAIDTypes"`
+		Status             status   `json:"Status"`
+	} `json:"StorageControllers"`
+	Drives  []odataRef `json:"Drives"`
+	Volumes odataRef   `json:"Volumes"`
+}
+type driveDetail struct {
+	Name             string  `json:"Name"`
+	Model            string  `json:"Model"`
+	Manufacturer     string  `json:"Manufacturer"`
+	SerialNumber     string  `json:"SerialNumber"`
+	MediaType        string  `json:"MediaType"` // HDD | SSD
+	Protocol         string  `json:"Protocol"`  // SAS | SATA | NVMe
+	CapacityBytes    int64   `json:"CapacityBytes"`
+	RotationSpeedRPM float64 `json:"RotationSpeedRPM"`
+	Status           status  `json:"Status"`
+}
+type volumeDetail struct {
+	Name          string `json:"Name"`
+	RAIDType      string `json:"RAIDType"`   // RAID0 | RAID1 | RAID5 | …
+	VolumeType    string `json:"VolumeType"` // legacy field on some BMCs
+	CapacityBytes int64  `json:"CapacityBytes"`
+	Status        status `json:"Status"`
 }
 type chassis struct {
 	Thermal odataRef `json:"Thermal"`
@@ -97,11 +181,6 @@ type power struct {
 type manager struct {
 	Model           string `json:"Model"`
 	FirmwareVersion string `json:"FirmwareVersion"`
-}
-type storageMember struct {
-	Name   string     `json:"Name"`
-	Status status     `json:"Status"`
-	Drives []odataRef `json:"Drives"`
 }
 
 // Collect walks the Redfish tree and assembles BMCFacts. Optional sections
@@ -133,7 +212,16 @@ func Collect(ctx context.Context, c *Client) (BMCFacts, error) {
 			f.BiosVersion, f.PowerState, f.Health = sys.BiosVersion, sys.PowerState, sys.Status.Health
 			f.ProcessorCount, f.ProcessorModel = sys.ProcessorSum.Count, sys.ProcessorSum.Model
 			f.MemoryGiB = sys.MemorySum.TotalSystemMemoryGiB
+			// Detailed inventory (best-effort; each section's failure leaves it empty).
+			f.collectProcessors(ctx, c, sys.Processors.ID)
+			f.collectMemory(ctx, c, sys.Memory.ID)
 			f.collectStorage(ctx, c, sys.Storage.ID)
+			// HPE Gen8/Gen10 iLO exposes disks/arrays under the OEM SmartStorage tree
+			// instead of the standard Systems/Storage — walk it when the standard path
+			// yielded no drives so iLO servers still show physical disks + RAID.
+			if countComponentKind(f.Components, "drive") == 0 {
+				f.collectHPESmartStorage(ctx, c, sys.Oem.Hpe.Links.SmartStorage.ID)
+			}
 		}
 	}
 
@@ -208,20 +296,233 @@ func (f *BMCFacts) collectPower(ctx context.Context, c *Client, path string) {
 	}
 }
 
+// collectProcessors reads each populated CPU socket → a cpu Component + the CPU summary
+// (model + count + cores) used by the overview.
+func (f *BMCFacts) collectProcessors(ctx context.Context, c *Client, path string) {
+	if path == "" {
+		return
+	}
+	for _, m := range membersOf(ctx, c, path) {
+		var p processor
+		if err := c.GetJSON(ctx, m, &p); err != nil {
+			continue
+		}
+		if p.Model == "" && p.TotalCores == 0 { // empty/absent socket
+			continue
+		}
+		name := orDefault(orDefault(p.Socket, p.Name), "CPU")
+		comp := Component{Kind: "cpu", Name: name, Model: strings.TrimSpace(p.Model), Status: p.Status.Health, Detail: map[string]string{}}
+		putInt(comp.Detail, "cores", p.TotalCores)
+		putInt(comp.Detail, "threads", p.TotalThreads)
+		putInt(comp.Detail, "max_speed_mhz", p.MaxSpeedMHz)
+		putStr(comp.Detail, "manufacturer", p.Manufacturer)
+		putStr(comp.Detail, "type", p.ProcessorType)
+		putStr(comp.Detail, "arch", p.InstructionSet)
+		f.Components = append(f.Components, comp)
+		if f.ProcessorModel == "" {
+			f.ProcessorModel = strings.TrimSpace(p.Model)
+		}
+		f.ProcessorCores += p.TotalCores
+	}
+	// If the summary didn't provide a count, use the sockets we actually read.
+	if cnt := countComponentKind(f.Components, "cpu"); f.ProcessorCount == 0 && cnt > 0 {
+		f.ProcessorCount = cnt
+	}
+}
+
+// collectMemory reads each POPULATED DIMM → a memory Component; empty slots (0 MiB) are
+// skipped. Fills the total memory if the MemorySummary didn't provide it.
+func (f *BMCFacts) collectMemory(ctx context.Context, c *Client, path string) {
+	if path == "" {
+		return
+	}
+	var totalMiB int64
+	for _, m := range membersOf(ctx, c, path) {
+		var mm memoryModule
+		if err := c.GetJSON(ctx, m, &mm); err != nil {
+			continue
+		}
+		if mm.CapacityMiB <= 0 { // empty slot
+			continue
+		}
+		totalMiB += mm.CapacityMiB
+		name := orDefault(orDefault(mm.DeviceLocator, mm.Name), "DIMM")
+		comp := Component{Kind: "memory", Name: name, Model: strings.TrimSpace(mm.PartNumber),
+			Serial: strings.TrimSpace(mm.SerialNumber), Status: mm.Status.Health,
+			CapacityBytes: mm.CapacityMiB * 1024 * 1024, Detail: map[string]string{}}
+		putStr(comp.Detail, "type", mm.MemoryDeviceType)
+		putInt(comp.Detail, "speed_mhz", mm.OperatingSpeedMhz)
+		putStr(comp.Detail, "manufacturer", mm.Manufacturer)
+		f.Components = append(f.Components, comp)
+	}
+	if f.MemoryGiB == 0 && totalMiB > 0 {
+		f.MemoryGiB = float64(totalMiB) / 1024
+	}
+}
+
+// collectStorage reads each storage subsystem → RAID controller Components, volume (RAID
+// array) Components, and physical drive Components (HDD/SSD, capacity, media, protocol).
 func (f *BMCFacts) collectStorage(ctx context.Context, c *Client, path string) {
 	if path == "" {
 		return
 	}
 	for _, m := range membersOf(ctx, c, path) {
-		var sm storageMember
-		if err := c.GetJSON(ctx, m, &sm); err != nil {
+		var sd storageDetail
+		if err := c.GetJSON(ctx, m, &sd); err != nil {
 			continue
 		}
-		f.Sensors = append(f.Sensors, Sensor{
-			Kind: "storage", Name: orDefault(sm.Name, "Storage"), Status: sm.Status.Health,
-			Reading: float64(len(sm.Drives)), Unit: "drives", HasReading: len(sm.Drives) > 0,
-		})
+		for _, sc := range sd.StorageControllers {
+			if sc.Name == "" && sc.Model == "" {
+				continue
+			}
+			comp := Component{Kind: "controller", Name: orDefault(sc.Name, sd.Name), Model: strings.TrimSpace(sc.Model), Status: sc.Status.Health, Detail: map[string]string{}}
+			putStr(comp.Detail, "firmware", sc.FirmwareVersion)
+			putStr(comp.Detail, "manufacturer", sc.Manufacturer)
+			if len(sc.SupportedRAIDTypes) > 0 {
+				comp.Detail["raid_types"] = strings.Join(sc.SupportedRAIDTypes, ",")
+			}
+			f.Components = append(f.Components, comp)
+		}
+		// Volumes (RAID arrays).
+		for _, vp := range membersOf(ctx, c, sd.Volumes.ID) {
+			var v volumeDetail
+			if err := c.GetJSON(ctx, vp, &v); err != nil {
+				continue
+			}
+			comp := Component{Kind: "volume", Name: orDefault(v.Name, "Volume"), Status: v.Status.Health, CapacityBytes: v.CapacityBytes, Detail: map[string]string{}}
+			putStr(comp.Detail, "raid", orDefault(v.RAIDType, v.VolumeType))
+			f.Components = append(f.Components, comp)
+		}
+		// Physical drives.
+		for _, dref := range sd.Drives {
+			var d driveDetail
+			if err := c.GetJSON(ctx, dref.ID, &d); err != nil {
+				continue
+			}
+			if d.Name == "" && d.Model == "" {
+				continue
+			}
+			comp := Component{Kind: "drive", Name: orDefault(d.Name, d.Model), Model: strings.TrimSpace(d.Model),
+				Serial: strings.TrimSpace(d.SerialNumber), Status: d.Status.Health, CapacityBytes: d.CapacityBytes, Detail: map[string]string{}}
+			putStr(comp.Detail, "media", d.MediaType)
+			putStr(comp.Detail, "protocol", d.Protocol)
+			putStr(comp.Detail, "manufacturer", d.Manufacturer)
+			if d.RotationSpeedRPM > 0 {
+				putInt(comp.Detail, "rpm", int(d.RotationSpeedRPM))
+			}
+			f.Components = append(f.Components, comp)
+		}
 	}
+}
+
+// --- HPE OEM SmartStorage (iLO): arrays, logical drives, physical disks ------
+
+type hpeSmartStorage struct {
+	Links struct {
+		ArrayControllers odataRef `json:"ArrayControllers"`
+	} `json:"Links"`
+}
+type hpeArrayController struct {
+	Model           string `json:"Model"`
+	SerialNumber    string `json:"SerialNumber"`
+	FirmwareVersion struct {
+		Current struct {
+			VersionString string `json:"VersionString"`
+		} `json:"Current"`
+	} `json:"FirmwareVersion"`
+	Status status `json:"Status"`
+	Links  struct {
+		PhysicalDrives odataRef `json:"PhysicalDrives"`
+		LogicalDrives  odataRef `json:"LogicalDrives"`
+	} `json:"Links"`
+}
+type hpePhysicalDrive struct {
+	Model         string `json:"Model"`
+	SerialNumber  string `json:"SerialNumber"`
+	CapacityMiB   int64  `json:"CapacityMiB"`
+	MediaType     string `json:"MediaType"`     // HDD | SSD
+	InterfaceType string `json:"InterfaceType"` // SAS | SATA | NVMe
+	Location      string `json:"Location"`
+	Status        status `json:"Status"`
+}
+type hpeLogicalDrive struct {
+	LogicalDriveName string `json:"LogicalDriveName"`
+	Raid             string `json:"Raid"` // HPE reports the RAID level as a bare number string ("1","5")
+	CapacityMiB      int64  `json:"CapacityMiB"`
+	Status           status `json:"Status"`
+}
+
+// collectHPESmartStorage walks the HPE OEM SmartStorage tree (array controllers →
+// physical drives + logical drives) so HPE iLO servers expose disks/RAID even though they
+// don't populate the standard Redfish Systems/Storage. Best-effort; any fetch error just
+// leaves that branch empty.
+func (f *BMCFacts) collectHPESmartStorage(ctx context.Context, c *Client, path string) {
+	if path == "" {
+		return
+	}
+	var ss hpeSmartStorage
+	if err := c.GetJSON(ctx, path, &ss); err != nil {
+		return
+	}
+	for _, acPath := range membersOf(ctx, c, ss.Links.ArrayControllers.ID) {
+		var ac hpeArrayController
+		if err := c.GetJSON(ctx, acPath, &ac); err != nil {
+			continue
+		}
+		if ac.Model != "" {
+			comp := Component{Kind: "controller", Name: ac.Model, Model: ac.Model, Serial: ac.SerialNumber, Status: ac.Status.Health, Detail: map[string]string{}}
+			putStr(comp.Detail, "firmware", ac.FirmwareVersion.Current.VersionString)
+			f.Components = append(f.Components, comp)
+		}
+		for _, ldPath := range membersOf(ctx, c, ac.Links.LogicalDrives.ID) {
+			var ld hpeLogicalDrive
+			if err := c.GetJSON(ctx, ldPath, &ld); err != nil {
+				continue
+			}
+			comp := Component{Kind: "volume", Name: orDefault(ld.LogicalDriveName, "Logical Drive"), Status: ld.Status.Health,
+				CapacityBytes: ld.CapacityMiB * 1024 * 1024, Detail: map[string]string{}}
+			if ld.Raid != "" {
+				comp.Detail["raid"] = "RAID" + ld.Raid
+			}
+			f.Components = append(f.Components, comp)
+		}
+		for _, pdPath := range membersOf(ctx, c, ac.Links.PhysicalDrives.ID) {
+			var pd hpePhysicalDrive
+			if err := c.GetJSON(ctx, pdPath, &pd); err != nil {
+				continue
+			}
+			name := orDefault(pd.Location, orDefault(pd.SerialNumber, pd.Model))
+			if name == "" {
+				continue
+			}
+			comp := Component{Kind: "drive", Name: name, Model: strings.TrimSpace(pd.Model), Serial: strings.TrimSpace(pd.SerialNumber),
+				Status: pd.Status.Health, CapacityBytes: pd.CapacityMiB * 1024 * 1024, Detail: map[string]string{}}
+			putStr(comp.Detail, "media", pd.MediaType)
+			putStr(comp.Detail, "protocol", pd.InterfaceType)
+			putStr(comp.Detail, "location", pd.Location)
+			f.Components = append(f.Components, comp)
+		}
+	}
+}
+
+func putStr(m map[string]string, k, v string) {
+	if s := strings.TrimSpace(v); s != "" {
+		m[k] = s
+	}
+}
+func putInt(m map[string]string, k string, v int) {
+	if v > 0 {
+		m[k] = fmt.Sprintf("%d", v)
+	}
+}
+func countComponentKind(cs []Component, kind string) int {
+	n := 0
+	for _, c := range cs {
+		if c.Kind == kind {
+			n++
+		}
+	}
+	return n
 }
 
 func membersOf(ctx context.Context, c *Client, collPath string) []string {

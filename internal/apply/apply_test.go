@@ -18,21 +18,22 @@ import (
 
 // fakeWriter records calls; LiveDeviceByIPAndLocation returns existing if set.
 type fakeWriter struct {
-	existing   *db.Device
-	created    []db.CreateDeviceParams
-	updated    []db.UpdateDiscoveredDeviceParams
-	creds      []db.SetDeviceCredentialParams
-	roles      []db.AddDeviceRoleParams
-	facts      []db.UpsertDeviceFactParams
-	ifaces     []db.UpsertInterfaceParams
-	vlans      []db.UpsertVlanParams
-	portVlans  []db.UpsertPortVlanParams
-	arp        []db.UpsertARPParams
-	neighbors  []db.UpsertNeighborParams
-	bmcInfo    []db.UpsertBMCInfoParams
-	bmcSensors []db.UpsertBMCSensorParams
-	vms        []db.UpsertVMParams
-	staleCalls int
+	existing      *db.Device
+	created       []db.CreateDeviceParams
+	updated       []db.UpdateDiscoveredDeviceParams
+	creds         []db.SetDeviceCredentialParams
+	roles         []db.AddDeviceRoleParams
+	facts         []db.UpsertDeviceFactParams
+	ifaces        []db.UpsertInterfaceParams
+	vlans         []db.UpsertVlanParams
+	portVlans     []db.UpsertPortVlanParams
+	arp           []db.UpsertARPParams
+	neighbors     []db.UpsertNeighborParams
+	bmcInfo       []db.UpsertBMCInfoParams
+	bmcSensors    []db.UpsertBMCSensorParams
+	bmcComponents []db.UpsertBMCComponentParams
+	vms           []db.UpsertVMParams
+	staleCalls    int
 }
 
 func (f *fakeWriter) LiveDeviceByIPAndLocation(_ context.Context, _ db.LiveDeviceByIPAndLocationParams) (db.Device, error) {
@@ -137,6 +138,13 @@ func (f *fakeWriter) UpsertBMCSensor(_ context.Context, arg db.UpsertBMCSensorPa
 	return nil
 }
 func (f *fakeWriter) DeleteStaleBMCSensors(_ context.Context, _ db.DeleteStaleBMCSensorsParams) error {
+	return nil
+}
+func (f *fakeWriter) UpsertBMCComponent(_ context.Context, arg db.UpsertBMCComponentParams) error {
+	f.bmcComponents = append(f.bmcComponents, arg)
+	return nil
+}
+func (f *fakeWriter) DeleteStaleBMCComponents(_ context.Context, _ db.DeleteStaleBMCComponentsParams) error {
 	return nil
 }
 func (f *fakeWriter) UpsertVM(_ context.Context, arg db.UpsertVMParams) (db.VirtualMachine, error) {

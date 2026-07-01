@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
 import { Server, Cpu, HardDrive, Cable, Activity, Settings, LayoutDashboard, Gauge, Thermometer, MemoryStick, KeyRound } from 'lucide-react'
-import { api, type ServerStorage, type DeviceFact, type DeviceRole, type Interface, type BMCInfo, type BMCSensor } from '../api'
+import { api, type ServerStorage, type DeviceFact, type DeviceRole, type Interface, type BMCInfo, type BMCSensor, type BMCComponent } from '../api'
 import { DeviceOps } from '../components/DeviceOps'
 import { DeviceHeader } from '../components/DeviceHeader'
 import { ConnectivityPanel } from '../components/ConnectivityPanel'
@@ -28,6 +28,8 @@ function fmtBytes(n?: number | null): string {
   return `${v.toFixed(i === 0 ? 0 : 1)} ${u[i]}`
 }
 const speedLabel = (mbps?: number | null) => (mbps ? (mbps >= 1000 ? `${mbps / 1000} Gb/s` : `${mbps} Mb/s`) : '—')
+// fmtGiB renders a capacity in bytes, or "—" when zero/absent (CPUs/controllers have none).
+const fmtGiB = (bytes?: number | null) => (bytes && bytes > 0 ? fmtBytes(bytes) : '—')
 
 // ServerDetail — enterprise server console (HOST-RESOURCES-MIB + Redfish/iLO/iDRAC
 // + deep OS inventory). Tabbed: Overview (resources + deep OS), Storage, Interfaces,
@@ -46,6 +48,7 @@ export function ServerDetail({ initialTab }: { initialTab?: Tab } = {}) {
   const ifaces = useQuery({ queryKey: ['interfaces', id], queryFn: () => api.get<Interface[]>(`/devices/${id}/interfaces`) })
   const bmc = useQuery({ queryKey: ['bmc', id], queryFn: () => api.get<BMCInfo>(`/devices/${id}/bmc`) })
   const sensors = useQuery({ queryKey: ['bmc-sensors', id], queryFn: () => api.get<BMCSensor[]>(`/devices/${id}/bmc-sensors`) })
+  const components = useQuery({ queryKey: ['bmc-components', id], queryFn: () => api.get<BMCComponent[]>(`/devices/${id}/bmc-components`) })
 
   const fm = useMemo(() => new Map((facts.data ?? []).map((f) => [f.key, f.value ?? ''])), [facts.data])
   const num = (k: string) => { const v = Number(fm.get(k)); return Number.isFinite(v) && fm.has(k) ? v : null }
@@ -63,6 +66,9 @@ export function ServerDetail({ initialTab }: { initialTab?: Tab } = {}) {
   const hasBMC = !!(bmc.data && bmc.data.device_id)
   const sensorList = sensors.data ?? []
   const badSensors = sensorList.filter((s) => s.status && s.status !== 'OK').length
+  const comps = components.data ?? []
+  const compsOf = (kind: string) => comps.filter((c) => c.kind === kind)
+  const cpus = compsOf('cpu'), dimms = compsOf('memory'), controllers = compsOf('controller'), volumes = compsOf('volume'), drives = compsOf('drive')
 
   const tabs = [
     { key: 'overview', label: 'Overview', icon: LayoutDashboard },
@@ -187,9 +193,70 @@ export function ServerDetail({ initialTab }: { initialTab?: Tab } = {}) {
                   { label: 'Model', value: bmc.data?.model ?? '—' },
                   { label: 'Serial', value: bmc.data?.serial ?? '—' },
                   { label: 'Firmware', value: bmc.data?.firmware_version ?? '—' },
+                  { label: 'BIOS', value: bmc.data?.bios_version || '—' },
                   { label: 'Power state', value: bmc.data?.power_state ?? '—' },
+                  { label: 'CPU', value: bmc.data?.cpu_model ? `${bmc.data.cpu_model}${bmc.data.cpu_count ? ` × ${bmc.data.cpu_count}` : ''}${bmc.data.cpu_cores ? ` · ${bmc.data.cpu_cores} cores` : ''}` : '—' },
+                  { label: 'Memory', value: bmc.data?.memory_gib ? `${bmc.data.memory_gib} GiB` : '—' },
                 ]} />
               </Panel>
+
+              {/* Processors */}
+              {cpus.length > 0 && (
+                <Panel title="Processors" icon={Cpu} subtitle={`${cpus.length}`} pad={false}>
+                  <table className="data-table">
+                    <thead><tr><th>Socket</th><th>Model</th><th>Cores / Threads</th><th>Max speed</th><th>Status</th></tr></thead>
+                    <tbody>{cpus.map((c) => (
+                      <tr key={c.id}><td className="cell-name">{c.name}</td><td>{c.model || '—'}</td>
+                        <td className="mono">{c.detail.cores || '—'}{c.detail.threads ? ` / ${c.detail.threads}` : ''}</td>
+                        <td className="mono">{c.detail.max_speed_mhz ? `${c.detail.max_speed_mhz} MHz` : '—'}</td>
+                        <td><StatusPill status={healthTone(c.status)} label={c.status ?? '—'} /></td></tr>
+                    ))}</tbody>
+                  </table>
+                </Panel>
+              )}
+
+              {/* Memory */}
+              {dimms.length > 0 && (
+                <Panel title="Memory" icon={MemoryStick} subtitle={`${dimms.length} DIMM(s)${bmc.data?.memory_gib ? ` · ${bmc.data.memory_gib} GiB` : ''}`} pad={false}>
+                  <table className="data-table">
+                    <thead><tr><th>Slot</th><th>Size</th><th>Type</th><th>Speed</th><th>Part / Mfr</th><th>Status</th></tr></thead>
+                    <tbody>{dimms.map((c) => (
+                      <tr key={c.id}><td className="cell-name">{c.name}</td><td className="mono">{fmtGiB(c.capacity_bytes)}</td>
+                        <td>{c.detail.type || '—'}</td><td className="mono">{c.detail.speed_mhz ? `${c.detail.speed_mhz} MHz` : '—'}</td>
+                        <td className="muted" style={{ fontSize: 12 }}>{[c.model, c.detail.manufacturer].filter(Boolean).join(' · ') || '—'}</td>
+                        <td><StatusPill status={healthTone(c.status)} label={c.status ?? '—'} /></td></tr>
+                    ))}</tbody>
+                  </table>
+                </Panel>
+              )}
+
+              {/* Storage: RAID controllers + volumes + physical drives */}
+              {(controllers.length > 0 || volumes.length > 0 || drives.length > 0) && (
+                <Panel title="Storage / RAID" icon={HardDrive} subtitle={`${controllers.length} controller(s) · ${volumes.length} volume(s) · ${drives.length} drive(s)`} pad={false}>
+                  <table className="data-table">
+                    <thead><tr><th>Type</th><th>Name</th><th>Model / RAID</th><th>Capacity</th><th>Detail</th><th>Status</th></tr></thead>
+                    <tbody>
+                      {controllers.map((c) => (
+                        <tr key={c.id}><td>controller</td><td className="cell-name">{c.name}</td><td>{c.model || '—'}</td><td className="mono">—</td>
+                          <td className="muted" style={{ fontSize: 12 }}>{[c.detail.firmware ? `fw ${c.detail.firmware}` : '', c.detail.raid_types ? `RAID: ${c.detail.raid_types}` : ''].filter(Boolean).join(' · ') || '—'}</td>
+                          <td><StatusPill status={healthTone(c.status)} label={c.status ?? '—'} /></td></tr>
+                      ))}
+                      {volumes.map((c) => (
+                        <tr key={c.id}><td>volume</td><td className="cell-name">{c.name}</td><td><span className="badge badge-info">{c.detail.raid || '—'}</span></td>
+                          <td className="mono">{fmtGiB(c.capacity_bytes)}</td><td className="muted" style={{ fontSize: 12 }}>—</td>
+                          <td><StatusPill status={healthTone(c.status)} label={c.status ?? '—'} /></td></tr>
+                      ))}
+                      {drives.map((c) => (
+                        <tr key={c.id}><td>drive</td><td className="cell-name">{c.name}</td><td>{c.model || '—'}{c.serial ? <span className="muted"> · {c.serial}</span> : null}</td>
+                          <td className="mono">{fmtGiB(c.capacity_bytes)}</td>
+                          <td className="muted" style={{ fontSize: 12 }}>{[c.detail.media, c.detail.protocol, c.detail.rpm ? `${c.detail.rpm} rpm` : ''].filter(Boolean).join(' · ') || '—'}</td>
+                          <td><StatusPill status={healthTone(c.status)} label={c.status ?? '—'} /></td></tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </Panel>
+              )}
+
               <Panel title="Sensors" icon={Activity} subtitle={sensorList.length ? `${sensorList.length} · ${badSensors} alerting` : undefined} pad={false}>
                 {sensorList.length === 0 && <EmptyState icon={Activity} title="No sensors reported" message="Thermal / power / fan sensors appear here when the BMC exposes them." />}
                 {sensorList.length > 0 && (

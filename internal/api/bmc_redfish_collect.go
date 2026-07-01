@@ -206,7 +206,9 @@ func (s *Server) collectBMCRedfish(w http.ResponseWriter, r *http.Request) {
 	_ = s.queries.UpsertBMCInfo(ctx, db.UpsertBMCInfoParams{
 		DeviceID: dev.ID, Vendor: nzp(facts.Vendor), ControllerKind: nzp(facts.ControllerKind),
 		Model: nzp(facts.Model), Serial: nzp(facts.Serial), FirmwareVersion: nzp(facts.FirmwareVersion),
-		PowerState: nzp(facts.PowerState), Health: nzp(facts.Health), LastSeenAt: poll,
+		PowerState: nzp(facts.PowerState), Health: nzp(facts.Health),
+		CpuModel: nzp(facts.ProcessorModel), CpuCount: int32(facts.ProcessorCount), CpuCores: int32(facts.ProcessorCores),
+		MemoryGib: facts.MemoryGiB, BiosVersion: nzp(facts.BiosVersion), LastSeenAt: poll,
 	})
 	for _, sn := range facts.Sensors {
 		_ = s.queries.UpsertBMCSensor(ctx, db.UpsertBMCSensorParams{
@@ -217,6 +219,17 @@ func (s *Server) collectBMCRedfish(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(facts.Sensors) > 0 {
 		_ = s.queries.DeleteStaleBMCSensors(ctx, db.DeleteStaleBMCSensorsParams{DeviceID: dev.ID, LastSeenAt: poll, CollectionSource: "redfish"})
+	}
+	// Detailed hardware inventory: CPUs, DIMMs, RAID controllers, volumes, physical drives.
+	for _, cp := range facts.Components {
+		_ = s.queries.UpsertBMCComponent(ctx, db.UpsertBMCComponentParams{
+			DeviceID: dev.ID, Kind: cp.Kind, Name: cp.Name, Model: nzp(cp.Model), Serial: nzp(cp.Serial),
+			Status: nzp(cp.Status), CapacityBytes: cp.CapacityBytes, Detail: detailJSON(cp.Detail),
+			CollectionSource: "redfish", LastSeenAt: poll,
+		})
+	}
+	if len(facts.Components) > 0 {
+		_ = s.queries.DeleteStaleBMCComponents(ctx, db.DeleteStaleBMCComponentsParams{DeviceID: dev.ID, LastSeenAt: poll, CollectionSource: "redfish"})
 	}
 	// Enrich the device row identity with the AUTHENTICATED Redfish values (COALESCE in the
 	// query never wipes a proven field). Never changes category — this is a bmc. The device
@@ -256,3 +269,15 @@ func nzp(s string) *string {
 }
 
 func f64p(f float64) *float64 { return &f }
+
+// detailJSON marshals a component's kind-specific detail map to JSONB (never nil).
+func detailJSON(m map[string]string) []byte {
+	if len(m) == 0 {
+		return []byte("{}")
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return []byte("{}")
+	}
+	return b
+}

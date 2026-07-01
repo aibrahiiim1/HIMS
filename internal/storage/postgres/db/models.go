@@ -137,6 +137,20 @@ type BackupRun struct {
 	Content   []byte    `json:"content"`
 }
 
+type BmcComponent struct {
+	ID               uuid.UUID `json:"id"`
+	DeviceID         uuid.UUID `json:"device_id"`
+	Kind             string    `json:"kind"`
+	Name             string    `json:"name"`
+	Model            *string   `json:"model"`
+	Serial           *string   `json:"serial"`
+	Status           *string   `json:"status"`
+	CapacityBytes    int64     `json:"capacity_bytes"`
+	Detail           []byte    `json:"detail"`
+	CollectionSource string    `json:"collection_source"`
+	LastSeenAt       time.Time `json:"last_seen_at"`
+}
+
 type BmcInfo struct {
 	DeviceID        uuid.UUID `json:"device_id"`
 	Vendor          *string   `json:"vendor"`
@@ -147,6 +161,11 @@ type BmcInfo struct {
 	PowerState      *string   `json:"power_state"`
 	Health          *string   `json:"health"`
 	LastSeenAt      time.Time `json:"last_seen_at"`
+	CpuModel        *string   `json:"cpu_model"`
+	CpuCount        int32     `json:"cpu_count"`
+	CpuCores        int32     `json:"cpu_cores"`
+	MemoryGib       float64   `json:"memory_gib"`
+	BiosVersion     *string   `json:"bios_version"`
 }
 
 type BmcSensor struct {

@@ -80,11 +80,19 @@ func (d *Driver) Collect(sess driver.Session, _ driver.Probe) (driver.Facts, err
 		Vendor: bf.Vendor, ControllerKind: bf.ControllerKind, Model: bf.Model,
 		Serial: bf.Serial, FirmwareVersion: bf.FirmwareVersion,
 		PowerState: bf.PowerState, Health: bf.Health,
+		CPUModel: bf.ProcessorModel, CPUCount: bf.ProcessorCount, CPUCores: bf.ProcessorCores,
+		MemoryGiB: bf.MemoryGiB, BiosVersion: bf.BiosVersion,
 	}
 	for _, s := range bf.Sensors {
 		f.BMCSensors = append(f.BMCSensors, driver.BMCSensorSnap{
 			Kind: s.Kind, Name: s.Name, Status: s.Status,
 			Reading: s.Reading, Unit: s.Unit, HasReading: s.HasReading,
+		})
+	}
+	for _, cp := range bf.Components {
+		f.BMCComponents = append(f.BMCComponents, driver.BMCComponentSnap{
+			Kind: cp.Kind, Name: cp.Name, Model: cp.Model, Serial: cp.Serial,
+			Status: cp.Status, CapacityBytes: cp.CapacityBytes, Detail: cp.Detail,
 		})
 	}
 	return f, nil

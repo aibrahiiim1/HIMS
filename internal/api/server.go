@@ -325,6 +325,7 @@ func (s *Server) routes() {
 		r.Get("/devices/{id}/ssh-cli-results", s.listSSHCliResults)              // per-command SSH CLI results
 		r.Get("/devices/{id}/bmc", s.deviceBMC)
 		r.Get("/devices/{id}/bmc-sensors", s.deviceBMCSensors)
+		r.Get("/devices/{id}/bmc-components", s.deviceBMCComponents) // detailed CPU/DIMM/RAID/volume/drive inventory
 		r.Get("/devices/{id}/printer-supplies", s.devicePrinterSupplies)
 		r.Get("/devices/{id}/phones", s.devicePhones)
 		r.Get("/devices/{id}/ups", s.deviceUPS)
@@ -1057,6 +1058,45 @@ func (s *Server) deviceBMCSensors(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, rows)
+}
+
+// bmcComponentDTO mirrors a bmc_components row but emits detail as RAW JSON (the sqlc
+// []byte column otherwise marshals as base64, which the UI can't read as an object).
+type bmcComponentDTO struct {
+	ID            string          `json:"id"`
+	Kind          string          `json:"kind"`
+	Name          string          `json:"name"`
+	Model         string          `json:"model"`
+	Serial        string          `json:"serial"`
+	Status        string          `json:"status"`
+	CapacityBytes int64           `json:"capacity_bytes"`
+	Detail        json.RawMessage `json:"detail"`
+}
+
+// deviceBMCComponents returns the detailed Redfish hardware inventory (CPUs, DIMMs, RAID
+// controllers, volumes, physical drives) for a BMC device.
+func (s *Server) deviceBMCComponents(w http.ResponseWriter, r *http.Request) {
+	ctx, id, ok := pathDevice(w, r)
+	if !ok {
+		return
+	}
+	rows, err := s.queries.ListBMCComponents(ctx, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	out := make([]bmcComponentDTO, 0, len(rows))
+	for _, r := range rows {
+		detail := json.RawMessage(r.Detail)
+		if len(detail) == 0 {
+			detail = json.RawMessage("{}")
+		}
+		out = append(out, bmcComponentDTO{
+			ID: r.ID.String(), Kind: r.Kind, Name: r.Name, Model: derefStr(r.Model), Serial: derefStr(r.Serial),
+			Status: derefStr(r.Status), CapacityBytes: r.CapacityBytes, Detail: detail,
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) deviceRoles(w http.ResponseWriter, r *http.Request) {
