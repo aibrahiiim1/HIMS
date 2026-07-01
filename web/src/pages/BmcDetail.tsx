@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Cpu, MemoryStick, HardDrive, Thermometer, Activity, Server, KeyRound, ShieldCheck, Gauge, Fan, Zap, Database } from 'lucide-react'
+import { Cpu, MemoryStick, HardDrive, Thermometer, Activity, Server, KeyRound, ShieldCheck, Gauge, Fan, Zap, Database, Network } from 'lucide-react'
 import { api, type BMCInfo, type BMCSensor, type BMCComponent, type Credential } from '../api'
 import { Panel, Kpi, StatusPill, EmptyState, DefList } from '../components/ui'
 import { DeviceHeader } from '../components/DeviceHeader'
@@ -89,7 +89,7 @@ export function BmcDetail() {
   const b = bmc.data
   const comps = components.data ?? []
   const compsOf = (k: string) => comps.filter((c) => c.kind === k)
-  const cpus = compsOf('cpu'), dimms = compsOf('memory'), controllers = compsOf('controller'), volumes = compsOf('volume'), drives = compsOf('drive')
+  const cpus = compsOf('cpu'), dimms = compsOf('memory'), controllers = compsOf('controller'), volumes = compsOf('volume'), drives = compsOf('drive'), nics = compsOf('nic')
   const sensorList = sensors.data ?? []
   const sensorsOf = (k: string) => sensorList.filter((s) => s.kind === k)
   const fans = sensorsOf('fan'), temps = sensorsOf('temperature'), psus = sensorsOf('psu')
@@ -235,6 +235,23 @@ export function BmcDetail() {
             </table>
           </Panel>
         </>
+      )}
+
+      {/* D. Network interfaces */}
+      {collected && nics.length > 0 && (
+        <Panel title="Network interfaces" icon={Network} subtitle={`${nics.length}`} pad={false}>
+          <table className="data-table">
+            <thead><tr><th>Interface</th><th>Role</th><th>MAC</th><th>IPv4</th><th>Link</th><th>Speed</th><th>Status</th></tr></thead>
+            <tbody>{nics.map((c) => (
+              <tr key={c.id}><td className="cell-name">{c.name}</td>
+                <td>{c.detail.role ? <span className={`badge badge-${c.detail.role === 'management' ? 'access' : 'unknown'}`}>{c.detail.role}</span> : '—'}</td>
+                <td className="mono">{c.detail.mac || '—'}</td><td className="mono">{c.detail.ipv4 || '—'}</td>
+                <td>{c.detail.link ? <span className={`badge badge-${/up/i.test(c.detail.link) ? 'up' : 'unknown'}`}>{c.detail.link}</span> : '—'}</td>
+                <td className="mono">{c.detail.speed_mbps ? (Number(c.detail.speed_mbps) >= 1000 ? `${Number(c.detail.speed_mbps) / 1000} Gb/s` : `${c.detail.speed_mbps} Mb/s`) : '—'}</td>
+                <td><StatusPill status={pillTone(c.status)} label={c.status || '—'} /></td></tr>
+            ))}</tbody>
+          </table>
+        </Panel>
       )}
 
       {/* D. Sensors — grouped */}

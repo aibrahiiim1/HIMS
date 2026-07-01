@@ -53,8 +53,18 @@ type Sensor struct {
 // --- partial Redfish schema (only the fields we read) -----------------------
 
 type odataRef struct {
-	ID string `json:"@odata.id"`
+	ID   string `json:"@odata.id"` // Redfish 1.2+ (iLO 5 / iDRAC)
+	Href string `json:"href"`      // Redfish 1.0.0 (iLO 4) legacy link form
 }
+
+// id returns the resource path regardless of Redfish generation.
+func (o odataRef) id() string {
+	if o.ID != "" {
+		return o.ID
+	}
+	return o.Href
+}
+
 type status struct {
 	Health string `json:"Health"`
 	State  string `json:"State"`
@@ -85,16 +95,40 @@ type computerSystem struct {
 	MemorySum struct {
 		TotalSystemMemoryGiB float64 `json:"TotalSystemMemoryGiB"`
 	} `json:"MemorySummary"`
-	Processors odataRef `json:"Processors"`
-	Memory     odataRef `json:"Memory"`
-	Storage    odataRef `json:"Storage"`
-	Oem        struct {
-		Hpe struct {
+	Processors         odataRef `json:"Processors"`
+	Memory             odataRef `json:"Memory"`
+	Storage            odataRef `json:"Storage"`
+	EthernetInterfaces odataRef `json:"EthernetInterfaces"`
+	Oem                struct {
+		Hpe struct { // iLO 5 (Redfish 1.2+)
 			Links struct {
 				SmartStorage odataRef `json:"SmartStorage"`
 			} `json:"Links"`
 		} `json:"Hpe"`
+		Hp struct { // iLO 4 (Redfish 1.0.0) — detailed resources hang off Oem.Hp.links
+			Links struct {
+				SmartStorage       odataRef `json:"SmartStorage"`
+				Memory             odataRef `json:"Memory"`
+				NetworkAdapters    odataRef `json:"NetworkAdapters"`
+				EthernetInterfaces odataRef `json:"EthernetInterfaces"`
+			} `json:"links"`
+		} `json:"Hp"`
 	} `json:"Oem"`
+}
+
+// ethernetInterface is one NIC (host or management), across Redfish generations.
+type ethernetInterface struct {
+	Name             string `json:"Name"`
+	MACAddress       string `json:"MACAddress"`
+	PermanentMAC     string `json:"PermanentMACAddress"`
+	SpeedMbps        int    `json:"SpeedMbps"`
+	FullDuplex       *bool  `json:"FullDuplex"`
+	LinkStatus       string `json:"LinkStatus"` // LinkUp | LinkDown | NoLink
+	InterfaceEnabled *bool  `json:"InterfaceEnabled"`
+	Status           status `json:"Status"`
+	IPv4Addresses    []struct {
+		Address string `json:"Address"`
+	} `json:"IPv4Addresses"`
 }
 
 // --- detailed inventory schema (only the fields we read) --------------------
@@ -113,13 +147,18 @@ type processor struct {
 }
 type memoryModule struct {
 	Name              string `json:"Name"`
-	DeviceLocator     string `json:"DeviceLocator"`
-	MemoryDeviceType  string `json:"MemoryDeviceType"`
+	DeviceLocator     string `json:"DeviceLocator"`    // iLO5 / iDRAC
+	SocketLocator     string `json:"SocketLocator"`    // iLO4
+	MemoryDeviceType  string `json:"MemoryDeviceType"` // iLO5 / iDRAC (DDR4)
+	DIMMType          string `json:"DIMMType"`         // iLO4 (DDR3)
 	Manufacturer      string `json:"Manufacturer"`
 	PartNumber        string `json:"PartNumber"`
 	SerialNumber      string `json:"SerialNumber"`
-	CapacityMiB       int64  `json:"CapacityMiB"`
-	OperatingSpeedMhz int    `json:"OperatingSpeedMhz"`
+	CapacityMiB       int64  `json:"CapacityMiB"`         // iLO5 / iDRAC
+	SizeMB            int64  `json:"SizeMB"`              // iLO4
+	OperatingSpeedMhz int    `json:"OperatingSpeedMhz"`   // iLO5 / iDRAC
+	MaxFreqMHz        int    `json:"MaximumFrequencyMHz"` // iLO4
+	DIMMStatus        string `json:"DIMMStatus"`          // iLO4 (GoodInUse)
 	Status            status `json:"Status"`
 }
 type storageDetail struct {
@@ -179,8 +218,12 @@ type power struct {
 	} `json:"PowerSupplies"`
 }
 type manager struct {
-	Model           string `json:"Model"`
-	FirmwareVersion string `json:"FirmwareVersion"`
+	Model              string   `json:"Model"`
+	FirmwareVersion    string   `json:"FirmwareVersion"`
+	EthernetInterfaces odataRef `json:"EthernetInterfaces"`
+	Links              struct {
+		EthernetNICs odataRef `json:"EthernetNICs"` // iLO4 legacy path to the mgmt NIC
+	} `json:"links"`
 }
 
 // Collect walks the Redfish tree and assembles BMCFacts. Optional sections
@@ -202,7 +245,7 @@ func Collect(ctx context.Context, c *Client) (BMCFacts, error) {
 	}
 
 	// ComputerSystem (first member).
-	if sysPath := firstMember(ctx, c, root.Systems.ID); sysPath != "" {
+	if sysPath := firstMember(ctx, c, root.Systems.id()); sysPath != "" {
 		var sys computerSystem
 		if err := c.GetJSON(ctx, sysPath, &sys); err == nil {
 			if f.Vendor == "" {
@@ -212,36 +255,49 @@ func Collect(ctx context.Context, c *Client) (BMCFacts, error) {
 			f.BiosVersion, f.PowerState, f.Health = sys.BiosVersion, sys.PowerState, sys.Status.Health
 			f.ProcessorCount, f.ProcessorModel = sys.ProcessorSum.Count, sys.ProcessorSum.Model
 			f.MemoryGiB = sys.MemorySum.TotalSystemMemoryGiB
-			// Detailed inventory (best-effort; each section's failure leaves it empty).
-			f.collectProcessors(ctx, c, sys.Processors.ID)
-			f.collectMemory(ctx, c, sys.Memory.ID)
-			f.collectStorage(ctx, c, sys.Storage.ID)
-			// HPE Gen8/Gen10 iLO exposes disks/arrays under the OEM SmartStorage tree
-			// instead of the standard Systems/Storage — walk it when the standard path
-			// yielded no drives so iLO servers still show physical disks + RAID.
+			// Detailed inventory (best-effort). iLO 4 (Redfish 1.0.0) hangs the detailed
+			// resources off Oem.Hp.links with legacy href refs instead of the standard
+			// Systems/{Processors,Memory,Storage} — fall back to those so Gen8 iLOs get
+			// memory/storage/NIC detail too, not just the summary.
+			f.collectProcessors(ctx, c, sys.Processors.id())
+			f.collectMemory(ctx, c, firstNonEmpty(sys.Memory.id(), sys.Oem.Hp.Links.Memory.id()))
+			f.collectStorage(ctx, c, sys.Storage.id())
 			if countComponentKind(f.Components, "drive") == 0 {
-				f.collectHPESmartStorage(ctx, c, sys.Oem.Hpe.Links.SmartStorage.ID)
+				f.collectHPESmartStorage(ctx, c, firstNonEmpty(sys.Oem.Hpe.Links.SmartStorage.id(), sys.Oem.Hp.Links.SmartStorage.id()))
+			}
+			// Physical/host network interfaces (MAC, link, speed).
+			f.collectNICs(ctx, c, firstNonEmpty(sys.EthernetInterfaces.id(), sys.Oem.Hp.Links.EthernetInterfaces.id()), "host")
+			// iLO 4 exposes no per-socket Processors collection — surface the real CPU
+			// summary (count + model) as rows so the processor data isn't blank.
+			if countComponentKind(f.Components, "cpu") == 0 && sys.ProcessorSum.Count > 0 && sys.ProcessorSum.Model != "" {
+				for i := 0; i < sys.ProcessorSum.Count; i++ {
+					f.Components = append(f.Components, Component{Kind: "cpu", Name: fmt.Sprintf("CPU %d", i+1),
+						Model: strings.TrimSpace(sys.ProcessorSum.Model), Status: "OK", Detail: map[string]string{"source": "summary"}})
+				}
 			}
 		}
 	}
 
 	// Chassis thermal + power (first member).
-	if chPath := firstMember(ctx, c, root.Chassis.ID); chPath != "" {
+	if chPath := firstMember(ctx, c, root.Chassis.id()); chPath != "" {
 		var ch chassis
 		if err := c.GetJSON(ctx, chPath, &ch); err == nil {
-			f.collectThermal(ctx, c, ch.Thermal.ID)
-			f.collectPower(ctx, c, ch.Power.ID)
+			f.collectThermal(ctx, c, ch.Thermal.id())
+			f.collectPower(ctx, c, ch.Power.id())
 		}
 	}
 
 	// Manager firmware (iLO/iDRAC version).
-	if mgrPath := firstMember(ctx, c, root.Managers.ID); mgrPath != "" {
+	if mgrPath := firstMember(ctx, c, root.Managers.id()); mgrPath != "" {
 		var mgr manager
 		if err := c.GetJSON(ctx, mgrPath, &mgr); err == nil {
 			f.FirmwareVersion = mgr.FirmwareVersion
 			if f.ControllerKind == "redfish" && mgr.Model != "" {
 				f.ControllerKind = mgr.Model
 			}
+			// The controller's OWN management NIC (MAC/IP/speed) — always populated, unlike
+			// the sparse host NICs on older iLO.
+			f.collectNICs(ctx, c, firstNonEmpty(mgr.EthernetInterfaces.id(), mgr.Links.EthernetNICs.id()), "management")
 		}
 	}
 	return f, nil
@@ -255,7 +311,7 @@ func firstMember(ctx context.Context, c *Client, collPath string) string {
 	if err := c.GetJSON(ctx, collPath, &col); err != nil || len(col.Members) == 0 {
 		return ""
 	}
-	return col.Members[0].ID
+	return col.Members[0].id()
 }
 
 func (f *BMCFacts) collectThermal(ctx context.Context, c *Client, path string) {
@@ -342,22 +398,90 @@ func (f *BMCFacts) collectMemory(ctx context.Context, c *Client, path string) {
 		if err := c.GetJSON(ctx, m, &mm); err != nil {
 			continue
 		}
-		if mm.CapacityMiB <= 0 { // empty slot
+		capMiB := mm.CapacityMiB // iLO5 / iDRAC
+		if capMiB <= 0 {
+			capMiB = mm.SizeMB // iLO4
+		}
+		if capMiB <= 0 { // empty slot
 			continue
 		}
-		totalMiB += mm.CapacityMiB
-		name := orDefault(orDefault(mm.DeviceLocator, mm.Name), "DIMM")
-		comp := Component{Kind: "memory", Name: name, Model: strings.TrimSpace(mm.PartNumber),
-			Serial: strings.TrimSpace(mm.SerialNumber), Status: mm.Status.Health,
-			CapacityBytes: mm.CapacityMiB * 1024 * 1024, Detail: map[string]string{}}
-		putStr(comp.Detail, "type", mm.MemoryDeviceType)
-		putInt(comp.Detail, "speed_mhz", mm.OperatingSpeedMhz)
-		putStr(comp.Detail, "manufacturer", mm.Manufacturer)
+		totalMiB += capMiB
+		name := firstNonEmpty(mm.DeviceLocator, mm.SocketLocator, mm.Name, "DIMM")
+		health := mm.Status.Health
+		if health == "" && mm.DIMMStatus != "" { // iLO4 reports DIMMStatus (GoodInUse) not Status.Health
+			health = mapDIMMStatus(mm.DIMMStatus)
+		}
+		comp := Component{Kind: "memory", Name: strings.TrimSpace(name), Model: strings.TrimSpace(mm.PartNumber),
+			Serial: strings.TrimSpace(mm.SerialNumber), Status: health,
+			CapacityBytes: capMiB * 1024 * 1024, Detail: map[string]string{}}
+		putStr(comp.Detail, "type", firstNonEmpty(mm.MemoryDeviceType, mm.DIMMType))
+		if sp := mm.OperatingSpeedMhz; sp > 0 {
+			putInt(comp.Detail, "speed_mhz", sp)
+		} else {
+			putInt(comp.Detail, "speed_mhz", mm.MaxFreqMHz)
+		}
+		putStr(comp.Detail, "manufacturer", strings.TrimSpace(mm.Manufacturer))
 		f.Components = append(f.Components, comp)
 	}
 	if f.MemoryGiB == 0 && totalMiB > 0 {
 		f.MemoryGiB = float64(totalMiB) / 1024
 	}
+}
+
+// collectNICs reads EthernetInterfaces → nic Components (MAC, link, speed, IPv4). role is
+// "host" (server NICs) or "management" (the iLO/iDRAC's own NIC). NICs the controller
+// exposes with no MAC and no IP (empty iLO4 host placeholders) are skipped — a NIC row
+// with nothing on it is noise, not data.
+func (f *BMCFacts) collectNICs(ctx context.Context, c *Client, path, role string) {
+	if path == "" {
+		return
+	}
+	for _, m := range membersOf(ctx, c, path) {
+		var e ethernetInterface
+		if err := c.GetJSON(ctx, m, &e); err != nil {
+			continue
+		}
+		mac := firstNonEmpty(e.MACAddress, e.PermanentMAC)
+		ip := ""
+		if len(e.IPv4Addresses) > 0 {
+			ip = e.IPv4Addresses[0].Address
+		}
+		if mac == "" && ip == "" {
+			continue
+		}
+		name := firstNonEmpty(e.Name, mac)
+		if role == "management" && e.Name != "" { // disambiguate the mgmt NIC from a host NIC of the same index
+			name = e.Name
+		}
+		comp := Component{Kind: "nic", Name: name, Serial: mac, Status: e.Status.Health, Detail: map[string]string{}}
+		putStr(comp.Detail, "mac", mac)
+		putStr(comp.Detail, "link", e.LinkStatus)
+		putStr(comp.Detail, "ipv4", ip)
+		putStr(comp.Detail, "role", role)
+		if e.SpeedMbps > 0 {
+			putInt(comp.Detail, "speed_mbps", e.SpeedMbps)
+		}
+		f.Components = append(f.Components, comp)
+	}
+}
+
+func mapDIMMStatus(s string) string {
+	switch strings.ToLower(s) {
+	case "goodinuse", "good", "inuse":
+		return "OK"
+	case "notpresent", "empty":
+		return ""
+	}
+	return s
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // collectStorage reads each storage subsystem → RAID controller Components, volume (RAID
@@ -384,7 +508,7 @@ func (f *BMCFacts) collectStorage(ctx context.Context, c *Client, path string) {
 			f.Components = append(f.Components, comp)
 		}
 		// Volumes (RAID arrays).
-		for _, vp := range membersOf(ctx, c, sd.Volumes.ID) {
+		for _, vp := range membersOf(ctx, c, sd.Volumes.id()) {
 			var v volumeDetail
 			if err := c.GetJSON(ctx, vp, &v); err != nil {
 				continue
@@ -396,7 +520,7 @@ func (f *BMCFacts) collectStorage(ctx context.Context, c *Client, path string) {
 		// Physical drives.
 		for _, dref := range sd.Drives {
 			var d driveDetail
-			if err := c.GetJSON(ctx, dref.ID, &d); err != nil {
+			if err := c.GetJSON(ctx, dref.id(), &d); err != nil {
 				continue
 			}
 			if d.Name == "" && d.Model == "" {
@@ -437,19 +561,21 @@ type hpeArrayController struct {
 	} `json:"Links"`
 }
 type hpePhysicalDrive struct {
-	Model         string `json:"Model"`
-	SerialNumber  string `json:"SerialNumber"`
-	CapacityMiB   int64  `json:"CapacityMiB"`
-	MediaType     string `json:"MediaType"`     // HDD | SSD
-	InterfaceType string `json:"InterfaceType"` // SAS | SATA | NVMe
-	Location      string `json:"Location"`
-	Status        status `json:"Status"`
+	Model              string  `json:"Model"`
+	SerialNumber       string  `json:"SerialNumber"`
+	CapacityMiB        int64   `json:"CapacityMiB"`
+	MediaType          string  `json:"MediaType"`     // HDD | SSD
+	InterfaceType      string  `json:"InterfaceType"` // SAS | SATA | NVMe
+	Location           string  `json:"Location"`
+	RotationalSpeedRpm float64 `json:"RotationalSpeedRpm"` // iLO4 (0 for SSD)
+	Status             status  `json:"Status"`
 }
 type hpeLogicalDrive struct {
-	LogicalDriveName string `json:"LogicalDriveName"`
-	Raid             string `json:"Raid"` // HPE reports the RAID level as a bare number string ("1","5")
-	CapacityMiB      int64  `json:"CapacityMiB"`
-	Status           status `json:"Status"`
+	LogicalDriveName   string `json:"LogicalDriveName"`
+	LogicalDriveNumber int    `json:"LogicalDriveNumber"` // iLO4 friendly index (Name is a raw GUID)
+	Raid               string `json:"Raid"`               // HPE reports the RAID level as a bare number string ("1","5")
+	CapacityMiB        int64  `json:"CapacityMiB"`
+	Status             status `json:"Status"`
 }
 
 // collectHPESmartStorage walks the HPE OEM SmartStorage tree (array controllers →
@@ -464,7 +590,7 @@ func (f *BMCFacts) collectHPESmartStorage(ctx context.Context, c *Client, path s
 	if err := c.GetJSON(ctx, path, &ss); err != nil {
 		return
 	}
-	for _, acPath := range membersOf(ctx, c, ss.Links.ArrayControllers.ID) {
+	for _, acPath := range membersOf(ctx, c, ss.Links.ArrayControllers.id()) {
 		var ac hpeArrayController
 		if err := c.GetJSON(ctx, acPath, &ac); err != nil {
 			continue
@@ -474,19 +600,28 @@ func (f *BMCFacts) collectHPESmartStorage(ctx context.Context, c *Client, path s
 			putStr(comp.Detail, "firmware", ac.FirmwareVersion.Current.VersionString)
 			f.Components = append(f.Components, comp)
 		}
-		for _, ldPath := range membersOf(ctx, c, ac.Links.LogicalDrives.ID) {
+		for _, ldPath := range membersOf(ctx, c, ac.Links.LogicalDrives.id()) {
 			var ld hpeLogicalDrive
 			if err := c.GetJSON(ctx, ldPath, &ld); err != nil {
 				continue
 			}
-			comp := Component{Kind: "volume", Name: orDefault(ld.LogicalDriveName, "Logical Drive"), Status: ld.Status.Health,
+			// iLO4's LogicalDriveName is a raw hex GUID — prefer a friendly "Logical Drive N".
+			vname := strings.TrimSpace(ld.LogicalDriveName)
+			if vname == "" || len(vname) > 20 {
+				if ld.LogicalDriveNumber > 0 {
+					vname = fmt.Sprintf("Logical Drive %d", ld.LogicalDriveNumber)
+				} else {
+					vname = "Logical Drive"
+				}
+			}
+			comp := Component{Kind: "volume", Name: vname, Status: ld.Status.Health,
 				CapacityBytes: ld.CapacityMiB * 1024 * 1024, Detail: map[string]string{}}
 			if ld.Raid != "" {
 				comp.Detail["raid"] = "RAID" + ld.Raid
 			}
 			f.Components = append(f.Components, comp)
 		}
-		for _, pdPath := range membersOf(ctx, c, ac.Links.PhysicalDrives.ID) {
+		for _, pdPath := range membersOf(ctx, c, ac.Links.PhysicalDrives.id()) {
 			var pd hpePhysicalDrive
 			if err := c.GetJSON(ctx, pdPath, &pd); err != nil {
 				continue
@@ -500,6 +635,9 @@ func (f *BMCFacts) collectHPESmartStorage(ctx context.Context, c *Client, path s
 			putStr(comp.Detail, "media", pd.MediaType)
 			putStr(comp.Detail, "protocol", pd.InterfaceType)
 			putStr(comp.Detail, "location", pd.Location)
+			if pd.RotationalSpeedRpm > 0 {
+				putInt(comp.Detail, "rpm", int(pd.RotationalSpeedRpm))
+			}
 			f.Components = append(f.Components, comp)
 		}
 	}
@@ -532,7 +670,7 @@ func membersOf(ctx context.Context, c *Client, collPath string) []string {
 	}
 	out := make([]string, 0, len(col.Members))
 	for _, m := range col.Members {
-		out = append(out, m.ID)
+		out = append(out, m.id())
 	}
 	return out
 }

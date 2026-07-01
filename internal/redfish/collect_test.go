@@ -161,3 +161,70 @@ func TestGetJSON_Non2xxErrors(t *testing.T) {
 		t.Fatal("expected error on 404")
 	}
 }
+
+// iLO 4 (Redfish 1.0.0) speaks a different dialect than iLO 5: detailed resources hang off
+// Oem.Hp.links with legacy `href` refs, memory uses SizeMB/SocketLocator/DIMMStatus, and the
+// only NIC with real data is the Manager's. This locks in that multi-generation support.
+var ilo4Routes = map[string]string{
+	"/redfish/v1/": `{"Vendor":"HPE","Oem":{"Hp":{}},"Systems":{"@odata.id":"/redfish/v1/Systems/"},
+		"Chassis":{"@odata.id":"/redfish/v1/Chassis/"},"Managers":{"@odata.id":"/redfish/v1/Managers/"}}`,
+	"/redfish/v1/Systems/": `{"Members":[{"@odata.id":"/redfish/v1/Systems/1/"}]}`,
+	"/redfish/v1/Systems/1/": `{"Manufacturer":"HP","Model":"ProLiant DL380p Gen8","SerialNumber":"CZ2235029F","BiosVersion":"P70",
+		"PowerState":"On","Status":{"Health":"OK"},"ProcessorSummary":{"Count":2,"Model":"Intel Xeon E5-2609"},
+		"MemorySummary":{"TotalSystemMemoryGB":32},
+		"Oem":{"Hp":{"links":{"Memory":{"href":"/redfish/v1/Systems/1/Memory/"},"SmartStorage":{"href":"/redfish/v1/Systems/1/SmartStorage/"}}}}}`,
+	"/redfish/v1/Systems/1/Memory/":                        `{"Members":[{"@odata.id":"/redfish/v1/Systems/1/Memory/d1/"},{"@odata.id":"/redfish/v1/Systems/1/Memory/d2/"}]}`,
+	"/redfish/v1/Systems/1/Memory/d1/":                     `{"SocketLocator":"PROC 1 DIMM 9","SizeMB":8192,"DIMMType":"DDR3","MaximumFrequencyMHz":1333,"DIMMStatus":"GoodInUse","Manufacturer":"HP"}`,
+	"/redfish/v1/Systems/1/Memory/d2/":                     `{"SocketLocator":"PROC 1 DIMM 12","SizeMB":0}`,
+	"/redfish/v1/Systems/1/SmartStorage/":                  `{"links":{"ArrayControllers":{"href":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/"}}}`,
+	"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/": `{"Members":[{"@odata.id":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/"}]}`,
+	"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/": `{"Model":"Smart Array P420i Controller","SerialNumber":"PDVTF0","FirmwareVersion":{"Current":{"VersionString":"3.04"}},"Status":{"Health":"OK"},
+		"links":{"LogicalDrives":{"href":"/ld/"},"PhysicalDrives":{"href":"/pd/"}}}`,
+	"/ld/":                    `{"Members":[{"@odata.id":"/ld/1/"}]}`,
+	"/ld/1/":                  `{"LogicalDriveName":"A0A9868250014380227B03C04F59","LogicalDriveNumber":1,"Raid":"5","CapacityMiB":1144280,"Status":{"Health":"OK"}}`,
+	"/pd/":                    `{"Members":[{"@odata.id":"/pd/1/"}]}`,
+	"/pd/1/":                  `{"Model":"EH0300FBQDD","SerialNumber":"6XN1","CapacityMiB":286102,"MediaType":"HDD","InterfaceType":"SAS","Location":"1I:2:1","RotationalSpeedRpm":15000,"Status":{"Health":"OK"}}`,
+	"/redfish/v1/Chassis/":    `{"Members":[]}`,
+	"/redfish/v1/Managers/":   `{"Members":[{"@odata.id":"/redfish/v1/Managers/1/"}]}`,
+	"/redfish/v1/Managers/1/": `{"Model":"iLO 4","FirmwareVersion":"2.78","links":{"EthernetNICs":{"href":"/redfish/v1/Managers/1/EthernetInterfaces/"}}}`,
+	"/redfish/v1/Managers/1/EthernetInterfaces/":   `{"Members":[{"@odata.id":"/redfish/v1/Managers/1/EthernetInterfaces/1/"}]}`,
+	"/redfish/v1/Managers/1/EthernetInterfaces/1/": `{"Name":"Manager Dedicated Network Interface","MacAddress":"00:9C:02:A9:D0:66","SpeedMbps":1000,"IPv4Addresses":[{"Address":"150.0.0.72"}],"Status":{"Health":"OK"}}`,
+}
+
+func TestCollect_iLO4(t *testing.T) {
+	c := NewClient("https://10.0.0.72", "admin", "secret", fakeDoer{routes: ilo4Routes})
+	f, err := Collect(context.Background(), c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kinds := map[string]int{}
+	for _, x := range f.Components {
+		kinds[x.Kind]++
+	}
+	// 2 CPUs synthesized from the summary (iLO4 has no Processors collection), 1 populated
+	// DIMM (empty slot skipped), 1 controller, 1 RAID5 volume, 1 SAS HDD, 1 mgmt NIC.
+	if kinds["cpu"] != 2 || kinds["memory"] != 1 || kinds["controller"] != 1 || kinds["volume"] != 1 || kinds["drive"] != 1 || kinds["nic"] != 1 {
+		t.Fatalf("iLO4 component mix wrong: %+v", kinds)
+	}
+	var mem, drive, vol, nic, ctrl bool
+	for _, x := range f.Components {
+		if x.Kind == "memory" && x.Detail["type"] == "DDR3" && x.CapacityBytes == 8192*1024*1024 && x.Status == "OK" {
+			mem = true
+		}
+		if x.Kind == "drive" && x.Detail["media"] == "HDD" && x.Detail["protocol"] == "SAS" && x.Detail["rpm"] == "15000" {
+			drive = true
+		}
+		if x.Kind == "volume" && x.Detail["raid"] == "RAID5" && x.Name == "Logical Drive 1" {
+			vol = true
+		}
+		if x.Kind == "nic" && x.Detail["mac"] == "00:9C:02:A9:D0:66" && x.Detail["ipv4"] == "150.0.0.72" && x.Detail["role"] == "management" {
+			nic = true
+		}
+		if x.Kind == "controller" && x.Detail["firmware"] == "3.04" {
+			ctrl = true
+		}
+	}
+	if !mem || !drive || !vol || !nic || !ctrl {
+		t.Fatalf("iLO4 detail not captured: mem=%v drive=%v vol=%v nic=%v ctrl=%v", mem, drive, vol, nic, ctrl)
+	}
+}
