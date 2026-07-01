@@ -325,7 +325,8 @@ func (s *Server) routes() {
 		r.Get("/devices/{id}/ssh-cli-results", s.listSSHCliResults)              // per-command SSH CLI results
 		r.Get("/devices/{id}/bmc", s.deviceBMC)
 		r.Get("/devices/{id}/bmc-sensors", s.deviceBMCSensors)
-		r.Get("/devices/{id}/bmc-components", s.deviceBMCComponents) // detailed CPU/DIMM/RAID/volume/drive inventory
+		r.Get("/devices/{id}/bmc-components", s.deviceBMCComponents)     // detailed CPU/DIMM/RAID/volume/drive inventory
+		r.Get("/devices/{id}/bmc-connectivity", s.deviceBMCConnectivity) // per-NIC (mgmt + host) switch/port map from FDB/ARP evidence
 		r.Get("/devices/{id}/printer-supplies", s.devicePrinterSupplies)
 		r.Get("/devices/{id}/phones", s.devicePhones)
 		r.Get("/devices/{id}/ups", s.deviceUPS)

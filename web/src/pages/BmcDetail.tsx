@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Cpu, MemoryStick, HardDrive, Thermometer, Activity, Server, KeyRound, ShieldCheck, Gauge, Fan, Zap, Database, Network } from 'lucide-react'
-import { api, type BMCInfo, type BMCSensor, type BMCComponent, type Credential } from '../api'
-import { Panel, Kpi, StatusPill, EmptyState, DefList } from '../components/ui'
+import { Cpu, MemoryStick, HardDrive, Thermometer, Activity, Server, KeyRound, ShieldCheck, Gauge, Fan, Zap, Database, Network, LayoutDashboard, Cable } from 'lucide-react'
+import { api, type BMCInfo, type BMCSensor, type BMCComponent, type BMCNicConnectivity, type Credential } from '../api'
+import { Panel, Kpi, StatusPill, EmptyState, DefList, TabBar } from '../components/ui'
 import { DeviceHeader } from '../components/DeviceHeader'
 
 // The /inventory/bmc row carries the DERIVED states (reachability, snmp vs redfish health,
@@ -73,40 +73,57 @@ const MediaBadge = ({ v }: { v?: string }) => {
 }
 const ProtoBadge = ({ v }: { v?: string }) => v ? <span className="badge badge-unknown">{v}</span> : <span className="muted">—</span>
 
+type Tab = 'overview' | 'hardware' | 'storage' | 'network' | 'sensors' | 'evidence'
+
 // BmcDetail is the dedicated iLO/iDRAC hardware dashboard for category=bmc devices — NOT
-// the generic server template. It presents controller identity, health (SNMP vs Redfish
-// kept separate), and the full authenticated Redfish inventory (CPU, memory, storage/RAID,
-// drives, grouped sensors) with honest empty/credential states — real API data only.
+// the generic server template. It is organized into tabs (Overview, Hardware, Storage,
+// Network, Sensors, Evidence): controller identity, health (SNMP vs Redfish kept separate),
+// the full authenticated Redfish inventory, and the per-NIC switch/port map resolved from
+// FDB/ARP evidence — with honest empty/credential states, real API data only.
 export function BmcDetail() {
   const { id } = useParams<{ id: string }>()
   const deviceId = id ?? ''
+  const [tab, setTab] = useState<Tab>('overview')
   const inv = useQuery({ queryKey: ['inventory-bmc'], queryFn: () => api.get<BmcRow[]>('/inventory/bmc') })
   const bmc = useQuery({ queryKey: ['bmc', id], queryFn: () => api.get<BMCInfo>(`/devices/${id}/bmc`) })
   const sensors = useQuery({ queryKey: ['bmc-sensors', id], queryFn: () => api.get<BMCSensor[]>(`/devices/${id}/bmc-sensors`) })
   const components = useQuery({ queryKey: ['bmc-components', id], queryFn: () => api.get<BMCComponent[]>(`/devices/${id}/bmc-components`) })
+  const connectivity = useQuery({ queryKey: ['bmc-connectivity', id], queryFn: () => api.get<BMCNicConnectivity[]>(`/devices/${id}/bmc-connectivity`) })
 
   const row = (inv.data ?? []).find((r) => r.id === deviceId)
   const b = bmc.data
   const comps = components.data ?? []
   const compsOf = (k: string) => comps.filter((c) => c.kind === k)
   const cpus = compsOf('cpu'), dimms = compsOf('memory'), controllers = compsOf('controller'), volumes = compsOf('volume'), drives = compsOf('drive'), nics = compsOf('nic')
+  const conns = connectivity.data ?? []
   const sensorList = sensors.data ?? []
   const sensorsOf = (k: string) => sensorList.filter((s) => s.kind === k)
   const fans = sensorsOf('fan'), temps = sensorsOf('temperature'), psus = sensorsOf('psu')
   const otherSensors = sensorList.filter((s) => !['fan', 'temperature', 'psu'].includes(s.kind))
   const badSensors = sensorList.filter((s) => s.status && s.status.toLowerCase() !== 'ok').length
   const badStorage = [...volumes, ...drives, ...controllers].filter((c) => c.status && c.status.toLowerCase() !== 'ok').length
+  const mappedNics = conns.filter((c) => c.switch_port || c.switch_name).length
   const rf = redfishState(row)
   const collected = row?.redfish_status === 'collected'
   const isBmc = !!b && !!b.device_id
 
   if (inv.isLoading && bmc.isLoading) return <div className="loading">Loading…</div>
 
+  const tabs = [
+    { key: 'overview', label: 'Overview', icon: LayoutDashboard },
+    { key: 'hardware', label: 'Hardware', icon: Cpu, count: collected ? cpus.length + dimms.length : undefined },
+    { key: 'storage', label: 'Storage', icon: HardDrive, count: collected ? volumes.length + drives.length : undefined },
+    { key: 'network', label: 'Network', icon: Network, count: collected ? nics.length : undefined },
+    { key: 'sensors', label: 'Sensors', icon: Thermometer, count: sensorList.length || undefined },
+    { key: 'evidence', label: 'Evidence', icon: KeyRound },
+  ]
+
   return (
     <div>
       <DeviceHeader deviceId={deviceId} icon={Cpu} showCredential={false} />
 
-      {/* Credential gate — only when inventory is NOT collected. Honest, actionable. */}
+      {/* Credential gate — shown ABOVE the tabs whenever inventory is NOT collected, so the
+          actionable blocker is always visible regardless of which tab is open. */}
       {row && !collected && (
         <Panel title="Full hardware inventory" icon={ShieldCheck} className="bmc-gate">
           <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
@@ -122,169 +139,244 @@ export function BmcDetail() {
         </Panel>
       )}
 
-      {/* B. Health summary cards */}
-      <div className="kpi-grid kpi-8">
-        <Kpi label="Reachability" value={cap(row?.reachability)} icon={Activity} tone={row?.reachability === 'online' ? 'ok' : row?.reachability === 'offline' ? 'crit' : 'default'} />
-        <Kpi label="SNMP health" value={row?.snmp_health || '—'} icon={Gauge} tone={row?.snmp_health ? healthTone(row.snmp_health) : 'default'} sub="controller (SNMP)" />
-        <Kpi label="Redfish health" value={collected ? (b?.health || row?.health_summary || '—') : '—'} icon={ShieldCheck} tone={collected ? healthTone(b?.health || row?.health_summary) : 'default'} sub={collected ? 'hardware (Redfish)' : 'not collected'} />
-        <Kpi label="Redfish inventory" value={rf.label} icon={Database} tone={rf.tone === 'up' ? 'ok' : rf.tone === 'down' ? 'crit' : rf.tone === 'warning' ? 'warn' : 'default'} />
-        <Kpi label="Sensors" value={sensorList.length || '—'} icon={Thermometer} tone={badSensors > 0 ? 'warn' : sensorList.length ? 'ok' : 'default'} sub={badSensors > 0 ? `${badSensors} not OK` : (sensorList.length ? 'all OK' : 'none')} />
-        <Kpi label="Storage / RAID" value={collected ? `${volumes.length}v · ${drives.length}d` : '—'} icon={HardDrive} tone={badStorage > 0 ? 'crit' : (drives.length ? 'ok' : 'default')} sub={collected ? `${controllers.length} controller(s)` : '—'} />
-        <Kpi label="CPU" value={b?.cpu_count ? `${b.cpu_count}× · ${b.cpu_cores ?? '?'}c` : '—'} icon={Cpu} tone="default" sub={b?.cpu_model ? shortCpu(b.cpu_model) : '—'} />
-        <Kpi label="Memory" value={b?.memory_gib ? `${b.memory_gib} GiB` : '—'} icon={MemoryStick} tone="default" sub={dimms.length ? `${dimms.length} DIMM(s)` : '—'} />
-      </div>
+      <TabBar tabs={tabs} active={tab} onChange={(k) => setTab(k as Tab)} />
 
-      {/* A2. BMC identity strip + hardware overview cards */}
-      <div className="grid-2" style={{ alignItems: 'start' }}>
-        <Panel title="Controller" icon={Server} actions={<StatusPill status={pillTone(b?.health || row?.health_summary)} label={collected ? (b?.health || 'unknown') : rf.label} />}>
-          <DefList items={[
-            { label: 'Vendor', value: row?.vendor || b?.vendor || '—' },
-            { label: 'Controller', value: `${row?.vendor ?? b?.vendor ?? ''} ${row?.controller_kind ?? b?.controller_kind ?? ''}`.trim() || '—' },
-            { label: 'Host model', value: b?.model || row?.model || '—' },
-            { label: 'Serial / ServiceTag', value: <span className="mono">{row?.serial || b?.serial || '—'}</span> },
-            { label: 'Firmware', value: b?.firmware_version || row?.firmware || '—' },
-            { label: 'Redfish inventory', value: <StatusPill status={rf.tone} label={rf.label} /> },
-            { label: 'Management', value: `${cap(row?.management)}${row?.managed_by?.length ? ` · ${row.managed_by.join(', ')}` : ''}` },
-            { label: 'Linked server', value: row?.linked_server ? <span title={row.link_evidence}>{row.linked_server} <span className="muted">({row.link_confidence}%)</span></span> : <span className="muted" title={row?.link_evidence}>{cap(row?.link_state) || 'unlinked'}</span> },
-          ]} />
-        </Panel>
-        <Panel title="Compute & firmware" icon={Cpu}>
-          <DefList items={[
-            { label: 'CPU', value: b?.cpu_model ? `${b.cpu_model}${b.cpu_count ? ` × ${b.cpu_count}` : ''}` : notExposed(collected) },
-            { label: 'Cores', value: b?.cpu_cores ? `${b.cpu_cores} cores` : notExposed(collected) },
-            { label: 'Memory', value: b?.memory_gib ? `${b.memory_gib} GiB · ${dimms.length} DIMM(s)` : notExposed(collected) },
-            { label: 'BIOS', value: b?.bios_version || notExposed(collected) },
-            { label: 'Power state', value: b?.power_state || row?.power_state || '—' },
-            { label: 'Storage', value: collected ? `${controllers.length} controller(s) · ${volumes.length} volume(s) · ${drives.length} drive(s)` : notExposed(collected) },
-          ]} />
-        </Panel>
-      </div>
-
-      {/* C. Processors */}
-      {collected && (
-        <Panel title="Processors" icon={Cpu} subtitle={`${cpus.length}`} pad={false}>
-          {cpus.length === 0 ? <NoData reason="not_exposed_by_device" /> : (
-            <table className="data-table">
-              <thead><tr><th>Socket</th><th>Model</th><th>Cores / Threads</th><th>Max speed</th><th>Arch</th><th>Status</th></tr></thead>
-              <tbody>{cpus.map((c) => (
-                <tr key={c.id}><td className="cell-name">{c.name}</td><td>{c.model || '—'}</td>
-                  <td className="mono">{c.detail.cores || '—'}{c.detail.threads ? ` / ${c.detail.threads}` : ''}</td>
-                  <td className="mono">{c.detail.max_speed_mhz ? `${c.detail.max_speed_mhz} MHz` : '—'}</td>
-                  <td className="muted" style={{ fontSize: 12 }}>{c.detail.arch || '—'}</td>
-                  <td><StatusPill status={pillTone(c.status)} label={c.status ?? '—'} /></td></tr>
-              ))}</tbody>
-            </table>
-          )}
-        </Panel>
-      )}
-
-      {/* C. Memory DIMMs */}
-      {collected && (
-        <Panel title="Memory" icon={MemoryStick} subtitle={`${dimms.length} DIMM(s)${b?.memory_gib ? ` · ${b.memory_gib} GiB` : ''}`} pad={false}>
-          {dimms.length === 0 ? <NoData reason="not_exposed_by_device" /> : (
-            <table className="data-table">
-              <thead><tr><th>Slot</th><th>Size</th><th>Type</th><th>Speed</th><th>Part / Manufacturer</th><th>Status</th></tr></thead>
-              <tbody>{dimms.map((c) => (
-                <tr key={c.id}><td className="cell-name">{c.name}</td><td className="mono">{fmtBytes(c.capacity_bytes)}</td>
-                  <td>{c.detail.type ? <span className="badge badge-unknown">{c.detail.type}</span> : '—'}</td>
-                  <td className="mono">{c.detail.speed_mhz ? `${c.detail.speed_mhz} MHz` : '—'}</td>
-                  <td className="muted" style={{ fontSize: 12 }}>{[c.model, c.detail.manufacturer].filter(Boolean).join(' · ') || '—'}</td>
-                  <td><StatusPill status={pillTone(c.status)} label={c.status ?? '—'} /></td></tr>
-              ))}</tbody>
-            </table>
-          )}
-        </Panel>
-      )}
-
-      {/* D. Storage / RAID — controllers, volumes, drives kept SEPARATE */}
-      {collected && (controllers.length > 0 || volumes.length > 0 || drives.length > 0) && (
+      {/* ============================ OVERVIEW ============================ */}
+      {tab === 'overview' && (
         <>
-          <Panel title="RAID controllers" icon={ShieldCheck} subtitle={`${controllers.length}`} pad={false}>
-            <table className="data-table">
-              <thead><tr><th>Name</th><th>Model</th><th>Firmware</th><th>Supported RAID</th><th>Status</th></tr></thead>
-              <tbody>{controllers.map((c) => (
-                <tr key={c.id}><td className="cell-name">{c.name}</td><td>{c.model || '—'}</td>
-                  <td className="mono">{c.detail.firmware || '—'}</td>
-                  <td>{c.detail.raid_types ? c.detail.raid_types.split(',').map((r) => <RaidBadge key={r} v={r} />) : <span className="muted">—</span>}</td>
-                  <td><StatusPill status={pillTone(c.status)} label={c.status ?? '—'} /></td></tr>
-              ))}</tbody>
-            </table>
-          </Panel>
-          <Panel title="Logical volumes (RAID)" icon={Database} subtitle={`${volumes.length}`} pad={false}>
-            {volumes.length === 0 ? <NoData reason="not_exposed_by_device" /> : (
-              <table className="data-table">
-                <thead><tr><th>Name</th><th>RAID level</th><th>Capacity</th><th>Status</th></tr></thead>
-                <tbody>{volumes.map((c) => (
-                  <tr key={c.id}><td className="cell-name">{c.name}</td><td><RaidBadge v={c.detail.raid} /></td>
-                    <td className="mono">{fmtBytes(c.capacity_bytes)}</td>
-                    <td><StatusPill status={pillTone(c.status)} label={c.status ?? '—'} /></td></tr>
-                ))}</tbody>
-              </table>
-            )}
-          </Panel>
-          <Panel title="Physical drives" icon={HardDrive} subtitle={`${drives.length}`} pad={false}>
-            <table className="data-table">
-              <thead><tr><th>Bay / Name</th><th>Model</th><th>Serial</th><th>Capacity</th><th>Media</th><th>Protocol</th><th>Status</th></tr></thead>
-              <tbody>{drives.map((c) => (
-                <tr key={c.id}><td className="cell-name">{c.name}</td><td>{c.model || '—'}</td>
-                  <td className="mono" style={{ fontSize: 12 }}>{c.serial || '—'}</td>
-                  <td className="mono">{fmtBytes(c.capacity_bytes)}</td>
-                  <td><MediaBadge v={c.detail.media} /></td><td><ProtoBadge v={c.detail.protocol} /></td>
-                  <td><StatusPill status={pillTone(c.status)} label={c.status ?? '—'} /></td></tr>
-              ))}</tbody>
-            </table>
-          </Panel>
+          <div className="kpi-grid kpi-8">
+            <Kpi label="Reachability" value={cap(row?.reachability)} icon={Activity} tone={row?.reachability === 'online' ? 'ok' : row?.reachability === 'offline' ? 'crit' : 'default'} />
+            <Kpi label="SNMP health" value={row?.snmp_health || '—'} icon={Gauge} tone={row?.snmp_health ? healthTone(row.snmp_health) : 'default'} sub="controller (SNMP)" />
+            <Kpi label="Redfish health" value={collected ? (b?.health || row?.health_summary || '—') : '—'} icon={ShieldCheck} tone={collected ? healthTone(b?.health || row?.health_summary) : 'default'} sub={collected ? 'hardware (Redfish)' : 'not collected'} />
+            <Kpi label="Redfish inventory" value={rf.label} icon={Database} tone={rf.tone === 'up' ? 'ok' : rf.tone === 'down' ? 'crit' : rf.tone === 'warning' ? 'warn' : 'default'} />
+            <Kpi label="Sensors" value={sensorList.length || '—'} icon={Thermometer} tone={badSensors > 0 ? 'warn' : sensorList.length ? 'ok' : 'default'} sub={badSensors > 0 ? `${badSensors} not OK` : (sensorList.length ? 'all OK' : 'none')} />
+            <Kpi label="Storage / RAID" value={collected ? `${volumes.length}v · ${drives.length}d` : '—'} icon={HardDrive} tone={badStorage > 0 ? 'crit' : (drives.length ? 'ok' : 'default')} sub={collected ? `${controllers.length} controller(s)` : '—'} />
+            <Kpi label="CPU" value={b?.cpu_count ? `${b.cpu_count}× · ${b.cpu_cores ?? '?'}c` : '—'} icon={Cpu} tone="default" sub={b?.cpu_model ? shortCpu(b.cpu_model) : '—'} />
+            <Kpi label="Memory" value={b?.memory_gib ? `${b.memory_gib} GiB` : '—'} icon={MemoryStick} tone="default" sub={dimms.length ? `${dimms.length} DIMM(s)` : '—'} />
+          </div>
+
+          <div className="grid-2" style={{ alignItems: 'start' }}>
+            <Panel title="Controller" icon={Server} actions={<StatusPill status={pillTone(b?.health || row?.health_summary)} label={collected ? (b?.health || 'unknown') : rf.label} />}>
+              <DefList items={[
+                { label: 'Vendor', value: row?.vendor || b?.vendor || '—' },
+                { label: 'Controller', value: `${row?.vendor ?? b?.vendor ?? ''} ${row?.controller_kind ?? b?.controller_kind ?? ''}`.trim() || '—' },
+                { label: 'Host model', value: b?.model || row?.model || '—' },
+                { label: 'Serial / ServiceTag', value: <span className="mono">{row?.serial || b?.serial || '—'}</span> },
+                { label: 'Firmware', value: b?.firmware_version || row?.firmware || '—' },
+                { label: 'Redfish inventory', value: <StatusPill status={rf.tone} label={rf.label} /> },
+                { label: 'Management', value: `${cap(row?.management)}${row?.managed_by?.length ? ` · ${row.managed_by.join(', ')}` : ''}` },
+                { label: 'Linked server', value: row?.linked_server ? <span title={row.link_evidence}>{row.linked_server} <span className="muted">({row.link_confidence}%)</span></span> : <span className="muted" title={row?.link_evidence}>{cap(row?.link_state) || 'unlinked'}</span> },
+              ]} />
+            </Panel>
+            <Panel title="Compute & firmware" icon={Cpu}>
+              <DefList items={[
+                { label: 'CPU', value: b?.cpu_model ? `${b.cpu_model}${b.cpu_count ? ` × ${b.cpu_count}` : ''}` : notExposed(collected) },
+                { label: 'Cores', value: b?.cpu_cores ? `${b.cpu_cores} cores` : notExposed(collected) },
+                { label: 'Memory', value: b?.memory_gib ? `${b.memory_gib} GiB · ${dimms.length} DIMM(s)` : notExposed(collected) },
+                { label: 'BIOS', value: b?.bios_version || notExposed(collected) },
+                { label: 'Power state', value: b?.power_state || row?.power_state || '—' },
+                { label: 'Storage', value: collected ? `${controllers.length} controller(s) · ${volumes.length} volume(s) · ${drives.length} drive(s)` : notExposed(collected) },
+              ]} />
+            </Panel>
+          </div>
+
+          {!isBmc && !row && (
+            <EmptyState icon={Cpu} title="Not a BMC device" message="This page is for out-of-band controllers (iLO / iDRAC / Redfish)." />
+          )}
         </>
       )}
 
-      {/* D. Network interfaces — host (server physical ports) and management kept separate */}
-      {collected && nics.length > 0 && (() => {
-        const hostNics = nics.filter((c) => c.detail.role === 'host')
-        const mgmtNics = nics.filter((c) => c.detail.role !== 'host')
-        return (
-          <Panel title="Network interfaces" icon={Network} subtitle={`${hostNics.length} host · ${mgmtNics.length} management`} pad={false}>
-            <table className="data-table">
-              <thead><tr><th>Interface</th><th>Role</th><th>Adapter</th><th>MAC</th><th>IPv4</th><th>Link</th><th>Speed</th><th>Duplex</th><th>Status</th></tr></thead>
-              <tbody>{[...hostNics, ...mgmtNics].map((c) => (
-                <tr key={c.id}><td className="cell-name">{c.detail.port ? `Port ${c.detail.port}` : c.name}</td>
-                  <td>{c.detail.role ? <span className={`badge badge-${c.detail.role === 'management' ? 'access' : 'up'}`}>{c.detail.role}</span> : '—'}</td>
-                  <td className="muted" style={{ fontSize: 12 }}>{c.detail.adapter || '—'}</td>
-                  <td className="mono">{c.detail.mac || '—'}</td><td className="mono">{c.detail.ipv4 && c.detail.ipv4 !== '0.0.0.0' ? c.detail.ipv4 : '—'}</td>
-                  <td>{c.detail.link ? <span className={`badge badge-${/up/i.test(c.detail.link) ? 'up' : 'unknown'}`}>{c.detail.link}</span> : '—'}</td>
-                  <td className="mono">{c.detail.speed_mbps ? (Number(c.detail.speed_mbps) >= 1000 ? `${Number(c.detail.speed_mbps) / 1000} Gb/s` : `${c.detail.speed_mbps} Mb/s`) : '—'}</td>
-                  <td>{c.detail.duplex || '—'}</td>
-                  <td><StatusPill status={pillTone(c.status)} label={c.status || '—'} /></td></tr>
-              ))}</tbody>
-            </table>
-          </Panel>
-        )
-      })()}
-
-      {/* D. Sensors — grouped */}
-      {collected && (
-        <div className="grid-2" style={{ alignItems: 'start' }}>
-          <SensorPanel title="Fans" icon={Fan} rows={fans} unitDefault="RPM" />
-          <SensorPanel title="Temperatures" icon={Thermometer} rows={temps} unitDefault="C" />
-          <SensorPanel title="Power supplies" icon={Zap} rows={psus} unitDefault="W" />
-          {otherSensors.length > 0 && <SensorPanel title="Other sensors" icon={Activity} rows={otherSensors} unitDefault="" />}
-        </div>
+      {/* ============================ HARDWARE ============================ */}
+      {tab === 'hardware' && (
+        collected ? (
+          <>
+            <Panel title="Processors" icon={Cpu} subtitle={`${cpus.length}`} pad={false}>
+              {cpus.length === 0 ? <NoData reason="not_exposed_by_device" /> : (
+                <table className="data-table">
+                  <thead><tr><th>Socket</th><th>Model</th><th>Cores / Threads</th><th>Max speed</th><th>Arch</th><th>Status</th></tr></thead>
+                  <tbody>{cpus.map((c) => (
+                    <tr key={c.id}><td className="cell-name">{c.name}</td><td>{c.model || '—'}</td>
+                      <td className="mono">{c.detail.cores || '—'}{c.detail.threads ? ` / ${c.detail.threads}` : ''}</td>
+                      <td className="mono">{c.detail.max_speed_mhz ? `${c.detail.max_speed_mhz} MHz` : '—'}</td>
+                      <td className="muted" style={{ fontSize: 12 }}>{c.detail.arch || '—'}</td>
+                      <td><StatusPill status={pillTone(c.status)} label={c.status ?? '—'} /></td></tr>
+                  ))}</tbody>
+                </table>
+              )}
+            </Panel>
+            <Panel title="Memory" icon={MemoryStick} subtitle={`${dimms.length} DIMM(s)${b?.memory_gib ? ` · ${b.memory_gib} GiB` : ''}`} pad={false}>
+              {dimms.length === 0 ? <NoData reason="not_exposed_by_device" /> : (
+                <table className="data-table">
+                  <thead><tr><th>Slot</th><th>Size</th><th>Type</th><th>Speed</th><th>Part / Manufacturer</th><th>Status</th></tr></thead>
+                  <tbody>{dimms.map((c) => (
+                    <tr key={c.id}><td className="cell-name">{c.name}</td><td className="mono">{fmtBytes(c.capacity_bytes)}</td>
+                      <td>{c.detail.type ? <span className="badge badge-unknown">{c.detail.type}</span> : '—'}</td>
+                      <td className="mono">{c.detail.speed_mhz ? `${c.detail.speed_mhz} MHz` : '—'}</td>
+                      <td className="muted" style={{ fontSize: 12 }}>{[c.model, c.detail.manufacturer].filter(Boolean).join(' · ') || '—'}</td>
+                      <td><StatusPill status={pillTone(c.status)} label={c.status ?? '—'} /></td></tr>
+                  ))}</tbody>
+                </table>
+              )}
+            </Panel>
+          </>
+        ) : <GatedTab rf={rf} deviceId={deviceId} what="processor & memory inventory" />
       )}
 
-      {/* Evidence / collection state */}
-      <Panel title="Evidence & collection state" icon={KeyRound}>
-        <DefList items={[
-          { label: 'Redfish inventory', value: <StatusPill status={rf.tone} label={rf.label} /> },
-          { label: 'BMC collection', value: cap(row?.bmc_status) || '—' },
-          { label: 'Classification evidence', value: <span className="muted" style={{ fontSize: 12 }}>{row?.evidence || '—'}</span> },
-          { label: 'Link evidence', value: <span className="muted" style={{ fontSize: 12 }}>{row?.link_evidence || '—'}</span> },
-        ]} />
-        {!collected && <div style={{ marginTop: 10 }}><RedfishCollect deviceId={deviceId} label="Collect Redfish…" /></div>}
-      </Panel>
+      {/* ============================ STORAGE ============================ */}
+      {tab === 'storage' && (
+        collected ? (
+          (controllers.length > 0 || volumes.length > 0 || drives.length > 0) ? (
+            <>
+              <Panel title="RAID controllers" icon={ShieldCheck} subtitle={`${controllers.length}`} pad={false}>
+                {controllers.length === 0 ? <NoData reason="not_exposed_by_device" /> : (
+                  <table className="data-table">
+                    <thead><tr><th>Name</th><th>Model</th><th>Firmware</th><th>Supported RAID</th><th>Status</th></tr></thead>
+                    <tbody>{controllers.map((c) => (
+                      <tr key={c.id}><td className="cell-name">{c.name}</td><td>{c.model || '—'}</td>
+                        <td className="mono">{c.detail.firmware || '—'}</td>
+                        <td>{c.detail.raid_types ? c.detail.raid_types.split(',').map((r) => <RaidBadge key={r} v={r} />) : <span className="muted">—</span>}</td>
+                        <td><StatusPill status={pillTone(c.status)} label={c.status ?? '—'} /></td></tr>
+                    ))}</tbody>
+                  </table>
+                )}
+              </Panel>
+              <Panel title="Logical volumes (RAID)" icon={Database} subtitle={`${volumes.length}`} pad={false}>
+                {volumes.length === 0 ? <NoData reason="not_exposed_by_device" /> : (
+                  <table className="data-table">
+                    <thead><tr><th>Name</th><th>RAID level</th><th>Capacity</th><th>Status</th></tr></thead>
+                    <tbody>{volumes.map((c) => (
+                      <tr key={c.id}><td className="cell-name">{c.name}</td><td><RaidBadge v={c.detail.raid} /></td>
+                        <td className="mono">{fmtBytes(c.capacity_bytes)}</td>
+                        <td><StatusPill status={pillTone(c.status)} label={c.status ?? '—'} /></td></tr>
+                    ))}</tbody>
+                  </table>
+                )}
+              </Panel>
+              <Panel title="Physical drives" icon={HardDrive} subtitle={`${drives.length}`} pad={false}>
+                {drives.length === 0 ? <NoData reason="not_exposed_by_device" /> : (
+                  <table className="data-table">
+                    <thead><tr><th>Bay / Name</th><th>Model</th><th>Serial</th><th>Capacity</th><th>Media</th><th>Protocol</th><th>Status</th></tr></thead>
+                    <tbody>{drives.map((c) => (
+                      <tr key={c.id}><td className="cell-name">{c.name}</td><td>{c.model || '—'}</td>
+                        <td className="mono" style={{ fontSize: 12 }}>{c.serial || '—'}</td>
+                        <td className="mono">{fmtBytes(c.capacity_bytes)}</td>
+                        <td><MediaBadge v={c.detail.media} /></td><td><ProtoBadge v={c.detail.protocol} /></td>
+                        <td><StatusPill status={pillTone(c.status)} label={c.status ?? '—'} /></td></tr>
+                    ))}</tbody>
+                  </table>
+                )}
+              </Panel>
+            </>
+          ) : <EmptyState icon={HardDrive} title="No storage reported" message="This controller exposed no RAID controllers, volumes, or drives over Redfish." />
+        ) : <GatedTab rf={rf} deviceId={deviceId} what="storage & RAID inventory" />
+      )}
 
-      {!isBmc && !row && (
-        <EmptyState icon={Cpu} title="Not a BMC device" message="This page is for out-of-band controllers (iLO / iDRAC / Redfish)." />
+      {/* ============================ NETWORK ============================ */}
+      {tab === 'network' && (
+        collected ? (
+          <>
+            {/* NEW: the per-interface port map — which switch + port each NIC (mgmt + host)
+                lands on, resolved from collected FDB/ARP evidence. */}
+            <Panel title="Switch connectivity (port map)" icon={Cable}
+              subtitle={conns.length ? `${mappedNics}/${conns.length} interface(s) mapped to a switch port` : undefined} pad={false}>
+              {conns.length === 0 ? <NoData reason={connectivity.isLoading ? 'loading' : 'no_nics'} /> : (
+                <table className="data-table">
+                  <thead><tr><th>Interface</th><th>Role</th><th>MAC</th><th>Switch</th><th>Switch port</th><th>VLAN</th><th>Evidence</th></tr></thead>
+                  <tbody>{[...conns].map((c, i) => {
+                    const mapped = !!(c.switch_port || c.switch_name)
+                    return (
+                      <tr key={`${c.mac}-${i}`}>
+                        <td className="cell-name">{c.port ? `Port ${c.port}` : c.name}{c.adapter ? <div className="muted" style={{ fontSize: 11 }}>{c.adapter}</div> : null}</td>
+                        <td><span className={`badge badge-${c.role === 'management' ? 'access' : 'up'}`}>{c.role}</span></td>
+                        <td className="mono">{c.mac || '—'}</td>
+                        <td>{c.switch_name ? <span>{c.switch_name}{c.switch_ip ? <span className="muted mono" style={{ fontSize: 11 }}> · {c.switch_ip}</span> : null}</span> : <span className="muted">—</span>}</td>
+                        <td className="mono">{c.switch_port || '—'}{c.port_alias ? <div className="muted" style={{ fontSize: 11 }}>{c.port_alias}</div> : null}</td>
+                        <td className="mono">{c.vlan ? <>{c.vlan}{c.vlan_name ? <span className="muted" style={{ fontSize: 11 }}> {c.vlan_name}</span> : null}</> : '—'}</td>
+                        <td>
+                          {mapped
+                            ? <span title={[c.source ? `source: ${c.source}` : '', c.mac_count != null ? `${c.mac_count} MAC(s) on port` : '', c.last_seen ? `last seen ${c.last_seen}` : ''].filter(Boolean).join(' · ')}>
+                                <StatusPill status={c.confidence === 'high' ? 'up' : c.confidence === 'medium' ? 'warning' : 'unknown'} label={c.confidence === 'high' ? 'direct' : c.confidence === 'medium' ? 'FDB/ARP' : c.confidence} />
+                              </span>
+                            : <span className="muted" style={{ fontSize: 12 }} title={c.gap}>No switch evidence</span>}
+                        </td>
+                      </tr>
+                    )
+                  })}</tbody>
+                </table>
+              )}
+              <p className="muted" style={{ fontSize: 11, padding: '8px 14px', margin: 0 }}>
+                The point of attachment is the switch port with the fewest learned MACs (a true edge port), from collected FDB/ARP tables — no link is inferred. Interfaces with no evidence may be on an un-collected switch, disconnected, or a disabled port.
+              </p>
+            </Panel>
+
+            {/* Detailed NIC hardware inventory (host physical ports vs management) */}
+            {nics.length > 0 && (() => {
+              const hostNics = nics.filter((c) => c.detail.role === 'host')
+              const mgmtNics = nics.filter((c) => c.detail.role !== 'host')
+              return (
+                <Panel title="Network interfaces" icon={Network} subtitle={`${hostNics.length} host · ${mgmtNics.length} management`} pad={false}>
+                  <table className="data-table">
+                    <thead><tr><th>Interface</th><th>Role</th><th>Adapter</th><th>MAC</th><th>IPv4</th><th>Link</th><th>Speed</th><th>Duplex</th><th>Status</th></tr></thead>
+                    <tbody>{[...mgmtNics, ...hostNics].map((c) => (
+                      <tr key={c.id}><td className="cell-name">{c.detail.port ? `Port ${c.detail.port}` : c.name}</td>
+                        <td>{c.detail.role ? <span className={`badge badge-${c.detail.role === 'management' ? 'access' : 'up'}`}>{c.detail.role}</span> : '—'}</td>
+                        <td className="muted" style={{ fontSize: 12 }}>{c.detail.adapter || '—'}</td>
+                        <td className="mono">{c.detail.mac || '—'}</td><td className="mono">{c.detail.ipv4 && c.detail.ipv4 !== '0.0.0.0' ? c.detail.ipv4 : '—'}</td>
+                        <td>{c.detail.link ? <span className={`badge badge-${/up/i.test(c.detail.link) ? 'up' : 'unknown'}`}>{c.detail.link}</span> : '—'}</td>
+                        <td className="mono">{c.detail.speed_mbps ? (Number(c.detail.speed_mbps) >= 1000 ? `${Number(c.detail.speed_mbps) / 1000} Gb/s` : `${c.detail.speed_mbps} Mb/s`) : '—'}</td>
+                        <td>{c.detail.duplex || '—'}</td>
+                        <td><StatusPill status={pillTone(c.status)} label={c.status || '—'} /></td></tr>
+                    ))}</tbody>
+                  </table>
+                </Panel>
+              )
+            })()}
+            {nics.length === 0 && <EmptyState icon={Network} title="No network interfaces" message="This controller exposed no host or management NICs over Redfish." />}
+          </>
+        ) : <GatedTab rf={rf} deviceId={deviceId} what="network interfaces & switch port map" />
+      )}
+
+      {/* ============================ SENSORS ============================ */}
+      {tab === 'sensors' && (
+        collected ? (
+          <div className="grid-2" style={{ alignItems: 'start' }}>
+            <SensorPanel title="Fans" icon={Fan} rows={fans} unitDefault="RPM" />
+            <SensorPanel title="Temperatures" icon={Thermometer} rows={temps} unitDefault="C" />
+            <SensorPanel title="Power supplies" icon={Zap} rows={psus} unitDefault="W" />
+            {otherSensors.length > 0 && <SensorPanel title="Other sensors" icon={Activity} rows={otherSensors} unitDefault="" />}
+          </div>
+        ) : <GatedTab rf={rf} deviceId={deviceId} what="fan, temperature & power sensors" />
+      )}
+
+      {/* ============================ EVIDENCE ============================ */}
+      {tab === 'evidence' && (
+        <Panel title="Evidence & collection state" icon={KeyRound}>
+          <DefList items={[
+            { label: 'Redfish inventory', value: <StatusPill status={rf.tone} label={rf.label} /> },
+            { label: 'BMC collection', value: cap(row?.bmc_status) || '—' },
+            { label: 'Classification evidence', value: <span className="muted" style={{ fontSize: 12 }}>{row?.evidence || '—'}</span> },
+            { label: 'Link evidence', value: <span className="muted" style={{ fontSize: 12 }}>{row?.link_evidence || '—'}</span> },
+          ]} />
+          <div style={{ marginTop: 10 }}><RedfishCollect deviceId={deviceId} label={collected ? 'Re-collect Redfish…' : 'Collect Redfish…'} /></div>
+        </Panel>
       )}
     </div>
+  )
+}
+
+// GatedTab is the honest "collect Redfish first" placeholder shown inside a data tab when the
+// full inventory has not been collected — with the exact reason and the Collect action.
+function GatedTab({ rf, deviceId, what }: { rf: { label: string; tone: string; help: string }; deviceId: string; what: string }) {
+  return (
+    <Panel title="Not collected yet" icon={ShieldCheck}>
+      <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+        <StatusPill status={rf.tone} label={rf.label} />
+        <div style={{ flex: 1, minWidth: 260 }}>
+          <p style={{ margin: 0, fontSize: 13 }}>The {what} is gathered over authenticated Redfish. {rf.help}</p>
+        </div>
+        <RedfishCollect deviceId={deviceId} label="Collect Redfish…" />
+      </div>
+    </Panel>
   )
 }
 
@@ -316,6 +408,8 @@ function NoData({ reason }: { reason: string }) {
     not_exposed_by_device: 'Not exposed by this controller.',
     unsupported_by_device: 'Not supported by this controller.',
     not_available: 'Not available.',
+    no_nics: 'No network interfaces were collected for this controller.',
+    loading: 'Resolving switch attachment from FDB/ARP…',
   }
   return <div style={{ padding: 14 }} className="muted" >{msg[reason] ?? 'Not available.'}</div>
 }
@@ -338,6 +432,7 @@ function RedfishCollect({ deviceId, label }: { deviceId: string; label: string }
       if (res.ok && kind === 'collect-bmc-redfish') {
         qc.invalidateQueries({ queryKey: ['inventory-bmc'] }); qc.invalidateQueries({ queryKey: ['bmc', deviceId] })
         qc.invalidateQueries({ queryKey: ['bmc-sensors', deviceId] }); qc.invalidateQueries({ queryKey: ['bmc-components', deviceId] })
+        qc.invalidateQueries({ queryKey: ['bmc-connectivity', deviceId] })
       }
     } catch (e) { setMsg('✗ ' + (e as Error).message) } finally { setBusy(false) }
   }

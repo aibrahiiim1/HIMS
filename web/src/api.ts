@@ -848,6 +848,30 @@ export interface BMCSensor {
   has_reading: boolean
 }
 
+// BMCNicConnectivity maps one NIC (management or host) to the switch + port it is attached
+// to, resolved purely from collected FDB/ARP evidence for the NIC's own MAC. When no switch
+// has learned the MAC, the switch fields are empty and `gap` explains why.
+export interface BMCNicConnectivity {
+  mac: string
+  role: string // management | host
+  name: string
+  adapter?: string
+  ipv4?: string
+  port?: string
+  switch_id?: string
+  switch_name?: string
+  switch_ip?: string
+  switch_port?: string
+  port_alias?: string
+  vlan?: number
+  vlan_name?: string
+  mac_count?: number
+  source?: string
+  last_seen?: string
+  confidence: string // high | medium | none
+  gap?: string
+}
+
 export interface DiscoveryJob {
   id: string
   location_id?: string | null
