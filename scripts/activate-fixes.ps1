@@ -61,6 +61,8 @@ function Warn($m) { Write-Host "  !!  $m" -ForegroundColor Yellow }
 $script:S = [ordered]@{
   expected_commit   = ''
   built_backend     = '(not built)'
+  agent_build       = '(not built)'
+  agent_deploy      = 'not deployed'
   running_before    = ''
   running_after     = ''
   old_pid           = ''
@@ -299,6 +301,31 @@ if ($backendChange -or $DryRun) {
   if ("$built" -notmatch [regex]::Escape($headShort)) { Fail "built artifact reports '$built' - does not contain HEAD $headShort." }
   $script:S.built_backend = $headShort
   Ok "artifact built and reports commit $headShort ($built)"
+
+  # Rebuild the relay agent too. The agent collects deep OS inventory (incl. disk media type)
+  # on relay-managed hosts; if it is not rebuilt, a re-collection still runs OLD agent code and
+  # new fields never populate. Build the LOCAL windows exe (deployed to the HIMSRelayAgent
+  # service) AND the cross-platform dist binaries the API serves for remote agents to reinstall.
+  # bin\hims-agent.exe is NOT locked by the running service (which holds its Program Files copy),
+  # so this is safe with services up.
+  Info '== Building relay agent (local + dist) =='
+  & go build -o $agentSrc ./cmd/hims-agent
+  if ($LASTEXITCODE -ne 0) { Fail 'go build of hims-agent.exe failed.' }
+  $agentVer = (& $agentSrc -version) 2>&1
+  $distDir = Join-Path $repo 'bin\agents'
+  if (Test-Path $distDir) {
+    try {
+      $env:GOOS='windows'; $env:GOARCH='amd64'
+      & go build -o (Join-Path $distDir 'hims-agent-windows-amd64.exe') ./cmd/hims-agent
+      if ($LASTEXITCODE -ne 0) { throw 'windows/amd64 agent build failed' }
+      Copy-Item $agentSrc (Join-Path $distDir 'hims-agent.exe') -Force
+      $env:GOOS='linux'; $env:GOARCH='amd64'
+      & go build -o (Join-Path $distDir 'hims-agent-linux-amd64') ./cmd/hims-agent
+      if ($LASTEXITCODE -ne 0) { throw 'linux/amd64 agent build failed' }
+    } finally { Remove-Item Env:GOOS, Env:GOARCH -ErrorAction SilentlyContinue }
+    Ok "relay agent rebuilt: local + dist windows/linux ($agentVer)"
+  } else { Ok "relay agent rebuilt: local only ($agentVer)" }
+  $script:S.agent_build = "$agentVer"
 } else { Ok 'no backend change - skipping artifact build'; $script:S.built_backend = "$oldCommit (unchanged)" }
 
 # --- migrations (apply to the service's DB before starting the new binary) ---
@@ -336,10 +363,9 @@ if ($DryRun) {
 # ============================================================================
 if (-not $backendChange) {
   if (Test-Path $apiTmp) { Remove-Item $apiTmp -Force }
-  # Optional: refresh the relay agent binary if a newer one is staged.
-  if ((Test-Path $agentSrc) -and (Test-Path (Split-Path $agentDst))) {
-    try { Copy-Item $agentSrc $agentDst -Force; Ok "relay agent refreshed -> $agentDst" } catch { Warn "agent copy skipped: $($_.Exception.Message)" }
-  }
+  # Frontend-only: the agent is a Go binary, so any agent change is a backend change and would
+  # not reach here. Nothing to redeploy - the agent is only rebuilt/redeployed on the backend path.
+  $script:S.agent_deploy = 'n/a (frontend-only)'
   $script:S.health_status = if ($before) { 'ok (backend unchanged)' } else { 'service down' }
   $script:S.new_pid = $oldPid
   $script:S.running_after = $oldCommit
@@ -393,9 +419,24 @@ try {
   Ok "hims-api.exe replaced (previous kept as hims-api.exe.bak)"
 } catch { Fail "could not replace hims-api.exe: $($_.Exception.Message)" }
 
-# --- refresh relay agent while we're deploying ------------------------------
-if ((Test-Path $agentSrc) -and (Test-Path (Split-Path $agentDst))) {
-  try { Copy-Item $agentSrc $agentDst -Force; Ok "relay agent refreshed -> $agentDst" } catch { Warn "agent copy skipped: $($_.Exception.Message)" }
+# --- redeploy the LOCAL relay agent ----------------------------------------
+# The agent service holds a lock on its Program Files exe while running, so a copy fails silently
+# unless we STOP it first (this was the bug: agent code never actually updated). Stop -> copy the
+# freshly built binary -> start, and verify the version so a stale agent is caught loudly.
+$agentSvc = Get-Service -Name 'HIMSRelayAgent' -ErrorAction SilentlyContinue
+if ($agentSvc -and (Test-Path $agentSrc) -and (Test-Path (Split-Path $agentDst))) {
+  try {
+    if ($agentSvc.Status -eq 'Running') { Stop-Service -Name 'HIMSRelayAgent' -Force -ErrorAction Stop; Start-Sleep -Milliseconds 800 }
+    $adead = (Get-Date).AddSeconds(15)
+    while ((Get-Date) -lt $adead) { try { $fs=[System.IO.File]::Open($agentDst,'Open','ReadWrite','None'); $fs.Close(); break } catch { Start-Sleep -Milliseconds 400 } }
+    Copy-Item $agentSrc $agentDst -Force -ErrorAction Stop
+    Start-Service -Name 'HIMSRelayAgent' -ErrorAction SilentlyContinue
+    $deployedVer = (& $agentDst -version) 2>&1
+    Ok "relay agent redeployed -> $agentDst ($deployedVer)"
+    $script:S.agent_deploy = "$deployedVer"
+  } catch { Warn "relay agent redeploy failed (service left as-is): $($_.Exception.Message)"; $script:S.agent_deploy = 'FAILED' }
+} else {
+  $script:S.agent_deploy = 'no local agent service'
 }
 
 # --- start + wait for health ------------------------------------------------
