@@ -172,7 +172,11 @@ var ilo4Routes = map[string]string{
 	"/redfish/v1/Systems/1/": `{"Manufacturer":"HP","Model":"ProLiant DL380p Gen8","SerialNumber":"CZ2235029F","BiosVersion":"P70",
 		"PowerState":"On","Status":{"Health":"OK"},"ProcessorSummary":{"Count":2,"Model":"Intel Xeon E5-2609"},
 		"MemorySummary":{"TotalSystemMemoryGB":32},
-		"Oem":{"Hp":{"links":{"Memory":{"href":"/redfish/v1/Systems/1/Memory/"},"SmartStorage":{"href":"/redfish/v1/Systems/1/SmartStorage/"}}}}}`,
+		"Oem":{"Hp":{"links":{"Memory":{"href":"/redfish/v1/Systems/1/Memory/"},"SmartStorage":{"href":"/redfish/v1/Systems/1/SmartStorage/"},"NetworkAdapters":{"href":"/redfish/v1/Systems/1/NetworkAdapters/"}}}}}`,
+	"/redfish/v1/Systems/1/NetworkAdapters/": `{"Members":[{"@odata.id":"/redfish/v1/Systems/1/NetworkAdapters/1/"}]}`,
+	"/redfish/v1/Systems/1/NetworkAdapters/1/": `{"Name":"HP Ethernet 1Gb 4-port 331FLR Adapter","PartNumber":"629135-B21","SerialNumber":"CN822K05ZN",
+		"PhysicalPorts":[{"MacAddress":"2C:76:8A:4F:CF:14","SpeedMbps":0,"FullDuplex":false,"IPv4Addresses":[{"Address":null}]},
+		                 {"MacAddress":"2C:76:8A:4F:CF:15","SpeedMbps":1000,"FullDuplex":true,"LinkStatus":"LinkUp"}]}`,
 	"/redfish/v1/Systems/1/Memory/":                        `{"Members":[{"@odata.id":"/redfish/v1/Systems/1/Memory/d1/"},{"@odata.id":"/redfish/v1/Systems/1/Memory/d2/"}]}`,
 	"/redfish/v1/Systems/1/Memory/d1/":                     `{"SocketLocator":"PROC 1 DIMM 9","SizeMB":8192,"DIMMType":"DDR3","MaximumFrequencyMHz":1333,"DIMMStatus":"GoodInUse","Manufacturer":"HP"}`,
 	"/redfish/v1/Systems/1/Memory/d2/":                     `{"SocketLocator":"PROC 1 DIMM 12","SizeMB":0}`,
@@ -202,11 +206,12 @@ func TestCollect_iLO4(t *testing.T) {
 		kinds[x.Kind]++
 	}
 	// 2 CPUs synthesized from the summary (iLO4 has no Processors collection), 1 populated
-	// DIMM (empty slot skipped), 1 controller, 1 RAID5 volume, 1 SAS HDD, 1 mgmt NIC.
-	if kinds["cpu"] != 2 || kinds["memory"] != 1 || kinds["controller"] != 1 || kinds["volume"] != 1 || kinds["drive"] != 1 || kinds["nic"] != 1 {
+	// DIMM (empty slot skipped), 1 controller, 1 RAID5 volume, 1 SAS HDD, and 3 NICs:
+	// 2 host physical ports (NetworkAdapters) + 1 management NIC.
+	if kinds["cpu"] != 2 || kinds["memory"] != 1 || kinds["controller"] != 1 || kinds["volume"] != 1 || kinds["drive"] != 1 || kinds["nic"] != 3 {
 		t.Fatalf("iLO4 component mix wrong: %+v", kinds)
 	}
-	var mem, drive, vol, nic, ctrl bool
+	var mem, drive, vol, mgmtNic, hostNic, ctrl bool
 	for _, x := range f.Components {
 		if x.Kind == "memory" && x.Detail["type"] == "DDR3" && x.CapacityBytes == 8192*1024*1024 && x.Status == "OK" {
 			mem = true
@@ -218,13 +223,18 @@ func TestCollect_iLO4(t *testing.T) {
 			vol = true
 		}
 		if x.Kind == "nic" && x.Detail["mac"] == "00:9C:02:A9:D0:66" && x.Detail["ipv4"] == "150.0.0.72" && x.Detail["role"] == "management" {
-			nic = true
+			mgmtNic = true
+		}
+		// The physical host port from NetworkAdapters — real MAC + adapter identity, role=host.
+		if x.Kind == "nic" && x.Detail["mac"] == "2C:76:8A:4F:CF:14" && x.Detail["role"] == "host" &&
+			x.Detail["adapter"] == "HP Ethernet 1Gb 4-port 331FLR Adapter" && x.Detail["part_number"] == "629135-B21" {
+			hostNic = true
 		}
 		if x.Kind == "controller" && x.Detail["firmware"] == "3.04" {
 			ctrl = true
 		}
 	}
-	if !mem || !drive || !vol || !nic || !ctrl {
-		t.Fatalf("iLO4 detail not captured: mem=%v drive=%v vol=%v nic=%v ctrl=%v", mem, drive, vol, nic, ctrl)
+	if !mem || !drive || !vol || !mgmtNic || !hostNic || !ctrl {
+		t.Fatalf("iLO4 detail not captured: mem=%v drive=%v vol=%v mgmtNic=%v hostNic=%v ctrl=%v", mem, drive, vol, mgmtNic, hostNic, ctrl)
 	}
 }

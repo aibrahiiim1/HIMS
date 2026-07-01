@@ -99,6 +99,7 @@ type computerSystem struct {
 	Memory             odataRef `json:"Memory"`
 	Storage            odataRef `json:"Storage"`
 	EthernetInterfaces odataRef `json:"EthernetInterfaces"`
+	NetworkAdapters    odataRef `json:"NetworkAdapters"`
 	Oem                struct {
 		Hpe struct { // iLO 5 (Redfish 1.2+)
 			Links struct {
@@ -114,6 +115,31 @@ type computerSystem struct {
 			} `json:"links"`
 		} `json:"Hp"`
 	} `json:"Oem"`
+}
+
+// networkAdapter is one physical NIC card (Systems/{id}/NetworkAdapters). iLO4/Gen8
+// exposes the server's real host ports here (the standard EthernetInterfaces are empty
+// placeholders on iLO4). PhysicalPorts is an inline array of per-port MAC/speed/duplex.
+type networkAdapter struct {
+	Name            string `json:"Name"`
+	PartNumber      string `json:"PartNumber"`
+	SerialNumber    string `json:"SerialNumber"`
+	FirmwareVersion struct {
+		Current struct {
+			VersionString string `json:"VersionString"`
+		} `json:"Current"`
+	} `json:"Firmware"`
+	PhysicalPorts []struct {
+		Name          string `json:"Name"`
+		MacAddress    string `json:"MacAddress"`
+		SpeedMbps     int    `json:"SpeedMbps"`
+		FullDuplex    *bool  `json:"FullDuplex"`
+		LinkStatus    string `json:"LinkStatus"`
+		Status        status `json:"Status"`
+		IPv4Addresses []struct {
+			Address string `json:"Address"`
+		} `json:"IPv4Addresses"`
+	} `json:"PhysicalPorts"`
 }
 
 // ethernetInterface is one NIC (host or management), across Redfish generations.
@@ -265,8 +291,11 @@ func Collect(ctx context.Context, c *Client) (BMCFacts, error) {
 			if countComponentKind(f.Components, "drive") == 0 {
 				f.collectHPESmartStorage(ctx, c, firstNonEmpty(sys.Oem.Hpe.Links.SmartStorage.id(), sys.Oem.Hp.Links.SmartStorage.id()))
 			}
-			// Physical/host network interfaces (MAC, link, speed).
+			// Physical/host network interfaces (MAC, link, speed). EthernetInterfaces first
+			// (iLO5/iDRAC host NICs), then NetworkAdapters/PhysicalPorts (iLO4/Gen8 physical
+			// ports) — addNIC de-dups by MAC so a port from both paths appears once.
 			f.collectNICs(ctx, c, firstNonEmpty(sys.EthernetInterfaces.id(), sys.Oem.Hp.Links.EthernetInterfaces.id()), "host")
+			f.collectNetworkAdapters(ctx, c, firstNonEmpty(sys.NetworkAdapters.id(), sys.Oem.Hp.Links.NetworkAdapters.id()))
 			// iLO 4 exposes no per-socket Processors collection — surface the real CPU
 			// summary (count + model) as rows so the processor data isn't blank.
 			if countComponentKind(f.Components, "cpu") == 0 && sys.ProcessorSum.Count > 0 && sys.ProcessorSum.Model != "" {
@@ -461,8 +490,64 @@ func (f *BMCFacts) collectNICs(ctx context.Context, c *Client, path, role string
 		if e.SpeedMbps > 0 {
 			putInt(comp.Detail, "speed_mbps", e.SpeedMbps)
 		}
-		f.Components = append(f.Components, comp)
+		f.addNIC(comp)
 	}
+}
+
+// collectNetworkAdapters walks Systems/{id}/NetworkAdapters → each physical adapter's
+// PhysicalPorts → a host nic Component (MAC + speed/duplex/IPv4 where exposed). This is how
+// iLO4/Gen8 surfaces the server's REAL physical host ports (its EthernetInterfaces are empty
+// placeholders); on iLO5/iDRAC the standard EthernetInterfaces already covered them, so
+// addNIC's MAC-dedup keeps a port from appearing twice.
+func (f *BMCFacts) collectNetworkAdapters(ctx context.Context, c *Client, path string) {
+	if path == "" {
+		return
+	}
+	for _, m := range membersOf(ctx, c, path) {
+		var na networkAdapter
+		if err := c.GetJSON(ctx, m, &na); err != nil {
+			continue
+		}
+		for i, pp := range na.PhysicalPorts {
+			mac := strings.TrimSpace(pp.MacAddress)
+			if mac == "" {
+				continue // a port with no MAC is not a real, reportable interface
+			}
+			ip := ""
+			if len(pp.IPv4Addresses) > 0 {
+				ip = pp.IPv4Addresses[0].Address
+			}
+			comp := Component{Kind: "nic", Name: firstNonEmpty(pp.Name, mac), Serial: mac, Status: pp.Status.Health, Detail: map[string]string{}}
+			putStr(comp.Detail, "mac", mac)
+			putStr(comp.Detail, "role", "host")
+			putStr(comp.Detail, "link", pp.LinkStatus)
+			putStr(comp.Detail, "ipv4", ip)
+			putStr(comp.Detail, "adapter", strings.TrimSpace(na.Name))
+			putStr(comp.Detail, "part_number", strings.TrimSpace(na.PartNumber))
+			putStr(comp.Detail, "adapter_serial", strings.TrimSpace(na.SerialNumber))
+			putInt(comp.Detail, "port", i+1)
+			if pp.SpeedMbps > 0 {
+				putInt(comp.Detail, "speed_mbps", pp.SpeedMbps)
+				if pp.FullDuplex != nil { // duplex is only meaningful on a linked port
+					comp.Detail["duplex"] = map[bool]string{true: "Full", false: "Half"}[*pp.FullDuplex]
+				}
+			}
+			f.addNIC(comp)
+		}
+	}
+}
+
+// addNIC appends a nic Component, de-duplicating by MAC so the same physical port surfaced
+// from two Redfish paths (EthernetInterfaces + NetworkAdapters) is never listed twice.
+func (f *BMCFacts) addNIC(comp Component) {
+	if mac := strings.ToUpper(strings.TrimSpace(comp.Detail["mac"])); mac != "" {
+		for _, c := range f.Components {
+			if c.Kind == "nic" && strings.ToUpper(strings.TrimSpace(c.Detail["mac"])) == mac {
+				return
+			}
+		}
+	}
+	f.Components = append(f.Components, comp)
 }
 
 func mapDIMMStatus(s string) string {

@@ -237,22 +237,28 @@ export function BmcDetail() {
         </>
       )}
 
-      {/* D. Network interfaces */}
-      {collected && nics.length > 0 && (
-        <Panel title="Network interfaces" icon={Network} subtitle={`${nics.length}`} pad={false}>
-          <table className="data-table">
-            <thead><tr><th>Interface</th><th>Role</th><th>MAC</th><th>IPv4</th><th>Link</th><th>Speed</th><th>Status</th></tr></thead>
-            <tbody>{nics.map((c) => (
-              <tr key={c.id}><td className="cell-name">{c.name}</td>
-                <td>{c.detail.role ? <span className={`badge badge-${c.detail.role === 'management' ? 'access' : 'unknown'}`}>{c.detail.role}</span> : '—'}</td>
-                <td className="mono">{c.detail.mac || '—'}</td><td className="mono">{c.detail.ipv4 || '—'}</td>
-                <td>{c.detail.link ? <span className={`badge badge-${/up/i.test(c.detail.link) ? 'up' : 'unknown'}`}>{c.detail.link}</span> : '—'}</td>
-                <td className="mono">{c.detail.speed_mbps ? (Number(c.detail.speed_mbps) >= 1000 ? `${Number(c.detail.speed_mbps) / 1000} Gb/s` : `${c.detail.speed_mbps} Mb/s`) : '—'}</td>
-                <td><StatusPill status={pillTone(c.status)} label={c.status || '—'} /></td></tr>
-            ))}</tbody>
-          </table>
-        </Panel>
-      )}
+      {/* D. Network interfaces — host (server physical ports) and management kept separate */}
+      {collected && nics.length > 0 && (() => {
+        const hostNics = nics.filter((c) => c.detail.role === 'host')
+        const mgmtNics = nics.filter((c) => c.detail.role !== 'host')
+        return (
+          <Panel title="Network interfaces" icon={Network} subtitle={`${hostNics.length} host · ${mgmtNics.length} management`} pad={false}>
+            <table className="data-table">
+              <thead><tr><th>Interface</th><th>Role</th><th>Adapter</th><th>MAC</th><th>IPv4</th><th>Link</th><th>Speed</th><th>Duplex</th><th>Status</th></tr></thead>
+              <tbody>{[...hostNics, ...mgmtNics].map((c) => (
+                <tr key={c.id}><td className="cell-name">{c.detail.port ? `Port ${c.detail.port}` : c.name}</td>
+                  <td>{c.detail.role ? <span className={`badge badge-${c.detail.role === 'management' ? 'access' : 'up'}`}>{c.detail.role}</span> : '—'}</td>
+                  <td className="muted" style={{ fontSize: 12 }}>{c.detail.adapter || '—'}</td>
+                  <td className="mono">{c.detail.mac || '—'}</td><td className="mono">{c.detail.ipv4 && c.detail.ipv4 !== '0.0.0.0' ? c.detail.ipv4 : '—'}</td>
+                  <td>{c.detail.link ? <span className={`badge badge-${/up/i.test(c.detail.link) ? 'up' : 'unknown'}`}>{c.detail.link}</span> : '—'}</td>
+                  <td className="mono">{c.detail.speed_mbps ? (Number(c.detail.speed_mbps) >= 1000 ? `${Number(c.detail.speed_mbps) / 1000} Gb/s` : `${c.detail.speed_mbps} Mb/s`) : '—'}</td>
+                  <td>{c.detail.duplex || '—'}</td>
+                  <td><StatusPill status={pillTone(c.status)} label={c.status || '—'} /></td></tr>
+              ))}</tbody>
+            </table>
+          </Panel>
+        )
+      })()}
 
       {/* D. Sensors — grouped */}
       {collected && (
