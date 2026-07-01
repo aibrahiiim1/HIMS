@@ -92,7 +92,7 @@ function Fail($m) {
   exit 1
 }
 
-function Require-Admin {
+function RequireAdmin {
   $id = [Security.Principal.WindowsIdentity]::GetCurrent()
   if (-not (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Fail 'Not elevated. A real activation stops/starts the LocalSystem "HIMS API" service and swaps hims-api.exe — re-run this script from an Administrator PowerShell (or use -DryRun to validate without admin).'
@@ -161,7 +161,7 @@ if ($SelfTest) {
 # Real pipeline
 # ============================================================================
 Set-Location $repo
-if ($DryRun) { $script:S.mode = 'dry-run' } else { Require-Admin }
+if ($DryRun) { $script:S.mode = 'dry-run' } else { RequireAdmin }
 
 # --- prerequisites ----------------------------------------------------------
 foreach ($tool in 'go','npm','git') {
@@ -169,7 +169,6 @@ foreach ($tool in 'go','npm','git') {
 }
 
 # --- git identity + cleanliness --------------------------------------------
-$head      = (& git rev-parse HEAD).Trim()
 $headShort = (& git rev-parse --short=12 HEAD).Trim()
 $script:S.expected_commit = $headShort
 # Only REAL tracked content changes count as dirty. `git diff --numstat HEAD` normalizes line
@@ -195,8 +194,10 @@ $oldPid    = if ($before) { "$($before.pid)" } else { '' }
 $oldCommit = if ($before) { "$($before.commit)" } else { '' }
 $svc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
 $svcRunning = ($svc -and $svc.Status -eq 'Running')
-$script:S.old_pid = if ($oldPid) { $oldPid } else { '(service down)' }
-$script:S.running_before = if ($oldCommit) { $oldCommit } else { '(unknown)' }
+# A running service on the OLD binary (before /healthz reported pid/commit) returns neither —
+# label that honestly rather than calling an up service "down".
+$script:S.old_pid = if ($oldPid) { $oldPid } elseif ($svcRunning) { '(running, pre-healthz build)' } else { '(service down)' }
+$script:S.running_before = if ($oldCommit) { $oldCommit } elseif ($svcRunning) { '(running, pre-healthz build)' } else { '(service down)' }
 Info "Running before: commit=$($script:S.running_before) pid=$($script:S.old_pid)  |  HEAD=$headShort"
 
 # --- change detection -------------------------------------------------------
@@ -301,7 +302,6 @@ if ($dbUrl) {
   $env:HIMS_DATABASE_URL = $dbUrl
   $status = (& go run ./cmd/hims-migrate status) 2>&1
   $pending = 0
-  $mp = [regex]::Match(("$status" | Select-Object -Last 1), '(\d+)\s+pending')
   foreach ($ln in @($status)) { $mm=[regex]::Match("$ln",'(\d+)\s+pending'); if ($mm.Success){ $pending=[int]$mm.Groups[1].Value } }
   if ($pending -gt 0) {
     if ($DryRun) { Warn "$pending migration(s) PENDING — would apply (dry-run: not applied)"; $script:S.migration_status = "$pending pending (dry-run)" }
