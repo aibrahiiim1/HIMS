@@ -30,8 +30,9 @@ type bmcInventoryRow struct {
 	BMCStatus       string   `json:"bmc_status"`      // collected | bmc_credential_required | bmc_auth_failed | not_collected
 	IPMIStatus      string   `json:"ipmi_status"`     // not_collected (no IPMI collector yet)
 	PowerState      string   `json:"power_state"`
-	HealthSummary   string   `json:"health_summary"`
-	LinkState       string   `json:"link_state"` // linked | candidate_link | unlinked_bmc
+	HealthSummary   string   `json:"health_summary"` // hardware health: Redfish when collected, else SNMP-derived
+	SnmpHealth      string   `json:"snmp_health"`    // HPE iLO overall condition over SNMP (kept separate from Redfish)
+	LinkState       string   `json:"link_state"`     // linked | candidate_link | unlinked_bmc
 	LinkedServer    string   `json:"linked_server"`
 	LinkedServerID  string   `json:"linked_server_id,omitempty"`
 	LinkConfidence  int      `json:"link_confidence"`
@@ -189,59 +190,73 @@ func (s *Server) listBMCInventory(w http.ResponseWriter, r *http.Request) {
 			row.LastCollected = d.LastDiscoveryAt.Format("2006-01-02 15:04")
 		}
 		row.Evidence = bmcEvidence(d)
-		// Join collected controller facts where present (Redfish/IPMI driver ran).
+		// Read device facts ONCE — SNMP health (bmc.snmp_health) is kept SEPARATE from any
+		// Redfish inventory health, so an authenticated Redfish collect never hides the
+		// SNMP-reported condition (the two channels stay distinct on the page).
+		redfishReachable, redfishProduct, redfishVersion, redfishCollect, factController := false, "", "", "", ""
+		if facts, ferr := s.queries.ListDeviceFacts(ctx, d.ID); ferr == nil {
+			for _, f := range facts {
+				switch f.Key {
+				case "bmc.snmp_health":
+					row.SnmpHealth = derefStr(f.Value)
+				case "bmc.controller", "redfish.controller":
+					if factController == "" {
+						factController = derefStr(f.Value)
+					}
+				case "redfish.reachable":
+					redfishReachable = strings.EqualFold(derefStr(f.Value), "true")
+				case "redfish.product":
+					redfishProduct = derefStr(f.Value)
+				case "redfish.version":
+					redfishVersion = derefStr(f.Value)
+				case "redfish.collect":
+					redfishCollect = derefStr(f.Value) // collected | auth_failed (from an authenticated attempt)
+				}
+			}
+		}
+		// Join collected controller facts where present (authenticated Redfish ran → bmc_info).
 		if b, berr := s.queries.GetBMCInfo(ctx, d.ID); berr == nil && b.DeviceID == d.ID {
 			row.RedfishStatus = "collected"
 			row.Firmware = derefStr(b.FirmwareVersion)
 			row.ControllerKind = derefStr(b.ControllerKind)
 			row.PowerState = derefStr(b.PowerState)
-			row.HealthSummary = derefStr(b.Health)
+			row.HealthSummary = derefStr(b.Health) // Redfish hardware health
 			if row.Vendor == "" {
 				row.Vendor = derefStr(b.Vendor)
 			}
 			if row.Model == "" {
 				row.Model = derefStr(b.Model)
 			}
+			if row.Serial == "" { // a BMC with no ServiceTag on the row falls back to the Redfish system serial
+				row.Serial = derefStr(b.Serial)
+			}
 			if !b.LastSeenAt.IsZero() {
 				row.LastCollected = b.LastSeenAt.Format("2006-01-02 15:04")
 			}
 		} else {
-			// No Redfish controller inventory — surface what the SAFE UNAUTHENTICATED
-			// evidence gave us, WITHOUT claiming Redfish was collected:
-			//   - SNMP (CPQ MIBs on HPE iLO): firmware + overall health.
-			//   - Redfish ServiceRoot probe (any vendor): the controller IS reachable over
-			//     Redfish but needs a credential → redfish_status=credential_required, plus
-			//     vendor/product/controller identity. This is honest detection, not a fake
-			//     Redfish identity; bmc_info is never written here.
+			// No AUTHENTICATED Redfish inventory. Surface the SAFE evidence honestly:
+			//   - SNMP (CPQ MIBs on HPE iLO): firmware + overall health (in SnmpHealth).
+			//   - Redfish ServiceRoot probe: the controller IS reachable over Redfish but needs
+			//     a credential → redfish_status=credential_required. Never writes bmc_info.
 			if row.Firmware == "" {
 				row.Firmware = derefStr(d.OsVersion)
 			}
-			redfishReachable, redfishProduct, redfishVersion := false, "", ""
-			if facts, ferr := s.queries.ListDeviceFacts(ctx, d.ID); ferr == nil {
-				for _, f := range facts {
-					switch f.Key {
-					case "bmc.snmp_health":
-						row.HealthSummary = derefStr(f.Value)
-					case "bmc.controller", "redfish.controller":
-						if row.ControllerKind == "" {
-							row.ControllerKind = derefStr(f.Value)
-						}
-					case "redfish.reachable":
-						redfishReachable = strings.EqualFold(derefStr(f.Value), "true")
-					case "redfish.product":
-						redfishProduct = derefStr(f.Value)
-					case "redfish.version":
-						redfishVersion = derefStr(f.Value)
-					}
-				}
+			// With no Redfish inventory, the SNMP condition is the best hardware-health signal.
+			row.HealthSummary = row.SnmpHealth
+			if row.ControllerKind == "" {
+				row.ControllerKind = factController
 			}
-			// Redfish service seen unauthenticated but no controller inventory collected →
-			// the honest reason full hardware inventory is missing is a missing credential.
+			// Honest Redfish state, most-specific first:
+			//   - a reachable Redfish service with no inventory → credential_required
+			//   - a PROVEN auth rejection on an authenticated attempt → credential_failed
 			if redfishReachable {
 				row.RedfishStatus = "credential_required"
 				if rp := strings.TrimSpace(redfishProduct + " " + redfishVersion); rp != "" {
 					row.Evidence = strings.TrimSpace("Redfish: " + rp)
 				}
+			}
+			if redfishCollect == "auth_failed" {
+				row.RedfishStatus = "credential_failed"
 			}
 		}
 		if row.ControllerKind == "" {
@@ -262,7 +277,7 @@ func (s *Server) listBMCInventory(w http.ResponseWriter, r *http.Request) {
 		switch cs := maps.cred[d.ID]; {
 		case row.RedfishStatus == "collected":
 			row.BMCStatus = "collected"
-		case cs.authRejected:
+		case row.RedfishStatus == "credential_failed" || cs.authRejected:
 			row.BMCStatus = "bmc_auth_failed"
 		case !redfishCapable:
 			row.BMCStatus = "bmc_credential_required"

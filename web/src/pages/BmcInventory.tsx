@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { Cpu } from 'lucide-react'
-import { api } from '../api'
+import { api, type Credential } from '../api'
 import { PageHeader, Panel, EmptyState, usePaged, Pager } from '../components/ui'
 import { ManagementBadge, ReachabilityBadge } from '../components/StatusBadges'
 import { SummaryCards, type SummaryCard } from '../components/SummaryCards'
@@ -22,7 +22,8 @@ interface BmcRow {
   bmc_status: string // collected | bmc_credential_required | bmc_auth_failed | not_collected
   ipmi_status: string
   power_state: string
-  health_summary: string
+  health_summary: string // hardware health: Redfish when collected, else SNMP-derived
+  snmp_health: string // HPE iLO overall condition over SNMP (separate from Redfish)
   link_state: string // linked | candidate_link | unlinked_bmc
   linked_server: string
   linked_server_id?: string
@@ -44,13 +45,66 @@ const CRED_REQUIRED = new Set(['needs_credential', 'credential_failed', 'not_aut
 // WHY full hardware inventory is missing (a missing Redfish credential), so the iLO/
 // iDRAC gap is self-explanatory in the table without opening each device.
 function redfishTitle(r: BmcRow): string {
-  if (r.bmc_status === 'collected') return 'Full hardware inventory collected over Redfish.'
-  if (r.bmc_status === 'bmc_auth_failed') return 'A Redfish/http_basic credential was rejected by this controller.'
+  if (r.redfish_status === 'collected') return 'Full hardware inventory collected over authenticated Redfish (model, CPU, memory, disks, sensors).'
+  if (r.redfish_status === 'credential_failed')
+    return 'A Redfish credential was REJECTED by this controller — it needs its own valid Redfish login. Use Collect Redfish with the correct credential.'
   if (r.redfish_status === 'credential_required')
-    return 'Redfish service is reachable but no valid credential is bound. Bind an http_basic/Redfish credential to collect full hardware inventory (model, CPU, memory, disks, sensors). Identity/health shown here is from the unauthenticated ServiceRoot / SNMP only.'
-  if (r.bmc_status === 'bmc_credential_required')
-    return 'No Redfish-capable credential bound. Identity/health (if any) is SNMP-derived; full hardware inventory needs an http_basic/Redfish credential.'
-  return 'BMC/Redfish collection status.'
+    return 'Redfish service is reachable but no valid credential is bound. Use Collect Redfish (Test then Collect) with an http_basic/Redfish login to gather full hardware inventory. Identity/health shown is from the unauthenticated ServiceRoot / SNMP only.'
+  return 'No Redfish service detected. Reachability + any SNMP health are collected separately.'
+}
+
+// redfishBadge maps redfish_status to a badge tone: collected=ok, credential_failed=down,
+// credential_required=warning, not_collected=muted.
+function redfishBadge(s: string): { cls: string; label: string } {
+  switch (s) {
+    case 'collected': return { cls: 'up', label: 'collected' }
+    case 'credential_failed': return { cls: 'down', label: 'credential_failed' }
+    case 'credential_required': return { cls: 'warning', label: 'credential_required' }
+    default: return { cls: 'unknown', label: s || 'not_collected' }
+  }
+}
+
+// RedfishCollect is the operator-driven, single-credential Redfish path for one BMC:
+// Test Connection (read-only auth check) then Collect Now (authenticated full inventory).
+// It NEVER sprays — the operator picks exactly one http_basic/vendor_api login. On a
+// successful collect it refreshes the table (redfish_status → collected). This is the UI
+// that closes the credential_required / credential_failed gate.
+function RedfishCollect({ row }: { row: BmcRow }) {
+  const qc = useQueryClient()
+  const [open, setOpen] = useState(false)
+  const [cred, setCred] = useState('')
+  const [msg, setMsg] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const creds = useQuery({ queryKey: ['credentials'], queryFn: () => api.get<Credential[]>('/credentials'), enabled: open })
+  const loginCreds = (creds.data ?? []).filter((c) => c.kind === 'http_basic' || c.kind === 'vendor_api')
+  async function run(kind: 'test-redfish' | 'collect-bmc-redfish') {
+    if (!cred) { setMsg('Pick a credential first'); return }
+    setBusy(true); setMsg(null)
+    try {
+      const res = await api.post<{ ok: boolean; state: string; detail: string }>(`/devices/${row.id}/${kind}`, { credential_id: cred })
+      setMsg((res.ok ? '✓ ' : '✗ ') + (res.detail || res.state))
+      if (res.ok && kind === 'collect-bmc-redfish') qc.invalidateQueries({ queryKey: ['inventory-bmc'] })
+    } catch (e) { setMsg('✗ ' + (e as Error).message) } finally { setBusy(false) }
+  }
+  const btn = { fontSize: 11, padding: '2px 8px', border: '1px solid var(--border)', borderRadius: 5, background: 'var(--surface)', color: 'inherit', cursor: 'pointer' } as const
+  if (!open) {
+    return <button style={btn} onClick={() => setOpen(true)} title="Bind a Redfish/http_basic credential and collect full hardware inventory (one credential, no spray).">
+      {row.redfish_status === 'collected' ? 'Re-collect' : 'Collect Redfish…'}</button>
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 180 }}>
+      <select value={cred} onChange={(e) => setCred(e.target.value)} style={{ fontSize: 11, maxWidth: 200 }}>
+        <option value="">— pick credential —</option>
+        {loginCreds.map((c) => <option key={c.id} value={c.id}>{c.name} · {c.kind}</option>)}
+      </select>
+      <div style={{ display: 'flex', gap: 4 }}>
+        <button style={btn} disabled={busy} onClick={() => run('test-redfish')}>Test</button>
+        <button style={btn} disabled={busy} onClick={() => run('collect-bmc-redfish')}>Collect</button>
+        <button style={btn} onClick={() => { setOpen(false); setMsg(null) }}>✕</button>
+      </div>
+      {msg && <span className="muted" style={{ fontSize: 10, maxWidth: 220, whiteSpace: 'normal' }}>{msg}</span>}
+    </div>
+  )
 }
 
 // BmcInventory is the iLO / BMC / iDRAC page: out-of-band management controllers ONLY,
@@ -141,28 +195,33 @@ export function BmcInventory() {
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>IP</th><th>Status</th><th>Hostname</th><th>Vendor</th><th>Model</th><th>Serial</th><th>Firmware</th>
-                  <th>Redfish</th><th>IPMI</th><th>Linked server</th><th>Link evidence</th><th>Health</th><th>Management</th><th>Last collected</th><th>Evidence</th>
+                  <th title="Live reachability (separate from any collection state)">Reachability</th>
+                  <th>IP</th><th>Hostname</th><th>Vendor</th><th>Model</th><th>Serial</th><th>Firmware</th>
+                  <th title="HPE iLO overall condition read over SNMP (cpqHeMibCondition) — separate from Redfish">SNMP health</th>
+                  <th title="Authenticated Redfish inventory health (model/CPU/mem/disks/sensors)">HW health</th>
+                  <th title="Redfish credential + full-inventory collection state">Redfish inventory</th>
+                  <th>Collect</th>
+                  <th>Linked server</th><th>Management</th><th>Last collected</th><th>Evidence</th>
                 </tr>
               </thead>
               <tbody>
                 {paged.slice.map((r) => (
                   <tr key={r.id}>
-                    <td className="mono"><Link className="cell-name" to={`/devices/${r.id}`}>{r.ip}</Link></td>
                     <td><ReachabilityBadge value={r.reachability} /></td>
+                    <td className="mono"><Link className="cell-name" to={`/devices/${r.id}`}>{r.ip}</Link></td>
                     <td>{fmt(r.hostname)}</td>
                     <td>{fmt(r.vendor)}</td>
                     <td>{fmt(r.model)}</td>
                     <td>{fmt(r.serial)}</td>
                     <td>{fmt(r.firmware)}</td>
-                    <td><span className={`badge badge-${r.bmc_status === 'collected' ? 'up' : r.bmc_status === 'bmc_auth_failed' ? 'down' : 'warning'}`} title={redfishTitle(r)}>{r.bmc_status || r.redfish_status}</span></td>
-                    <td><span className="badge badge-unknown">{r.ipmi_status}</span></td>
+                    <td title="SNMP overall condition (HPE iLO) — independent of Redfish">{r.snmp_health ? <span className={`badge badge-${/ok/i.test(r.snmp_health) ? 'up' : 'warning'}`}>{r.snmp_health}</span> : <span className="muted">—</span>}</td>
+                    <td title="Authenticated Redfish hardware health">{r.redfish_status === 'collected' && r.health_summary ? <span className={`badge badge-${/ok/i.test(r.health_summary) ? 'up' : 'warning'}`}>{r.health_summary}{r.power_state ? ` · ${r.power_state}` : ''}</span> : <span className="muted">—</span>}</td>
+                    <td>{(() => { const b = redfishBadge(r.redfish_status); return <span className={`badge badge-${b.cls}`} title={redfishTitle(r)}>{b.label}</span> })()}</td>
+                    <td><RedfishCollect row={r} /></td>
                     <td>{linkBadge(r)}</td>
-                    <td className="muted" style={{ fontSize: 12 }} title={r.link_evidence}>{fmt(r.link_evidence)}</td>
-                    <td>{r.health_summary ? <span className={`badge badge-${/ok/i.test(r.health_summary) ? 'up' : 'warning'}`}>{r.health_summary}{r.power_state ? ` · ${r.power_state}` : ''}</span> : <span className="muted">—</span>}</td>
                     <td><ManagementBadge value={r.management} managedBy={r.managed_by} /></td>
                     <td className="mono">{fmt(r.last_collected)}</td>
-                    <td className="muted" style={{ fontSize: 12 }}>{fmt(r.evidence)}</td>
+                    <td className="muted" style={{ fontSize: 12 }} title={r.evidence}>{fmt(r.evidence)}</td>
                   </tr>
                 ))}
               </tbody>

@@ -344,6 +344,61 @@ func (q *Queries) ListAllDevices(ctx context.Context) ([]Device, error) {
 	return items, nil
 }
 
+const listBMCWithoutRedfishInventory = `-- name: ListBMCWithoutRedfishInventory :many
+SELECT d.id, d.name, d.primary_ip, d.vendor, d.subtype,
+       (rf.value IS NOT NULL)::boolean AS redfish_reachable,
+       (rc.value = 'auth_failed')::boolean AS auth_failed
+FROM devices d
+LEFT JOIN bmc_info b ON b.device_id = d.id
+LEFT JOIN device_facts rf ON rf.device_id = d.id AND rf.key = 'redfish.reachable'
+LEFT JOIN device_facts rc ON rc.device_id = d.id AND rc.key = 'redfish.collect'
+WHERE d.deleted_at IS NULL AND d.category = 'bmc' AND b.device_id IS NULL
+ORDER BY d.primary_ip
+`
+
+type ListBMCWithoutRedfishInventoryRow struct {
+	ID               uuid.UUID   `json:"id"`
+	Name             string      `json:"name"`
+	PrimaryIp        *netip.Addr `json:"primary_ip"`
+	Vendor           *string     `json:"vendor"`
+	Subtype          string      `json:"subtype"`
+	RedfishReachable bool        `json:"redfish_reachable"`
+	AuthFailed       bool        `json:"auth_failed"`
+}
+
+// BMC/iLO/iDRAC controllers that are detected/reachable but have NO authenticated Redfish
+// inventory (no bmc_info row). This is the "full hardware inventory gap": the honest reason
+// is a missing/failed Redfish credential. redfish_reachable = the unauthenticated
+// ServiceRoot answered; auth_failed = an authenticated attempt was rejected (proven). Used
+// by Data Quality to surface the gap with an actionable credential reason — never an alert.
+func (q *Queries) ListBMCWithoutRedfishInventory(ctx context.Context) ([]ListBMCWithoutRedfishInventoryRow, error) {
+	rows, err := q.db.Query(ctx, listBMCWithoutRedfishInventory)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListBMCWithoutRedfishInventoryRow{}
+	for rows.Next() {
+		var i ListBMCWithoutRedfishInventoryRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.PrimaryIp,
+			&i.Vendor,
+			&i.Subtype,
+			&i.RedfishReachable,
+			&i.AuthFailed,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDeviceFacts = `-- name: ListDeviceFacts :many
 SELECT id, device_id, key, value, value_json, driver, observed_at FROM device_facts WHERE device_id = $1 ORDER BY key
 `

@@ -680,6 +680,7 @@ type NvrChannel struct {
 	Enabled        bool        `json:"enabled"`
 	Recording      *bool       `json:"recording"`
 	Resolution     string      `json:"resolution"`
+	DetectReason   string      `json:"detect_reason"`
 }
 
 type NvrInfo struct {

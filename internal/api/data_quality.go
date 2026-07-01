@@ -242,6 +242,42 @@ func (s *Server) dataQuality(w http.ResponseWriter, r *http.Request) {
 		addDQ("bmc_health_bad", "Server hardware health (iLO)", desc, sev, list, len(rows))
 	}
 
+	// --- BMC Redfish full-inventory gap (credential_required) ----------------
+	// Controllers detected/reachable but with no AUTHENTICATED Redfish inventory. The
+	// honest reason is a missing (or rejected) Redfish credential — an actionable gate,
+	// not a vague deferred item. Informational (never an alert); iLOs currently managed
+	// over SNMP still need a Redfish http_basic credential for full hardware inventory.
+	if rows, err := s.queries.ListBMCWithoutRedfishInventory(ctx); err == nil && len(rows) > 0 {
+		credReq, authFail := 0, 0
+		list := []dqDevice{}
+		for _, r := range rows {
+			reason := "Redfish credential required — bind an http_basic/Redfish login, then Collect Now"
+			if r.AuthFailed {
+				authFail++
+				reason = "Redfish credential REJECTED — the bound/selected login failed; provide a valid Redfish credential"
+			} else {
+				credReq++
+			}
+			ip := ""
+			if r.PrimaryIp != nil && r.PrimaryIp.IsValid() {
+				ip = r.PrimaryIp.String()
+			}
+			name := r.Name
+			if v := strings.TrimSpace(derefStr(r.Vendor)); v != "" {
+				name = v + " " + nz(r.Subtype, "bmc") + " " + ip
+			}
+			if len(list) < dqSampleCap {
+				list = append(list, dqDevice{ID: r.ID.String(), Name: strings.TrimSpace(name), PrimaryIP: ip, Category: "bmc", Note: reason})
+			}
+		}
+		desc := fmt.Sprintf("Out-of-band controllers detected but missing authenticated Redfish hardware inventory: %d need a Redfish credential, %d had a credential rejected. Full inventory (model, CPU, memory, disks, sensors) requires an http_basic/Redfish login bound to each — Test Connection then Collect Now on the device. Reachability + SNMP health are collected separately and unaffected.", credReq, authFail)
+		sev := "info"
+		if authFail > 0 {
+			sev = "warning"
+		}
+		addDQ("bmc_redfish_gap", "BMC Redfish inventory (credential required)", desc, sev, list, len(rows))
+	}
+
 	// --- Wireless controller collection quality (WC-P5) ----------------------
 	s.addWirelessDQ(ctx, devs, &issues, staleBefore)
 

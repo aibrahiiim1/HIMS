@@ -452,6 +452,12 @@ type Querier interface {
 	// text (summary) / time range. NULL args are ignored.
 	ListAuditLogFiltered(ctx context.Context, arg ListAuditLogFilteredParams) ([]AuditLog, error)
 	ListBMCSensors(ctx context.Context, deviceID uuid.UUID) ([]BmcSensor, error)
+	// BMC/iLO/iDRAC controllers that are detected/reachable but have NO authenticated Redfish
+	// inventory (no bmc_info row). This is the "full hardware inventory gap": the honest reason
+	// is a missing/failed Redfish credential. redfish_reachable = the unauthenticated
+	// ServiceRoot answered; auth_failed = an authenticated attempt was rejected (proven). Used
+	// by Data Quality to surface the gap with an actionable credential reason — never an alert.
+	ListBMCWithoutRedfishInventory(ctx context.Context) ([]ListBMCWithoutRedfishInventoryRow, error)
 	// Excludes the content blob (can be large); content is fetched on demand for download.
 	ListBackupRuns(ctx context.Context) ([]ListBackupRunsRow, error)
 	ListChildLocations(ctx context.Context, parentID *uuid.UUID) ([]Location, error)
