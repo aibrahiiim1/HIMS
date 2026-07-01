@@ -18,49 +18,170 @@ function fmtUptime(s?: number | null): string {
   return `${d}d ${h}h`
 }
 
-// DeepOSInventory renders the authenticated deep OS inventory (WinRM/SSH) for a
-// device: a summary plus disks/network/services/processes/software/roles/events.
-// Absent data shows "Not collected" / "Not collected yet" — never fabricated. A
-// Collect button (shown only to users with devices.write) runs an on-demand
-// collection (needs a bound credential).
-//
-// Visibility: the card renders when the device is a Windows/Linux host
-// (os_family) OR already has an OS-inventory row, OR `alwaysShow` is set (the
-// Server detail page). This lets the generic device page surface deep inventory
-// for Windows workstations / Linux hosts that don't route through ServerDetail,
-// while staying hidden for switches/cameras/etc.
-export function DeepOSInventory({ deviceId, alwaysShow, isVirtual }: { deviceId: string; alwaysShow?: boolean; isVirtual?: boolean }) {
+// The composable data sections the deep OS inventory exposes. A detail page can render just
+// one section inside its own tab/Panel (bare, no card chrome); passing no section renders the
+// legacy self-contained card (used by the generic + switch detail pages).
+export type OSSection = 'summary' | 'disks' | 'network' | 'services' | 'processes' | 'software'
+
+// useOSInventory is the shared query + on-demand collect for a device's deep OS inventory.
+// Every consumer uses the same query key so react-query fetches once per device.
+export function useOSInventory(deviceId: string) {
   const qc = useQueryClient()
   const q = useQuery({ queryKey: ['os-inventory', deviceId], queryFn: () => api.get<OSInventoryBundle>(`/devices/${deviceId}/os-inventory`) })
-  // Shared with ClassificationCard's query key — react-query dedupes the fetch.
-  const cls = useQuery({ queryKey: ['classification', deviceId], queryFn: () => api.get<Classification>(`/devices/${deviceId}/classification`) })
   const me = useQuery({ queryKey: ['me'], queryFn: () => api.get<AuthMe>('/auth/me') })
   const collect = useMutation({
     mutationFn: () => api.post(`/devices/${deviceId}/collect-os`, {}),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['os-inventory', deviceId] }),
   })
+  const canCollect = !!(me.data?.admin || me.data?.permissions?.includes('devices.write'))
+  return { bundle: q.data ?? null, isLoading: q.isLoading, collect, canCollect }
+}
 
-  const b = q.data
+// CollectOSButton runs an on-demand deep OS collection (needs a bound credential + devices.write).
+// Hidden for manually-modeled virtual devices, which are never probed.
+export function CollectOSButton({ deviceId, isVirtual, small }: { deviceId: string; isVirtual?: boolean; small?: boolean }) {
+  const { bundle, collect, canCollect } = useOSInventory(deviceId)
+  if (!canCollect || isVirtual) return null
+  const label = collect.isPending ? 'Collecting…' : bundle?.inventory ? 'Re-collect OS' : 'Collect OS'
+  return (
+    <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 4 }}>
+      <button className={small ? 'btn btn-sm' : 'btn'} disabled={collect.isPending} onClick={() => collect.mutate()}>
+        <RefreshCw size={13} /> {label}
+      </button>
+      {collect.error && <span className="error-msg" style={{ fontSize: 11 }}>{(collect.error as Error).message}</span>}
+    </span>
+  )
+}
+
+// ---- bare section renderers (embeddable in a detail-page Panel) -------------
+
+function SummaryBlock({ b }: { b: OSInventoryBundle }) {
+  const inv = b.inventory!
+  return (
+    <>
+      <dl className="kv">
+        <div><dt>OS</dt><dd>{val(inv.os_caption)}</dd></div>
+        <div><dt>Version / build</dt><dd>{val(inv.os_version)}{inv.os_build ? ` (${inv.os_build})` : ''}</dd></div>
+        <div><dt>Edition / arch</dt><dd>{val(inv.os_edition || inv.os_arch)}</dd></div>
+        {inv.kernel && <div><dt>Kernel</dt><dd>{inv.kernel}</dd></div>}
+        <div><dt>Hostname</dt><dd>{val(inv.hostname)}</dd></div>
+        <div><dt>Domain / FQDN</dt><dd>{val(inv.fqdn || inv.domain || inv.workgroup)}</dd></div>
+        <div><dt>Logged-on user</dt><dd>{val(inv.logged_on_user)}</dd></div>
+        <div><dt>Uptime</dt><dd>{fmtUptime(inv.uptime_seconds)}</dd></div>
+        <div><dt>Timezone</dt><dd>{val(inv.timezone)}</dd></div>
+        <div><dt>Manufacturer / model</dt><dd>{val([inv.manufacturer, inv.model].filter(Boolean).join(' ') || null)}</dd></div>
+        <div><dt>Serial</dt><dd>{val(inv.serial)}</dd></div>
+        <div><dt>BIOS</dt><dd>{val(inv.bios_version)}{inv.bios_date ? ` (${inv.bios_date})` : ''}</dd></div>
+        <div><dt>CPU</dt><dd>{val(inv.cpu_model)}{inv.cpu_cores ? ` · ${inv.cpu_cores} cores` : ''}{inv.cpu_sockets ? ` / ${inv.cpu_sockets} sockets` : ''}</dd></div>
+        <div><dt>RAM</dt><dd>{fmtBytes(inv.ram_total_bytes)}</dd></div>
+      </dl>
+      {b.roles.length > 0 && (
+        <div style={{ marginTop: 10 }}>
+          <span className="muted">Detected roles: </span>
+          {b.roles.map((r) => <span key={r.role} className="badge badge-access" style={{ marginRight: 6 }}>{r.role}</span>)}
+        </div>
+      )}
+    </>
+  )
+}
+
+function DisksBlock({ b }: { b: OSInventoryBundle }) {
+  if (b.disks.length === 0) return <span className="muted">Not collected yet.</span>
+  return (
+    <table className="data-table"><thead><tr><th>Name</th><th>FS</th><th>Total</th><th>Free</th><th>Model</th></tr></thead>
+      <tbody>{b.disks.map((d, i) => <tr key={i}><td className="cell-name">{d.name}</td><td>{d.filesystem || '—'}</td><td className="mono">{fmtBytes(d.total_bytes)}</td><td className="mono">{fmtBytes(d.free_bytes)}</td><td className="muted" style={{ fontSize: 12 }}>{d.model || '—'}</td></tr>)}</tbody>
+    </table>
+  )
+}
+
+function NicsBlock({ b }: { b: OSInventoryBundle }) {
+  if (b.nics.length === 0) return <span className="muted">Not collected yet.</span>
+  return (
+    <table className="data-table"><thead><tr><th>Interface</th><th>MAC</th><th>IP(s)</th><th>Gateway</th><th>DNS</th><th>DHCP</th></tr></thead>
+      <tbody>{b.nics.map((n, i) => <tr key={i}><td className="cell-name">{n.name}</td><td className="mono" style={{ fontSize: 12 }}>{n.mac || '—'}</td><td className="mono" style={{ fontSize: 12 }}>{n.ip_addresses || '—'}</td><td>{n.gateway || '—'}</td><td className="mono" style={{ fontSize: 12 }}>{n.dns_servers || '—'}</td><td>{n.dhcp_enabled ? 'yes' : 'no'}</td></tr>)}</tbody>
+    </table>
+  )
+}
+
+// renderSection returns the bare content for one section, for embedding in a tab.
+function renderSection(section: OSSection, b: OSInventoryBundle) {
+  const inv = b.inventory
+  switch (section) {
+    case 'summary': return <SummaryBlock b={b} />
+    case 'disks': return <DisksBlock b={b} />
+    case 'network': return <NicsBlock b={b} />
+    case 'services': return (
+      <PagedSection title="Services" items={b.services} bare
+        head={<tr><th>Name</th><th>Status</th><th>Start</th><th>Description</th></tr>}
+        match={(sv, q) => (sv.display_name || sv.name || '').toLowerCase().includes(q) || (sv.status || '').toLowerCase().includes(q)}
+        row={(sv, i) => <tr key={i}><td className="cell-name">{sv.display_name || sv.name}</td><td>{sv.status || '—'}</td><td>{sv.start_type || '—'}</td><td className="muted" style={{ fontSize: 12 }}>{sv.description || ''}</td></tr>} />
+    )
+    case 'processes': return (
+      <PagedSection title="Top processes" items={b.processes} bare
+        head={<tr><th>Process</th><th>PID</th><th>Memory</th><th>CPU%</th></tr>}
+        match={(p, q) => p.name.toLowerCase().includes(q)}
+        emptyNote={inv ? `Not reported via ${inv.collection_method} collection on the last run.` : undefined}
+        row={(p) => <tr key={p.pid}><td className="cell-name">{p.name}</td><td className="mono">{p.pid}</td><td className="mono">{fmtBytes(p.mem_bytes)}</td><td className="mono">{p.cpu_pct ?? '—'}</td></tr>} />
+    )
+    case 'software': return (
+      <PagedSection title="Installed software" items={b.software} bare
+        head={<tr><th>Name</th><th>Version</th><th>Publisher</th></tr>}
+        match={(sw, q) => (sw.name || '').toLowerCase().includes(q) || (sw.publisher || '').toLowerCase().includes(q)}
+        emptyNote={inv?.software_note ? `Software not collected — ${inv.software_note}` : inv ? `Not reported via ${inv.collection_method} collection — some hosts don't expose the installed-software registry over WMI/WinRM (e.g. legacy WSMan). Re-collect after enabling remote registry, or collect over direct WinRM.` : undefined}
+        row={(sw, i) => <tr key={i}><td className="cell-name">{sw.name}</td><td className="mono">{sw.version || '—'}</td><td className="muted" style={{ fontSize: 12 }}>{sw.publisher || ''}</td></tr>} />
+    )
+  }
+}
+
+// EventHealth renders the 24h Windows event-log rollup as a compact strip (reused by pages).
+export function EventHealth({ deviceId }: { deviceId: string }) {
+  const { bundle } = useOSInventory(deviceId)
+  const inv = bundle?.inventory
+  if (!inv || (inv.events_error_24h == null && inv.events_warning_24h == null && inv.events_critical_24h == null)) {
+    return <span className="muted" style={{ fontSize: 13 }}>No event-log data collected.</span>
+  }
+  return (
+    <p style={{ margin: 0, fontSize: 13 }}>
+      <strong>Event log (24h):</strong>{' '}
+      <span className="badge badge-down">{inv.events_critical_24h ?? 0} critical</span>{' '}
+      <span className="badge badge-warning">{inv.events_error_24h ?? 0} error</span>{' '}
+      <span className="badge badge-unknown">{inv.events_warning_24h ?? 0} warning</span>
+      {inv.last_critical_event ? <div className="muted" style={{ marginTop: 4 }}>last critical: {inv.last_critical_event}</div> : null}
+    </p>
+  )
+}
+
+// OSInventorySection renders ONE bare section for embedding in a detail-page tab. It shows an
+// honest empty/pending message (never fabricated) when nothing is collected.
+export function OSInventorySection({ deviceId, section, isVirtual }: { deviceId: string; section: OSSection; isVirtual?: boolean }) {
+  const { bundle, isLoading } = useOSInventory(deviceId)
+  if (isLoading) return <div className="loading">Loading…</div>
+  if (!bundle || !bundle.inventory) {
+    return (
+      <p className="muted" style={{ margin: '6px 0' }}>
+        {isVirtual
+          ? 'Manually modeled virtual device — OS, hardware, disks, network and software are maintained manually. Use Edit virtual device in the header to update them.'
+          : 'Not collected yet. Bind a working credential (WinRM for Windows, SSH for Linux) and Collect OS to gather this.'}
+      </p>
+    )
+  }
+  return <>{renderSection(section, bundle)}</>
+}
+
+// DeepOSInventory renders the authenticated deep OS inventory (WinRM/SSH) for a device as a
+// single self-contained card (summary + disks/network/services/processes/software/events). Used
+// by the generic + switch detail pages. Absent data shows "Not collected" — never fabricated.
+export function DeepOSInventory({ deviceId, alwaysShow, isVirtual }: { deviceId: string; alwaysShow?: boolean; isVirtual?: boolean }) {
+  const { bundle, isLoading, canCollect } = useOSInventory(deviceId)
+  const cls = useQuery({ queryKey: ['classification', deviceId], queryFn: () => api.get<Classification>(`/devices/${deviceId}/classification`) })
+
+  const b = bundle
   const inv = b?.inventory ?? null
   const osFamily = cls.data?.os_family ?? ''
   const isOSHost = osFamily === 'windows' || osFamily === 'linux'
-  const canCollect = !!(me.data?.admin || me.data?.permissions?.includes('devices.write'))
 
-  // Still loading the signals we gate on — don't flash the card.
-  if (q.isLoading || cls.isLoading) {
-    return null
-  }
-  if (!alwaysShow && !isOSHost && !inv) {
-    return null // not an OS host and nothing collected → hide entirely
-  }
-
-  // Virtual (manually-modeled) devices are never probed — no Collect OS button.
-  const collectBtn = canCollect && !isVirtual ? (
-    <button className="btn btn-sm" disabled={collect.isPending} onClick={() => collect.mutate()}>
-      <RefreshCw size={13} /> {collect.isPending ? 'Collecting…' : inv ? 'Re-collect' : 'Collect OS'}
-    </button>
-  ) : null
-  const err = collect.error ? (collect.error as Error).message : null
+  if (isLoading || cls.isLoading) return null
+  if (!alwaysShow && !isOSHost && !inv) return null
 
   return (
     <div className="card">
@@ -68,12 +189,9 @@ export function DeepOSInventory({ deviceId, alwaysShow, isVirtual }: { deviceId:
         <h2 style={{ margin: 0, display: 'inline-flex', gap: 8, alignItems: 'center' }}><Cpu size={17} /> Deep OS Inventory</h2>
         <span style={{ display: 'inline-flex', gap: 10, alignItems: 'center' }}>
           {inv && <span className="muted" style={{ fontSize: 12 }}>via <strong>{inv.collection_method}</strong> · {new Date(inv.collected_at).toLocaleString()}</span>}
-          {collectBtn}
+          {canCollect && !isVirtual && <CollectOSButton deviceId={deviceId} isVirtual={isVirtual} small />}
         </span>
       </div>
-      {err && <p className="error-msg" style={{ marginTop: 8 }}>{err}</p>}
-
-      {q.isLoading && <div className="loading">Loading…</div>}
 
       {b && !inv && (
         isVirtual ? (
@@ -91,67 +209,15 @@ export function DeepOSInventory({ deviceId, alwaysShow, isVirtual }: { deviceId:
 
       {b && inv && (
         <>
-          <dl className="kv" style={{ marginTop: 12 }}>
-            <div><dt>OS</dt><dd>{val(inv.os_caption)}</dd></div>
-            <div><dt>Version / build</dt><dd>{val(inv.os_version)}{inv.os_build ? ` (${inv.os_build})` : ''}</dd></div>
-            <div><dt>Edition / arch</dt><dd>{val(inv.os_edition || inv.os_arch)}</dd></div>
-            {inv.kernel && <div><dt>Kernel</dt><dd>{inv.kernel}</dd></div>}
-            <div><dt>Hostname</dt><dd>{val(inv.hostname)}</dd></div>
-            <div><dt>Domain / FQDN</dt><dd>{val(inv.fqdn || inv.domain || inv.workgroup)}</dd></div>
-            <div><dt>Uptime</dt><dd>{fmtUptime(inv.uptime_seconds)}</dd></div>
-            <div><dt>Timezone</dt><dd>{val(inv.timezone)}</dd></div>
-            <div><dt>Manufacturer / model</dt><dd>{val([inv.manufacturer, inv.model].filter(Boolean).join(' ') || null)}</dd></div>
-            <div><dt>Serial</dt><dd>{val(inv.serial)}</dd></div>
-            <div><dt>BIOS</dt><dd>{val(inv.bios_version)}</dd></div>
-            <div><dt>CPU</dt><dd>{val(inv.cpu_model)}{inv.cpu_cores ? ` · ${inv.cpu_cores} cores` : ''}{inv.cpu_sockets ? ` / ${inv.cpu_sockets} sockets` : ''}</dd></div>
-            <div><dt>RAM</dt><dd>{fmtBytes(inv.ram_total_bytes)}</dd></div>
-          </dl>
-
-          {b.roles.length > 0 && (
-            <div style={{ marginTop: 6 }}>
-              <span className="muted">Detected roles: </span>
-              {b.roles.map((r) => <span key={r.role} className="badge badge-access" style={{ marginRight: 6 }}>{r.role}</span>)}
-            </div>
-          )}
-
+          <div style={{ marginTop: 12 }}><SummaryBlock b={b} /></div>
           {(inv.events_error_24h != null || inv.events_warning_24h != null || inv.events_critical_24h != null) && (
-            <p style={{ marginTop: 10, fontSize: 13 }}>
-              <strong>Event log (24h):</strong>{' '}
-              <span className="badge badge-down">{inv.events_critical_24h ?? 0} critical</span>{' '}
-              <span className="badge badge-warning">{inv.events_error_24h ?? 0} error</span>{' '}
-              <span className="badge badge-unknown">{inv.events_warning_24h ?? 0} warning</span>
-              {inv.last_critical_event ? <span className="muted"> · last critical: {inv.last_critical_event}</span> : null}
-            </p>
+            <div style={{ marginTop: 10 }}><EventHealth deviceId={deviceId} /></div>
           )}
-
-          <Section title={`Disks / Volumes (${b.disks.length})`} empty={b.disks.length === 0}>
-            <table><thead><tr><th>Name</th><th>FS</th><th>Total</th><th>Free</th><th>Model</th></tr></thead>
-              <tbody>{b.disks.map((d, i) => <tr key={i}><td>{d.name}</td><td>{d.filesystem || '—'}</td><td>{fmtBytes(d.total_bytes)}</td><td>{fmtBytes(d.free_bytes)}</td><td>{d.model || '—'}</td></tr>)}</tbody>
-            </table>
-          </Section>
-
-          <Section title={`Network (${b.nics.length})`} empty={b.nics.length === 0}>
-            <table><thead><tr><th>Interface</th><th>MAC</th><th>IP(s)</th><th>Gateway</th><th>DNS</th><th>DHCP</th></tr></thead>
-              <tbody>{b.nics.map((n, i) => <tr key={i}><td>{n.name}</td><td className="mono" style={{ fontSize: 12 }}>{n.mac || '—'}</td><td className="mono" style={{ fontSize: 12 }}>{n.ip_addresses || '—'}</td><td>{n.gateway || '—'}</td><td className="mono" style={{ fontSize: 12 }}>{n.dns_servers || '—'}</td><td>{n.dhcp_enabled ? 'yes' : 'no'}</td></tr>)}</tbody>
-            </table>
-          </Section>
-
-          <PagedSection title="Services" items={b.services}
-            head={<tr><th>Name</th><th>Status</th><th>Start</th><th>Description</th></tr>}
-            match={(sv, q) => (sv.display_name || sv.name || '').toLowerCase().includes(q) || (sv.status || '').toLowerCase().includes(q)}
-            row={(sv, i) => <tr key={i}><td>{sv.display_name || sv.name}</td><td>{sv.status || '—'}</td><td>{sv.start_type || '—'}</td><td className="muted" style={{ fontSize: 12 }}>{sv.description || ''}</td></tr>} />
-
-          <PagedSection title="Top processes" items={b.processes}
-            head={<tr><th>Process</th><th>PID</th><th>Memory</th><th>CPU%</th></tr>}
-            match={(p, q) => p.name.toLowerCase().includes(q)}
-            emptyNote={inv ? `Not reported via ${inv.collection_method} collection on the last run.` : undefined}
-            row={(p) => <tr key={p.pid}><td>{p.name}</td><td>{p.pid}</td><td>{fmtBytes(p.mem_bytes)}</td><td>{p.cpu_pct ?? '—'}</td></tr>} />
-
-          <PagedSection title="Installed software" items={b.software}
-            head={<tr><th>Name</th><th>Version</th><th>Publisher</th></tr>}
-            match={(sw, q) => (sw.name || '').toLowerCase().includes(q) || (sw.publisher || '').toLowerCase().includes(q)}
-            emptyNote={inv?.software_note ? `Software not collected — ${inv.software_note}` : inv ? `Not reported via ${inv.collection_method} collection — some hosts don't expose the installed-software registry over WMI/WinRM (e.g. legacy WSMan). Re-collect after enabling remote registry, or collect over direct WinRM.` : undefined}
-            row={(sw, i) => <tr key={i}><td>{sw.name}</td><td>{sw.version || '—'}</td><td className="muted" style={{ fontSize: 12 }}>{sw.publisher || ''}</td></tr>} />
+          <Section title={`Disks / Volumes (${b.disks.length})`} empty={b.disks.length === 0}><DisksBlock b={b} /></Section>
+          <Section title={`Network (${b.nics.length})`} empty={b.nics.length === 0}><NicsBlock b={b} /></Section>
+          <div style={{ marginTop: 12 }}>{renderSection('services', b)}</div>
+          <div style={{ marginTop: 12 }}>{renderSection('processes', b)}</div>
+          <div style={{ marginTop: 12 }}>{renderSection('software', b)}</div>
         </>
       )}
     </div>
@@ -167,10 +233,10 @@ function Section({ title, empty, children }: { title: string; empty: boolean; ch
   )
 }
 
-// PagedSection renders a large collection (services/processes/software) with a
-// filter box + client-side pagination so the DOM stays small and the page
-// doesn't become an endless scroll. Collapsed by default when empty.
-function PagedSection<T>({ title, items, head, row, match, pageSize = 10, emptyNote }: {
+// PagedSection renders a large collection (services/processes/software) with a filter box +
+// client-side pagination so the DOM stays small. `bare` drops the <details> wrapper so the
+// content can live directly inside a tab Panel; otherwise it is a collapsible section.
+function PagedSection<T>({ title, items, head, row, match, pageSize = 12, emptyNote, bare }: {
   title: string
   items: T[]
   head: React.ReactNode
@@ -178,28 +244,33 @@ function PagedSection<T>({ title, items, head, row, match, pageSize = 10, emptyN
   match?: (it: T, q: string) => boolean
   pageSize?: number
   emptyNote?: string
+  bare?: boolean
 }) {
   const [filter, setFilter] = useState('')
   const { slice, total, page, pages, setPage } = usePaged(items, { pageSize, filter, match })
+  const body = (
+    <div style={{ marginTop: bare ? 0 : 8 }}>
+      {items.length === 0 ? <span className="muted">{emptyNote || 'Not collected yet.'}</span> : (
+        <>
+          {match && (
+            <input
+              placeholder={`Filter ${title.toLowerCase()}…`}
+              value={filter}
+              onChange={(e) => { setFilter(e.target.value); setPage(0) }}
+              style={{ marginBottom: 8, padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, width: 280, maxWidth: '100%', background: 'var(--surface)', color: 'inherit' }}
+            />
+          )}
+          <table className="data-table"><thead>{head}</thead><tbody>{slice.map(row)}</tbody></table>
+          <Pager page={page} pages={pages} total={total} pageSize={pageSize} onPage={setPage} />
+        </>
+      )}
+    </div>
+  )
+  if (bare) return body
   return (
     <details style={{ marginTop: 12 }} open={items.length > 0}>
       <summary style={{ cursor: 'pointer', fontWeight: 600 }}>{title} ({items.length})</summary>
-      <div style={{ marginTop: 8 }}>
-        {items.length === 0 ? <span className="muted">{emptyNote || 'Not collected yet.'}</span> : (
-          <>
-            {match && (
-              <input
-                placeholder={`Filter ${title.toLowerCase()}…`}
-                value={filter}
-                onChange={(e) => { setFilter(e.target.value); setPage(0) }}
-                style={{ marginBottom: 8, padding: '6px 10px', border: '1px solid #2a3a47', borderRadius: 6, fontSize: 13, width: 280, maxWidth: '100%' }}
-              />
-            )}
-            <table><thead>{head}</thead><tbody>{slice.map(row)}</tbody></table>
-            <Pager page={page} pages={pages} total={total} pageSize={pageSize} onPage={setPage} />
-          </>
-        )}
-      </div>
+      {body}
     </details>
   )
 }

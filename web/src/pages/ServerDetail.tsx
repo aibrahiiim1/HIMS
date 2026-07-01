@@ -1,24 +1,33 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { useParams } from 'react-router-dom'
-import { Server, Cpu, HardDrive, Cable, Activity, Settings, LayoutDashboard, Gauge, Thermometer, MemoryStick, KeyRound } from 'lucide-react'
-import { api, type ServerStorage, type DeviceFact, type DeviceRole, type Interface, type BMCInfo, type BMCSensor, type BMCComponent } from '../api'
+import { useParams, Link } from 'react-router-dom'
+import { Server, Cpu, HardDrive, Cable, Activity, Settings, LayoutDashboard, Gauge, Thermometer, MemoryStick, KeyRound, Boxes, Box, MonitorSmartphone } from 'lucide-react'
+import { api, type ServerStorage, type DeviceFact, type DeviceRole, type Interface, type BMCInfo, type BMCSensor, type BMCComponent, type Device } from '../api'
 import { DeviceOps } from '../components/DeviceOps'
 import { DeviceHeader } from '../components/DeviceHeader'
 import { ConnectivityPanel } from '../components/ConnectivityPanel'
 import { ClassificationEvidencePanel } from '../components/ClassificationEvidence'
-import { DeepOSInventory } from '../components/DeepOSInventory'
+import { OSInventorySection, CollectOSButton } from '../components/DeepOSInventory'
 import { DeviceCredentialHealth } from '../components/DeviceCredentialHealth'
 import { CredentialBindSelect } from '../components/CredentialBindSelect'
 import { Panel, Kpi, DefList, EmptyState, StatusPill, Meter, TabBar } from '../components/ui'
 
-type Tab = 'overview' | 'storage' | 'interfaces' | 'hardware' | 'operations'
+type Tab = 'overview' | 'hardware' | 'storage' | 'network' | 'software' | 'operations'
 
 const healthTone = (h?: string | null): 'up' | 'down' | 'warning' | 'unknown' =>
   h === 'OK' ? 'up' : h === 'Critical' ? 'down' : h === 'Warning' ? 'warning' : 'unknown'
-// KPI cards use a different tone vocabulary (ok/warn/crit/info/default) than StatusPill.
 const healthKpiTone = (h?: string | null): 'ok' | 'crit' | 'warn' | 'default' =>
   h === 'OK' ? 'ok' : h === 'Critical' ? 'crit' : h === 'Warning' ? 'warn' : 'default'
+
+// Virtualization role → operator-facing badge (drives the "Physical vs VM" strip). A guest VM
+// links to its parent hypervisor when known (hosted_on).
+const ROLE_META: Record<string, { label: string; icon: typeof Server; bg: string }> = {
+  physical_server: { label: 'Physical Server', icon: Server, bg: '#0e7490' },
+  virtual_machine: { label: 'Virtual Machine', icon: Box, bg: '#7c3aed' },
+  virtual_host_esxi: { label: 'ESXi Host', icon: Boxes, bg: '#166534' },
+  virtual_host_hyperv: { label: 'Hyper-V Host', icon: Boxes, bg: '#1e3a8a' },
+  unknown_server: { label: 'Unknown Server', icon: Server, bg: '#6b7280' },
+}
 
 function fmtBytes(n?: number | null): string {
   if (n == null) return '—'
@@ -28,18 +37,16 @@ function fmtBytes(n?: number | null): string {
   return `${v.toFixed(i === 0 ? 0 : 1)} ${u[i]}`
 }
 const speedLabel = (mbps?: number | null) => (mbps ? (mbps >= 1000 ? `${mbps / 1000} Gb/s` : `${mbps} Mb/s`) : '—')
-// fmtGiB renders a capacity in bytes, or "—" when zero/absent (CPUs/controllers have none).
 const fmtGiB = (bytes?: number | null) => (bytes && bytes > 0 ? fmtBytes(bytes) : '—')
 
-// ServerDetail — enterprise server console (HOST-RESOURCES-MIB + Redfish/iLO/iDRAC
-// + deep OS inventory). Tabbed: Overview (resources + deep OS), Storage, Interfaces,
-// Hardware/BMC, Operations. Re-scan / Repair check / credential binding come from
-// the shared DeviceHeader (identical to every other device-detail page).
+// ServerDetail — enterprise server console (HOST-RESOURCES-MIB + Redfish/iLO/iDRAC + deep OS
+// inventory). Tabbed: Overview (identity/virtualization + resources), Hardware/BMC, Storage,
+// Network (interfaces + switch port map), Software (deep OS), Operations. A physical-vs-VM strip
+// makes virtualization first-class and links a guest to its hypervisor. Re-scan / Repair check /
+// credential binding come from the shared DeviceHeader.
 export function ServerDetail({ initialTab }: { initialTab?: Tab } = {}) {
   const { id } = useParams<{ id: string }>()
   const deviceId = id ?? ''
-  // A BMC lands on Hardware/BMC (its collected inventory) rather than the server-centric
-  // Overview, which is empty for an out-of-band controller.
   const [tab, setTab] = useState<Tab>(initialTab ?? 'overview')
 
   const facts = useQuery({ queryKey: ['facts', id], queryFn: () => api.get<DeviceFact[]>(`/devices/${id}/facts`) })
@@ -49,6 +56,8 @@ export function ServerDetail({ initialTab }: { initialTab?: Tab } = {}) {
   const bmc = useQuery({ queryKey: ['bmc', id], queryFn: () => api.get<BMCInfo>(`/devices/${id}/bmc`) })
   const sensors = useQuery({ queryKey: ['bmc-sensors', id], queryFn: () => api.get<BMCSensor[]>(`/devices/${id}/bmc-sensors`) })
   const components = useQuery({ queryKey: ['bmc-components', id], queryFn: () => api.get<BMCComponent[]>(`/devices/${id}/bmc-components`) })
+  const dev = useQuery({ queryKey: ['devices', 'all'], queryFn: () => api.get<Device[]>('/devices?category=all') })
+  const row = (dev.data ?? []).find((d) => d.id === deviceId)
 
   const fm = useMemo(() => new Map((facts.data ?? []).map((f) => [f.key, f.value ?? ''])), [facts.data])
   const num = (k: string) => { const v = Number(fm.get(k)); return Number.isFinite(v) && fm.has(k) ? v : null }
@@ -70,31 +79,47 @@ export function ServerDetail({ initialTab }: { initialTab?: Tab } = {}) {
   const compsOf = (kind: string) => comps.filter((c) => c.kind === kind)
   const cpus = compsOf('cpu'), dimms = compsOf('memory'), controllers = compsOf('controller'), volumes = compsOf('volume'), drives = compsOf('drive')
 
+  const rm = ROLE_META[row?.server_role ?? ''] ?? null
+  const isVM = row?.server_role === 'virtual_machine'
+
   const tabs = [
     { key: 'overview', label: 'Overview', icon: LayoutDashboard },
+    { key: 'hardware', label: 'Hardware', icon: Thermometer, count: hasBMC ? (sensorList.length || undefined) : undefined },
     { key: 'storage', label: 'Storage', icon: HardDrive, count: vols.length || undefined },
-    { key: 'interfaces', label: 'Interfaces', icon: Cable, count: ifList.length || undefined },
-    { key: 'hardware', label: 'Hardware / BMC', icon: Thermometer, count: hasBMC ? (sensorList.length || undefined) : undefined },
+    { key: 'network', label: 'Network', icon: Cable, count: ifList.length || undefined },
+    { key: 'software', label: 'Software', icon: Boxes },
     { key: 'operations', label: 'Operations', icon: Settings },
   ]
 
   return (
     <div>
-      <DeviceHeader deviceId={deviceId} icon={Server} showCredential={false} />
-      <ConnectivityPanel deviceId={deviceId} />
-      <ClassificationEvidencePanel deviceId={deviceId} />
+      <DeviceHeader deviceId={deviceId} icon={isVM ? Box : Server} showCredential={false} />
 
       <TabBar tabs={tabs} active={tab} onChange={(k) => setTab(k as Tab)} />
 
       {/* ── OVERVIEW ──────────────────────────────────────────────────────── */}
       {tab === 'overview' && (
         <>
+          {/* Virtualization / role strip — physical vs VM is first-class; a guest links to its host. */}
+          {rm && (
+            <div className="card" style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', padding: '12px 16px' }}>
+              <span className="badge" style={{ background: rm.bg, color: '#fff', display: 'inline-flex', gap: 6, alignItems: 'center', padding: '4px 10px', fontSize: 13 }}>
+                <rm.icon size={14} /> {rm.label}
+              </span>
+              {(row?.vendor || row?.model) && <span className="muted" style={{ fontSize: 13 }}>{[row?.vendor, row?.model].filter(Boolean).join(' · ')}</span>}
+              {isVM && (row?.hosted_on
+                ? <span style={{ fontSize: 13 }}>hosted on <Link to={`/virtual-hosts/${row.hosted_on.id}`}>{row.hosted_on.name || row.hosted_on.ip}</Link></span>
+                : <span className="muted" style={{ fontSize: 13 }}>parent hypervisor not yet linked</span>)}
+              {row?.server_role === 'unknown_server' && <span className="muted" style={{ fontSize: 12 }}>OS not yet identified — bind a credential and collect to classify physical vs virtual.</span>}
+            </div>
+          )}
+
           <div className="kpi-grid kpi-6">
             <Kpi label="CPU load" value={cpu != null ? `${cpu}%` : '—'} icon={Cpu} tone={cpu != null && cpu >= 90 ? 'crit' : cpu != null && cpu >= 75 ? 'warn' : 'default'} sub="utilisation" />
             <Kpi label="Memory" value={memPct != null ? `${memPct}%` : '—'} icon={MemoryStick} tone={memPct != null && memPct >= 90 ? 'crit' : memPct != null && memPct >= 75 ? 'warn' : 'default'} sub={memTotal ? fmtBytes(memTotal) : 'used'} />
             <Kpi label="Storage used" value={worstVol != null ? `${worstVol}%` : '—'} icon={HardDrive} tone={worstVol != null && worstVol >= 90 ? 'crit' : worstVol != null && worstVol >= 75 ? 'warn' : 'default'} sub={totalCap ? `${fmtBytes(totalCap)} total` : 'busiest volume'} onClick={vols.length ? () => setTab('storage') : undefined} />
             <Kpi label="Volumes" value={vols.length} icon={HardDrive} tone="default" onClick={vols.length ? () => setTab('storage') : undefined} />
-            <Kpi label="Interfaces" value={ifList.length} icon={Cable} tone="default" onClick={ifList.length ? () => setTab('interfaces') : undefined} />
+            <Kpi label="Interfaces" value={ifList.length} icon={Cable} tone="default" onClick={ifList.length ? () => setTab('network') : undefined} />
             <Kpi label="Hardware" value={hasBMC ? (bmc.data?.health ?? 'unknown') : '—'} icon={Thermometer} tone={hasBMC ? healthKpiTone(bmc.data?.health) : 'default'} sub={hasBMC ? (badSensors > 0 ? `${badSensors} sensor alerts` : 'BMC OK') : 'no BMC'} onClick={hasBMC ? () => setTab('hardware') : undefined} />
           </div>
 
@@ -107,7 +132,7 @@ export function ServerDetail({ initialTab }: { initialTab?: Tab } = {}) {
                 </div>
               )}
               {(cpu == null && memPct == null && worstVol == null)
-                ? <EmptyState icon={Gauge} title="No resource gauges" message="CPU / memory / storage come from SNMP (HOST-RESOURCES-MIB) or deep OS inventory." />
+                ? <EmptyState icon={Gauge} title="No resource gauges" message="CPU / memory / storage come from SNMP (HOST-RESOURCES-MIB) or deep OS inventory. Bind a credential and collect to populate them." />
                 : (
                   <div className="stack" style={{ gap: 14 }}>
                     {cpu != null && <Meter label="CPU load" value={cpu} />}
@@ -118,73 +143,31 @@ export function ServerDetail({ initialTab }: { initialTab?: Tab } = {}) {
             </Panel>
             <Panel title="System Facts" icon={Server}>
               <DefList items={[
+                { label: 'Type', value: rm ? rm.label : '—' },
+                { label: 'Vendor / model', value: [row?.vendor, row?.model].filter(Boolean).join(' · ') || '—' },
                 { label: 'CPU load', value: cpu != null ? `${cpu}%` : '—' },
                 { label: 'Memory total', value: fmtBytes(memTotal) },
-                { label: 'Memory used', value: fmtBytes(memUsed) },
                 { label: 'Storage total', value: totalCap ? fmtBytes(totalCap) : '—' },
-                { label: 'Volumes', value: vols.length },
-                { label: 'Interfaces', value: ifList.length },
+                { label: 'Volumes / interfaces', value: `${vols.length} / ${ifList.length}` },
               ]} />
             </Panel>
           </div>
 
-          <DeepOSInventory deviceId={deviceId} alwaysShow />
+          <ClassificationEvidencePanel deviceId={deviceId} />
         </>
-      )}
-
-      {/* ── STORAGE ───────────────────────────────────────────────────────── */}
-      {tab === 'storage' && (
-        <Panel title="Storage Volumes" icon={HardDrive} subtitle={vols.length ? `${vols.length} · ${fmtBytes(totalCap)} total` : undefined} pad={false}>
-          {storage.isLoading && <div className="loading">Loading…</div>}
-          {storage.data && vols.length === 0 && <EmptyState icon={HardDrive} title="No storage collected" message="Volumes come from HOST-RESOURCES-MIB (SNMP) or deep OS inventory." />}
-          {vols.length > 0 && (
-            <table className="data-table">
-              <thead><tr><th>Volume</th><th>Type</th><th>Total</th><th>Used</th><th>Utilisation</th></tr></thead>
-              <tbody>
-                {vols.map((s) => {
-                  const pct = volPct(s)
-                  return (
-                    <tr key={s.id}>
-                      <td className="cell-name">{s.descr ?? '—'}</td>
-                      <td><span className="badge badge-unknown">{s.storage_type}</span></td>
-                      <td className="mono">{fmtBytes(s.total_bytes)}</td>
-                      <td className="mono">{fmtBytes(s.used_bytes)}</td>
-                      <td style={{ minWidth: 180 }}>{pct != null ? <Meter value={pct} /> : '—'}</td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          )}
-        </Panel>
-      )}
-
-      {/* ── INTERFACES ────────────────────────────────────────────────────── */}
-      {tab === 'interfaces' && (
-        <Panel title="Network Interfaces" icon={Cable} subtitle={ifList.length ? `${ifList.length}` : undefined} pad={false}>
-          {ifaces.data && ifList.length === 0 && <EmptyState icon={Cable} title="No interfaces collected" message="Bind a working credential and re-scan to collect interfaces." />}
-          {ifList.length > 0 && (
-            <table className="data-table">
-              <thead><tr><th>Index</th><th>Name</th><th>MAC</th><th>Speed</th></tr></thead>
-              <tbody>
-                {[...ifList].sort((a, b) => a.if_index - b.if_index).map((i) => (
-                  <tr key={i.id}>
-                    <td>{i.if_index}</td>
-                    <td className="cell-name">{i.if_name ?? i.if_descr ?? '—'}</td>
-                    <td className="mono">{i.mac ?? '—'}</td>
-                    <td className="mono">{speedLabel(i.speed_mbps)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </Panel>
       )}
 
       {/* ── HARDWARE / BMC ────────────────────────────────────────────────── */}
       {tab === 'hardware' && (
         <>
-          {!hasBMC && <EmptyState icon={Thermometer} title="No out-of-band controller" message="iLO / iDRAC / Redfish hardware health appears here when a BMC is discovered and a credential is bound." />}
+          {!hasBMC && (
+            <>
+              <EmptyState icon={Thermometer} title="No out-of-band controller" message="iLO / iDRAC / Redfish hardware health appears here when a BMC is discovered and a credential is bound. CPU / memory below come from OS inventory when collected." />
+              <Panel title="Compute (from OS inventory)" icon={Cpu} actions={<CollectOSButton deviceId={deviceId} small />}>
+                <OSInventorySection deviceId={deviceId} section="summary" />
+              </Panel>
+            </>
+          )}
           {hasBMC && (
             <>
               <Panel title="Baseboard Management Controller" icon={Thermometer} actions={<StatusPill status={healthTone(bmc.data?.health)} label={bmc.data?.health ?? 'unknown'} />}>
@@ -200,7 +183,6 @@ export function ServerDetail({ initialTab }: { initialTab?: Tab } = {}) {
                 ]} />
               </Panel>
 
-              {/* Processors */}
               {cpus.length > 0 && (
                 <Panel title="Processors" icon={Cpu} subtitle={`${cpus.length}`} pad={false}>
                   <table className="data-table">
@@ -215,7 +197,6 @@ export function ServerDetail({ initialTab }: { initialTab?: Tab } = {}) {
                 </Panel>
               )}
 
-              {/* Memory */}
               {dimms.length > 0 && (
                 <Panel title="Memory" icon={MemoryStick} subtitle={`${dimms.length} DIMM(s)${bmc.data?.memory_gib ? ` · ${bmc.data.memory_gib} GiB` : ''}`} pad={false}>
                   <table className="data-table">
@@ -230,7 +211,6 @@ export function ServerDetail({ initialTab }: { initialTab?: Tab } = {}) {
                 </Panel>
               )}
 
-              {/* Storage: RAID controllers + volumes + physical drives */}
               {(controllers.length > 0 || volumes.length > 0 || drives.length > 0) && (
                 <Panel title="Storage / RAID" icon={HardDrive} subtitle={`${controllers.length} controller(s) · ${volumes.length} volume(s) · ${drives.length} drive(s)`} pad={false}>
                   <table className="data-table">
@@ -277,6 +257,76 @@ export function ServerDetail({ initialTab }: { initialTab?: Tab } = {}) {
               </Panel>
             </>
           )}
+        </>
+      )}
+
+      {/* ── STORAGE ───────────────────────────────────────────────────────── */}
+      {tab === 'storage' && (
+        <Panel title="Storage Volumes" icon={HardDrive} subtitle={vols.length ? `${vols.length} · ${fmtBytes(totalCap)} total` : undefined} pad={false}>
+          {storage.isLoading && <div className="loading">Loading…</div>}
+          {storage.data && vols.length === 0 && <EmptyState icon={HardDrive} title="No storage collected" message="Volumes come from HOST-RESOURCES-MIB (SNMP) or deep OS inventory." />}
+          {vols.length > 0 && (
+            <table className="data-table">
+              <thead><tr><th>Volume</th><th>Type</th><th>Total</th><th>Used</th><th>Utilisation</th></tr></thead>
+              <tbody>
+                {vols.map((s) => {
+                  const pct = volPct(s)
+                  return (
+                    <tr key={s.id}>
+                      <td className="cell-name">{s.descr ?? '—'}</td>
+                      <td><span className="badge badge-unknown">{s.storage_type}</span></td>
+                      <td className="mono">{fmtBytes(s.total_bytes)}</td>
+                      <td className="mono">{fmtBytes(s.used_bytes)}</td>
+                      <td style={{ minWidth: 180 }}>{pct != null ? <Meter value={pct} /> : '—'}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          )}
+        </Panel>
+      )}
+
+      {/* ── NETWORK (interfaces + switch port map) ────────────────────────── */}
+      {tab === 'network' && (
+        <>
+          <Panel title="Network Interfaces" icon={Cable} subtitle={ifList.length ? `${ifList.length}` : undefined} pad={false}>
+            {ifaces.data && ifList.length === 0 && <EmptyState icon={Cable} title="No interfaces collected" message="Bind a working credential and re-scan to collect interfaces." />}
+            {ifList.length > 0 && (
+              <table className="data-table">
+                <thead><tr><th>Index</th><th>Name</th><th>MAC</th><th>Speed</th></tr></thead>
+                <tbody>
+                  {[...ifList].sort((a, b) => a.if_index - b.if_index).map((i) => (
+                    <tr key={i.id}>
+                      <td className="mono">{i.if_index}</td>
+                      <td className="cell-name">{i.if_name ?? i.if_descr ?? '—'}</td>
+                      <td className="mono">{i.mac ?? '—'}</td>
+                      <td className="mono">{speedLabel(i.speed_mbps)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </Panel>
+          <ConnectivityPanel deviceId={deviceId} />
+        </>
+      )}
+
+      {/* ── SOFTWARE (deep OS inventory) ──────────────────────────────────── */}
+      {tab === 'software' && (
+        <>
+          <Panel title="Operating system" icon={MonitorSmartphone} actions={<CollectOSButton deviceId={deviceId} small />}>
+            <OSInventorySection deviceId={deviceId} section="summary" />
+          </Panel>
+          <Panel title="Installed software" icon={Boxes}>
+            <OSInventorySection deviceId={deviceId} section="software" />
+          </Panel>
+          <Panel title="Services" icon={Settings}>
+            <OSInventorySection deviceId={deviceId} section="services" />
+          </Panel>
+          <Panel title="Top processes" icon={Activity}>
+            <OSInventorySection deviceId={deviceId} section="processes" />
+          </Panel>
         </>
       )}
 

@@ -15,16 +15,15 @@ const CONF: Record<string, { label: string; cls: string }> = {
   none: { label: 'No evidence', cls: 'badge-unknown' },
 }
 
-export function ConnectivityPanel({ deviceId }: { deviceId: string }) {
+export function ConnectivityPanel({ deviceId, bare }: { deviceId: string; bare?: boolean }) {
   const q = useQuery({ queryKey: ['connectivity', deviceId], queryFn: () => api.get<DeviceConnectivity>(`/devices/${deviceId}/connectivity`) })
   const d = q.data
   const conf = CONF[d?.confidence ?? 'none'] ?? CONF.none
   const ports = d?.switch_port ?? []
   const best = ports[0]
 
-  return (
-    <Panel title="Switch Connectivity" icon={Cable} subtitle={ports.length ? `${ports.length} sighting${ports.length > 1 ? 's' : ''}` : undefined}
-      actions={d && <span className={'badge ' + conf.cls} title={(d.confidence_reasons ?? []).join(' · ')}>{conf.label}</span>}>
+  const body = (
+    <>
       {q.isLoading && <div className="loading">Resolving…</div>}
       {d && ports.length === 0 && (
         <EmptyState icon={Cable} title="No switch evidence" message={d.gap || 'This device has not been seen in any collected switch FDB/ARP table.'} />
@@ -64,6 +63,22 @@ export function ConnectivityPanel({ deviceId }: { deviceId: string }) {
           </div>
         </>
       )}
+    </>
+  )
+
+  // Bare mode: caller supplies the surrounding Panel (e.g. an Overview grid cell).
+  if (bare) {
+    return (
+      <>
+        {d && <div style={{ marginBottom: 8 }}><span className={'badge ' + conf.cls} title={(d.confidence_reasons ?? []).join(' · ')}>{conf.label}</span></div>}
+        {body}
+      </>
+    )
+  }
+  return (
+    <Panel title="Switch Connectivity" icon={Cable} subtitle={ports.length ? `${ports.length} sighting${ports.length > 1 ? 's' : ''}` : undefined}
+      actions={d && <span className={'badge ' + conf.cls} title={(d.confidence_reasons ?? []).join(' · ')}>{conf.label}</span>}>
+      {body}
     </Panel>
   )
 }
