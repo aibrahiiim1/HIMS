@@ -172,10 +172,13 @@ foreach ($tool in 'go','npm','git') {
 $head      = (& git rev-parse HEAD).Trim()
 $headShort = (& git rev-parse --short=12 HEAD).Trim()
 $script:S.expected_commit = $headShort
-$dirty = (& git status --porcelain)
-if ($dirty) {
-  if ($AllowDirty) { Warn "git tree is DIRTY — building HEAD ($headShort); uncommitted changes are NOT in the artifact." }
-  else { Fail "git working tree has uncommitted changes. Commit them first so the built commit == HEAD (or pass -AllowDirty to build HEAD anyway). Acceptance rule: commit locally before activating." }
+# Only REAL tracked content changes count as dirty. `git diff --numstat HEAD` normalizes line
+# endings (this repo has pervasive CRLF churn that `git status` flags but which is not a real
+# change) and ignores untracked build artifacts (dist/, .claude/, etc.).
+$dirty = @(& git diff --numstat HEAD 2>$null | Where-Object { $_ -match '\S' })
+if ($dirty.Count -gt 0) {
+  if ($AllowDirty) { Warn "git tree is DIRTY ($($dirty.Count) file(s)) — building HEAD ($headShort); uncommitted changes are NOT in the artifact." }
+  else { Fail "git working tree has $($dirty.Count) uncommitted change(s). Commit them first so the built commit == HEAD (or pass -AllowDirty to build HEAD anyway). Acceptance rule: commit locally before activating." }
 }
 
 # --- read the service's own DB URL (so migrations target the SAME database) --
@@ -238,8 +241,8 @@ if ($sqlcChange) {
   if (Get-Command sqlc -ErrorAction SilentlyContinue) {
     & sqlc generate
     if ($LASTEXITCODE -ne 0) { Fail 'sqlc generate failed.' }
-    $stillDirty = (& git status --porcelain -- $genDir)
-    if ($stillDirty -and -not $AllowDirty) { Warn 'sqlc produced changes to generated code — commit them so HEAD matches what is built.' }
+    $stillDirty = @(& git diff --numstat HEAD -- $genDir 2>$null | Where-Object { $_ -match '\S' })
+    if ($stillDirty.Count -gt 0) { Warn 'sqlc produced changes to generated code — commit them so HEAD matches what is built.' }
     $script:S.sqlc_status = 'regenerated'
     Ok 'sqlc generate complete'
   } else { Warn 'sqlc not on PATH — skipping regeneration (generated code assumed current).'; $script:S.sqlc_status = 'skipped (no sqlc)' }
