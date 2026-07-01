@@ -32,6 +32,13 @@ export function DeviceDetailDispatch() {
   switch (dev?.category) {
     case 'server':
       return <ServerDetail />
+    case 'bmc':
+      // A BMC (iLO/iDRAC/Redfish) is a server's management plane — ServerDetail's
+      // Hardware/BMC + Sensors tabs render its collected bmc_info + sensor inventory
+      // (from /devices/{id}/bmc + /bmc-sensors). Without this case a bmc device fell
+      // through to GenericDeviceDetail, which shows none of the collected Redfish data.
+      // Open straight to the Hardware/BMC tab where that data lives.
+      return <ServerDetail initialTab="hardware" />
     case 'endpoint':
       return <EndpointDetail />
     case 'firewall':

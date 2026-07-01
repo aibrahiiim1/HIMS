@@ -33,10 +33,12 @@ const speedLabel = (mbps?: number | null) => (mbps ? (mbps >= 1000 ? `${mbps / 1
 // + deep OS inventory). Tabbed: Overview (resources + deep OS), Storage, Interfaces,
 // Hardware/BMC, Operations. Re-scan / Repair check / credential binding come from
 // the shared DeviceHeader (identical to every other device-detail page).
-export function ServerDetail() {
+export function ServerDetail({ initialTab }: { initialTab?: Tab } = {}) {
   const { id } = useParams<{ id: string }>()
   const deviceId = id ?? ''
-  const [tab, setTab] = useState<Tab>('overview')
+  // A BMC lands on Hardware/BMC (its collected inventory) rather than the server-centric
+  // Overview, which is empty for an out-of-band controller.
+  const [tab, setTab] = useState<Tab>(initialTab ?? 'overview')
 
   const facts = useQuery({ queryKey: ['facts', id], queryFn: () => api.get<DeviceFact[]>(`/devices/${id}/facts`) })
   const roles = useQuery({ queryKey: ['roles', id], queryFn: () => api.get<DeviceRole[]>(`/devices/${id}/roles`) })
