@@ -83,3 +83,38 @@ func TestDeriveManagement(t *testing.T) {
 		t.Errorf("expected unmanaged, got %s", st)
 	}
 }
+
+// isVirtualByHardware must recognize a VM from its own SMBIOS vendor/model (so an unlinked
+// guest is never mislabeled "Physical"), while leaving real physical servers alone.
+func TestIsVirtualByHardware(t *testing.T) {
+	virtual := []struct{ vendor, model string }{
+		{"Microsoft Corporation", "Virtual Machine"}, // Hyper-V / Azure (the 150.0.0.111 bug)
+		{"VMware, Inc.", "VMware Virtual Platform"},
+		{"VMware, Inc.", "VMware7,1"},
+		{"innotek GmbH", "VirtualBox"},
+		{"QEMU", "Standard PC (Q35 + ICH9, 2009)"},
+		{"Red Hat", "KVM"},
+		{"Xen", "HVM domU"},
+		{"Nutanix", "AHV"},
+	}
+	for _, c := range virtual {
+		if !isVirtualByHardware(strp(c.vendor), strp(c.model)) {
+			t.Errorf("isVirtualByHardware(%q,%q)=false, want true (this is a VM)", c.vendor, c.model)
+		}
+	}
+	physical := []struct{ vendor, model string }{
+		{"HP", "ProLiant DL380p Gen8"},
+		{"HPE", "ProLiant DL380 Gen10"},
+		{"Dell Inc.", "PowerEdge R740"},
+		{"", ""},
+	}
+	for _, c := range physical {
+		if isVirtualByHardware(strp(c.vendor), strp(c.model)) {
+			t.Errorf("isVirtualByHardware(%q,%q)=true, want false (this is physical)", c.vendor, c.model)
+		}
+	}
+	// Nil-safe.
+	if isVirtualByHardware(nil, nil) {
+		t.Error("isVirtualByHardware(nil,nil)=true, want false")
+	}
+}

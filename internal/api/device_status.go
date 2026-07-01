@@ -229,12 +229,48 @@ func (m *statusMaps) serverRole(d db.Device) string {
 		}
 		return "virtual_host_esxi"
 	case string(domain.CatServer):
+		// A guest VM whose parent hypervisor hasn't been discovered/linked still reports its
+		// virtual nature in its OWN SMBIOS/DMI vendor+model — trust that so it is never mislabeled
+		// "Physical". (The vmParent link above wins first when we DO know the host.)
+		if isVirtualByHardware(d.Vendor, d.Model) {
+			return "virtual_machine"
+		}
 		if d.OsFamily != "" {
 			return "physical_server"
 		}
 		return "unknown_server"
 	}
 	return ""
+}
+
+// isVirtualByHardware reports whether a device's system vendor/model is a hypervisor guest
+// signature — the string a hypervisor stamps into a VM's SMBIOS/DMI (e.g. VMware "VMware, Inc."
+// / "VMware Virtual Platform", Hyper-V "Microsoft Corporation" + "Virtual Machine", KVM/QEMU,
+// VirtualBox, Xen). This is the guest's own evidence, so a VM is recognized as virtual even when
+// its parent host is not discovered. A physical server running a hypervisor reports its REAL
+// maker (HPE/Dell/Lenovo), not these, so virtualization HOSTS are not caught here.
+func isVirtualByHardware(vendor, model *string) bool {
+	s := strings.ToLower(strings.TrimSpace(derefStr(vendor) + " " + derefStr(model)))
+	if s == "" {
+		return false
+	}
+	for _, sig := range []string{
+		"vmware",          // VMware, Inc. / VMware Virtual Platform / VMware7,1
+		"virtual machine", // Microsoft Hyper-V / Azure guest
+		"virtualbox", "innotek",
+		"kvm", "qemu", "bochs",
+		"xen", "hvm domu", // Citrix/Xen HVM guest
+		"parallels",
+		"openstack", "opennebula",
+		"google compute engine",
+		"amazon ec2",
+		"nutanix ahv", "ahv",
+	} {
+		if strings.Contains(s, sig) {
+			return true
+		}
+	}
+	return false
 }
 
 // windowsLike reports whether a device is (or is most likely) a Windows host even
