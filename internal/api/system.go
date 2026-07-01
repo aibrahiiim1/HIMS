@@ -30,6 +30,29 @@ type RuntimeInfo struct {
 // from main after NewServer).
 func (s *Server) SetRuntime(rt RuntimeInfo) { s.rt = rt }
 
+// healthz is the public, UNAUTHENTICATED liveness + build-identity probe. It is
+// deliberately pre-auth so a deploy/activation script can confirm WHICH build is
+// actually serving — the running git commit and PID — without needing credentials
+// or scraping the log. It exposes only non-secret identity: the same commit already
+// written to the startup log and returned by the authed /system/runtime. No DB URL,
+// key, or environment is included, so it is safe to expose unauthenticated.
+func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
+	uptime := int64(0)
+	started := ""
+	if !s.rt.StartedAt.IsZero() {
+		uptime = int64(time.Since(s.rt.StartedAt).Seconds())
+		started = s.rt.StartedAt.Format(time.RFC3339)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":         "ok",
+		"version":        firstNonEmpty(s.rt.Version, "dev"),
+		"commit":         firstNonEmpty(s.rt.Commit, "unknown"),
+		"pid":            os.Getpid(),
+		"started_at":     started,
+		"uptime_seconds": uptime,
+	})
+}
+
 // redactDBURL returns a database URL with its password masked so it is safe to
 // display/log. It never returns the original password; URLs without an embedded
 // password are returned unchanged.

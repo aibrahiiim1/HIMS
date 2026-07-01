@@ -153,9 +153,7 @@ func (s *Server) routes() {
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.StripSlashes)
 
-	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-	})
+	r.Get("/healthz", s.healthz)
 
 	r.Route("/api/v1", func(r chi.Router) {
 		// Authentication gate: every /api/v1 route requires a valid session
