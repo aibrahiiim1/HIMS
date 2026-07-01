@@ -1,4 +1,4 @@
-# dev-live.ps1 — DEV ONLY convenience watcher. Re-runs the real activation pipeline
+# dev-live.ps1 - DEV ONLY convenience watcher. Re-runs the real activation pipeline
 # (activate-fixes.ps1) whenever tracked source changes, so a developer can edit and see
 # the live :8090 service update without re-typing the command.
 #
@@ -10,7 +10,7 @@
 # #  like a manual activation, so untested code is never silently deployed.   #
 # ############################################################################
 #
-# USAGE (elevated — each activation restarts the LocalSystem service):
+# USAGE (elevated - each activation restarts the LocalSystem service):
 #   powershell -ExecutionPolicy Bypass -File D:\WebProjects\HIMS\scripts\dev-live.ps1
 #
 #   -Unsafe            fast dev loop: pass -SkipTests to activation (build+vet still run,
@@ -20,7 +20,7 @@
 #
 # It builds the WORKING TREE (uncommitted code) via activation's -AllowDirty, because the
 # whole point of a dev loop is iterating on uncommitted changes. The built binary is stamped
-# with HEAD's commit (approximate in a dirty tree) — commit before a real activation so the
+# with HEAD's commit (approximate in a dirty tree) - commit before a real activation so the
 # running commit is exact. See scripts/activate-fixes.ps1 (the single source of truth).
 
 [CmdletBinding()]
@@ -41,7 +41,7 @@ $watch   = @(
 )
 
 Write-Host '############################################################' -ForegroundColor Magenta
-Write-Host '#  dev-live.ps1 — DEV ONLY. Watches source, re-activates.  #' -ForegroundColor Magenta
+Write-Host '#  dev-live.ps1 - DEV ONLY. Watches source, re-activates.  #' -ForegroundColor Magenta
 Write-Host (("#  Mode: {0}" -f $(if ($Unsafe) { 'UNSAFE (go test SKIPPED)' } else { 'SAFE (full gates each cycle)' })).PadRight(59) + '#') -ForegroundColor Magenta
 Write-Host '#  Never pushes. Ctrl+C to stop.                           #' -ForegroundColor Magenta
 Write-Host '############################################################' -ForegroundColor Magenta
@@ -67,7 +67,7 @@ Write-Host "Watching: $($watch -join ', ')" -ForegroundColor Cyan
 Write-Host "Forwarding to activate-fixes.ps1: $($fwd -join ' ')" -ForegroundColor Cyan
 
 $last = Get-Fingerprint
-Write-Host 'Initial activation…' -ForegroundColor Cyan
+Write-Host 'Initial activation?' -ForegroundColor Cyan
 & $activate @fwd
 Write-Host "(activation exit code: $LASTEXITCODE)" -ForegroundColor DarkGray
 
@@ -80,7 +80,7 @@ while ($true) {
     do { $prev = $now; Start-Sleep -Seconds $IntervalSeconds; $now = Get-Fingerprint } while ($now -ne $prev)
     $last = $now
     Write-Host ''
-    Write-Host "== change detected — re-activating ($(if ($Unsafe) {'UNSAFE'} else {'SAFE'})) ==" -ForegroundColor Magenta
+    Write-Host "== change detected - re-activating ($(if ($Unsafe) {'UNSAFE'} else {'SAFE'})) ==" -ForegroundColor Magenta
     try { & $activate @fwd; Write-Host "(activation exit code: $LASTEXITCODE)" -ForegroundColor DarkGray }
     catch { Write-Host "activation error: $($_.Exception.Message)" -ForegroundColor Red }
   }

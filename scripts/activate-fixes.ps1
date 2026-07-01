@@ -1,18 +1,18 @@
-# activate-fixes.ps1 — the SINGLE, reliable way to activate HIMS/NIMS changes on the
+# activate-fixes.ps1 - the SINGLE, reliable way to activate HIMS/NIMS changes on the
 # local real :8090 service. It rebuilds, restarts, and PROVES the running service is the
-# code you committed — or it fails loudly and exits non-zero. No fake success.
+# code you committed - or it fails loudly and exits non-zero. No fake success.
 #
 # Go code cannot be hot-reloaded into the already-running production service; the honest
 # solution is a one-command rebuild+restart+verify, not a fake live-reload. This script is
 # that command.
 #
-# USAGE (run ELEVATED for a real activation — stopping/starting the LocalSystem service and
+# USAGE (run ELEVATED for a real activation - stopping/starting the LocalSystem service and
 # swapping C:\...\hims-api.exe require admin):
 #   powershell -ExecutionPolicy Bypass -File D:\WebProjects\HIMS\scripts\activate-fixes.ps1
 #
 #   -Frontend       force a web/dist rebuild even if no frontend source changed
 #   -SkipFrontend   never rebuild web/dist (backend-only activation)
-#   -SkipTests      skip `go test ./...` (build + vet still run) — faster, less safe
+#   -SkipTests      skip `go test ./...` (build + vet still run) - faster, less safe
 #   -Force          if the service process refuses to exit, force-kill it (last resort)
 #   -AllowDirty     proceed even though the git working tree has uncommitted changes
 #   -DryRun         run every check + build the artifact to a temp path, but DO NOT stop,
@@ -21,8 +21,8 @@
 #                   stale PID / wrong commit) and exit. Needs no admin, touches nothing.
 #
 # EXIT CODE: 0 only when the final result is ACTIVATED (or a clean DryRun/SelfTest). Any
-# staleness — unchanged PID after a backend change, running commit != HEAD, health never
-# ready, a failed gate, an unapplied migration — exits non-zero.
+# staleness - unchanged PID after a backend change, running commit != HEAD, health never
+# ready, a failed gate, an unapplied migration - exits non-zero.
 
 [CmdletBinding()]
 param(
@@ -95,7 +95,7 @@ function Fail($m) {
 function RequireAdmin {
   $id = [Security.Principal.WindowsIdentity]::GetCurrent()
   if (-not (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Fail 'Not elevated. A real activation stops/starts the LocalSystem "HIMS API" service and swaps hims-api.exe — re-run this script from an Administrator PowerShell (or use -DryRun to validate without admin).'
+    Fail 'Not elevated. A real activation stops/starts the LocalSystem "HIMS API" service and swaps hims-api.exe - re-run this script from an Administrator PowerShell (or use -DryRun to validate without admin).'
   }
 }
 
@@ -120,10 +120,10 @@ function Test-Activation {
   if (-not $HealthOk) { $reasons += 'health endpoint never became ready' }
   if ($BackendChange) {
     if ([string]::IsNullOrEmpty($NewPid)) { $reasons += 'no running PID after restart' }
-    elseif ($NewPid -eq $OldPid)          { $reasons += "PID did not change (still $OldPid) — service is running the OLD process" }
+    elseif ($NewPid -eq $OldPid)          { $reasons += "PID did not change (still $OldPid) - service is running the OLD process" }
     if ([string]::IsNullOrEmpty($RunningCommit) -or $RunningCommit -eq 'unknown') { $reasons += 'running service did not report a commit' }
     elseif ($RunningCommit -notlike "$Expected*" -and $Expected -notlike "$RunningCommit*") {
-      $reasons += "running commit $RunningCommit != built/HEAD $Expected — service is STALE"
+      $reasons += "running commit $RunningCommit != built/HEAD $Expected - service is STALE"
     }
   }
   return @{ ok = ($reasons.Count -eq 0); reasons = $reasons }
@@ -149,9 +149,9 @@ if ($SelfTest) {
     $r = Test-Activation @a
     $got = $r.ok
     if ($got -eq $c.expect) { Ok "$($c.name): verdict=$got (expected)" }
-    else { Warn "$($c.name): verdict=$got but expected $($c.expect) — LOGIC BUG"; $bad++ }
+    else { Warn "$($c.name): verdict=$got but expected $($c.expect) - LOGIC BUG"; $bad++ }
   }
-  if ($bad -gt 0) { Fail "$bad self-test case(s) misbehaved — the fail-loud verification is broken." }
+  if ($bad -gt 0) { Fail "$bad self-test case(s) misbehaved - the fail-loud verification is broken." }
   $script:S.result = 'SELFTEST-PASS'
   Show-Summary
   exit 0
@@ -165,7 +165,7 @@ if ($DryRun) { $script:S.mode = 'dry-run' } else { RequireAdmin }
 
 # --- prerequisites ----------------------------------------------------------
 foreach ($tool in 'go','npm','git') {
-  if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { Fail "$tool is not on PATH — cannot build." }
+  if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { Fail "$tool is not on PATH - cannot build." }
 }
 
 # --- git identity + cleanliness --------------------------------------------
@@ -176,7 +176,7 @@ $script:S.expected_commit = $headShort
 # change) and ignores untracked build artifacts (dist/, .claude/, etc.).
 $dirty = @(& git diff --numstat HEAD 2>$null | Where-Object { $_ -match '\S' })
 if ($dirty.Count -gt 0) {
-  if ($AllowDirty) { Warn "git tree is DIRTY ($($dirty.Count) file(s)) — building HEAD ($headShort); uncommitted changes are NOT in the artifact." }
+  if ($AllowDirty) { Warn "git tree is DIRTY ($($dirty.Count) file(s)) - building HEAD ($headShort); uncommitted changes are NOT in the artifact." }
   else { Fail "git working tree has $($dirty.Count) uncommitted change(s). Commit them first so the built commit == HEAD (or pass -AllowDirty to build HEAD anyway). Acceptance rule: commit locally before activating." }
 }
 
@@ -194,7 +194,7 @@ $oldPid    = if ($before) { "$($before.pid)" } else { '' }
 $oldCommit = if ($before) { "$($before.commit)" } else { '' }
 $svc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
 $svcRunning = ($svc -and $svc.Status -eq 'Running')
-# A running service on the OLD binary (before /healthz reported pid/commit) returns neither —
+# A running service on the OLD binary (before /healthz reported pid/commit) returns neither -
 # label that honestly rather than calling an up service "down".
 $script:S.old_pid = if ($oldPid) { $oldPid } elseif ($svcRunning) { '(running, pre-healthz build)' } else { '(service down)' }
 $script:S.running_before = if ($oldCommit) { $oldCommit } elseif ($svcRunning) { '(running, pre-healthz build)' } else { '(service down)' }
@@ -243,14 +243,14 @@ if ($sqlcChange) {
     & sqlc generate
     if ($LASTEXITCODE -ne 0) { Fail 'sqlc generate failed.' }
     $stillDirty = @(& git diff --numstat HEAD -- $genDir 2>$null | Where-Object { $_ -match '\S' })
-    if ($stillDirty.Count -gt 0) { Warn 'sqlc produced changes to generated code — commit them so HEAD matches what is built.' }
+    if ($stillDirty.Count -gt 0) { Warn 'sqlc produced changes to generated code - commit them so HEAD matches what is built.' }
     $script:S.sqlc_status = 'regenerated'
     Ok 'sqlc generate complete'
-  } else { Warn 'sqlc not on PATH — skipping regeneration (generated code assumed current).'; $script:S.sqlc_status = 'skipped (no sqlc)' }
+  } else { Warn 'sqlc not on PATH - skipping regeneration (generated code assumed current).'; $script:S.sqlc_status = 'skipped (no sqlc)' }
 } else { $script:S.sqlc_status = 'current' }
 
 # ============================================================================
-# QUALITY GATES — run with the service still UP so a failing gate never takes
+# QUALITY GATES - run with the service still UP so a failing gate never takes
 # production down. Any failure exits non-zero and the service is untouched.
 # ============================================================================
 Info '== Quality gates =='
@@ -266,7 +266,7 @@ if ($frontendChange) {
   finally { Pop-Location }
   Ok 'web/dist rebuilt'
   $script:S.frontend_status = 'rebuilt'
-} else { Ok 'frontend unchanged — web/dist reused' }
+} else { Ok 'frontend unchanged - web/dist reused' }
 $script:S.gates = if ($SkipTests) { 'build+vet (tests skipped)' } else { 'build+vet+test+frontend' }
 
 # --- confirm frontend bundle + cache busting --------------------------------
@@ -277,10 +277,10 @@ if (Test-Path $webIndex) {
     $bundle = $m.Groups[1].Value
     $script:S.frontend_bundle = $bundle
     if (Test-Path (Join-Path $webDist "assets\$bundle")) {
-      Ok "frontend bundle $bundle present — content-hashed filename IS the cache-bust (new build => new URL)"
-    } else { Warn "index.html references $bundle but the file is missing in web/dist/assets — stale/broken build." }
-  } else { Warn 'could not find a content-hashed bundle reference in index.html — cache busting unverified.' }
-} else { Warn 'web/dist/index.html missing — UI will not be served.' }
+      Ok "frontend bundle $bundle present - content-hashed filename IS the cache-bust (new build => new URL)"
+    } else { Warn "index.html references $bundle but the file is missing in web/dist/assets - stale/broken build." }
+  } else { Warn 'could not find a content-hashed bundle reference in index.html - cache busting unverified.' }
+} else { Warn 'web/dist/index.html missing - UI will not be served.' }
 
 # --- build the backend artifact to a TEMP path (service still up = no lock) --
 if ($backendChange -or $DryRun) {
@@ -291,10 +291,10 @@ if ($backendChange -or $DryRun) {
   if (-not (Test-Path $apiTmp)) { Fail 'hims-api.exe artifact was not produced.' }
   # Prove the artifact really carries the commit we intend to ship.
   $built = (& $apiTmp -version) 2>&1
-  if ("$built" -notmatch [regex]::Escape($headShort)) { Fail "built artifact reports '$built' — does not contain HEAD $headShort." }
+  if ("$built" -notmatch [regex]::Escape($headShort)) { Fail "built artifact reports '$built' - does not contain HEAD $headShort." }
   $script:S.built_backend = $headShort
   Ok "artifact built and reports commit $headShort ($built)"
-} else { Ok 'no backend change — skipping artifact build'; $script:S.built_backend = "$oldCommit (unchanged)" }
+} else { Ok 'no backend change - skipping artifact build'; $script:S.built_backend = "$oldCommit (unchanged)" }
 
 # --- migrations (apply to the service's DB before starting the new binary) ---
 if ($dbUrl) {
@@ -304,24 +304,24 @@ if ($dbUrl) {
   $pending = 0
   foreach ($ln in @($status)) { $mm=[regex]::Match("$ln",'(\d+)\s+pending'); if ($mm.Success){ $pending=[int]$mm.Groups[1].Value } }
   if ($pending -gt 0) {
-    if ($DryRun) { Warn "$pending migration(s) PENDING — would apply (dry-run: not applied)"; $script:S.migration_status = "$pending pending (dry-run)" }
+    if ($DryRun) { Warn "$pending migration(s) PENDING - would apply (dry-run: not applied)"; $script:S.migration_status = "$pending pending (dry-run)" }
     else {
       $up = (& go run ./cmd/hims-migrate up) 2>&1
       if ($LASTEXITCODE -ne 0) { Fail "migration apply failed: $up" }
       Ok "applied migrations: $up"
       $script:S.migration_status = "applied $pending"
     }
-  } else { Ok 'database up to date — no pending migrations'; $script:S.migration_status = 'up to date' }
-} else { Warn 'no DB URL — migrations not checked'; $script:S.migration_status = 'skipped (no DB URL)' }
+  } else { Ok 'database up to date - no pending migrations'; $script:S.migration_status = 'up to date' }
+} else { Warn 'no DB URL - migrations not checked'; $script:S.migration_status = 'skipped (no DB URL)' }
 
 # ============================================================================
-# DRY RUN stops here — nothing on the live service was touched.
+# DRY RUN stops here - nothing on the live service was touched.
 # ============================================================================
 if ($DryRun) {
   if (Test-Path $apiTmp) { Remove-Item $apiTmp -Force }
   $script:S.health_status = if ($before) { 'ok (unchanged)' } else { 'service down' }
   $script:S.result = if ($backendChange) { 'DRY-RUN (backend would restart)' } else { 'DRY-RUN (frontend-only / no-op)' }
-  Info 'Dry run complete — service NOT touched. Re-run elevated (without -DryRun) to activate.'
+  Info 'Dry run complete - service NOT touched. Re-run elevated (without -DryRun) to activate.'
   Show-Summary
   exit 0
 }
@@ -341,7 +341,7 @@ if (-not $backendChange) {
   $v = Test-Activation -Expected $headShort -RunningCommit $oldCommit -OldPid $oldPid -NewPid $oldPid -BackendChange:$false -HealthOk:([bool]$before)
   if (-not $v.ok) { Fail ("frontend-only activation checks failed: " + ($v.reasons -join '; ')) }
   $script:S.result = 'ACTIVATED'
-  Info 'Frontend activated (served live from web/dist). Backend unchanged — no restart needed. Hard-reload the browser to pick up the new hashed bundle.'
+  Info 'Frontend activated (served live from web/dist). Backend unchanged - no restart needed. Hard-reload the browser to pick up the new hashed bundle.'
   Show-Summary
   exit 0
 }
@@ -368,10 +368,10 @@ while ((Get-Date) -lt $deadline) {
 }
 if (-not $exited) {
   if ($Force) {
-    Warn "service process did not exit within 40s — force-killing (-Force)."
+    Warn "service process did not exit within 40s - force-killing (-Force)."
     if ($oldPid) { Stop-Process -Id $oldPid -Force -ErrorAction SilentlyContinue }
     Start-Sleep -Seconds 2
-    try { $fs = [System.IO.File]::Open($apiExe, 'Open', 'ReadWrite', 'None'); $fs.Close() } catch { Fail 'binary still locked after force-kill — cannot swap. A handle is held; reboot or investigate.' }
+    try { $fs = [System.IO.File]::Open($apiExe, 'Open', 'ReadWrite', 'None'); $fs.Close() } catch { Fail 'binary still locked after force-kill - cannot swap. A handle is held; reboot or investigate.' }
   } else {
     Fail 'service process did not exit and hims-api.exe is still locked after 40s. Re-run elevated, or pass -Force to force-kill the stuck process. Refusing to swap a locked binary (that is exactly how the OLD pid survives an "activation").'
   }
@@ -429,5 +429,5 @@ Remove-Item "$apiExe.bak" -Force -ErrorAction SilentlyContinue
 $script:S.result = 'ACTIVATED'
 Show-Summary
 Write-Host ''
-Write-Host 'ACTIVATED — the live :8090 service is now running the committed code.' -ForegroundColor Green
+Write-Host 'ACTIVATED - the live :8090 service is now running the committed code.' -ForegroundColor Green
 exit 0
