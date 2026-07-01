@@ -279,7 +279,14 @@ export function BmcDetail() {
                 lands on, resolved from collected FDB/ARP evidence. */}
             <Panel title="Switch connectivity (port map)" icon={Cable}
               subtitle={conns.length ? `${mappedNics}/${conns.length} interface(s) mapped to a switch port` : undefined} pad={false}>
-              {conns.length === 0 ? <NoData reason={connectivity.isLoading ? 'loading' : 'no_nics'} /> : (
+              {conns.length === 0 ? (
+                <NoData reason={
+                  connectivity.isLoading ? 'loading'
+                    : connectivity.isError ? 'conn_endpoint_missing'
+                      : nics.length > 0 ? 'conn_endpoint_missing'
+                        : 'no_nics'
+                } />
+              ) : (
                 <table className="data-table">
                   <thead><tr><th>Interface</th><th>Role</th><th>MAC</th><th>Switch</th><th>Switch port</th><th>VLAN</th><th>Evidence</th></tr></thead>
                   <tbody>{[...conns].map((c, i) => {
@@ -410,6 +417,7 @@ function NoData({ reason }: { reason: string }) {
     not_available: 'Not available.',
     no_nics: 'No network interfaces were collected for this controller.',
     loading: 'Resolving switch attachment from FDB/ARP…',
+    conn_endpoint_missing: 'Switch attachment could not be resolved: the port-map endpoint (/bmc-connectivity) did not respond. The API build that provides it is not running yet — activate the latest backend, then reload. The NIC inventory below is unaffected.',
   }
   return <div style={{ padding: 14 }} className="muted" >{msg[reason] ?? 'Not available.'}</div>
 }
