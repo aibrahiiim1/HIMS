@@ -583,7 +583,15 @@ try {
     $os=HimsInv Win32_OperatingSystem; $cs=HimsInv Win32_ComputerSystem; $bios=HimsInv Win32_BIOS
     $cpu=@(HimsInv Win32_Processor)
     $cores=($cpu|Measure-Object NumberOfCores -Sum).Sum; if(-not $cores){$cores=($cpu|Measure-Object NumberOfLogicalProcessors -Sum).Sum}
-    $disks=@(HimsInv Win32_LogicalDisk|?{$_.DriveType -eq 3}|%{@{name=$_.DeviceID;filesystem=$_.FileSystem;total_bytes=[int64]$_.Size;free_bytes=[int64]$_.FreeSpace;size_bytes=[int64]$_.Size}})
+    # Map each fixed volume to its backing disk's media type. Get-PhysicalDisk/Get-Partition exist
+    # on Win8/2012+; wrapped so a legacy host (no Storage cmdlets) simply leaves media_type empty.
+    $media=@{}
+    try{
+      $byNum=@{}
+      foreach($pdk in @(Get-PhysicalDisk -ErrorAction Stop)){ $mt=[string]$pdk.MediaType; if($mt -eq 'Unspecified'){$mt=''}; if([string]$pdk.BusType -eq 'NVMe'){$mt='NVMe'}; $byNum[[string]$pdk.DeviceId]=$mt }
+      foreach($pt in @(Get-Partition -ErrorAction SilentlyContinue)){ if($pt.DriveLetter){ $k=[string]$pt.DiskNumber; if($byNum.ContainsKey($k)){ $media[([string]$pt.DriveLetter)+':']=$byNum[$k] } } }
+    }catch{}
+    $disks=@(HimsInv Win32_LogicalDisk|?{$_.DriveType -eq 3}|%{$mt='';if($media.ContainsKey([string]$_.DeviceID)){$mt=$media[[string]$_.DeviceID]};@{name=$_.DeviceID;filesystem=$_.FileSystem;total_bytes=[int64]$_.Size;free_bytes=[int64]$_.FreeSpace;size_bytes=[int64]$_.Size;media_type=$mt}})
     $nics=@(HimsInv Win32_NetworkAdapterConfiguration|?{$_.IPEnabled}|%{@{name=$_.Description;mac=$_.MACAddress;ip_addresses=(@($_.IPAddress)-join',');gateway=(@($_.DefaultIPGateway)-join',');dns_servers=(@($_.DNSServerSearchOrder)-join',');dhcp_enabled=[bool]$_.DHCPEnabled}})
     $svc=@(HimsInv Win32_Service|%{@{name=$_.Name;display_name=$_.DisplayName;status=$_.State;start_type=$_.StartMode;account=$_.StartName}})
     $procs=@(); try { $procs=@(Get-Process|Sort-Object WS -Descending|Select-Object -First 50|%{@{name=$_.ProcessName;pid=[int]$_.Id;mem_bytes=[int64]$_.WS}}) } catch {}

@@ -24,6 +24,7 @@ echo "@@@SEC lscpu"; lscpu 2>/dev/null
 echo "@@@SEC dmi_system"; cat /sys/class/dmi/id/sys_vendor /sys/class/dmi/id/product_name /sys/class/dmi/id/product_serial 2>/dev/null
 echo "@@@SEC dmi_bios"; cat /sys/class/dmi/id/bios_version /sys/class/dmi/id/bios_date 2>/dev/null
 echo "@@@SEC df"; df -B1 --output=source,fstype,size,avail,target 2>/dev/null
+echo "@@@SEC lsblk"; lsblk -dno NAME,ROTA,TRAN 2>/dev/null
 echo "@@@SEC iplink"; ip -o link show 2>/dev/null
 echo "@@@SEC ipaddr"; ip -o -4 addr show 2>/dev/null
 echo "@@@SEC iproute"; ip route 2>/dev/null
@@ -119,6 +120,14 @@ func ParseLinux(out string) Report {
 	}
 
 	rep.Disks = parseDF(s["df"])
+	// Annotate each mounted volume with the media type of its backing block device (lsblk).
+	if media := parseLsblk(s["lsblk"]); len(media) > 0 {
+		for i := range rep.Disks {
+			if bd := baseDisk(rep.Disks[i].Model); bd != "" {
+				rep.Disks[i].MediaType = media[bd]
+			}
+		}
+	}
 	rep.Nics = parseNics(s["iplink"], s["ipaddr"], s["iproute"], s["resolv"])
 	rep.Services = parseSystemd(s["services"], s["unitfiles"])
 	rep.Processes = parsePS(s["ps"])
@@ -175,6 +184,51 @@ func parseLscpu(lines []string, hw *Hardware) {
 	if sockets > 0 && coresPerSocket > 0 {
 		hw.CPUCores = sockets * coresPerSocket
 	}
+}
+
+// parseLsblk maps a physical block device name -> media type from `lsblk -dno NAME,ROTA,TRAN`
+// output (e.g. "sda 1 sata" -> HDD, "nvme0n1 0 nvme" -> NVMe, "sdb 0 sata" -> SSD).
+func parseLsblk(lines []string) map[string]string {
+	out := map[string]string{}
+	for _, l := range lines {
+		f := strings.Fields(l)
+		if len(f) < 2 {
+			continue
+		}
+		name, rota := f[0], f[1]
+		tran := ""
+		if len(f) >= 3 {
+			tran = f[2]
+		}
+		hint := tran + " rotational=" + rota
+		if mt := NormalizeMediaType(hint, ""); mt != "" {
+			out[name] = mt
+		}
+	}
+	return out
+}
+
+// baseDisk reduces a df "source" (a device path or LVM/mapper name) to the underlying physical
+// block-device name lsblk reports, or "" when it cannot be resolved (LVM/device-mapper).
+//   /dev/sda2 -> sda ; /dev/nvme0n1p2 -> nvme0n1 ; /dev/mapper/vg-lv -> "" ; tmpfs -> ""
+func baseDisk(dev string) string {
+	dev = strings.TrimSpace(dev)
+	// Only real device paths carry media; pseudo sources (tmpfs, udev, none) do not.
+	if !strings.HasPrefix(dev, "/dev/") {
+		return ""
+	}
+	dev = strings.TrimPrefix(dev, "/dev/")
+	if dev == "" || strings.HasPrefix(dev, "mapper/") || strings.HasPrefix(dev, "dm-") {
+		return ""
+	}
+	if strings.HasPrefix(dev, "nvme") {
+		if i := strings.IndexByte(dev, 'p'); i > 0 {
+			return dev[:i] // nvme0n1p2 -> nvme0n1
+		}
+		return dev
+	}
+	// sd*/vd*/hd*/xvd*: strip the trailing partition number.
+	return strings.TrimRight(dev, "0123456789")
 }
 
 func parseDF(lines []string) []Disk {

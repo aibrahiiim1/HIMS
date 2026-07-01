@@ -70,7 +70,10 @@ func Persist(ctx context.Context, w Writer, deviceID uuid.UUID, rep Report, poll
 		if err := w.UpsertOSDisk(ctx, db.UpsertOSDiskParams{
 			DeviceID: deviceID, Name: d.Name, Model: ptr(d.Model), Serial: ptr(d.Serial),
 			Filesystem: ptr(d.Filesystem), SizeBytes: ptr64(d.SizeBytes), TotalBytes: ptr64(d.TotalBytes),
-			FreeBytes: ptr64(d.FreeBytes), Health: ptr(d.Health), CollectionSource: src, LastSeenAt: poll,
+			FreeBytes: ptr64(d.FreeBytes), Health: ptr(d.Health),
+			// Canonicalize the collector's hint (+ model as a secondary signal) to SSD/NVMe/HDD/"".
+			MediaType:        NormalizeMediaType(d.MediaType, d.Model),
+			CollectionSource: src, LastSeenAt: poll,
 		}); err != nil {
 			return err
 		}

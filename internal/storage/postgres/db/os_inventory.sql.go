@@ -203,7 +203,7 @@ func (q *Queries) ListDevicesWithoutOSInventory(ctx context.Context) ([]ListDevi
 }
 
 const listOSDisks = `-- name: ListOSDisks :many
-SELECT id, device_id, name, model, serial, filesystem, size_bytes, total_bytes, free_bytes, health, collection_source, last_seen_at, created_at FROM os_disks WHERE device_id = $1 ORDER BY name
+SELECT id, device_id, name, model, serial, filesystem, size_bytes, total_bytes, free_bytes, health, collection_source, last_seen_at, created_at, media_type FROM os_disks WHERE device_id = $1 ORDER BY name
 `
 
 // --- disks ---
@@ -230,6 +230,7 @@ func (q *Queries) ListOSDisks(ctx context.Context, deviceID uuid.UUID) ([]OsDisk
 			&i.CollectionSource,
 			&i.LastSeenAt,
 			&i.CreatedAt,
+			&i.MediaType,
 		); err != nil {
 			return nil, err
 		}
@@ -421,12 +422,12 @@ func (q *Queries) ListOSSoftware(ctx context.Context, deviceID uuid.UUID) ([]OsS
 }
 
 const upsertOSDisk = `-- name: UpsertOSDisk :exec
-INSERT INTO os_disks (device_id, name, model, serial, filesystem, size_bytes, total_bytes, free_bytes, health, collection_source, last_seen_at)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+INSERT INTO os_disks (device_id, name, model, serial, filesystem, size_bytes, total_bytes, free_bytes, health, media_type, collection_source, last_seen_at)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 ON CONFLICT (device_id, name) DO UPDATE SET
     model = EXCLUDED.model, serial = EXCLUDED.serial, filesystem = EXCLUDED.filesystem,
     size_bytes = EXCLUDED.size_bytes, total_bytes = EXCLUDED.total_bytes, free_bytes = EXCLUDED.free_bytes,
-    health = EXCLUDED.health, collection_source = EXCLUDED.collection_source, last_seen_at = EXCLUDED.last_seen_at
+    health = EXCLUDED.health, media_type = EXCLUDED.media_type, collection_source = EXCLUDED.collection_source, last_seen_at = EXCLUDED.last_seen_at
 `
 
 type UpsertOSDiskParams struct {
@@ -439,6 +440,7 @@ type UpsertOSDiskParams struct {
 	TotalBytes       *int64    `json:"total_bytes"`
 	FreeBytes        *int64    `json:"free_bytes"`
 	Health           *string   `json:"health"`
+	MediaType        string    `json:"media_type"`
 	CollectionSource string    `json:"collection_source"`
 	LastSeenAt       time.Time `json:"last_seen_at"`
 }
@@ -454,6 +456,7 @@ func (q *Queries) UpsertOSDisk(ctx context.Context, arg UpsertOSDiskParams) erro
 		arg.TotalBytes,
 		arg.FreeBytes,
 		arg.Health,
+		arg.MediaType,
 		arg.CollectionSource,
 		arg.LastSeenAt,
 	)

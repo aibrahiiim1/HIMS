@@ -85,11 +85,28 @@ function SummaryBlock({ b }: { b: OSInventoryBundle }) {
   )
 }
 
+// DiskTypeBadge renders the physical media type of a disk (SSD / NVMe / HDD) with a distinct
+// color, or an honest "—" when the collector could not determine it (never guessed).
+export function DiskTypeBadge({ media }: { media?: string | null }) {
+  const m = (media || '').trim()
+  if (!m) return <span className="muted" title="Media type not collected — re-collect OS to detect">—</span>
+  const cls = m === 'SSD' ? 'badge-up' : m === 'NVMe' ? 'badge-access' : m === 'HDD' ? 'badge-unknown' : 'badge-info'
+  return <span className={`badge ${cls}`}>{m}</span>
+}
+
+// diskMediaRollup summarizes the media mix ("2 SSD · 1 NVMe · 1 HDD") for a set of disks; empty
+// when none are typed yet.
+export function diskMediaRollup(disks: { media_type?: string | null }[]): string {
+  const counts: Record<string, number> = {}
+  for (const d of disks) { const m = (d.media_type || '').trim(); if (m) counts[m] = (counts[m] || 0) + 1 }
+  return ['NVMe', 'SSD', 'HDD'].filter((k) => counts[k]).map((k) => `${counts[k]} ${k}`).join(' · ')
+}
+
 function DisksBlock({ b }: { b: OSInventoryBundle }) {
   if (b.disks.length === 0) return <span className="muted">Not collected yet.</span>
   return (
-    <table className="data-table"><thead><tr><th>Name</th><th>FS</th><th>Total</th><th>Free</th><th>Model</th></tr></thead>
-      <tbody>{b.disks.map((d, i) => <tr key={i}><td className="cell-name">{d.name}</td><td>{d.filesystem || '—'}</td><td className="mono">{fmtBytes(d.total_bytes)}</td><td className="mono">{fmtBytes(d.free_bytes)}</td><td className="muted" style={{ fontSize: 12 }}>{d.model || '—'}</td></tr>)}</tbody>
+    <table className="data-table"><thead><tr><th>Name</th><th>Type</th><th>FS</th><th>Total</th><th>Free</th><th>Model</th></tr></thead>
+      <tbody>{b.disks.map((d, i) => <tr key={i}><td className="cell-name">{d.name}</td><td><DiskTypeBadge media={d.media_type} /></td><td>{d.filesystem || '—'}</td><td className="mono">{fmtBytes(d.total_bytes)}</td><td className="mono">{fmtBytes(d.free_bytes)}</td><td className="muted" style={{ fontSize: 12 }}>{d.model || '—'}</td></tr>)}</tbody>
     </table>
   )
 }

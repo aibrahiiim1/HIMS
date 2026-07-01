@@ -62,12 +62,12 @@ ORDER BY d.name;
 SELECT * FROM os_disks WHERE device_id = $1 ORDER BY name;
 
 -- name: UpsertOSDisk :exec
-INSERT INTO os_disks (device_id, name, model, serial, filesystem, size_bytes, total_bytes, free_bytes, health, collection_source, last_seen_at)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+INSERT INTO os_disks (device_id, name, model, serial, filesystem, size_bytes, total_bytes, free_bytes, health, media_type, collection_source, last_seen_at)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 ON CONFLICT (device_id, name) DO UPDATE SET
     model = EXCLUDED.model, serial = EXCLUDED.serial, filesystem = EXCLUDED.filesystem,
     size_bytes = EXCLUDED.size_bytes, total_bytes = EXCLUDED.total_bytes, free_bytes = EXCLUDED.free_bytes,
-    health = EXCLUDED.health, collection_source = EXCLUDED.collection_source, last_seen_at = EXCLUDED.last_seen_at;
+    health = EXCLUDED.health, media_type = EXCLUDED.media_type, collection_source = EXCLUDED.collection_source, last_seen_at = EXCLUDED.last_seen_at;
 
 -- name: DeleteStaleOSDisks :exec
 DELETE FROM os_disks WHERE device_id = $1 AND collection_source = $2 AND last_seen_at < $3;

@@ -755,6 +755,7 @@ type OsDisk struct {
 	CollectionSource string    `json:"collection_source"`
 	LastSeenAt       time.Time `json:"last_seen_at"`
 	CreatedAt        time.Time `json:"created_at"`
+	MediaType        string    `json:"media_type"`
 }
 
 type OsInventory struct {

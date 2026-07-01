@@ -6,7 +6,7 @@ import { api, type OSInventoryBundle, type Device } from '../api'
 import { DeviceHeader } from '../components/DeviceHeader'
 import { ConnectivityPanel } from '../components/ConnectivityPanel'
 import { ClassificationCard } from '../components/ClassificationCard'
-import { OSInventorySection, EventHealth, CollectOSButton } from '../components/DeepOSInventory'
+import { OSInventorySection, EventHealth, CollectOSButton, diskMediaRollup } from '../components/DeepOSInventory'
 import { DeviceOps } from '../components/DeviceOps'
 import { DeviceCredentialHealth } from '../components/DeviceCredentialHealth'
 import { CredentialBindSelect } from '../components/CredentialBindSelect'
@@ -127,7 +127,7 @@ export function EndpointDetail() {
 
       {/* ── STORAGE ───────────────────────────────────────────────────────── */}
       {tab === 'storage' && (
-        <Panel title="Disks / Volumes" icon={HardDrive} subtitle={b?.disks.length ? `${b.disks.length} · ${fmtBytes(diskFree)} free of ${fmtBytes(diskTotal)}` : undefined} pad={false} actions={collectAction}>
+        <Panel title="Disks / Volumes" icon={HardDrive} subtitle={b?.disks.length ? `${b.disks.length} · ${fmtBytes(diskFree)} free of ${fmtBytes(diskTotal)}${diskMediaRollup(b.disks) ? ` · ${diskMediaRollup(b.disks)}` : ''}` : undefined} pad={false} actions={collectAction}>
           <div style={{ padding: 14 }}><OSInventorySection deviceId={deviceId} section="disks" isVirtual={isVirtual} /></div>
         </Panel>
       )}

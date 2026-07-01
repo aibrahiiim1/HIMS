@@ -49,7 +49,24 @@ type winSummary struct {
 const (
 	winSummaryPS = `$os=Get-CimInstance Win32_OperatingSystem;$cs=Get-CimInstance Win32_ComputerSystem;$b=Get-CimInstance Win32_BIOS;$c=@(Get-CimInstance Win32_Processor);$f=$cs.DNSHostName;if($cs.PartOfDomain){$f="$($cs.DNSHostName).$($cs.Domain)"};$u=0;if($os.LastBootUpTime){$u=[int64]((Get-Date)-$os.LastBootUpTime).TotalSeconds};[pscustomobject]@{hostname=$cs.Name;fqdn=$f;domain=$cs.Domain;workgroup=$cs.Workgroup;logged_on_user=$cs.UserName;caption=$os.Caption;version=$os.Version;build=$os.BuildNumber;arch=$os.OSArchitecture;install_date=($os.InstallDate.ToString('o'));last_boot=($os.LastBootUpTime.ToString('o'));uptime_seconds=$u;timezone=(Get-CimInstance Win32_TimeZone).Caption;manufacturer=$cs.Manufacturer;model=$cs.Model;serial=$b.SerialNumber;bios_version=(@($b.BIOSVersion)-join ' ');bios_date=($b.ReleaseDate.ToString('o'));cpu_model=$c[0].Name;cpu_sockets=$c.Count;cpu_cores=(($c|Measure-Object NumberOfCores -Sum).Sum);ram_total_bytes=[int64]$cs.TotalPhysicalMemory}|ConvertTo-Json -Compress`
 
-	winDisksPS = `@(Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3"|ForEach-Object{[pscustomobject]@{name=$_.DeviceID;filesystem=$_.FileSystem;total_bytes=[int64]$_.Size;free_bytes=[int64]$_.FreeSpace;size_bytes=[int64]$_.Size}})|ConvertTo-Json -Compress`
+	// winDisksPS returns fixed logical volumes, each annotated with the media type of its backing
+	// physical disk. It first tries the Storage-namespace MSFT_PhysicalDisk (Win8/2012+): MediaType
+	// 3=HDD / 4=SSD, BusType 17=NVMe, mapped volume->partition->disk. On older Windows (no Storage
+	// namespace) it falls back to Win32_DiskDrive model heuristics (NVMe/SSD in the model) mapped
+	// via Win32_DiskPartition->Win32_LogicalDisk. Undetermined stays empty (never guessed).
+	winDisksPS = `$media=@{}
+try{
+  $byNum=@{}
+  foreach($p in @(Get-CimInstance -Namespace root\Microsoft\Windows\Storage -ClassName MSFT_PhysicalDisk -ErrorAction Stop)){ $t=switch([int]$p.MediaType){3{'HDD'}4{'SSD'}default{''}}; if([int]$p.BusType -eq 17){$t='NVMe'}; $byNum[[string]$p.DeviceId]=$t }
+  foreach($pt in @(Get-CimInstance -Namespace root\Microsoft\Windows\Storage -ClassName MSFT_Partition -ErrorAction SilentlyContinue)){ if($pt.DriveLetter){ $k=[string]$pt.DiskNumber; if($byNum.ContainsKey($k)){ $media[([string]$pt.DriveLetter)+':']=$byNum[$k] } } }
+}catch{}
+if($media.Count -eq 0){
+  foreach($dd in @(Get-CimInstance Win32_DiskDrive -ErrorAction SilentlyContinue)){
+    $mt='';if($dd.Model -match 'NVMe'){$mt='NVMe'}elseif($dd.Model -match 'SSD'){$mt='SSD'}
+    if($mt){ foreach($pp in @(Get-CimAssociatedInstance -InputObject $dd -ResultClassName Win32_DiskPartition -ErrorAction SilentlyContinue)){ foreach($ld in @(Get-CimAssociatedInstance -InputObject $pp -ResultClassName Win32_LogicalDisk -ErrorAction SilentlyContinue)){ if($ld.DeviceID){ $media[[string]$ld.DeviceID]=$mt } } } }
+  }
+}
+@(Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3"|ForEach-Object{$mt='';if($media.ContainsKey([string]$_.DeviceID)){$mt=$media[[string]$_.DeviceID]};[pscustomobject]@{name=$_.DeviceID;filesystem=$_.FileSystem;total_bytes=[int64]$_.Size;free_bytes=[int64]$_.FreeSpace;size_bytes=[int64]$_.Size;media_type=$mt}})|ConvertTo-Json -Compress`
 
 	winNicsPS = `@(Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "IPEnabled=True"|ForEach-Object{[pscustomobject]@{name=$_.Description;mac=$_.MACAddress;ip_addresses=($_.IPAddress -join ',');gateway=(@($_.DefaultIPGateway)[0]);dns_servers=($_.DNSServerSearchOrder -join ',');dhcp_enabled=[bool]$_.DHCPEnabled}})|ConvertTo-Json -Compress`
 

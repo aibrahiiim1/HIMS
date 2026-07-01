@@ -2036,7 +2036,7 @@ export interface OSInventory {
   // exact blocker when software is empty (remote_registry_disabled, access_denied, …).
   software_note?: string | null
 }
-export interface OSDisk { name: string; model?: string | null; serial?: string | null; filesystem?: string | null; size_bytes?: number | null; total_bytes?: number | null; free_bytes?: number | null; health?: string | null }
+export interface OSDisk { name: string; model?: string | null; serial?: string | null; filesystem?: string | null; size_bytes?: number | null; total_bytes?: number | null; free_bytes?: number | null; health?: string | null; media_type?: string | null }
 export interface OSNic { name: string; mac?: string | null; ip_addresses?: string | null; gateway?: string | null; dns_servers?: string | null; dhcp_enabled?: boolean | null; link_speed_mbps?: number | null }
 export interface OSService { name: string; display_name?: string | null; status?: string | null; start_type?: string | null; account?: string | null; description?: string | null }
 export interface OSProcess { pid: number; name: string; cpu_pct?: number | null; mem_bytes?: number | null; start_time?: string | null }

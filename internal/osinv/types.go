@@ -116,6 +116,9 @@ type Disk struct {
 	Serial     string `json:"serial"`
 	Filesystem string `json:"filesystem"`
 	Health     string `json:"health"`
+	// MediaType is the backing physical media: "SSD" | "NVMe" | "HDD" (empty = undetermined,
+	// never guessed). Populated by the collectors; NormalizeMediaType canonicalizes raw values.
+	MediaType  string `json:"media_type"`
 	SizeBytes  int64  `json:"size_bytes"`
 	TotalBytes int64  `json:"total_bytes"`
 	FreeBytes  int64  `json:"free_bytes"`

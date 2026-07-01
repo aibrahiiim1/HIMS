@@ -7,7 +7,7 @@ import { DeviceOps } from '../components/DeviceOps'
 import { DeviceHeader } from '../components/DeviceHeader'
 import { ConnectivityPanel } from '../components/ConnectivityPanel'
 import { ClassificationEvidencePanel } from '../components/ClassificationEvidence'
-import { OSInventorySection, CollectOSButton } from '../components/DeepOSInventory'
+import { OSInventorySection, CollectOSButton, useOSInventory, DiskTypeBadge, diskMediaRollup } from '../components/DeepOSInventory'
 import { DeviceCredentialHealth } from '../components/DeviceCredentialHealth'
 import { CredentialBindSelect } from '../components/CredentialBindSelect'
 import { Panel, Kpi, DefList, EmptyState, StatusPill, Meter, TabBar } from '../components/ui'
@@ -58,17 +58,32 @@ export function ServerDetail({ initialTab }: { initialTab?: Tab } = {}) {
   const components = useQuery({ queryKey: ['bmc-components', id], queryFn: () => api.get<BMCComponent[]>(`/devices/${id}/bmc-components`) })
   const dev = useQuery({ queryKey: ['devices', 'all'], queryFn: () => api.get<Device[]>('/devices?category=all') })
   const row = (dev.data ?? []).find((d) => d.id === deviceId)
+  // Deep OS inventory (shared query key) — the fallback source for CPU/RAM/storage on hosts
+  // collected over WinRM/SSH, which have no SNMP HOST-RESOURCES facts.
+  const { bundle: osb } = useOSInventory(deviceId)
+  const osInv = osb?.inventory ?? null
+  const osDisks = osb?.disks ?? []
 
   const fm = useMemo(() => new Map((facts.data ?? []).map((f) => [f.key, f.value ?? ''])), [facts.data])
   const num = (k: string) => { const v = Number(fm.get(k)); return Number.isFinite(v) && fm.has(k) ? v : null }
   const cpu = num('cpu.load_pct')
-  const memUsed = num('memory.used_bytes'), memTotal = num('memory.total_bytes')
-  const memPct = memUsed != null && memTotal ? Math.round((memUsed / memTotal) * 100) : num('memory.used_pct')
+  const memUsed = num('memory.used_bytes'), memTotalSnmp = num('memory.total_bytes')
+  const memPct = memUsed != null && memTotalSnmp ? Math.round((memUsed / memTotalSnmp) * 100) : num('memory.used_pct')
+  const memTotal = memTotalSnmp ?? osInv?.ram_total_bytes ?? null
 
   const vols = storage.data ?? []
   const volPct = (s: ServerStorage) => (s.total_bytes && s.used_bytes ? Math.round((s.used_bytes / s.total_bytes) * 100) : null)
-  const worstVol = vols.reduce<number | null>((acc, s) => { const p = volPct(s); return p != null && (acc == null || p > acc) ? p : acc }, null)
-  const totalCap = vols.reduce((a, s) => a + (s.total_bytes ?? 0), 0)
+  // Storage effective values fall back to OS-inventory volumes when SNMP HOST-RESOURCES is absent.
+  const osDiskTotal = osDisks.reduce((a, d) => a + (d.total_bytes ?? 0), 0)
+  const osDiskFree = osDisks.reduce((a, d) => a + (d.free_bytes ?? 0), 0)
+  const osWorst = osDisks.reduce<number | null>((acc, d) => {
+    if (d.total_bytes && d.free_bytes != null) { const p = Math.round((1 - d.free_bytes / d.total_bytes) * 100); return acc == null || p > acc ? p : acc }
+    return acc
+  }, null)
+  const worstVol = vols.reduce<number | null>((acc, s) => { const p = volPct(s); return p != null && (acc == null || p > acc) ? p : acc }, null) ?? osWorst
+  const totalCap = vols.reduce((a, s) => a + (s.total_bytes ?? 0), 0) || osDiskTotal
+  const diskCount = vols.length || osDisks.length
+  const mediaRollup = diskMediaRollup(osDisks)
 
   const ifList = ifaces.data ?? []
   const roleList = roles.data ?? []
@@ -117,8 +132,8 @@ export function ServerDetail({ initialTab }: { initialTab?: Tab } = {}) {
           <div className="kpi-grid kpi-6">
             <Kpi label="CPU load" value={cpu != null ? `${cpu}%` : '—'} icon={Cpu} tone={cpu != null && cpu >= 90 ? 'crit' : cpu != null && cpu >= 75 ? 'warn' : 'default'} sub="utilisation" />
             <Kpi label="Memory" value={memPct != null ? `${memPct}%` : '—'} icon={MemoryStick} tone={memPct != null && memPct >= 90 ? 'crit' : memPct != null && memPct >= 75 ? 'warn' : 'default'} sub={memTotal ? fmtBytes(memTotal) : 'used'} />
-            <Kpi label="Storage used" value={worstVol != null ? `${worstVol}%` : '—'} icon={HardDrive} tone={worstVol != null && worstVol >= 90 ? 'crit' : worstVol != null && worstVol >= 75 ? 'warn' : 'default'} sub={totalCap ? `${fmtBytes(totalCap)} total` : 'busiest volume'} onClick={vols.length ? () => setTab('storage') : undefined} />
-            <Kpi label="Volumes" value={vols.length} icon={HardDrive} tone="default" onClick={vols.length ? () => setTab('storage') : undefined} />
+            <Kpi label="Storage used" value={worstVol != null ? `${worstVol}%` : '—'} icon={HardDrive} tone={worstVol != null && worstVol >= 90 ? 'crit' : worstVol != null && worstVol >= 75 ? 'warn' : 'default'} sub={totalCap ? `${fmtBytes(totalCap)} total` : 'busiest volume'} onClick={diskCount ? () => setTab('storage') : undefined} />
+            <Kpi label="Volumes" value={diskCount} icon={HardDrive} tone="default" sub={mediaRollup || undefined} onClick={diskCount ? () => setTab('storage') : undefined} />
             <Kpi label="Interfaces" value={ifList.length} icon={Cable} tone="default" onClick={ifList.length ? () => setTab('network') : undefined} />
             <Kpi label="Hardware" value={hasBMC ? (bmc.data?.health ?? 'unknown') : '—'} icon={Thermometer} tone={hasBMC ? healthKpiTone(bmc.data?.health) : 'default'} sub={hasBMC ? (badSensors > 0 ? `${badSensors} sensor alerts` : 'BMC OK') : 'no BMC'} onClick={hasBMC ? () => setTab('hardware') : undefined} />
           </div>
@@ -132,12 +147,12 @@ export function ServerDetail({ initialTab }: { initialTab?: Tab } = {}) {
                 </div>
               )}
               {(cpu == null && memPct == null && worstVol == null)
-                ? <EmptyState icon={Gauge} title="No resource gauges" message="CPU / memory / storage come from SNMP (HOST-RESOURCES-MIB) or deep OS inventory. Bind a credential and collect to populate them." />
+                ? <EmptyState icon={Gauge} title="No resource gauges" message="CPU / memory utilisation come from SNMP (HOST-RESOURCES-MIB); storage also from deep OS inventory. Bind a credential and collect to populate them." />
                 : (
                   <div className="stack" style={{ gap: 14 }}>
                     {cpu != null && <Meter label="CPU load" value={cpu} />}
                     {memPct != null && <Meter label="Memory used" value={memPct} />}
-                    {worstVol != null && <Meter label="Busiest volume" value={worstVol} />}
+                    {worstVol != null && <Meter label={vols.length ? 'Busiest volume' : 'Busiest disk (OS inventory)'} value={worstVol} />}
                   </div>
                 )}
             </Panel>
@@ -145,10 +160,12 @@ export function ServerDetail({ initialTab }: { initialTab?: Tab } = {}) {
               <DefList items={[
                 { label: 'Type', value: rm ? rm.label : '—' },
                 { label: 'Vendor / model', value: [row?.vendor, row?.model].filter(Boolean).join(' · ') || '—' },
-                { label: 'CPU load', value: cpu != null ? `${cpu}%` : '—' },
+                { label: 'Operating system', value: osInv?.os_caption || '—' },
+                { label: 'CPU', value: osInv?.cpu_model ? `${osInv.cpu_model}${osInv.cpu_cores ? ` · ${osInv.cpu_cores} cores` : ''}` : (cpu != null ? `${cpu}% load` : '—') },
                 { label: 'Memory total', value: fmtBytes(memTotal) },
                 { label: 'Storage total', value: totalCap ? fmtBytes(totalCap) : '—' },
-                { label: 'Volumes / interfaces', value: `${vols.length} / ${ifList.length}` },
+                { label: 'Disks', value: mediaRollup ? `${diskCount} · ${mediaRollup}` : (diskCount || '—') },
+                { label: 'Interfaces', value: ifList.length },
               ]} />
             </Panel>
           </div>
@@ -260,12 +277,10 @@ export function ServerDetail({ initialTab }: { initialTab?: Tab } = {}) {
         </>
       )}
 
-      {/* ── STORAGE ───────────────────────────────────────────────────────── */}
+      {/* ── STORAGE (SNMP volumes, else OS-inventory disks with media type) ─── */}
       {tab === 'storage' && (
-        <Panel title="Storage Volumes" icon={HardDrive} subtitle={vols.length ? `${vols.length} · ${fmtBytes(totalCap)} total` : undefined} pad={false}>
-          {storage.isLoading && <div className="loading">Loading…</div>}
-          {storage.data && vols.length === 0 && <EmptyState icon={HardDrive} title="No storage collected" message="Volumes come from HOST-RESOURCES-MIB (SNMP) or deep OS inventory." />}
-          {vols.length > 0 && (
+        vols.length > 0 ? (
+          <Panel title="Storage Volumes" icon={HardDrive} subtitle={`${vols.length} · ${fmtBytes(totalCap)} total (SNMP)`} pad={false}>
             <table className="data-table">
               <thead><tr><th>Volume</th><th>Type</th><th>Total</th><th>Used</th><th>Utilisation</th></tr></thead>
               <tbody>
@@ -283,8 +298,35 @@ export function ServerDetail({ initialTab }: { initialTab?: Tab } = {}) {
                 })}
               </tbody>
             </table>
-          )}
-        </Panel>
+          </Panel>
+        ) : osDisks.length > 0 ? (
+          <Panel title="Disks / Volumes" icon={HardDrive} pad={false}
+            subtitle={`${osDisks.length} · ${fmtBytes(osDiskFree)} free of ${fmtBytes(osDiskTotal)}${mediaRollup ? ` · ${mediaRollup}` : ''} (OS inventory)`}
+            actions={<CollectOSButton deviceId={deviceId} small />}>
+            <table className="data-table">
+              <thead><tr><th>Volume</th><th>Type</th><th>FS</th><th>Total</th><th>Free</th><th>Utilisation</th></tr></thead>
+              <tbody>
+                {osDisks.map((d, i) => {
+                  const pct = d.total_bytes && d.free_bytes != null ? Math.round((1 - d.free_bytes / d.total_bytes) * 100) : null
+                  return (
+                    <tr key={i}>
+                      <td className="cell-name">{d.name}</td>
+                      <td><DiskTypeBadge media={d.media_type} /></td>
+                      <td>{d.filesystem || '—'}</td>
+                      <td className="mono">{fmtBytes(d.total_bytes)}</td>
+                      <td className="mono">{fmtBytes(d.free_bytes)}</td>
+                      <td style={{ minWidth: 180 }}>{pct != null ? <Meter value={pct} /> : '—'}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </Panel>
+        ) : (
+          <Panel title="Storage" icon={HardDrive}>
+            {storage.isLoading ? <div className="loading">Loading…</div> : <EmptyState icon={HardDrive} title="No storage collected" message="Volumes come from HOST-RESOURCES-MIB (SNMP) or deep OS inventory. Bind a credential and collect to populate them — disk media type (SSD/NVMe/HDD) is detected during OS collection." />}
+          </Panel>
+        )
       )}
 
       {/* ── NETWORK (interfaces + switch port map) ────────────────────────── */}
