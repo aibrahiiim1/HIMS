@@ -35,7 +35,12 @@ param(
   [switch]$SelfTest
 )
 
-$ErrorActionPreference = 'Stop'
+# NOT 'Stop': under Windows PowerShell 5.1, ErrorActionPreference=Stop turns a native
+# command's stderr (e.g. git's harmless "LF will be replaced by CRLF" warning, or go/npm
+# build chatter) into a TERMINATING NativeCommandError that aborts the script. We instead
+# check $LASTEXITCODE after every native tool and put explicit -ErrorAction Stop on the few
+# cmdlets that must throw into a try/catch (Stop/Start-Service, the binary swap, registry read).
+$ErrorActionPreference = 'Continue'
 $repo       = 'D:\WebProjects\HIMS'
 $apiExe     = Join-Path $repo 'bin\hims-api.exe'
 $apiTmp     = Join-Path $repo 'bin\hims-api.new.exe'
@@ -382,9 +387,9 @@ Ok 'service stopped and binary is free'
 Info '== Swapping binary =='
 try {
   $bak = "$apiExe.bak"
-  if (Test-Path $bak) { Remove-Item $bak -Force }
-  if (Test-Path $apiExe) { Rename-Item $apiExe $bak -Force }
-  Move-Item $apiTmp $apiExe -Force
+  if (Test-Path $bak) { Remove-Item $bak -Force -ErrorAction Stop }
+  if (Test-Path $apiExe) { Rename-Item $apiExe $bak -Force -ErrorAction Stop }
+  Move-Item $apiTmp $apiExe -Force -ErrorAction Stop
   Ok "hims-api.exe replaced (previous kept as hims-api.exe.bak)"
 } catch { Fail "could not replace hims-api.exe: $($_.Exception.Message)" }
 
