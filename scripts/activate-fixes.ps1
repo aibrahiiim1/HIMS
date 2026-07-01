@@ -33,8 +33,18 @@ Start-Sleep -Seconds 2
 Write-Host '== Deploying agent binary ==' -ForegroundColor Cyan
 Copy-Item $agentSrc $agentDst -Force
 Write-Host "   agent -> $agentDst"
-# (hims-api.exe is built in place at $apiExe; the service path already points at it.)
-Write-Host "   api   -> $apiExe (in place)"
+
+# Rebuild hims-api.exe in place from the current source. The service holds a lock on the exe
+# while running, so this MUST happen after Stop-Service (above) and before Start-Service (below);
+# building here guarantees the started service carries the latest committed code, not a stale binary.
+Write-Host '== Building hims-api.exe ==' -ForegroundColor Cyan
+$commit = (& git -C $repo rev-parse --short HEAD).Trim()
+Push-Location $repo
+try {
+  & go build -o $apiExe ./cmd/hims-api
+  if ($LASTEXITCODE -ne 0) { throw "go build failed (exit $LASTEXITCODE)" }
+} finally { Pop-Location }
+Write-Host "   api   -> $apiExe (rebuilt at $commit)"
 
 Write-Host '== Starting services ==' -ForegroundColor Cyan
 Start-Service 'HIMS API'
@@ -47,5 +57,12 @@ try {
   $h = Invoke-RestMethod -Uri 'http://127.0.0.1:8090/healthz' -TimeoutSec 5
   Write-Host "   /healthz: OK"
 } catch { Write-Host "   /healthz: $($_.Exception.Message)" -ForegroundColor Yellow }
+# Confirm the freshly-started service is running the code we just built (the on-disk binary and
+# the in-memory service image can differ if the restart was skipped). The log stamps the commit.
+$logCommit = (Select-String -Path 'C:\ProgramData\HIMS\API\logs\hims-api.log' -Pattern '"commit":"([0-9a-f]+)"' -ErrorAction SilentlyContinue | Select-Object -Last 1).Matches.Groups[1].Value
+if ($logCommit) {
+  if ($logCommit -like "$commit*") { Write-Host "   running commit: $logCommit (matches build ✓)" -ForegroundColor Green }
+  else { Write-Host "   running commit: $logCommit but built $commit — service may not have restarted" -ForegroundColor Yellow }
+}
 & $agentDst -version
 Write-Host 'Done. Agent should heartbeat as 1.2.19 within ~30s; reconciler enqueues any never-attempted host within 5 min.' -ForegroundColor Green
