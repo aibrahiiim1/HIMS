@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useParams, Link } from 'react-router-dom'
-import { Server, Cpu, HardDrive, Cable, Activity, Settings, LayoutDashboard, Gauge, Thermometer, MemoryStick, KeyRound, Boxes, Box, MonitorSmartphone } from 'lucide-react'
-import { api, type ServerStorage, type DeviceFact, type DeviceRole, type Interface, type BMCInfo, type BMCSensor, type BMCComponent, type Device } from '../api'
+import { Server, Cpu, HardDrive, Cable, Activity, Settings, LayoutDashboard, Gauge, Thermometer, MemoryStick, KeyRound, Boxes, Box, MonitorSmartphone, CircuitBoard, Link2 } from 'lucide-react'
+import { api, type ServerStorage, type DeviceFact, type DeviceRole, type Interface, type BMCInfo, type BMCSensor, type BMCComponent, type Device, type ServerBMCDrives } from '../api'
 import { DeviceOps } from '../components/DeviceOps'
 import { DeviceHeader } from '../components/DeviceHeader'
 import { ConnectivityPanel } from '../components/ConnectivityPanel'
@@ -58,6 +58,9 @@ export function ServerDetail({ initialTab }: { initialTab?: Tab } = {}) {
   const components = useQuery({ queryKey: ['bmc-components', id], queryFn: () => api.get<BMCComponent[]>(`/devices/${id}/bmc-components`) })
   const dev = useQuery({ queryKey: ['devices', 'all'], queryFn: () => api.get<Device[]>('/devices?category=all') })
   const row = (dev.data ?? []).find((d) => d.id === deviceId)
+  // Physical-drive media from the server's evidence-linked BMC (Redfish) — the only real source
+  // of SSD/HDD/NVMe on a hardware-RAID server, where the OS sees only logical volumes.
+  const bmcDrives = useQuery({ queryKey: ['bmc-drives', id], queryFn: () => api.get<ServerBMCDrives>(`/devices/${id}/bmc-drives`) })
   // Deep OS inventory (shared query key) — the fallback source for CPU/RAM/storage on hosts
   // collected over WinRM/SSH, which have no SNMP HOST-RESOURCES facts.
   const { bundle: osb } = useOSInventory(deviceId)
@@ -277,10 +280,11 @@ export function ServerDetail({ initialTab }: { initialTab?: Tab } = {}) {
         </>
       )}
 
-      {/* ── STORAGE (SNMP volumes, else OS-inventory disks with media type) ─── */}
+      {/* ── STORAGE — OS logical volumes (WMI/SNMP) + physical drives from linked BMC (Redfish) ─ */}
       {tab === 'storage' && (
-        vols.length > 0 ? (
-          <Panel title="Storage Volumes" icon={HardDrive} subtitle={`${vols.length} · ${fmtBytes(totalCap)} total (SNMP)`} pad={false}>
+        <>
+        {vols.length > 0 ? (
+          <Panel title="Logical volumes (OS)" icon={HardDrive} subtitle={`${vols.length} · ${fmtBytes(totalCap)} total (SNMP)`} pad={false}>
             <table className="data-table">
               <thead><tr><th>Volume</th><th>Type</th><th>Total</th><th>Used</th><th>Utilisation</th></tr></thead>
               <tbody>
@@ -300,7 +304,7 @@ export function ServerDetail({ initialTab }: { initialTab?: Tab } = {}) {
             </table>
           </Panel>
         ) : osDisks.length > 0 ? (
-          <Panel title="Disks / Volumes" icon={HardDrive} pad={false}
+          <Panel title="Logical volumes (OS)" icon={HardDrive} pad={false}
             subtitle={`${osDisks.length} · ${fmtBytes(osDiskFree)} free of ${fmtBytes(osDiskTotal)}${mediaRollup ? ` · ${mediaRollup}` : ''} (OS inventory)`}
             actions={<CollectOSButton deviceId={deviceId} small />}>
             <table className="data-table">
@@ -323,10 +327,13 @@ export function ServerDetail({ initialTab }: { initialTab?: Tab } = {}) {
             </table>
           </Panel>
         ) : (
-          <Panel title="Storage" icon={HardDrive}>
-            {storage.isLoading ? <div className="loading">Loading…</div> : <EmptyState icon={HardDrive} title="No storage collected" message="Volumes come from HOST-RESOURCES-MIB (SNMP) or deep OS inventory. Bind a credential and collect to populate them — disk media type (SSD/NVMe/HDD) is detected during OS collection." />}
+          <Panel title="Logical volumes (OS)" icon={HardDrive}>
+            {storage.isLoading ? <div className="loading">Loading…</div> : <EmptyState icon={HardDrive} title="No OS volumes collected" message="Logical volumes come from HOST-RESOURCES-MIB (SNMP) or deep OS inventory. Bind a credential and collect to populate them — disk media type (SSD/NVMe/HDD) is detected during OS collection, or from the linked BMC for hardware-RAID servers (below)." />}
           </Panel>
-        )
+        )}
+
+        <BMCPhysicalDrives data={bmcDrives.data} loading={bmcDrives.isLoading} />
+        </>
       )}
 
       {/* ── NETWORK (interfaces + switch port map) ────────────────────────── */}
@@ -386,5 +393,64 @@ export function ServerDetail({ initialTab }: { initialTab?: Tab } = {}) {
         </>
       )}
     </div>
+  )
+}
+
+// BMCPhysicalDrives shows the server's PHYSICAL drives from its evidence-linked BMC (iLO/iDRAC)
+// Redfish inventory — the real SSD/HDD/NVMe media of a hardware-RAID server, kept separate from
+// the OS logical volumes above. When there is no serial-evidence link, or the linked BMC has no
+// Redfish drive inventory, it shows an honest, actionable gap (never a fabricated link/media).
+function BMCPhysicalDrives({ data, loading }: { data?: ServerBMCDrives; loading: boolean }) {
+  if (loading) return <Panel title="Physical drives (BMC Redfish)" icon={CircuitBoard}><div className="loading">Resolving linked BMC…</div></Panel>
+  if (!data) return null
+
+  // Not linked, or linked-but-no-inventory: honest actionable state.
+  if (!data.linked || data.drives.length === 0) {
+    return (
+      <Panel title="Physical drives (BMC Redfish)" icon={CircuitBoard}
+        actions={data.linked ? <StatusPill status="warning" label="linked · no drive inventory" /> : <StatusPill status="unknown" label="not linked" />}>
+        <EmptyState icon={Link2} title={data.linked ? `Linked to ${data.bmc_name} — no Redfish drive inventory` : 'Physical disk media not available'}
+          message={data.gap || 'A hardware-RAID server exposes only logical volumes to the OS; its real SSD/HDD/NVMe media comes from the linked BMC.'} />
+        {data.evidence_needed && <p className="muted" style={{ fontSize: 12, padding: '0 14px 12px' }}><strong>Evidence needed:</strong> {data.evidence_needed}</p>}
+      </Panel>
+    )
+  }
+
+  return (
+    <>
+      {(data.controllers?.length ?? 0) > 0 && (
+        <Panel title="Storage controller" icon={CircuitBoard} subtitle={`${data.controllers!.length}`} pad={false}>
+          <table className="data-table">
+            <thead><tr><th>Controller</th><th>Model</th><th>Firmware</th><th>RAID</th><th>Status</th></tr></thead>
+            <tbody>{data.controllers!.map((c, i) => (
+              <tr key={i}><td className="cell-name">{c.name}</td><td>{c.model || '—'}</td>
+                <td className="mono">{c.firmware || '—'}</td><td>{c.raid_types || '—'}</td>
+                <td><StatusPill status={healthTone(c.status)} label={c.status || '—'} /></td></tr>
+            ))}</tbody>
+          </table>
+        </Panel>
+      )}
+      <Panel title="Physical drives (BMC Redfish)" icon={HardDrive}
+        subtitle={`${data.drives.length}${data.media_rollup ? ` · ${data.media_rollup}` : ''} · via ${data.bmc_name}`}
+        actions={<StatusPill status="up" label={data.link_evidence || 'linked'} />} pad={false}>
+        <table className="data-table">
+          <thead><tr><th>Bay</th><th>Media</th><th>Model</th><th>Serial</th><th>Capacity</th><th>Protocol</th><th>Status</th></tr></thead>
+          <tbody>{data.drives.map((d, i) => (
+            <tr key={i}>
+              <td className="cell-name mono">{d.bay || '—'}</td>
+              <td><DiskTypeBadge media={d.media} /></td>
+              <td>{d.model || '—'}</td>
+              <td className="mono" style={{ fontSize: 12 }}>{d.serial || '—'}</td>
+              <td className="mono">{fmtGiB(d.capacity_bytes)}</td>
+              <td>{d.protocol || '—'}{d.rpm && d.rpm !== '0' ? <span className="muted" style={{ fontSize: 11 }}> · {d.rpm} rpm</span> : null}</td>
+              <td><StatusPill status={healthTone(d.status)} label={d.status || '—'} /></td>
+            </tr>
+          ))}</tbody>
+        </table>
+        <p className="muted" style={{ fontSize: 11, padding: '8px 14px', margin: 0 }}>
+          Source: {data.source} — the OS sees only logical volumes on a RAID array; physical media (SSD/HDD/NVMe) is read from the linked controller over Redfish. Link is chassis-serial/UUID evidence only.
+        </p>
+      </Panel>
+    </>
   )
 }

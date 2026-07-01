@@ -2037,6 +2037,20 @@ export interface OSInventory {
   software_note?: string | null
 }
 export interface OSDisk { name: string; model?: string | null; serial?: string | null; filesystem?: string | null; size_bytes?: number | null; total_bytes?: number | null; free_bytes?: number | null; health?: string | null; media_type?: string | null }
+
+// BMCPhysicalDrive / ServerBMCDrives — a server's PHYSICAL drives sourced from its evidence-linked
+// BMC (iLO/iDRAC) Redfish inventory. Kept separate from OS logical volumes; the real SSD/HDD/NVMe
+// media of a hardware-RAID server lives here, behind the controller.
+export interface BMCPhysicalDrive { bay?: string; model?: string; serial?: string; capacity_bytes: number; media?: string; protocol?: string; rpm?: string; status?: string }
+export interface BMCRaidController { name: string; model?: string; firmware?: string; raid_types?: string; status?: string }
+export interface ServerBMCDrives {
+  linked: boolean
+  bmc_id?: string; bmc_ip?: string; bmc_name?: string; link_evidence?: string
+  controllers?: BMCRaidController[]
+  drives: BMCPhysicalDrive[]
+  media_rollup?: string; source?: string
+  gap?: string; evidence_needed?: string
+}
 export interface OSNic { name: string; mac?: string | null; ip_addresses?: string | null; gateway?: string | null; dns_servers?: string | null; dhcp_enabled?: boolean | null; link_speed_mbps?: number | null }
 export interface OSService { name: string; display_name?: string | null; status?: string | null; start_type?: string | null; account?: string | null; description?: string | null }
 export interface OSProcess { pid: number; name: string; cpu_pct?: number | null; mem_bytes?: number | null; start_time?: string | null }
