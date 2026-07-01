@@ -66,13 +66,19 @@ func Persist(ctx context.Context, w Writer, deviceID uuid.UUID, rep Report, poll
 		return err
 	}
 
+	// A guest VM's disks are all virtual; the per-disk physical-media probe is unreliable across
+	// Windows versions, so fall back to the host's own SMBIOS vendor/model (reliable VM signal).
+	hostVirtual := IsVirtualHost(rep.Hardware.Manufacturer, rep.Hardware.Model)
 	for _, d := range rep.Disks {
+		media := NormalizeMediaType(d.MediaType, d.Model)
+		if media == "" && hostVirtual {
+			media = "Virtual"
+		}
 		if err := w.UpsertOSDisk(ctx, db.UpsertOSDiskParams{
 			DeviceID: deviceID, Name: d.Name, Model: ptr(d.Model), Serial: ptr(d.Serial),
 			Filesystem: ptr(d.Filesystem), SizeBytes: ptr64(d.SizeBytes), TotalBytes: ptr64(d.TotalBytes),
-			FreeBytes: ptr64(d.FreeBytes), Health: ptr(d.Health),
-			// Canonicalize the collector's hint (+ model as a secondary signal) to SSD/NVMe/HDD/"".
-			MediaType:        NormalizeMediaType(d.MediaType, d.Model),
+			FreeBytes:        ptr64(d.FreeBytes), Health: ptr(d.Health),
+			MediaType:        media,
 			CollectionSource: src, LastSeenAt: poll,
 		}); err != nil {
 			return err

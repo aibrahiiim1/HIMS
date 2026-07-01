@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { RefreshCw, Cpu } from 'lucide-react'
 import { api, type OSInventoryBundle, type Classification, type AuthMe } from '../api'
@@ -37,18 +37,86 @@ export function useOSInventory(deviceId: string) {
   return { bundle: q.data ?? null, isLoading: q.isLoading, collect, canCollect }
 }
 
-// CollectOSButton runs an on-demand deep OS collection (needs a bound credential + devices.write).
+// CollectResult mirrors the /collect-os response (status: collected | queued | failed).
+interface CollectResult { status: string; method?: string; detail?: string; agent_name?: string; counts?: Record<string, number> }
+
+type CollectPhase = 'idle' | 'collecting' | 'waiting' | 'done' | 'error'
+
+// CollectOSButton runs an on-demand deep OS collection (needs a bound credential + devices.write)
+// and shows live PROGRESS: a spinner + elapsed timer while the host/agent is queried, then an
+// honest outcome. A direct WinRM/SSH collect is synchronous (the request blocks ~30-60s); a
+// relay-agent collect returns "queued" and we then poll the inventory's collected_at until the
+// agent reports back, so the operator sees "waiting for agent" rather than a dead button.
 // Hidden for manually-modeled virtual devices, which are never probed.
 export function CollectOSButton({ deviceId, isVirtual, small }: { deviceId: string; isVirtual?: boolean; small?: boolean }) {
-  const { bundle, collect, canCollect } = useOSInventory(deviceId)
+  const qc = useQueryClient()
+  const { bundle, canCollect } = useOSInventory(deviceId)
+  const [phase, setPhase] = useState<CollectPhase>('idle')
+  const [elapsed, setElapsed] = useState(0)
+  const [msg, setMsg] = useState<string | null>(null)
+
+  // Tick an elapsed-seconds counter while a collection is in flight or we're polling an agent.
+  useEffect(() => {
+    if (phase !== 'collecting' && phase !== 'waiting') return
+    const t = setInterval(() => setElapsed((e) => e + 1), 1000)
+    return () => clearInterval(t)
+  }, [phase])
+
   if (!canCollect || isVirtual) return null
-  const label = collect.isPending ? 'Collecting…' : bundle?.inventory ? 'Re-collect OS' : 'Collect OS'
+
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ['os-inventory', deviceId] })
+    qc.invalidateQueries({ queryKey: ['devices', 'all'] })
+    qc.invalidateQueries({ queryKey: ['storage', deviceId] })
+    qc.invalidateQueries({ queryKey: ['classification', deviceId] })
+  }
+
+  // Poll for a NEW collected_at (agent completed asynchronously) up to ~2 minutes.
+  async function pollForAgent(baseline: string) {
+    for (let i = 0; i < 40; i++) {
+      await new Promise((r) => setTimeout(r, 3000))
+      try {
+        const b = await api.get<OSInventoryBundle>(`/devices/${deviceId}/os-inventory`)
+        if (b.inventory && b.inventory.collected_at !== baseline) {
+          setPhase('done'); setMsg('Updated from agent'); refresh(); return
+        }
+      } catch { /* keep waiting */ }
+    }
+    setPhase('idle'); setMsg('Dispatched — inventory will appear when the agent reports back'); refresh()
+  }
+
+  async function run() {
+    setPhase('collecting'); setElapsed(0); setMsg(null)
+    const baseline = bundle?.inventory?.collected_at ?? ''
+    try {
+      const res = await api.post<CollectResult>(`/devices/${deviceId}/collect-os`, {})
+      if (res.status === 'collected') {
+        const n = res.counts ? Object.values(res.counts).reduce((a, b) => a + b, 0) : 0
+        setPhase('done'); setMsg(`Updated${n ? ` · ${n} items` : ''}`); refresh()
+      } else if (res.status === 'queued') {
+        setPhase('waiting'); setMsg(res.agent_name ? `Dispatched to ${res.agent_name}` : 'Dispatched to relay agent')
+        void pollForAgent(baseline)
+      } else {
+        setPhase('error'); setMsg(res.detail || 'Collection failed')
+      }
+    } catch (e) {
+      setPhase('error'); setMsg((e as Error).message)
+    }
+  }
+
+  const busy = phase === 'collecting' || phase === 'waiting'
+  const label = phase === 'collecting' ? `Collecting… ${elapsed}s`
+    : phase === 'waiting' ? `Waiting for agent… ${elapsed}s`
+      : bundle?.inventory ? 'Re-collect OS' : 'Collect OS'
+
   return (
-    <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 4 }}>
-      <button className={small ? 'btn btn-sm' : 'btn'} disabled={collect.isPending} onClick={() => collect.mutate()}>
-        <RefreshCw size={13} /> {label}
+    <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end' }}>
+      <button className={small ? 'btn btn-sm' : 'btn'} disabled={busy} onClick={run} title={busy ? 'A collection is in progress' : 'Gather OS, hardware, disks (incl. media type), network and software'}>
+        <RefreshCw size={13} className={busy ? 'spin' : undefined} /> {label}
       </button>
-      {collect.error && <span className="error-msg" style={{ fontSize: 11 }}>{(collect.error as Error).message}</span>}
+      {msg && phase === 'error' && <span className="error-msg" style={{ fontSize: 11, maxWidth: 280, whiteSpace: 'normal', textAlign: 'right' }}>{msg}</span>}
+      {msg && phase !== 'error' && <span className="muted" style={{ fontSize: 11, maxWidth: 280, whiteSpace: 'normal', textAlign: 'right' }}>{phase === 'done' ? '✓ ' : ''}{msg}</span>}
+      {busy && <span className="muted" style={{ fontSize: 10 }}>this can take 30–90s</span>}
     </span>
   )
 }
@@ -89,17 +157,17 @@ function SummaryBlock({ b }: { b: OSInventoryBundle }) {
 // color, or an honest "—" when the collector could not determine it (never guessed).
 export function DiskTypeBadge({ media }: { media?: string | null }) {
   const m = (media || '').trim()
-  if (!m) return <span className="muted" title="Media type not collected — re-collect OS to detect">—</span>
-  const cls = m === 'SSD' ? 'badge-up' : m === 'NVMe' ? 'badge-access' : m === 'HDD' ? 'badge-unknown' : 'badge-info'
+  if (!m) return <span className="muted" title="Media type not collected — re-collect OS to detect (a physical host reports SSD/NVMe/HDD; a VM reports Virtual)">—</span>
+  const cls = m === 'SSD' ? 'badge-up' : m === 'NVMe' ? 'badge-access' : m === 'HDD' ? 'badge-unknown' : m === 'Virtual' ? 'badge-info' : 'badge-info'
   return <span className={`badge ${cls}`}>{m}</span>
 }
 
-// diskMediaRollup summarizes the media mix ("2 SSD · 1 NVMe · 1 HDD") for a set of disks; empty
-// when none are typed yet.
+// diskMediaRollup summarizes the media mix ("2 NVMe · 1 SSD · 1 Virtual") for a set of disks;
+// empty when none are typed yet.
 export function diskMediaRollup(disks: { media_type?: string | null }[]): string {
   const counts: Record<string, number> = {}
   for (const d of disks) { const m = (d.media_type || '').trim(); if (m) counts[m] = (counts[m] || 0) + 1 }
-  return ['NVMe', 'SSD', 'HDD'].filter((k) => counts[k]).map((k) => `${counts[k]} ${k}`).join(' · ')
+  return ['NVMe', 'SSD', 'HDD', 'Virtual'].filter((k) => counts[k]).map((k) => `${counts[k]} ${k}`).join(' · ')
 }
 
 function DisksBlock({ b }: { b: OSInventoryBundle }) {

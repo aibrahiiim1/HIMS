@@ -3,6 +3,7 @@ package osinv
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,7 +25,7 @@ echo "@@@SEC lscpu"; lscpu 2>/dev/null
 echo "@@@SEC dmi_system"; cat /sys/class/dmi/id/sys_vendor /sys/class/dmi/id/product_name /sys/class/dmi/id/product_serial 2>/dev/null
 echo "@@@SEC dmi_bios"; cat /sys/class/dmi/id/bios_version /sys/class/dmi/id/bios_date 2>/dev/null
 echo "@@@SEC df"; df -B1 --output=source,fstype,size,avail,target 2>/dev/null
-echo "@@@SEC lsblk"; lsblk -dno NAME,ROTA,TRAN 2>/dev/null
+echo "@@@SEC lsblk"; lsblk -dn -P -o NAME,ROTA,TRAN,MODEL 2>/dev/null
 echo "@@@SEC iplink"; ip -o link show 2>/dev/null
 echo "@@@SEC ipaddr"; ip -o -4 addr show 2>/dev/null
 echo "@@@SEC iproute"; ip route 2>/dev/null
@@ -186,22 +187,29 @@ func parseLscpu(lines []string, hw *Hardware) {
 	}
 }
 
-// parseLsblk maps a physical block device name -> media type from `lsblk -dno NAME,ROTA,TRAN`
-// output (e.g. "sda 1 sata" -> HDD, "nvme0n1 0 nvme" -> NVMe, "sdb 0 sata" -> SSD).
+var lsblkPairRe = regexp.MustCompile(`(\w+)="([^"]*)"`)
+
+// parseLsblk maps a physical block device name -> media type from `lsblk -dn -P -o
+// NAME,ROTA,TRAN,MODEL` key/value output, e.g.
+//   NAME="sda" ROTA="1" TRAN="sata" MODEL="ST1000..."      -> HDD
+//   NAME="nvme0n1" ROTA="0" TRAN="nvme" MODEL="WD..."       -> NVMe
+//   NAME="sda" ROTA="1" TRAN="" MODEL="VMware Virtual disk" -> Virtual (VM guest)
 func parseLsblk(lines []string) map[string]string {
 	out := map[string]string{}
 	for _, l := range lines {
-		f := strings.Fields(l)
-		if len(f) < 2 {
+		if strings.TrimSpace(l) == "" {
 			continue
 		}
-		name, rota := f[0], f[1]
-		tran := ""
-		if len(f) >= 3 {
-			tran = f[2]
+		kv := map[string]string{}
+		for _, mm := range lsblkPairRe.FindAllStringSubmatch(l, -1) {
+			kv[mm[1]] = mm[2]
 		}
-		hint := tran + " rotational=" + rota
-		if mt := NormalizeMediaType(hint, ""); mt != "" {
+		name := kv["NAME"]
+		if name == "" {
+			continue
+		}
+		hint := kv["TRAN"] + " rotational=" + kv["ROTA"] + " " + kv["MODEL"]
+		if mt := NormalizeMediaType(hint, kv["MODEL"]); mt != "" {
 			out[name] = mt
 		}
 	}

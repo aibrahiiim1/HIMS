@@ -57,12 +57,12 @@ const (
 	winDisksPS = `$media=@{}
 try{
   $byNum=@{}
-  foreach($p in @(Get-CimInstance -Namespace root\Microsoft\Windows\Storage -ClassName MSFT_PhysicalDisk -ErrorAction Stop)){ $t=switch([int]$p.MediaType){3{'HDD'}4{'SSD'}default{''}}; if([int]$p.BusType -eq 17){$t='NVMe'}; $byNum[[string]$p.DeviceId]=$t }
+  foreach($p in @(Get-CimInstance -Namespace root\Microsoft\Windows\Storage -ClassName MSFT_PhysicalDisk -ErrorAction Stop)){ $t=switch([int]$p.MediaType){3{'HDD'}4{'SSD'}default{''}}; if([int]$p.BusType -eq 17){$t='NVMe'}; if([string]$p.FriendlyName -match 'Virtual'){$t='Virtual'}; $byNum[[string]$p.DeviceId]=$t }
   foreach($pt in @(Get-CimInstance -Namespace root\Microsoft\Windows\Storage -ClassName MSFT_Partition -ErrorAction SilentlyContinue)){ if($pt.DriveLetter){ $k=[string]$pt.DiskNumber; if($byNum.ContainsKey($k)){ $media[([string]$pt.DriveLetter)+':']=$byNum[$k] } } }
 }catch{}
 if($media.Count -eq 0){
   foreach($dd in @(Get-CimInstance Win32_DiskDrive -ErrorAction SilentlyContinue)){
-    $mt='';if($dd.Model -match 'NVMe'){$mt='NVMe'}elseif($dd.Model -match 'SSD'){$mt='SSD'}
+    $mt='';if($dd.Model -match 'Virtual|VMware|Msft'){$mt='Virtual'}elseif($dd.Model -match 'NVMe'){$mt='NVMe'}elseif($dd.Model -match 'SSD'){$mt='SSD'}
     if($mt){ foreach($pp in @(Get-CimAssociatedInstance -InputObject $dd -ResultClassName Win32_DiskPartition -ErrorAction SilentlyContinue)){ foreach($ld in @(Get-CimAssociatedInstance -InputObject $pp -ResultClassName Win32_LogicalDisk -ErrorAction SilentlyContinue)){ if($ld.DeviceID){ $media[[string]$ld.DeviceID]=$mt } } } }
   }
 }

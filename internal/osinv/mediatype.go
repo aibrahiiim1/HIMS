@@ -13,6 +13,15 @@ func NormalizeMediaType(hint, model string) string {
 	h := strings.ToLower(strings.TrimSpace(hint))
 	m := strings.ToLower(strings.TrimSpace(model))
 
+	// A VM guest disk has no physical media — the hypervisor presents a virtual disk. Report
+	// "Virtual" (honest + useful) rather than a fabricated SSD/HDD. Signatures come from the
+	// disk's FriendlyName/model: VMware/Hyper-V ("... Virtual disk"), QEMU/KVM, VirtualBox.
+	if strings.Contains(h, "virtual") || strings.Contains(m, "virtual") ||
+		strings.Contains(h, "vmware") || strings.Contains(m, "vmware") ||
+		strings.Contains(h, "qemu") || strings.Contains(m, "qemu") ||
+		strings.Contains(m, "vbox") {
+		return "Virtual"
+	}
 	// NVMe is a bus/protocol and takes precedence — an NVMe device is always solid-state, and
 	// operators care about the NVMe distinction.
 	if strings.Contains(h, "nvme") || strings.Contains(m, "nvme") {
@@ -30,4 +39,26 @@ func NormalizeMediaType(hint, model string) string {
 		return "HDD"
 	}
 	return ""
+}
+
+// IsVirtualHost reports whether a host's system vendor/model is a hypervisor guest signature.
+// Used to label a VM's disks "Virtual" when per-disk physical-media detection returns nothing —
+// a guest has no real physical media, and the per-disk CIM mapping is unreliable across Windows
+// versions, but the host's own SMBIOS vendor/model reliably identifies a VM. A physical host
+// running a hypervisor reports its real maker (HPE/Dell) and is NOT matched here.
+func IsVirtualHost(vendor, model string) bool {
+	s := strings.ToLower(strings.TrimSpace(vendor + " " + model))
+	if s == "" {
+		return false
+	}
+	for _, sig := range []string{
+		"vmware", "virtual machine", "virtualbox", "innotek",
+		"qemu", "kvm", "xen", "parallels", "bochs",
+		"openstack", "google compute engine", "amazon ec2", "nutanix ahv",
+	} {
+		if strings.Contains(s, sig) {
+			return true
+		}
+	}
+	return false
 }

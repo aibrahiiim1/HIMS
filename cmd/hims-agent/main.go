@@ -588,7 +588,7 @@ try {
     $media=@{}
     try{
       $byNum=@{}
-      foreach($pdk in @(Get-PhysicalDisk -ErrorAction Stop)){ $mt=[string]$pdk.MediaType; if($mt -eq 'Unspecified'){$mt=''}; if([string]$pdk.BusType -eq 'NVMe'){$mt='NVMe'}; $byNum[[string]$pdk.DeviceId]=$mt }
+      foreach($pdk in @(Get-PhysicalDisk -ErrorAction Stop)){ $mt=[string]$pdk.MediaType; if($mt -eq 'Unspecified'){$mt=''}; if([string]$pdk.BusType -eq 'NVMe'){$mt='NVMe'}; if([string]$pdk.FriendlyName -match 'Virtual'){$mt='Virtual'}; $byNum[[string]$pdk.DeviceId]=$mt }
       foreach($pt in @(Get-Partition -ErrorAction SilentlyContinue)){ if($pt.DriveLetter){ $k=[string]$pt.DiskNumber; if($byNum.ContainsKey($k)){ $media[([string]$pt.DriveLetter)+':']=$byNum[$k] } } }
     }catch{}
     $disks=@(HimsInv Win32_LogicalDisk|?{$_.DriveType -eq 3}|%{$mt='';if($media.ContainsKey([string]$_.DeviceID)){$mt=$media[[string]$_.DeviceID]};@{name=$_.DeviceID;filesystem=$_.FileSystem;total_bytes=[int64]$_.Size;free_bytes=[int64]$_.FreeSpace;size_bytes=[int64]$_.Size;media_type=$mt}})
