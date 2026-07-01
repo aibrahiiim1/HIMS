@@ -34,6 +34,7 @@ import (
 	"github.com/coralsearesorts/hims/internal/fingerprint"
 	"github.com/coralsearesorts/hims/internal/isapi"
 	"github.com/coralsearesorts/hims/internal/omnipcx"
+	"github.com/coralsearesorts/hims/internal/redfish"
 	"github.com/coralsearesorts/hims/internal/snmp"
 	"github.com/coralsearesorts/hims/internal/telnet"
 )
@@ -133,6 +134,10 @@ type HostResult struct {
 	// applied over the driver's generic identity when a specific fingerprint hits.
 	Vendor string
 	Model  string
+	// Serial is a REAL identity serial learned from a safe unauthenticated probe
+	// (e.g. a Dell iDRAC's Redfish ServiceTag). Empty ⇒ leave any existing serial
+	// untouched — a weak scan never wipes a proven serial.
+	Serial string
 	// Subtype is a discovery-refined device subtype within the category (e.g.
 	// "alcatel_omnipcx" for a detected OmniPCX). Empty = leave the subtype untouched.
 	Subtype string
@@ -378,6 +383,18 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 			}
 			r.Probe.Hints["telnet_banner"] = tb
 		}
+	}
+
+	// Step 2b-redfish: UNAUTHENTICATED Redfish ServiceRoot probe. Every DMTF BMC
+	// (HPE iLO / Dell iDRAC / Lenovo XClarity / Supermicro) serves /redfish/v1/
+	// without a credential, exposing Vendor/Product (and, on Dell, the ServiceTag
+	// serial) — while Systems/Chassis stay behind Basic auth. This is the honest way
+	// to detect an out-of-band controller (and which vendor) when its web UI banner
+	// is generic (e.g. an iDRAC behind "Server: Apache"), instead of a generic-web
+	// guess. It NEVER authenticates, so full inventory stays gated behind a real
+	// Redfish credential. Gated to 443/80 so it adds at most one cheap GET.
+	if hasPortN(r.OpenPorts, 443) || hasPortN(r.OpenPorts, 80) {
+		probeRedfish(ctx, ip, &r, cfg.PortTimeout)
 	}
 
 	// Step 2c: Protocol plan — decide the expected protocol(s) and which credential
@@ -662,6 +679,11 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 	// match (≥85) also supplies the canonical vendor + product model.
 	applyFingerprints(&r, cfg.Fingerprints)
 
+	// Redfish ServiceRoot evidence is authoritative for "this is an out-of-band
+	// controller" — apply it AFTER the driver/fingerprint passes so a generic
+	// web-port "server" guess doesn't bury a real iLO/iDRAC.
+	applyRedfishClassification(&r)
+
 	if c := string(r.Match.Category); c != "" {
 		emit("classification_updated", "", c, strconv.Itoa(r.Match.Confidence))
 	}
@@ -844,6 +866,95 @@ func scanPorts(ctx context.Context, ip netip.Addr, ports []int, timeout time.Dur
 }
 
 var titleRe = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
+
+// probeRedfish runs the UNAUTHENTICATED Redfish ServiceRoot probe and, on a hit,
+// records the controller identity as evidence + classifies the host as a 'bmc'.
+// It writes redfish.* hints (consumed by Apply → device facts and the BMC
+// inventory's honest redfish_status) and sets the canonical vendor / controller
+// subtype / real serial (Dell ServiceTag). It NEVER authenticates and NEVER marks
+// Redfish collected — full inventory still requires a real Redfish credential.
+func probeRedfish(ctx context.Context, ip netip.Addr, r *HostResult, timeout time.Duration) {
+	// A BMC's ServiceRoot is a single small GET, but its management NIC + legacy-TLS
+	// handshake can be slow — give it a floor of 5s so a real iLO/iDRAC isn't missed
+	// on a borderline handshake (which would leave a controller mis-identified).
+	if timeout < 5*time.Second {
+		timeout = 5 * time.Second
+	}
+	doer := isapi.PermissiveClient(timeout) // legacy/self-signed BMC TLS
+	var info redfish.ServiceRootInfo
+	for _, base := range redfishBaseURLs(ip, r.OpenPorts) {
+		if info = redfish.ProbeServiceRoot(ctx, base, doer); info.Reachable {
+			break
+		}
+		// One retry per base: the first TLS handshake to a BMC can time out cold.
+		if info = redfish.ProbeServiceRoot(ctx, base, doer); info.Reachable {
+			break
+		}
+	}
+	if !info.Reachable {
+		return
+	}
+	if r.Probe.Hints == nil {
+		r.Probe.Hints = map[string]string{}
+	}
+	setHint := func(k, v string) {
+		if strings.TrimSpace(v) != "" {
+			r.Probe.Hints[k] = v
+		}
+	}
+	r.Probe.Hints["redfish.reachable"] = "true"
+	setHint("redfish.vendor", info.Vendor)
+	setHint("redfish.product", info.Product)
+	setHint("redfish.version", info.RedfishVersion)
+	setHint("redfish.controller", info.ControllerKind)
+	setHint("redfish.servicetag", info.ServiceTag)
+
+	// Identity from the ServiceRoot (vendor / controller subtype / Dell ServiceTag serial).
+	// The CATEGORY override is applied later by applyRedfishClassification — AFTER the
+	// driver-registry + fingerprint passes, which would otherwise reassign r.Match.
+	if info.Vendor != "" {
+		r.Vendor = info.Vendor
+	}
+	if info.ControllerKind != "" {
+		r.Subtype = strings.ToLower(strings.NewReplacer(" ", "_", "-", "_").Replace(info.ControllerKind))
+	}
+	if info.ServiceTag != "" { // Dell ServiceTag is the chassis serial — real, unauthenticated
+		r.Serial = info.ServiceTag
+	}
+}
+
+// applyRedfishClassification promotes a host with a reachable Redfish ServiceRoot to
+// the 'bmc' category. A Redfish service at /redfish/v1/ IS the out-of-band controller
+// (an iLO/iDRAC on its own management IP) — definitive evidence that outranks the
+// generic "open web port ⇒ server" guess. Runs AFTER the driver/fingerprint passes
+// (which reassign r.Match) so the controller identity survives. Confidence 88 matches
+// the Dell-iDRAC SNMP-OID fingerprint; it never overrides a stronger (≥88) specific
+// match. Reconcile still honors an operator classification lock downstream.
+func applyRedfishClassification(r *HostResult) {
+	if r.Probe.Hints["redfish.reachable"] != "true" {
+		return
+	}
+	if r.Match.Category == "" || r.Match.Category == domain.CatUnknown || r.Match.Confidence < 88 {
+		r.Match = driver.Match{Category: domain.CatBMC, Confidence: 88}
+	}
+}
+
+// redfishBaseURLs returns the scheme://host[:port] bases to try for the Redfish
+// ServiceRoot, https first (the BMC norm), http only if 443 is closed.
+func redfishBaseURLs(ip netip.Addr, ports []int) []string {
+	host := ip.String()
+	if ip.Is6() {
+		host = "[" + host + "]"
+	}
+	var bases []string
+	if hasPortN(ports, 443) {
+		bases = append(bases, "https://"+host)
+	}
+	if hasPortN(ports, 80) {
+		bases = append(bases, "http://"+host)
+	}
+	return bases
+}
 
 // httpPort reports whether any web/management port is open (incl. the Hikvision
 // 8000+octet range), gating whether a banner grab runs at all.

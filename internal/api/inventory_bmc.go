@@ -26,7 +26,7 @@ type bmcInventoryRow struct {
 	Firmware        string   `json:"firmware"`
 	ControllerKind  string   `json:"controller_kind"` // iLO / iDRAC / XClarity / IPMI / Redfish
 	Reachability    string   `json:"reachability"`    // online | offline | warning | unknown (so the list shows live status)
-	RedfishStatus   string   `json:"redfish_status"`  // collected | not_collected
+	RedfishStatus   string   `json:"redfish_status"`  // collected | credential_required | not_collected
 	BMCStatus       string   `json:"bmc_status"`      // collected | bmc_credential_required | bmc_auth_failed | not_collected
 	IPMIStatus      string   `json:"ipmi_status"`     // not_collected (no IPMI collector yet)
 	PowerState      string   `json:"power_state"`
@@ -206,22 +206,41 @@ func (s *Server) listBMCInventory(w http.ResponseWriter, r *http.Request) {
 				row.LastCollected = b.LastSeenAt.Format("2006-01-02 15:04")
 			}
 		} else {
-			// No Redfish controller inventory — surface what SNMP (CPQ MIBs) collected
-			// (iLO firmware + overall health), WITHOUT claiming Redfish. redfish_status stays
-			// not_collected; this is honest SNMP-sourced enrichment, not a Redfish identity.
+			// No Redfish controller inventory — surface what the SAFE UNAUTHENTICATED
+			// evidence gave us, WITHOUT claiming Redfish was collected:
+			//   - SNMP (CPQ MIBs on HPE iLO): firmware + overall health.
+			//   - Redfish ServiceRoot probe (any vendor): the controller IS reachable over
+			//     Redfish but needs a credential → redfish_status=credential_required, plus
+			//     vendor/product/controller identity. This is honest detection, not a fake
+			//     Redfish identity; bmc_info is never written here.
 			if row.Firmware == "" {
 				row.Firmware = derefStr(d.OsVersion)
 			}
+			redfishReachable, redfishProduct, redfishVersion := false, "", ""
 			if facts, ferr := s.queries.ListDeviceFacts(ctx, d.ID); ferr == nil {
 				for _, f := range facts {
 					switch f.Key {
 					case "bmc.snmp_health":
 						row.HealthSummary = derefStr(f.Value)
-					case "bmc.controller":
+					case "bmc.controller", "redfish.controller":
 						if row.ControllerKind == "" {
 							row.ControllerKind = derefStr(f.Value)
 						}
+					case "redfish.reachable":
+						redfishReachable = strings.EqualFold(derefStr(f.Value), "true")
+					case "redfish.product":
+						redfishProduct = derefStr(f.Value)
+					case "redfish.version":
+						redfishVersion = derefStr(f.Value)
 					}
+				}
+			}
+			// Redfish service seen unauthenticated but no controller inventory collected →
+			// the honest reason full hardware inventory is missing is a missing credential.
+			if redfishReachable {
+				row.RedfishStatus = "credential_required"
+				if rp := strings.TrimSpace(redfishProduct + " " + redfishVersion); rp != "" {
+					row.Evidence = strings.TrimSpace("Redfish: " + rp)
 				}
 			}
 		}

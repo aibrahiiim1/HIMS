@@ -40,6 +40,19 @@ interface BmcRow {
 const fmt = (s?: string) => s || '—'
 const CRED_REQUIRED = new Set(['needs_credential', 'credential_failed', 'not_authorized'])
 
+// redfishTitle explains the Redfish/BMC collection state honestly — most importantly
+// WHY full hardware inventory is missing (a missing Redfish credential), so the iLO/
+// iDRAC gap is self-explanatory in the table without opening each device.
+function redfishTitle(r: BmcRow): string {
+  if (r.bmc_status === 'collected') return 'Full hardware inventory collected over Redfish.'
+  if (r.bmc_status === 'bmc_auth_failed') return 'A Redfish/http_basic credential was rejected by this controller.'
+  if (r.redfish_status === 'credential_required')
+    return 'Redfish service is reachable but no valid credential is bound. Bind an http_basic/Redfish credential to collect full hardware inventory (model, CPU, memory, disks, sensors). Identity/health shown here is from the unauthenticated ServiceRoot / SNMP only.'
+  if (r.bmc_status === 'bmc_credential_required')
+    return 'No Redfish-capable credential bound. Identity/health (if any) is SNMP-derived; full hardware inventory needs an http_basic/Redfish credential.'
+  return 'BMC/Redfish collection status.'
+}
+
 // BmcInventory is the iLO / BMC / iDRAC page: out-of-band management controllers ONLY,
 // never mixed with normal servers (their own 'bmc' category). Data-driven summary cards
 // reconcile with the table. The physical-server link is the result of an evidence-based
@@ -142,7 +155,7 @@ export function BmcInventory() {
                     <td>{fmt(r.model)}</td>
                     <td>{fmt(r.serial)}</td>
                     <td>{fmt(r.firmware)}</td>
-                    <td><span className={`badge badge-${r.bmc_status === 'collected' ? 'up' : r.bmc_status === 'bmc_auth_failed' ? 'down' : 'warning'}`} title="BMC/Redfish collection status">{r.bmc_status || r.redfish_status}</span></td>
+                    <td><span className={`badge badge-${r.bmc_status === 'collected' ? 'up' : r.bmc_status === 'bmc_auth_failed' ? 'down' : 'warning'}`} title={redfishTitle(r)}>{r.bmc_status || r.redfish_status}</span></td>
                     <td><span className="badge badge-unknown">{r.ipmi_status}</span></td>
                     <td>{linkBadge(r)}</td>
                     <td className="muted" style={{ fontSize: 12 }} title={r.link_evidence}>{fmt(r.link_evidence)}</td>

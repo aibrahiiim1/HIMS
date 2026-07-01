@@ -46,6 +46,13 @@ func (s *Server) collectILOviaSNMP(ctx context.Context, dev db.Device) bool {
 	if dev.PrimaryIp == nil || !dev.PrimaryIp.IsValid() {
 		return false
 	}
+	// HP CPQ MIBs are HPE-iLO-specific. NEVER walk them on a known non-HPE controller
+	// (e.g. a Dell iDRAC) — the OIDs would simply return nothing, but guarding on the
+	// proven vendor keeps the intent explicit and avoids any vendor-mismatched read.
+	if v := strings.ToLower(derefStr(dev.Vendor)); v != "" &&
+		!strings.Contains(v, "hp") && !strings.Contains(v, "hewlett") && !strings.Contains(v, "compaq") {
+		return false
+	}
 	c, err := s.snmpClientForDevice(ctx, dev, "", 8*time.Second)
 	if err != nil {
 		return false
@@ -72,7 +79,13 @@ func (s *Server) collectILOviaSNMP(ctx context.Context, dev db.Device) bool {
 		controller = strings.TrimSpace(m[1]) // "Integrated Lights-Out 5"
 		fw = "iLO " + m[2]                   // "iLO 1.37"
 	}
-	if model == "" && serial == "" && fw == "" {
+	// Require a POSITIVE HPE-iLO signature before writing any HPE identity: the iLO
+	// firmware string parsed from the standard sysDescr, or a ProLiant product name
+	// from the CPQ MIB. This is the discriminator that keeps a NON-HPE controller
+	// (e.g. a Dell iDRAC whose SNMP agent returns noSuchObject for the HP CPQ OIDs)
+	// from being fabricated as "HPE" — the exact clobber this collector must never do.
+	isILO := fw != "" || strings.Contains(strings.ToLower(model), "proliant")
+	if !isILO {
 		return false // not an HPE iLO over SNMP — leave it gated, never fabricate
 	}
 

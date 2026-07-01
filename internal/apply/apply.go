@@ -163,11 +163,35 @@ func (a *Applier) Apply(ctx context.Context, res discovery.HostResult, locationI
 	// This feeds the fingerprint test tool and "what is this device?" without a
 	// re-probe, and runs even when no Collector matched the host.
 	a.applySNMPIdentity(ctx, dev.ID, res.Probe)
+	// Persist the UNAUTHENTICATED Redfish ServiceRoot identity (vendor/product/version/
+	// servicetag + reachable) as device facts when the scan saw a Redfish service. This
+	// records the evidence that the host IS an out-of-band controller and that Redfish
+	// is reachable-but-uncredentialed — WITHOUT writing bmc_info or claiming Redfish was
+	// collected. The BMC inventory reads redfish.reachable to show redfish_status=
+	// credential_required honestly.
+	a.applyRedfishIdentity(ctx, dev.ID, res.Probe)
 
 	if res.Facts != nil {
 		a.applyFacts(ctx, dev.ID, res.Facts, poll)
 	}
 	return dev.ID, nil
+}
+
+// applyRedfishIdentity upserts the redfish.* probe hints (set by discovery's
+// unauthenticated ServiceRoot probe) as device facts. Empty values are skipped so a
+// host that briefly didn't answer Redfish keeps its prior evidence. driver="redfish"
+// marks the source; it never writes bmc_info (that needs a real Redfish credential).
+func (a *Applier) applyRedfishIdentity(ctx context.Context, devID uuid.UUID, p driver.Probe) {
+	for _, key := range []string{"redfish.reachable", "redfish.vendor", "redfish.product", "redfish.version", "redfish.controller", "redfish.servicetag"} {
+		v := p.Hints[key]
+		if v == "" {
+			continue
+		}
+		val := v
+		_ = a.w.UpsertDeviceFact(ctx, db.UpsertDeviceFactParams{
+			DeviceID: devID, Key: key, Value: &val, Driver: "redfish", ValueJson: nil,
+		})
+	}
 }
 
 // applySNMPIdentity upserts the raw SNMP system-group values as device facts.
@@ -693,6 +717,12 @@ func identity(res discovery.HostResult) (name string, hostname, vendor, model, s
 	}
 	if res.Model != "" {
 		model = strptr(res.Model)
+	}
+	// A real serial learned from a safe unauthenticated probe (e.g. a Dell iDRAC's
+	// Redfish ServiceTag) is canonical identity. Only set when non-empty, so a scan
+	// that didn't learn a serial never wipes a proven one.
+	if res.Serial != "" {
+		serial = strptr(res.Serial)
 	}
 	// Canonicalize vendor casing/legal-name forms so the same manufacturer from
 	// different discovery sources doesn't split into duplicate inventory entries.

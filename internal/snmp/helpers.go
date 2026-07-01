@@ -82,9 +82,20 @@ func bytesHex(b []byte) string {
 	return string(out)
 }
 
-// PDUString extracts a printable string from OctetString / IPAddress PDUs.
+// PDUString extracts a printable string from OctetString / IPAddress PDUs. SNMP
+// "no such object/instance" and end-of-MIB markers, and a nil value, are NOT data —
+// they return "" (an empty string), never the Go literal "<nil>". This is critical:
+// a caller that treats a non-empty PDUString as "the device answered this OID" would
+// otherwise mistake an unimplemented vendor OID (e.g. HP CPQ OIDs on a Dell iDRAC)
+// for a real value and fabricate identity. Errors are an ABSENT value, full stop.
 func PDUString(p PDU) string {
+	switch p.Type {
+	case TypeNoSuchObject, TypeNoSuchInstance, TypeEndOfMIBView:
+		return ""
+	}
 	switch v := p.Value.(type) {
+	case nil:
+		return ""
 	case string:
 		return v
 	case []byte:
