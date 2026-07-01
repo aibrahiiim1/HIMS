@@ -127,12 +127,12 @@ func (s *Server) runVSphereCollection(ctx context.Context, d db.Device) vsphereR
 		}
 
 		// Success — persist host facts, VM list, classification, bind, mark up.
-		hostName := ""
+		hostName, hostSerial := "", ""
 		if len(inv.Hosts) > 0 {
-			hostName = inv.Hosts[0].Name
+			hostName, hostSerial = inv.Hosts[0].Name, inv.Hosts[0].Serial
 		}
 		_ = s.queries.UpdateDeviceHardwareInfo(ctx, db.UpdateDeviceHardwareInfoParams{
-			ID: d.ID, Vendor: vendor, Model: model, OsVersion: ver, Hostname: hostName,
+			ID: d.ID, Vendor: vendor, Model: model, Serial: hostSerial, OsVersion: ver, Hostname: hostName,
 		})
 		if blob, merr := domain.MarshalEvidence(nil); merr == nil {
 			dc := "esxi"
@@ -202,15 +202,15 @@ func (s *Server) collectVSphereProfile(ctx context.Context, p db.VendorConnectio
 
 	// vCenter manages multiple hosts; a standalone ESXi reports one. Classify
 	// accordingly (honest heuristic from authenticated evidence).
-	hostName, deviceClass := "", "esxi"
+	hostName, deviceClass, hostSerial := "", "esxi", ""
 	if len(inv.Hosts) > 0 {
-		hostName = inv.Hosts[0].Name
+		hostName, hostSerial = inv.Hosts[0].Name, inv.Hosts[0].Serial
 	}
 	if len(inv.Hosts) > 1 {
 		deviceClass = "vcenter"
 	}
 	_ = s.queries.UpdateDeviceHardwareInfo(ctx, db.UpdateDeviceHardwareInfoParams{
-		ID: d.ID, Vendor: vendor, Model: model, OsVersion: ver, Hostname: hostName,
+		ID: d.ID, Vendor: vendor, Model: model, Serial: hostSerial, OsVersion: ver, Hostname: hostName,
 	})
 	if blob, merr := domain.MarshalEvidence(nil); merr == nil {
 		conf := int16(92)

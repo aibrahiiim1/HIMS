@@ -60,6 +60,17 @@ func (d *Driver) Collect(sess driver.Session, _ driver.Probe) (driver.Facts, err
 		return driver.Facts{}, err
 	}
 	f := driver.Facts{KV: map[string]string{"hypervisor.type": "esxi"}, Raw: map[string]any{}, Vendor: "VMware"}
+	// Physical host identity (hardware vendor/model/serial) from the ESXi HostSystem — the
+	// chassis serial is the same one the box's iLO/iDRAC reports, so persisting it lets HIMS
+	// link the BMC to this server by real serial evidence.
+	if len(inv.Hosts) > 0 {
+		h := inv.Hosts[0]
+		if h.Vendor != "" {
+			f.Vendor = h.Vendor
+		}
+		f.Model = h.Model
+		f.Serial = h.Serial
+	}
 	for _, vm := range inv.VMs {
 		f.VMs = append(f.VMs, driver.VMSnap{
 			Name: vm.Name, PowerState: vm.PowerState, VCPU: vm.NumCPU,

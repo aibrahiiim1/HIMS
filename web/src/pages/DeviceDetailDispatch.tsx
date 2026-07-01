@@ -12,6 +12,7 @@ import { UPSDetail } from './UPSDetail'
 import { PbxDetail } from './PbxDetail'
 import { WirelessDetail } from './WirelessDetail'
 import { GenericDeviceDetail } from './GenericDeviceDetail'
+import { BmcDetail } from './BmcDetail'
 
 // DeviceDetailDispatch is the single entry point for `/devices/:id`. It looks up
 // the device's category and renders the matching template. Previously this route
@@ -33,12 +34,10 @@ export function DeviceDetailDispatch() {
     case 'server':
       return <ServerDetail />
     case 'bmc':
-      // A BMC (iLO/iDRAC/Redfish) is a server's management plane — ServerDetail's
-      // Hardware/BMC + Sensors tabs render its collected bmc_info + sensor inventory
-      // (from /devices/{id}/bmc + /bmc-sensors). Without this case a bmc device fell
-      // through to GenericDeviceDetail, which shows none of the collected Redfish data.
-      // Open straight to the Hardware/BMC tab where that data lives.
-      return <ServerDetail initialTab="hardware" />
+      // A BMC (iLO/iDRAC/Redfish) gets a DEDICATED hardware dashboard — not the generic
+      // server template — presenting controller identity, SNMP-vs-Redfish health, and the
+      // full authenticated Redfish inventory (CPU/memory/storage-RAID/drives/sensors).
+      return <BmcDetail />
     case 'endpoint':
       return <EndpointDetail />
     case 'firewall':

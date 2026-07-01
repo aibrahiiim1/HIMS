@@ -85,6 +85,7 @@ type Host struct {
 	FullName        string // e.g. "VMware ESXi 7.0.3 build-19193900"
 	Vendor          string // hardware vendor, e.g. "Dell Inc."
 	Model           string // hardware model, e.g. "PowerEdge R740"
+	Serial          string // chassis serial / ServiceTag (matches the managing iLO/iDRAC)
 	CPUModel        string
 	CPUPackages     int32
 	CPUCores        int32
@@ -94,6 +95,30 @@ type Host struct {
 	Pnics           []Pnic
 	VSwitches       []VSwitch
 	Portgroups      []Portgroup
+}
+
+// hostSerial extracts the physical chassis serial from an ESXi host's identification
+// info, preferring the vendor service tag (Dell "ServiceTag", HPE "SerialNumberTag" /
+// "EnclosureSerialNumberTag") over an asset tag. This is the SAME serial the box's iLO/
+// iDRAC reports, so it lets HIMS link a BMC to the physical server by real evidence.
+func hostSerial(info []types.HostSystemIdentificationInfo) string {
+	byKey := map[string]string{}
+	for _, i := range info {
+		if i.IdentifierType == nil {
+			continue
+		}
+		k := i.IdentifierType.GetElementDescription().Key
+		v := strings.TrimSpace(i.IdentifierValue)
+		if v != "" && v != "Unknown" {
+			byKey[k] = v
+		}
+	}
+	for _, k := range []string{"ServiceTag", "SerialNumberTag", "EnclosureSerialNumberTag", "AssetTag"} {
+		if v := byKey[k]; v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // Inventory is what one Collect run gathered.
@@ -115,7 +140,7 @@ func Collect(ctx context.Context, c *vim25.Client) (Inventory, error) {
 	if herr == nil {
 		defer func() { _ = hostView.Destroy(ctx) }()
 		var hosts []mo.HostSystem
-		if err := hostView.Retrieve(ctx, []string{"HostSystem"}, []string{"summary", "config.network"}, &hosts); err == nil {
+		if err := hostView.Retrieve(ctx, []string{"HostSystem"}, []string{"summary", "config.network", "hardware.systemInfo"}, &hosts); err == nil {
 			for _, h := range hosts {
 				host := Host{Name: h.Summary.Config.Name}
 				if p := h.Summary.Config.Product; p != nil {
@@ -127,6 +152,23 @@ func Collect(ctx context.Context, c *vim25.Client) (Inventory, error) {
 					host.CPUPackages = int32(hw.NumCpuPkgs)
 					host.CPUCores = int32(hw.NumCpuCores)
 					host.MemoryBytes = hw.MemorySize
+					host.Serial = hostSerial(hw.OtherIdentifyingInfo) // summary path (often empty)
+				}
+				// The chassis serial lives under hardware.systemInfo — SerialNumber (6.7+) or
+				// the vendor tag in OtherIdentifyingInfo. This is what matches the box's iLO/iDRAC.
+				if host.Serial == "" && h.Hardware != nil {
+					si := h.Hardware.SystemInfo
+					if s := strings.TrimSpace(si.SerialNumber); s != "" {
+						host.Serial = s
+					} else {
+						host.Serial = hostSerial(si.OtherIdentifyingInfo)
+					}
+					if host.Vendor == "" {
+						host.Vendor = si.Vendor
+					}
+					if host.Model == "" {
+						host.Model = si.Model
+					}
 				}
 				if qs := h.Summary.QuickStats; qs.OverallMemoryUsage != 0 || qs.Uptime != 0 {
 					host.MemoryUsedBytes = int64(qs.OverallMemoryUsage) * 1024 * 1024
