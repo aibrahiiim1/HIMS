@@ -189,7 +189,9 @@ function ActionRequiredCard() {
   return (
     <Panel title="Needs attention now" icon={TriangleAlert} subtitle="the real issues to act on, worst-first"
       actions={d ? <span className="muted" style={{ fontSize: 11 }}>updated {timeAgo(d.updated_at)}</span> : undefined}>
-      {!d ? <div className="loading">Loading…</div> : items.length === 0 ? (
+      {q.isError ? (
+        <div className="muted" style={{ fontSize: 12, padding: '8px 2px' }}>Attention summary is unavailable right now. <button className="btn btn-ghost btn-xs" onClick={() => q.refetch()}>Retry</button></div>
+      ) : !d ? <div className="loading">Loading…</div> : items.length === 0 ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 2px' }}>
           <span style={{ width: 22, height: 22, borderRadius: '50%', background: 'var(--ok)', color: '#fff', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700 }}>✓</span>
           <div><div style={{ fontWeight: 600 }}>All clear</div><div className="muted" style={{ fontSize: 12 }}>No open critical alerts or management gaps right now.</div></div>
