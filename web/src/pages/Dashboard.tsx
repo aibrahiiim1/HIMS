@@ -253,6 +253,19 @@ export function Dashboard() {
 
   const byType = Object.entries(devs.reduce<Record<string, number>>((m, d) => { m[d.category] = (m[d.category] ?? 0) + 1; return m }, {})).sort((a, b) => b[1] - a[1])
   const typeDonut = byType.slice(0, 7).map(([label, value]) => ({ label: label.replace(/_/g, ' '), value, color: colorFor(label) }))
+  // Per-type breakdown (ALL types) with offline (reachability=offline) and unmanaged
+  // (a real management gap — inventory-only/virtual are NOT gaps) counts, one pass.
+  const typeStats = devs.reduce<Record<string, { count: number; offline: number; unmanaged: number }>>((acc, d) => {
+    const t = d.category || 'unknown'
+    const s = acc[t] ?? (acc[t] = { count: 0, offline: 0, unmanaged: 0 })
+    s.count++
+    if ((d.reachability ?? '') === 'offline') s.offline++
+    if (d.management && d.management !== 'managed' && !NON_MANAGEABLE.has(d.management)) s.unmanaged++
+    return acc
+  }, {})
+  const typeBreakdown = Object.entries(typeStats).map(([type, s]) => ({ type, ...s })).sort((a, b) => b.count - a.count)
+  const typeOfflineTotal = typeBreakdown.reduce((n, t) => n + t.offline, 0)
+  const typeUnmanagedTotal = typeBreakdown.reduce((n, t) => n + t.unmanaged, 0)
   const topVendors = Object.entries(devs.reduce<Record<string, number>>((m, d) => { const v = d.vendor || 'Unknown'; m[v] = (m[v] ?? 0) + 1; return m }, {})).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([label, value]) => ({ label, value, color: colorFor(label) }))
 
   const critical = devs.filter((d) => ['down', 'needs_attention', 'offline'].includes((d.status || '').toLowerCase())).slice(0, 6)
@@ -497,13 +510,37 @@ export function Dashboard() {
       {/* ===== D · Fleet Overview — what's on the network ===== */}
       <SectionTitle icon={Boxes} title="Fleet Overview" hint={`what's on the network — ${total} devices across ${byType.length} types`} />
       <div className="grid-2">
-        <Panel title="Devices by Type" icon={Layers} subtitle="what kinds of devices are on the network">
-          {typeDonut.length > 0 ? (
-            <div className="row" style={{ alignItems: 'center', gap: 20 }}>
-              <Donut data={typeDonut} centerValue={total} centerLabel="devices" size={140} />
-              <div style={{ flex: 1, minWidth: 140 }}><Legend data={typeDonut} total={total} /></div>
-            </div>
-          ) : <div className="muted">No devices yet.</div>}
+        <Panel title="Devices by Type" icon={Layers} subtitle={`all ${byType.length} types · offline & unmanaged per type`}>
+          {typeBreakdown.length === 0 ? <div className="muted">No devices yet.</div> : (
+            <>
+              <div className="row" style={{ alignItems: 'center', gap: 18, marginBottom: 14 }}>
+                <Donut data={typeDonut} centerValue={total} centerLabel="devices" size={110} />
+                <div style={{ fontSize: 12 }}>
+                  <div><b style={{ fontSize: 20 }}>{total.toLocaleString()}</b> <span className="muted">devices · {byType.length} types</span></div>
+                  <div style={{ marginTop: 4, display: 'flex', gap: 14 }}>
+                    <span><b style={{ color: typeOfflineTotal > 0 ? 'var(--crit)' : 'var(--text)' }}>{typeOfflineTotal}</b> <span className="muted">offline</span></span>
+                    <span><b style={{ color: typeUnmanagedTotal > 0 ? 'var(--warn)' : 'var(--text)' }}>{typeUnmanagedTotal}</b> <span className="muted">unmanaged</span></span>
+                  </div>
+                </div>
+              </div>
+              {/* ALL types in two columns; per type: total, offline (red), unmanaged (orange). */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(232px, 1fr))', gap: '0 22px' }}>
+                {[typeBreakdown.slice(0, Math.ceil(typeBreakdown.length / 2)), typeBreakdown.slice(Math.ceil(typeBreakdown.length / 2))].map((col, i) => (
+                  <div key={i}>
+                    <div className="dbt-head">TYPE<span>TOTAL</span><span title="offline devices">OFF</span><span title="unmanaged devices">UNM</span></div>
+                    {col.map((t) => (
+                      <Link key={t.type} to={`/inventory?category=${t.type}`} className="dbt-row" title={`${t.type.replace(/_/g, ' ')} — ${t.count} total · ${t.offline} offline · ${t.unmanaged} unmanaged`}>
+                        <span className="dbt-name"><span className="dbt-dot" style={{ background: colorFor(t.type) }} />{t.type.replace(/_/g, ' ')}</span>
+                        <span className="dbt-num">{t.count}</span>
+                        <span className="dbt-num" style={{ color: t.offline > 0 ? 'var(--crit)' : 'var(--text-faint)', fontWeight: t.offline > 0 ? 700 : 400 }}>{t.offline || '—'}</span>
+                        <span className="dbt-num" style={{ color: t.unmanaged > 0 ? 'var(--warn)' : 'var(--text-faint)', fontWeight: t.unmanaged > 0 ? 700 : 400 }}>{t.unmanaged || '—'}</span>
+                      </Link>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
         </Panel>
         <Panel title="Top Vendors" icon={Server} subtitle="most common hardware makers in inventory"><BarList rows={topVendors} /></Panel>
       </div>
