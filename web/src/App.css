@@ -663,7 +663,7 @@ select.field { cursor: pointer; }
 /* A .stack used directly as a hero column fills the row height, and a panel it
    marks `.fill` grows to take the leftover space so the stacked pair lines up
    with the tall cards beside it (e.g. Manageability + Critical Assets column). */
-.grid-hero > .stack { height: 100%; }
+.grid-hero > .stack, .grid-side > .stack { height: 100%; }
 .stack { min-height: 0; }
 .stack > .panel.fill { flex: 1; display: flex; flex-direction: column; }
 .stack > .panel.fill > .panel-body { flex: 1; }

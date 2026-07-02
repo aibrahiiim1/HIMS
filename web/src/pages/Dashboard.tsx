@@ -456,7 +456,7 @@ export function Dashboard() {
       {/* ===== C · Collection & Trust — reachable vs managed, kept separate ===== */}
       <SectionTitle icon={ShieldCheck} title="Collection & Trust" hint="online means a device answers the network · managed means HIMS can log in and collect from it — two different things" />
       <ReachManageCards />
-      <div className="grid-side">
+      <div className="grid-side" style={{ alignItems: 'stretch' }}>
         <div className="stack"><ManagementAccessCoverage /></div>
         <div className="stack">
           <Panel title="Live Fleet Health" icon={HeartPulse} subtitle="status of every monitored device right now">
@@ -468,7 +468,7 @@ export function Dashboard() {
             ) : <EmptyState icon={Activity} title="No monitoring checks yet" message="Seed checks to compute a health score." action={<Link className="btn btn-primary btn-sm" to="/monitoring">Go to Monitoring</Link>} />}
           </Panel>
           {siteRows.length > 0 && (
-            <Panel title="Site Health" icon={Building2} subtitle="up / down / open alerts per site · worst first" actions={<Link className="btn btn-ghost btn-sm" to="/sites">Multi-Site →</Link>}>
+            <Panel title="Site Health" icon={Building2} className="fill" subtitle="up / down / open alerts per site · worst first" actions={<Link className="btn btn-ghost btn-sm" to="/sites">Multi-Site →</Link>}>
               <table className="site-matrix">
                 <thead><tr><th>Site</th><th>Devices</th><th>On</th><th>Off</th><th>Availability</th><th>Alerts</th></tr></thead>
                 <tbody>
