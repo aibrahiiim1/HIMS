@@ -123,6 +123,7 @@ type updateDeviceReq struct {
 	MonitoringEnabled          *bool   `json:"monitoring_enabled"`
 	ClassificationLocked       *bool   `json:"classification_locked"`
 	ManualClassificationReason *string `json:"manual_classification_reason"`
+	IsInventoryOnly            *bool   `json:"is_inventory_only"`
 }
 
 var validCriticality = map[string]bool{"": true, "low": true, "normal": true, "high": true, "critical": true}
@@ -194,6 +195,7 @@ func (s *Server) updateDevice(w http.ResponseWriter, r *http.Request) {
 		MonitoringEnabled:          mergeBool(req.MonitoringEnabled, cur.MonitoringEnabled),
 		ClassificationLocked:       mergeBool(req.ClassificationLocked, cur.ClassificationLocked),
 		ManualClassificationReason: mergeStr(req.ManualClassificationReason, cur.ManualClassificationReason),
+		IsInventoryOnly:            mergeBool(req.IsInventoryOnly, cur.IsInventoryOnly),
 	}
 	if req.LocationID != nil {
 		params.LocationID = parseUUIDPtr(req.LocationID) // "" → nil (clear)
@@ -213,6 +215,70 @@ func (s *Server) updateDevice(w http.ResponseWriter, r *http.Request) {
 			"classification_locked": dev.ClassificationLocked,
 		})
 	writeJSON(w, http.StatusOK, dev)
+}
+
+// setInventoryOnlyReq is the body for the one-click Unmanaged-page toggle.
+type setInventoryOnlyReq struct {
+	InventoryOnly bool `json:"inventory_only"`
+}
+
+// setDeviceInventoryOnly handles POST /devices/{id}/inventory-only — the one-click
+// "mark as inventory only" action from the Unmanaged page. Marking a device
+// inventory-only records that authenticated access is DELIBERATELY opted out
+// (third-party-owned kit, no-credential-by-policy, must-not-probe): it drops out of
+// the Unmanaged list and every credential/collection gap, but stays MONITORED for
+// reachability. So turning it on also guarantees the device is actually monitored —
+// monitoring enabled + a reachability check seeded from the ports it last answered
+// on — otherwise "monitor only if it goes offline" could silently not monitor at all.
+func (s *Server) setDeviceInventoryOnly(w http.ResponseWriter, r *http.Request) {
+	ctx, id, ok := pathDevice(w, r)
+	if !ok {
+		return
+	}
+	var req setInventoryOnlyReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	dev, err := s.queries.MarkDeviceInventoryOnly(ctx, db.MarkDeviceInventoryOnlyParams{ID: id, IsInventoryOnly: req.InventoryOnly})
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if req.InventoryOnly {
+		// Guarantee it is genuinely monitored: enable monitoring if it was off, and
+		// seed an evidence-based reachability check (best-effort; monitoring is non-critical).
+		if !dev.MonitoringEnabled {
+			p := db.UpdateDeviceParams{
+				ID: dev.ID, Name: dev.Name, Category: dev.Category,
+				Vendor: dev.Vendor, Model: dev.Model, Serial: dev.Serial,
+				OsVersion: dev.OsVersion, Hostname: dev.Hostname, Vlan: dev.Vlan,
+				DeviceClass: dev.DeviceClass, Location: dev.Location, LocationID: dev.LocationID,
+				Subtype: dev.Subtype, Notes: dev.Notes, Criticality: dev.Criticality,
+				MonitoringEnabled: true, ClassificationLocked: dev.ClassificationLocked,
+				ManualClassificationReason: dev.ManualClassificationReason, IsInventoryOnly: true,
+			}
+			if d2, e := s.queries.UpdateDevice(ctx, p); e == nil {
+				dev = d2
+			}
+		}
+		s.seedReachabilityCheck(ctx, dev, s.deviceOpenPorts(ctx, id), false)
+	}
+
+	action, msg := "device.inventory_only.set", "Marked "+dev.Name+" inventory-only (monitor-only)"
+	if !req.InventoryOnly {
+		action, msg = "device.inventory_only.clear", "Cleared inventory-only on "+dev.Name
+	}
+	s.audit(r, "inventory", action, "device", id.String(), msg, map[string]any{"inventory_only": req.InventoryOnly})
+
+	// Return the enriched device (same shape as getDevice) so the UI updates in place.
+	rows := s.scopeDevices(ctx, []db.Device{dev})
+	maps, merr := s.buildStatusMaps(ctx)
+	if merr != nil || len(rows) == 0 {
+		writeJSON(w, http.StatusOK, dev)
+		return
+	}
+	writeJSON(w, http.StatusOK, maps.enrich(rows)[0])
 }
 
 // mergeStr returns *p (when provided) else the current NOT-NULL string.
@@ -270,6 +336,7 @@ func changedDeviceFields(a, b db.Device) []string {
 	add("criticality", a.Criticality != b.Criticality)
 	add("monitoring_enabled", a.MonitoringEnabled != b.MonitoringEnabled)
 	add("classification_locked", a.ClassificationLocked != b.ClassificationLocked)
+	add("is_inventory_only", a.IsInventoryOnly != b.IsInventoryOnly)
 	return out
 }
 

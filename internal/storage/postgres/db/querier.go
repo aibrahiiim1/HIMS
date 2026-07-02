@@ -89,6 +89,8 @@ type Querier interface {
 	CountExpiringSystems(ctx context.Context) (int64, error)
 	// Failed jobs for one agent (for the agent detail page + Data Quality count).
 	CountFailedAgentJobs(ctx context.Context, agentID uuid.UUID) (int64, error)
+	// Headline count for the "N inventory-only (monitor-only)" indicator.
+	CountInventoryOnlyDevices(ctx context.Context) (int64, error)
 	// Channels whose camera IP matched an already-discovered standalone camera device.
 	CountLinkedNVRChannels(ctx context.Context) (int64, error)
 	CountMibPacksBySource(ctx context.Context) ([]CountMibPacksBySourceRow, error)
@@ -722,6 +724,9 @@ type Querier interface {
 	LiveDeviceByIPAndLocation(ctx context.Context, arg LiveDeviceByIPAndLocationParams) (Device, error)
 	MACCountByPort(ctx context.Context, deviceID uuid.UUID) ([]MACCountByPortRow, error)
 	MarkAgentJobDispatched(ctx context.Context, id uuid.UUID) error
+	// Flag (or unflag) a device as record-and-monitor-only (access opted out). Returns
+	// the updated row so the API can re-derive + return its two-axis status.
+	MarkDeviceInventoryOnly(ctx context.Context, arg MarkDeviceInventoryOnlyParams) (Device, error)
 	// Flag (or unflag) a device as a manually-entered virtual placeholder.
 	MarkDeviceVirtual(ctx context.Context, arg MarkDeviceVirtualParams) error
 	// Freshness of the most recent LLDP/CDP neighbor observation (topology age).

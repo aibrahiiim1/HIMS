@@ -263,6 +263,7 @@ func (s *Server) routes() {
 		r.Post("/devices/bulk-assign", s.bulkAssignDevices)
 		r.Get("/devices/{id}", s.getDevice)
 		r.Patch("/devices/{id}", s.updateDevice)
+		r.Post("/devices/{id}/inventory-only", s.setDeviceInventoryOnly) // record-and-monitor-only toggle
 		r.Delete("/devices/{id}", s.deleteDevice)
 		r.Get("/devices/{id}/classification", s.getClassification)
 		r.Get("/devices/{id}/classification-evidence", s.getClassificationEvidence) // latest scan probe_data (classification_detail) for the evidence panel
@@ -323,9 +324,9 @@ func (s *Server) routes() {
 		r.Get("/devices/{id}/ssh-cli-results", s.listSSHCliResults)              // per-command SSH CLI results
 		r.Get("/devices/{id}/bmc", s.deviceBMC)
 		r.Get("/devices/{id}/bmc-sensors", s.deviceBMCSensors)
-		r.Get("/devices/{id}/bmc-components", s.deviceBMCComponents)     // detailed CPU/DIMM/RAID/volume/drive inventory
-		r.Get("/devices/{id}/bmc-connectivity", s.deviceBMCConnectivity) // per-NIC (mgmt + host) switch/port map from FDB/ARP evidence
-		r.Get("/devices/{id}/bmc-drives", s.deviceServerBMCDrives)       // server physical-drive media from its evidence-linked BMC (Redfish)
+		r.Get("/devices/{id}/bmc-components", s.deviceBMCComponents)       // detailed CPU/DIMM/RAID/volume/drive inventory
+		r.Get("/devices/{id}/bmc-connectivity", s.deviceBMCConnectivity)   // per-NIC (mgmt + host) switch/port map from FDB/ARP evidence
+		r.Get("/devices/{id}/bmc-drives", s.deviceServerBMCDrives)         // server physical-drive media from its evidence-linked BMC (Redfish)
 		r.Post("/devices/{id}/collector-agent", s.setDeviceCollectorAgent) // pin OS collection to a specific reachable relay agent (override)
 		r.Get("/devices/{id}/printer-supplies", s.devicePrinterSupplies)
 		r.Get("/devices/{id}/phones", s.devicePhones)
@@ -705,7 +706,10 @@ func (s *Server) listDevices(w http.ResponseWriter, r *http.Request) {
 			// It backs the dashboard "Online but Unmanaged" drill-down so the count
 			// (online && != managed) matches the filtered list exactly.
 			if mgmtFilter == "not_managed" {
-				if d.Management == MgmtManaged {
+				// Inventory-only devices are intentionally not-managed (access opted out),
+				// so they are NOT an unresolved gap — keep them out of the Unmanaged list.
+				// They remain reachable via the explicit ?management=inventory_only filter.
+				if d.Management == MgmtManaged || d.Management == MgmtInventoryOnly {
 					continue
 				}
 			} else if mgmtFilter != "" && d.Management != mgmtFilter {

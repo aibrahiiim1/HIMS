@@ -75,6 +75,7 @@ UPDATE devices SET
     location = $11, location_id = $12,
     subtype = $13, notes = $14, criticality = $15, monitoring_enabled = $16,
     classification_locked = $17, manual_classification_reason = $18,
+    is_inventory_only = $19,
     updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
 RETURNING *;
@@ -264,6 +265,17 @@ ORDER BY category, name;
 -- name: MarkDeviceVirtual :exec
 -- Flag (or unflag) a device as a manually-entered virtual placeholder.
 UPDATE devices SET is_virtual = $2, updated_at = now() WHERE id = $1;
+
+-- name: MarkDeviceInventoryOnly :one
+-- Flag (or unflag) a device as record-and-monitor-only (access opted out). Returns
+-- the updated row so the API can re-derive + return its two-axis status.
+UPDATE devices SET is_inventory_only = $2, updated_at = now()
+WHERE id = $1 AND deleted_at IS NULL
+RETURNING *;
+
+-- name: CountInventoryOnlyDevices :one
+-- Headline count for the "N inventory-only (monitor-only)" indicator.
+SELECT COUNT(*)::bigint FROM devices WHERE is_inventory_only AND deleted_at IS NULL;
 
 -- name: CountVirtualDevices :one
 -- Headline count for the "N devices, M virtual" indicator.

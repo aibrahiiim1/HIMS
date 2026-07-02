@@ -325,6 +325,8 @@ type Device struct {
 	WebLastPort         *int32     `json:"web_last_port"`
 	WebLastCredentialID *uuid.UUID `json:"web_last_credential_id"`
 	WebPrefProto        string     `json:"web_pref_proto"`
+	// Operator-marked record-and-monitor-only device: monitored for reachability but excluded from access/credential expectations.
+	IsInventoryOnly bool `json:"is_inventory_only"`
 }
 
 type DeviceFact struct {

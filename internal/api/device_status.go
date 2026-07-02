@@ -59,6 +59,12 @@ const (
 	// be 0 for a settled from-zero scan.
 	MgmtNotAttempted = "not_attempted"
 	MgmtVirtual      = "virtual" // operator-entered placeholder; not probed/monitored
+	// MgmtInventoryOnly: operator marked this REAL device as record-and-monitor-only
+	// (access opted out — third-party kit, no-credential-by-policy, must-not-probe).
+	// It IS monitored for reachability (online/offline), but must never be reported as
+	// needs_credential / credential_failed / collection_failed and never counted as a
+	// management gap. Distinct from virtual (virtual is not on the network at all).
+	MgmtInventoryOnly = "inventory_only"
 	// MgmtWebAuthenticated: a WEB/identity credential (http_basic/http) authenticated, but
 	// no DEEP OS/endpoint management exists (winrm/wmi/ssh/snmp did not collect). The
 	// credential WORKS — so this is NEVER credential_failed; the operator may add a deep
@@ -561,6 +567,14 @@ func (m *statusMaps) statusFor(d db.Device) deviceStatus {
 	if d.IsVirtual {
 		return deviceStatus{Reachability: reachabilityFromStatus(d.Status), Management: MgmtVirtual, ServerRole: m.serverRole(d)}
 	}
+	// Inventory-only devices are REAL and still monitored, so reachability reflects the
+	// live monitoring status — but access was deliberately opted out, so management is a
+	// distinct "inventory_only" state. This keeps them out of every credential/collection
+	// gap bucket below (needs_credential / credential_failed / collection_failed) while
+	// still letting "offline" surface (see statusDataQualityIssues).
+	if d.IsInventoryOnly {
+		return deviceStatus{Reachability: reachabilityFromStatus(d.Status), Management: MgmtInventoryOnly, ServerRole: m.serverRole(d)}
+	}
 	reach := reachabilityFromStatus(d.Status)
 	state, managedBy := m.deriveManagement(d)
 	st := deviceStatus{
@@ -585,10 +599,18 @@ func (m *statusMaps) statusFor(d db.Device) deviceStatus {
 func (m *statusMaps) statusDataQualityIssues(devs []db.Device, now time.Time) []dqIssue {
 	var onlineUnmanaged, reachableNoCred, credBoundNotWorking, needsAgentColl,
 		agentOfflineManaged, offlinePrevManaged, managedStale, notAttempted,
-		notAuthorized, webOnly []db.Device
+		notAuthorized, webOnly, inventoryOnlyOffline []db.Device
 	staleBefore := now.Add(-reachStale)
 	for _, d := range devs {
 		st := m.statusFor(d)
+		// Inventory-only (monitor-only) devices: no access is expected, but the operator
+		// asked to be alerted when one goes offline. Surface exactly that, and nothing else.
+		if st.Management == MgmtInventoryOnly {
+			if st.Reachability == ReachOffline {
+				inventoryOnlyOffline = append(inventoryOnlyOffline, d)
+			}
+			continue
+		}
 		// Offline now but has a working method on record — was managed, can't be reached.
 		if st.PreviouslyManaged {
 			offlinePrevManaged = append(offlinePrevManaged, d)
@@ -646,6 +668,7 @@ func (m *statusMaps) statusDataQualityIssues(devs []db.Device, now time.Time) []
 	add("collection_not_attempted", "Collection not attempted", "Reachable Windows hosts that were enrolled but never had a collection attempt (no in-flight job, no recorded attempt). This should be 0 once a from-zero scan settles — a non-zero count is an enqueue gap, not a credential problem. Re-run a targeted collection.", "warning", notAttempted)
 	add("credential_not_authorized", "Credential not authorized on host", "A credential AUTHENTICATED but the host denied access (UAC LocalAccountTokenFilterPolicy, remote-logon rights, group membership, WinRM/DCOM policy). This is NOT a wrong password — fix host policy or use a credential authorized on this host.", "warning", notAuthorized)
 	add("web_authenticated_no_deep", "Web-authenticated, no deep management", "A web/identity credential (HTTP) authenticates, but no deep OS/endpoint management exists yet. The credential works — add a Windows/Linux/SNMP management credential if deep inventory is required.", "info", webOnly)
+	add("inventory_only_offline", "Inventory-only device offline", "Devices marked inventory-only (record-and-monitor-only — access opted out) that are currently unreachable. These are monitored for liveness only; check power/network. Access/credential remediation does NOT apply to them.", "warning", inventoryOnlyOffline)
 	return out
 }
 

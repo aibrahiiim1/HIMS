@@ -111,6 +111,11 @@ func (s *Server) trustAudit(w http.ResponseWriter, r *http.Request) {
 	var weak []cand
 	for _, d := range devs {
 		st := maps.statusFor(d).Management
+		// Inventory-only devices have access deliberately opted out — they are not a trust
+		// gap and must never appear in the weak/expected-collectors audit.
+		if st == MgmtInventoryOnly {
+			continue
+		}
 		deep := osInv[d.ID] || vmHost[d.ID] || hasBMC[d.ID]
 		shallowManaged := st == MgmtManaged && deepCompute[d.Category] && !deep
 		if st != MgmtManaged || shallowManaged {

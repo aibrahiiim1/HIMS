@@ -82,7 +82,9 @@ func (s *Server) dataQuality(w http.ResponseWriter, r *http.Request) {
 		if d.Vendor == nil || strings.TrimSpace(*d.Vendor) == "" {
 			missingVendor = append(missingVendor, d)
 		}
-		if credentialedCategories[d.Category] && d.CredentialID == nil {
+		// Inventory-only devices deliberately have no credential (access opted out), so
+		// they are NOT a "missing credential" gap — exclude them from this bucket.
+		if credentialedCategories[d.Category] && d.CredentialID == nil && !d.IsInventoryOnly {
 			missingCreds = append(missingCreds, d)
 		}
 		if d.Category == "unknown" {

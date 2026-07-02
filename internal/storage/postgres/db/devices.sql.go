@@ -74,6 +74,18 @@ func (q *Queries) CountDevices(ctx context.Context) (int64, error) {
 	return column_1, err
 }
 
+const countInventoryOnlyDevices = `-- name: CountInventoryOnlyDevices :one
+SELECT COUNT(*)::bigint FROM devices WHERE is_inventory_only AND deleted_at IS NULL
+`
+
+// Headline count for the "N inventory-only (monitor-only)" indicator.
+func (q *Queries) CountInventoryOnlyDevices(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countInventoryOnlyDevices)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const countVirtualDevices = `-- name: CountVirtualDevices :one
 SELECT COUNT(*)::bigint FROM devices WHERE is_virtual AND deleted_at IS NULL
 `
@@ -92,7 +104,7 @@ INSERT INTO devices (
     os_version, category, status, driver, credential_id, metadata,
     vlan, device_class, location
 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
-RETURNING id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason, is_virtual, cctv_credential_id, web_scheme_pref, web_port_pref, web_alt_ports, web_notes, web_last_ok, web_last_ok_at, web_last_proto, web_last_scheme, web_last_port, web_last_credential_id, web_pref_proto
+RETURNING id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason, is_virtual, cctv_credential_id, web_scheme_pref, web_port_pref, web_alt_ports, web_notes, web_last_ok, web_last_ok_at, web_last_proto, web_last_scheme, web_last_port, web_last_credential_id, web_pref_proto, is_inventory_only
 `
 
 type CreateDeviceParams struct {
@@ -179,6 +191,7 @@ func (q *Queries) CreateDevice(ctx context.Context, arg CreateDeviceParams) (Dev
 		&i.WebLastPort,
 		&i.WebLastCredentialID,
 		&i.WebPrefProto,
+		&i.IsInventoryOnly,
 	)
 	return i, err
 }
@@ -217,7 +230,7 @@ func (q *Queries) DeleteManualDeviceRoles(ctx context.Context, deviceID uuid.UUI
 }
 
 const getDevice = `-- name: GetDevice :one
-SELECT id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason, is_virtual, cctv_credential_id, web_scheme_pref, web_port_pref, web_alt_ports, web_notes, web_last_ok, web_last_ok_at, web_last_proto, web_last_scheme, web_last_port, web_last_credential_id, web_pref_proto FROM devices WHERE id = $1 AND deleted_at IS NULL
+SELECT id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason, is_virtual, cctv_credential_id, web_scheme_pref, web_port_pref, web_alt_ports, web_notes, web_last_ok, web_last_ok_at, web_last_proto, web_last_scheme, web_last_port, web_last_credential_id, web_pref_proto, is_inventory_only FROM devices WHERE id = $1 AND deleted_at IS NULL
 `
 
 func (q *Queries) GetDevice(ctx context.Context, id uuid.UUID) (Device, error) {
@@ -268,12 +281,13 @@ func (q *Queries) GetDevice(ctx context.Context, id uuid.UUID) (Device, error) {
 		&i.WebLastPort,
 		&i.WebLastCredentialID,
 		&i.WebPrefProto,
+		&i.IsInventoryOnly,
 	)
 	return i, err
 }
 
 const listAllDevices = `-- name: ListAllDevices :many
-SELECT id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason, is_virtual, cctv_credential_id, web_scheme_pref, web_port_pref, web_alt_ports, web_notes, web_last_ok, web_last_ok_at, web_last_proto, web_last_scheme, web_last_port, web_last_credential_id, web_pref_proto FROM devices
+SELECT id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason, is_virtual, cctv_credential_id, web_scheme_pref, web_port_pref, web_alt_ports, web_notes, web_last_ok, web_last_ok_at, web_last_proto, web_last_scheme, web_last_port, web_last_credential_id, web_pref_proto, is_inventory_only FROM devices
 WHERE deleted_at IS NULL
 ORDER BY category, name
 `
@@ -333,6 +347,7 @@ func (q *Queries) ListAllDevices(ctx context.Context) ([]Device, error) {
 			&i.WebLastPort,
 			&i.WebLastCredentialID,
 			&i.WebPrefProto,
+			&i.IsInventoryOnly,
 		); err != nil {
 			return nil, err
 		}
@@ -493,7 +508,7 @@ func (q *Queries) ListDeviceRoles(ctx context.Context, deviceID uuid.UUID) ([]De
 }
 
 const listDevicesByCategory = `-- name: ListDevicesByCategory :many
-SELECT id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason, is_virtual, cctv_credential_id, web_scheme_pref, web_port_pref, web_alt_ports, web_notes, web_last_ok, web_last_ok_at, web_last_proto, web_last_scheme, web_last_port, web_last_credential_id, web_pref_proto FROM devices
+SELECT id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason, is_virtual, cctv_credential_id, web_scheme_pref, web_port_pref, web_alt_ports, web_notes, web_last_ok, web_last_ok_at, web_last_proto, web_last_scheme, web_last_port, web_last_credential_id, web_pref_proto, is_inventory_only FROM devices
 WHERE category = $1 AND deleted_at IS NULL
 ORDER BY name
 `
@@ -552,6 +567,7 @@ func (q *Queries) ListDevicesByCategory(ctx context.Context, category string) ([
 			&i.WebLastPort,
 			&i.WebLastCredentialID,
 			&i.WebPrefProto,
+			&i.IsInventoryOnly,
 		); err != nil {
 			return nil, err
 		}
@@ -564,7 +580,7 @@ func (q *Queries) ListDevicesByCategory(ctx context.Context, category string) ([
 }
 
 const listDevicesByOSFamily = `-- name: ListDevicesByOSFamily :many
-SELECT id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason, is_virtual, cctv_credential_id, web_scheme_pref, web_port_pref, web_alt_ports, web_notes, web_last_ok, web_last_ok_at, web_last_proto, web_last_scheme, web_last_port, web_last_credential_id, web_pref_proto FROM devices
+SELECT id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason, is_virtual, cctv_credential_id, web_scheme_pref, web_port_pref, web_alt_ports, web_notes, web_last_ok, web_last_ok_at, web_last_proto, web_last_scheme, web_last_port, web_last_credential_id, web_pref_proto, is_inventory_only FROM devices
 WHERE os_family = $1 AND deleted_at IS NULL
 ORDER BY category, name
 `
@@ -623,6 +639,7 @@ func (q *Queries) ListDevicesByOSFamily(ctx context.Context, osFamily string) ([
 			&i.WebLastPort,
 			&i.WebLastCredentialID,
 			&i.WebPrefProto,
+			&i.IsInventoryOnly,
 		); err != nil {
 			return nil, err
 		}
@@ -635,7 +652,7 @@ func (q *Queries) ListDevicesByOSFamily(ctx context.Context, osFamily string) ([
 }
 
 const listDevicesByRole = `-- name: ListDevicesByRole :many
-SELECT d.id, d.location_id, d.primary_ip, d.hostname, d.name, d.vendor, d.model, d.serial, d.os_version, d.category, d.status, d.driver, d.credential_id, d.last_discovery_at, d.last_monitoring_at, d.metadata, d.created_at, d.updated_at, d.deleted_at, d.vlan, d.device_class, d.location, d.os_family, d.confidence_score, d.classification_evidence, d.classification_locked, d.subtype, d.notes, d.criticality, d.monitoring_enabled, d.manual_classification_reason, d.is_virtual, d.cctv_credential_id, d.web_scheme_pref, d.web_port_pref, d.web_alt_ports, d.web_notes, d.web_last_ok, d.web_last_ok_at, d.web_last_proto, d.web_last_scheme, d.web_last_port, d.web_last_credential_id, d.web_pref_proto FROM devices d
+SELECT d.id, d.location_id, d.primary_ip, d.hostname, d.name, d.vendor, d.model, d.serial, d.os_version, d.category, d.status, d.driver, d.credential_id, d.last_discovery_at, d.last_monitoring_at, d.metadata, d.created_at, d.updated_at, d.deleted_at, d.vlan, d.device_class, d.location, d.os_family, d.confidence_score, d.classification_evidence, d.classification_locked, d.subtype, d.notes, d.criticality, d.monitoring_enabled, d.manual_classification_reason, d.is_virtual, d.cctv_credential_id, d.web_scheme_pref, d.web_port_pref, d.web_alt_ports, d.web_notes, d.web_last_ok, d.web_last_ok_at, d.web_last_proto, d.web_last_scheme, d.web_last_port, d.web_last_credential_id, d.web_pref_proto, d.is_inventory_only FROM devices d
 JOIN device_roles r ON r.device_id = d.id
 WHERE r.role = $1
 ORDER BY d.name
@@ -695,6 +712,7 @@ func (q *Queries) ListDevicesByRole(ctx context.Context, role string) ([]Device,
 			&i.WebLastPort,
 			&i.WebLastCredentialID,
 			&i.WebPrefProto,
+			&i.IsInventoryOnly,
 		); err != nil {
 			return nil, err
 		}
@@ -789,7 +807,7 @@ func (q *Queries) ListUnhealthyBMC(ctx context.Context) ([]ListUnhealthyBMCRow, 
 }
 
 const liveDeviceByIP = `-- name: LiveDeviceByIP :one
-SELECT id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason, is_virtual, cctv_credential_id, web_scheme_pref, web_port_pref, web_alt_ports, web_notes, web_last_ok, web_last_ok_at, web_last_proto, web_last_scheme, web_last_port, web_last_credential_id, web_pref_proto FROM devices
+SELECT id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason, is_virtual, cctv_credential_id, web_scheme_pref, web_port_pref, web_alt_ports, web_notes, web_last_ok, web_last_ok_at, web_last_proto, web_last_scheme, web_last_port, web_last_credential_id, web_pref_proto, is_inventory_only FROM devices
 WHERE primary_ip = $1 AND deleted_at IS NULL
 ORDER BY updated_at DESC
 LIMIT 1
@@ -846,12 +864,13 @@ func (q *Queries) LiveDeviceByIP(ctx context.Context, primaryIp *netip.Addr) (De
 		&i.WebLastPort,
 		&i.WebLastCredentialID,
 		&i.WebPrefProto,
+		&i.IsInventoryOnly,
 	)
 	return i, err
 }
 
 const liveDeviceByIPAndLocation = `-- name: LiveDeviceByIPAndLocation :one
-SELECT id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason, is_virtual, cctv_credential_id, web_scheme_pref, web_port_pref, web_alt_ports, web_notes, web_last_ok, web_last_ok_at, web_last_proto, web_last_scheme, web_last_port, web_last_credential_id, web_pref_proto FROM devices
+SELECT id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason, is_virtual, cctv_credential_id, web_scheme_pref, web_port_pref, web_alt_ports, web_notes, web_last_ok, web_last_ok_at, web_last_proto, web_last_scheme, web_last_port, web_last_credential_id, web_pref_proto, is_inventory_only FROM devices
 WHERE primary_ip = $1 AND location_id IS NOT DISTINCT FROM $2 AND deleted_at IS NULL
 `
 
@@ -912,6 +931,73 @@ func (q *Queries) LiveDeviceByIPAndLocation(ctx context.Context, arg LiveDeviceB
 		&i.WebLastPort,
 		&i.WebLastCredentialID,
 		&i.WebPrefProto,
+		&i.IsInventoryOnly,
+	)
+	return i, err
+}
+
+const markDeviceInventoryOnly = `-- name: MarkDeviceInventoryOnly :one
+UPDATE devices SET is_inventory_only = $2, updated_at = now()
+WHERE id = $1 AND deleted_at IS NULL
+RETURNING id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason, is_virtual, cctv_credential_id, web_scheme_pref, web_port_pref, web_alt_ports, web_notes, web_last_ok, web_last_ok_at, web_last_proto, web_last_scheme, web_last_port, web_last_credential_id, web_pref_proto, is_inventory_only
+`
+
+type MarkDeviceInventoryOnlyParams struct {
+	ID              uuid.UUID `json:"id"`
+	IsInventoryOnly bool      `json:"is_inventory_only"`
+}
+
+// Flag (or unflag) a device as record-and-monitor-only (access opted out). Returns
+// the updated row so the API can re-derive + return its two-axis status.
+func (q *Queries) MarkDeviceInventoryOnly(ctx context.Context, arg MarkDeviceInventoryOnlyParams) (Device, error) {
+	row := q.db.QueryRow(ctx, markDeviceInventoryOnly, arg.ID, arg.IsInventoryOnly)
+	var i Device
+	err := row.Scan(
+		&i.ID,
+		&i.LocationID,
+		&i.PrimaryIp,
+		&i.Hostname,
+		&i.Name,
+		&i.Vendor,
+		&i.Model,
+		&i.Serial,
+		&i.OsVersion,
+		&i.Category,
+		&i.Status,
+		&i.Driver,
+		&i.CredentialID,
+		&i.LastDiscoveryAt,
+		&i.LastMonitoringAt,
+		&i.Metadata,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+		&i.Vlan,
+		&i.DeviceClass,
+		&i.Location,
+		&i.OsFamily,
+		&i.ConfidenceScore,
+		&i.ClassificationEvidence,
+		&i.ClassificationLocked,
+		&i.Subtype,
+		&i.Notes,
+		&i.Criticality,
+		&i.MonitoringEnabled,
+		&i.ManualClassificationReason,
+		&i.IsVirtual,
+		&i.CctvCredentialID,
+		&i.WebSchemePref,
+		&i.WebPortPref,
+		&i.WebAltPorts,
+		&i.WebNotes,
+		&i.WebLastOk,
+		&i.WebLastOkAt,
+		&i.WebLastProto,
+		&i.WebLastScheme,
+		&i.WebLastPort,
+		&i.WebLastCredentialID,
+		&i.WebPrefProto,
+		&i.IsInventoryOnly,
 	)
 	return i, err
 }
@@ -969,7 +1055,7 @@ UPDATE devices SET
     classification_locked = $2,
     updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
-RETURNING id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason, is_virtual, cctv_credential_id, web_scheme_pref, web_port_pref, web_alt_ports, web_notes, web_last_ok, web_last_ok_at, web_last_proto, web_last_scheme, web_last_port, web_last_credential_id, web_pref_proto
+RETURNING id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason, is_virtual, cctv_credential_id, web_scheme_pref, web_port_pref, web_alt_ports, web_notes, web_last_ok, web_last_ok_at, web_last_proto, web_last_scheme, web_last_port, web_last_credential_id, web_pref_proto, is_inventory_only
 `
 
 type SetClassificationLockParams struct {
@@ -1027,6 +1113,7 @@ func (q *Queries) SetClassificationLock(ctx context.Context, arg SetClassificati
 		&i.WebLastPort,
 		&i.WebLastCredentialID,
 		&i.WebPrefProto,
+		&i.IsInventoryOnly,
 	)
 	return i, err
 }
@@ -1181,9 +1268,10 @@ UPDATE devices SET
     location = $11, location_id = $12,
     subtype = $13, notes = $14, criticality = $15, monitoring_enabled = $16,
     classification_locked = $17, manual_classification_reason = $18,
+    is_inventory_only = $19,
     updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
-RETURNING id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason, is_virtual, cctv_credential_id, web_scheme_pref, web_port_pref, web_alt_ports, web_notes, web_last_ok, web_last_ok_at, web_last_proto, web_last_scheme, web_last_port, web_last_credential_id, web_pref_proto
+RETURNING id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason, is_virtual, cctv_credential_id, web_scheme_pref, web_port_pref, web_alt_ports, web_notes, web_last_ok, web_last_ok_at, web_last_proto, web_last_scheme, web_last_port, web_last_credential_id, web_pref_proto, is_inventory_only
 `
 
 type UpdateDeviceParams struct {
@@ -1205,6 +1293,7 @@ type UpdateDeviceParams struct {
 	MonitoringEnabled          bool       `json:"monitoring_enabled"`
 	ClassificationLocked       bool       `json:"classification_locked"`
 	ManualClassificationReason string     `json:"manual_classification_reason"`
+	IsInventoryOnly            bool       `json:"is_inventory_only"`
 }
 
 // Operator edit of a device's identity + management attributes (Edit Device).
@@ -1231,6 +1320,7 @@ func (q *Queries) UpdateDevice(ctx context.Context, arg UpdateDeviceParams) (Dev
 		arg.MonitoringEnabled,
 		arg.ClassificationLocked,
 		arg.ManualClassificationReason,
+		arg.IsInventoryOnly,
 	)
 	var i Device
 	err := row.Scan(
@@ -1278,6 +1368,7 @@ func (q *Queries) UpdateDevice(ctx context.Context, arg UpdateDeviceParams) (Dev
 		&i.WebLastPort,
 		&i.WebLastCredentialID,
 		&i.WebPrefProto,
+		&i.IsInventoryOnly,
 	)
 	return i, err
 }
@@ -1291,7 +1382,7 @@ UPDATE devices SET
     classification_evidence = $6,
     updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL AND classification_locked = false
-RETURNING id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason, is_virtual, cctv_credential_id, web_scheme_pref, web_port_pref, web_alt_ports, web_notes, web_last_ok, web_last_ok_at, web_last_proto, web_last_scheme, web_last_port, web_last_credential_id, web_pref_proto
+RETURNING id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason, is_virtual, cctv_credential_id, web_scheme_pref, web_port_pref, web_alt_ports, web_notes, web_last_ok, web_last_ok_at, web_last_proto, web_last_scheme, web_last_port, web_last_credential_id, web_pref_proto, is_inventory_only
 `
 
 type UpdateDeviceClassificationParams struct {
@@ -1362,6 +1453,7 @@ func (q *Queries) UpdateDeviceClassification(ctx context.Context, arg UpdateDevi
 		&i.WebLastPort,
 		&i.WebLastCredentialID,
 		&i.WebPrefProto,
+		&i.IsInventoryOnly,
 	)
 	return i, err
 }
@@ -1417,7 +1509,7 @@ UPDATE devices SET
     location_id = COALESCE(location_id, $10),
     last_discovery_at = now(), updated_at = now()
 WHERE id = $11
-RETURNING id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason, is_virtual, cctv_credential_id, web_scheme_pref, web_port_pref, web_alt_ports, web_notes, web_last_ok, web_last_ok_at, web_last_proto, web_last_scheme, web_last_port, web_last_credential_id, web_pref_proto
+RETURNING id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason, is_virtual, cctv_credential_id, web_scheme_pref, web_port_pref, web_alt_ports, web_notes, web_last_ok, web_last_ok_at, web_last_proto, web_last_scheme, web_last_port, web_last_credential_id, web_pref_proto, is_inventory_only
 `
 
 type UpdateDiscoveredDeviceParams struct {
@@ -1505,6 +1597,7 @@ func (q *Queries) UpdateDiscoveredDevice(ctx context.Context, arg UpdateDiscover
 		&i.WebLastPort,
 		&i.WebLastCredentialID,
 		&i.WebPrefProto,
+		&i.IsInventoryOnly,
 	)
 	return i, err
 }
