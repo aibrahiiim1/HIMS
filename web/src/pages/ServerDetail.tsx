@@ -37,6 +37,7 @@ function fmtBytes(n?: number | null): string {
   return `${v.toFixed(i === 0 ? 0 : 1)} ${u[i]}`
 }
 const speedLabel = (mbps?: number | null) => (mbps ? (mbps >= 1000 ? `${mbps / 1000} Gb/s` : `${mbps} Mb/s`) : '—')
+const shortCpu = (m: string) => m.replace(/\(R\)|\(TM\)|CPU|@.*/gi, '').replace(/\s+/g, ' ').trim()
 const fmtGiB = (bytes?: number | null) => (bytes && bytes > 0 ? fmtBytes(bytes) : '—')
 
 // ServerDetail — enterprise server console (HOST-RESOURCES-MIB + Redfish/iLO/iDRAC + deep OS
@@ -66,6 +67,7 @@ export function ServerDetail({ initialTab }: { initialTab?: Tab } = {}) {
   const { bundle: osb } = useOSInventory(deviceId)
   const osInv = osb?.inventory ?? null
   const osDisks = osb?.disks ?? []
+  const osNics = osb?.nics ?? []
 
   const fm = useMemo(() => new Map((facts.data ?? []).map((f) => [f.key, f.value ?? ''])), [facts.data])
   const num = (k: string) => { const v = Number(fm.get(k)); return Number.isFinite(v) && fm.has(k) ? v : null }
@@ -89,6 +91,9 @@ export function ServerDetail({ initialTab }: { initialTab?: Tab } = {}) {
   const mediaRollup = diskMediaRollup(osDisks)
 
   const ifList = ifaces.data ?? []
+  // Effective interface count: SNMP ifTable when present, else the OS-inventory NICs (WinRM/SSH
+  // hosts have no SNMP ifTable but DO report NICs via deep OS inventory).
+  const ifCount = ifList.length || osNics.length
   const roleList = roles.data ?? []
   const hasBMC = !!(bmc.data && bmc.data.device_id)
   const sensorList = sensors.data ?? []
@@ -104,7 +109,7 @@ export function ServerDetail({ initialTab }: { initialTab?: Tab } = {}) {
     { key: 'overview', label: 'Overview', icon: LayoutDashboard },
     { key: 'hardware', label: 'Hardware', icon: Thermometer, count: hasBMC ? (sensorList.length || undefined) : undefined },
     { key: 'storage', label: 'Storage', icon: HardDrive, count: vols.length || undefined },
-    { key: 'network', label: 'Network', icon: Cable, count: ifList.length || undefined },
+    { key: 'network', label: 'Network', icon: Cable, count: ifCount || undefined },
     { key: 'software', label: 'Software', icon: Boxes },
     { key: 'operations', label: 'Operations', icon: Settings },
   ]
@@ -137,7 +142,7 @@ export function ServerDetail({ initialTab }: { initialTab?: Tab } = {}) {
             <Kpi label="Memory" value={memPct != null ? `${memPct}%` : '—'} icon={MemoryStick} tone={memPct != null && memPct >= 90 ? 'crit' : memPct != null && memPct >= 75 ? 'warn' : 'default'} sub={memTotal ? fmtBytes(memTotal) : 'used'} />
             <Kpi label="Storage used" value={worstVol != null ? `${worstVol}%` : '—'} icon={HardDrive} tone={worstVol != null && worstVol >= 90 ? 'crit' : worstVol != null && worstVol >= 75 ? 'warn' : 'default'} sub={totalCap ? `${fmtBytes(totalCap)} total` : 'busiest volume'} onClick={diskCount ? () => setTab('storage') : undefined} />
             <Kpi label="Volumes" value={diskCount} icon={HardDrive} tone="default" sub={mediaRollup || undefined} onClick={diskCount ? () => setTab('storage') : undefined} />
-            <Kpi label="Interfaces" value={ifList.length} icon={Cable} tone="default" onClick={ifList.length ? () => setTab('network') : undefined} />
+            <Kpi label="Interfaces" value={ifCount} icon={Cable} tone="default" onClick={ifCount ? () => setTab('network') : undefined} />
             <Kpi label="Hardware" value={hasBMC ? (bmc.data?.health ?? 'unknown') : '—'} icon={Thermometer} tone={hasBMC ? healthKpiTone(bmc.data?.health) : 'default'} sub={hasBMC ? (badSensors > 0 ? `${badSensors} sensor alerts` : 'BMC OK') : 'no BMC'} onClick={hasBMC ? () => setTab('hardware') : undefined} />
           </div>
 
@@ -168,7 +173,7 @@ export function ServerDetail({ initialTab }: { initialTab?: Tab } = {}) {
                 { label: 'Memory total', value: fmtBytes(memTotal) },
                 { label: 'Storage total', value: totalCap ? fmtBytes(totalCap) : '—' },
                 { label: 'Disks', value: mediaRollup ? `${diskCount} · ${mediaRollup}` : (diskCount || '—') },
-                { label: 'Interfaces', value: ifList.length },
+                { label: 'Interfaces', value: ifCount },
               ]} />
             </Panel>
           </div>
@@ -182,9 +187,19 @@ export function ServerDetail({ initialTab }: { initialTab?: Tab } = {}) {
         <>
           {!hasBMC && (
             <>
-              <EmptyState icon={Thermometer} title="No out-of-band controller" message="iLO / iDRAC / Redfish hardware health appears here when a BMC is discovered and a credential is bound. CPU / memory below come from OS inventory when collected." />
-              <Panel title="Compute (from OS inventory)" icon={Cpu} actions={<CollectOSButton deviceId={deviceId} small />}>
+              {/* Lead with the compute data (from OS inventory) so the tab isn't dominated by the
+                  BMC empty state; the "no out-of-band controller" note is demoted below. */}
+              <div className="kpi-grid kpi-4">
+                <Kpi label="CPU" value={osInv?.cpu_model ? shortCpu(osInv.cpu_model) : '—'} icon={Cpu} sub={osInv?.cpu_cores ? `${osInv.cpu_cores} cores${osInv.cpu_sockets ? ` · ${osInv.cpu_sockets} socket(s)` : ''}` : undefined} />
+                <Kpi label="Memory" value={osInv?.ram_total_bytes ? fmtBytes(osInv.ram_total_bytes) : (memTotal ? fmtBytes(memTotal) : '—')} icon={MemoryStick} sub="installed" />
+                <Kpi label="Model" value={row?.model || osInv?.model || '—'} icon={Server} sub={osInv?.manufacturer || row?.vendor || undefined} />
+                <Kpi label="BIOS" value={osInv?.bios_version || '—'} icon={Activity} sub={osInv?.serial ? `SN ${osInv.serial}` : undefined} />
+              </div>
+              <Panel title="System & hardware (OS inventory)" icon={Cpu} actions={<CollectOSButton deviceId={deviceId} small />}>
                 <OSInventorySection deviceId={deviceId} section="summary" />
+              </Panel>
+              <Panel title="Out-of-band controller (BMC)" icon={Thermometer}>
+                <EmptyState icon={Thermometer} title="No linked BMC" message="iLO / iDRAC / Redfish hardware health (sensors, RAID, physical drives) appears here when this server is linked to its BMC by chassis-serial evidence and a Redfish credential is bound." />
               </Panel>
             </>
           )}
@@ -336,12 +351,11 @@ export function ServerDetail({ initialTab }: { initialTab?: Tab } = {}) {
         </>
       )}
 
-      {/* ── NETWORK (interfaces + switch port map) ────────────────────────── */}
+      {/* ── NETWORK (SNMP ifTable, else OS-inventory NICs, + switch port map) ─ */}
       {tab === 'network' && (
         <>
-          <Panel title="Network Interfaces" icon={Cable} subtitle={ifList.length ? `${ifList.length}` : undefined} pad={false}>
-            {ifaces.data && ifList.length === 0 && <EmptyState icon={Cable} title="No interfaces collected" message="Bind a working credential and re-scan to collect interfaces." />}
-            {ifList.length > 0 && (
+          {ifList.length > 0 ? (
+            <Panel title="Network Interfaces" icon={Cable} subtitle={`${ifList.length} (SNMP)`} pad={false}>
               <table className="data-table">
                 <thead><tr><th>Index</th><th>Name</th><th>MAC</th><th>Speed</th></tr></thead>
                 <tbody>
@@ -355,8 +369,18 @@ export function ServerDetail({ initialTab }: { initialTab?: Tab } = {}) {
                   ))}
                 </tbody>
               </table>
-            )}
-          </Panel>
+            </Panel>
+          ) : osNics.length > 0 ? (
+            // WinRM/SSH hosts have no SNMP ifTable but DO report NICs via deep OS inventory.
+            <Panel title="Network adapters" icon={Cable} subtitle={`${osNics.length} (OS inventory)`} pad={false}
+              actions={<CollectOSButton deviceId={deviceId} small />}>
+              <div style={{ padding: 14 }}><OSInventorySection deviceId={deviceId} section="network" /></div>
+            </Panel>
+          ) : (
+            <Panel title="Network Interfaces" icon={Cable}>
+              <EmptyState icon={Cable} title="No interfaces collected" message="Interfaces come from SNMP (ifTable) or deep OS inventory (WinRM/SSH). Bind a working credential and re-scan / Collect OS to populate them." />
+            </Panel>
+          )}
           <ConnectivityPanel deviceId={deviceId} />
         </>
       )}
