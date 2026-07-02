@@ -285,6 +285,7 @@ func (s *Server) routes() {
 		r.Post("/devices/{id}/classification-lock", s.setClassificationLock)
 		r.Get("/devices/{id}/interfaces", s.deviceInterfaces)
 		r.Get("/devices/{id}/vlans", s.deviceVLANs)
+		r.Get("/devices/{id}/vlan-gateways", s.deviceVLANGateways) // L3/SVI interfaces (ipAddrTable) + linked gateway devices
 		r.Get("/devices/{id}/neighbors", s.deviceNeighbors)
 		r.Get("/devices/{id}/topology", s.deviceTopology)
 		r.Get("/devices/{id}/mac", s.deviceMACTable)
@@ -794,6 +795,51 @@ func (s *Server) deviceVLANs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, rows)
+}
+
+// deviceVLANGateways returns a switch's L3/SVI interfaces (its own ipAddrTable
+// IPs), each joined to the VLAN it gateways and to any device row that was
+// discovered for that gateway IP — so the switch-detail "VLAN gateways" section
+// can show "Vlan210 · 172.21.210.250" and link the (former phantom) device back.
+func (s *Server) deviceVLANGateways(w http.ResponseWriter, r *http.Request) {
+	ctx, id, ok := pathDevice(w, r)
+	if !ok {
+		return
+	}
+	rows, err := s.queries.DeviceL3Interfaces(ctx, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	type l3iface struct {
+		IfIndex           int32   `json:"if_index"`
+		IP                string  `json:"ip"`
+		NetMask           string  `json:"net_mask,omitempty"`
+		VLANID            *int32  `json:"vlan_id,omitempty"`
+		VLANName          string  `json:"vlan_name,omitempty"`
+		IsGateway         bool    `json:"is_gateway"`
+		GatewayDeviceID   *string `json:"gateway_device_id,omitempty"`
+		GatewayDeviceName string  `json:"gateway_device_name,omitempty"`
+	}
+	out := make([]l3iface, 0, len(rows))
+	for _, r := range rows {
+		it := l3iface{IfIndex: r.IfIndex, IP: r.IpAddress, VLANID: r.VlanID, IsGateway: r.VlanID != nil}
+		if r.NetMask != nil {
+			it.NetMask = r.NetMask.String()
+		}
+		if r.VlanName != nil {
+			it.VLANName = *r.VlanName
+		}
+		if r.GatewayDeviceID != nil {
+			s := r.GatewayDeviceID.String()
+			it.GatewayDeviceID = &s
+		}
+		if r.GatewayDeviceName != nil {
+			it.GatewayDeviceName = *r.GatewayDeviceName
+		}
+		out = append(out, it)
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) deviceNeighbors(w http.ResponseWriter, r *http.Request) {

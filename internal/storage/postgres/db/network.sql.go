@@ -157,6 +157,62 @@ func (q *Queries) DeleteStaleVlans(ctx context.Context, arg DeleteStaleVlansPara
 	return err
 }
 
+const deviceL3Interfaces = `-- name: DeviceL3Interfaces :many
+SELECT ii.if_index,
+       host(ii.ip_address)  AS ip_address,
+       ii.net_mask,
+       v.vlan_id            AS vlan_id,
+       v.name               AS vlan_name,
+       g.id                 AS gateway_device_id,
+       g.name               AS gateway_device_name
+FROM ip_interfaces ii
+LEFT JOIN vlans v   ON v.device_id = ii.device_id AND v.gateway_ip = ii.ip_address
+LEFT JOIN devices g ON g.primary_ip = ii.ip_address AND g.deleted_at IS NULL AND g.id <> ii.device_id
+WHERE ii.device_id = $1
+ORDER BY ii.ip_address
+`
+
+type DeviceL3InterfacesRow struct {
+	IfIndex           int32       `json:"if_index"`
+	IpAddress         string      `json:"ip_address"`
+	NetMask           *netip.Addr `json:"net_mask"`
+	VlanID            *int32      `json:"vlan_id"`
+	VlanName          *string     `json:"vlan_name"`
+	GatewayDeviceID   *uuid.UUID  `json:"gateway_device_id"`
+	GatewayDeviceName *string     `json:"gateway_device_name"`
+}
+
+// The L3 interfaces (ipAddrTable IPs) configured ON a switch, each joined to the
+// VLAN it gateways (when the IP is an SVI gateway) and to any device row that was
+// discovered for that IP (the phantom gateway now attributed back to this switch).
+func (q *Queries) DeviceL3Interfaces(ctx context.Context, deviceID uuid.UUID) ([]DeviceL3InterfacesRow, error) {
+	rows, err := q.db.Query(ctx, deviceL3Interfaces, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DeviceL3InterfacesRow{}
+	for rows.Next() {
+		var i DeviceL3InterfacesRow
+		if err := rows.Scan(
+			&i.IfIndex,
+			&i.IpAddress,
+			&i.NetMask,
+			&i.VlanID,
+			&i.VlanName,
+			&i.GatewayDeviceID,
+			&i.GatewayDeviceName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const findMACByIP = `-- name: FindMACByIP :many
 SELECT ip_address, mac, device_id, last_seen_at
 FROM arp_entries

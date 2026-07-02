@@ -268,6 +268,10 @@ type Querier interface {
 	// colon/dash/case differences don't matter — used to reverse-link a Hyper-V guest VM to
 	// an existing device by MAC when its guest IP is unavailable (no integration services).
 	DeviceIDByMAC(ctx context.Context, mac string) (uuid.UUID, error)
+	// The L3 interfaces (ipAddrTable IPs) configured ON a switch, each joined to the
+	// VLAN it gateways (when the IP is an SVI gateway) and to any device row that was
+	// discovered for that IP (the phantom gateway now attributed back to this switch).
+	DeviceL3Interfaces(ctx context.Context, deviceID uuid.UUID) ([]DeviceL3InterfacesRow, error)
 	// Per-device availability over the window: sample/up counts (for uptime %),
 	// latency, and flap count (status transitions). Ordered worst-first so the UI can
 	// show "worst performers" and a flapping list. $1 = window (e.g. '24 hours').

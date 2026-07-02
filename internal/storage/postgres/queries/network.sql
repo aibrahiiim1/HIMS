@@ -78,6 +78,23 @@ WHERE ii.ip_address = $1 AND ii.device_id <> $2;
 -- attributed gateway device with its VLAN id).
 SELECT device_id, vlan_id, name FROM vlans WHERE device_id = $1 AND gateway_ip = $2;
 
+-- name: DeviceL3Interfaces :many
+-- The L3 interfaces (ipAddrTable IPs) configured ON a switch, each joined to the
+-- VLAN it gateways (when the IP is an SVI gateway) and to any device row that was
+-- discovered for that IP (the phantom gateway now attributed back to this switch).
+SELECT ii.if_index,
+       host(ii.ip_address)  AS ip_address,
+       ii.net_mask,
+       v.vlan_id            AS vlan_id,
+       v.name               AS vlan_name,
+       g.id                 AS gateway_device_id,
+       g.name               AS gateway_device_name
+FROM ip_interfaces ii
+LEFT JOIN vlans v   ON v.device_id = ii.device_id AND v.gateway_ip = ii.ip_address
+LEFT JOIN devices g ON g.primary_ip = ii.ip_address AND g.deleted_at IS NULL AND g.id <> ii.device_id
+WHERE ii.device_id = $1
+ORDER BY ii.ip_address;
+
 -- name: SVIGatewayLinks :many
 -- Every device that is an SVI / VLAN gateway attributed to a switch (fact
 -- svi.gateway_of = switch id), with the owning switch + VLAN — so the discovered
