@@ -403,7 +403,8 @@ export function Dashboard() {
               <div className="s-item" style={{ cursor: unmanagedCount > 0 ? 'pointer' : undefined }} onClick={unmanagedCount > 0 ? () => navigate('/inventory/unmanaged') : undefined} title={unmanagedCount > 0 ? 'Open the Unmanaged Devices list' : undefined}>
                 <b style={{ color: unmanagedCount > 0 ? 'var(--warn)' : undefined }}>{unmanagedCount.toLocaleString()}{unmanagedCount > 0 ? ' ›' : ''}</b><small>unmanaged<InfoHint text="Manageable devices with no proven working access yet — need a credential or an agent. Click to fix." label="Unmanaged" /></small>
               </div>
-              <div className="s-item"><b>{naCount.toLocaleString()}</b><small>n/a<InfoHint text="Not applicable for management — phones, VMs, inventory-only and virtual placeholders that HIMS doesn't log into." label="Not applicable" /></small></div>
+              <div className="s-item" style={{ cursor: naCount > 0 ? 'pointer' : undefined }} onClick={naCount > 0 ? () => navigate('/inventory?management=inventory_only') : undefined} title={naCount > 0 ? 'View inventory-only devices' : undefined}>
+                <b>{naCount.toLocaleString()}{naCount > 0 ? ' ›' : ''}</b><small>INV<InfoHint text="Inventory only — recorded and monitored for reachability, but access is deliberately opted out (no credential expected). Includes virtual placeholders. Not counted as unmanaged. Click to view them." label="Inventory only" /></small></div>
             </div>
           </Panel>
           <Panel title="Critical Assets" icon={TriangleAlert} subtitle="offline or flagged, needing attention now" className="fill" actions={critical.length > 0 ? <Link className="btn btn-ghost btn-sm" to="/inventory?reachability=offline">View all</Link> : undefined}>
