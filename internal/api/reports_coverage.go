@@ -75,8 +75,13 @@ func (s *Server) managementCoverage(ctx context.Context) map[string]any {
 	total := 0
 	for _, d := range devs {
 		st := maps.statusFor(d)
-		total++
 		byState[st.Management]++
+		// Inventory-only devices are recorded in the state histogram for transparency but
+		// excluded from the managed/unmanaged coverage ratio (access opted out by design).
+		if d.IsInventoryOnly {
+			continue
+		}
+		total++
 		managed := st.Management == MgmtManaged
 		bump(cat, d.Category, managed)
 		if rl := maps.serverRole(d); rl != "" {

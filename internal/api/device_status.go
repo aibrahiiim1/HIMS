@@ -770,7 +770,7 @@ func (s *Server) deviceStatusSummary(w http.ResponseWriter, r *http.Request) {
 				byProto[p]++
 			}
 		}
-		if st.Reachability == ReachOnline && st.Management != MgmtManaged {
+		if st.Reachability == ReachOnline && st.Management != MgmtManaged && st.Management != MgmtInventoryOnly {
 			onlineUnmanaged++
 		}
 		if st.PreviouslyManaged {

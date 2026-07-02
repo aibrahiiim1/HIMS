@@ -308,9 +308,17 @@ func (s *Server) accessCoverage(w http.ResponseWriter, r *http.Request) {
 	}
 	byProto := map[string]*agg{}
 	managed := 0
-	var noCredBound, credFailed, notTested int
+	var noCredBound, credFailed, notTested, invOnly int
 
 	for _, d := range devices {
+		// Inventory-only devices have access DELIBERATELY opted out (monitored, not
+		// managed). They are neither managed nor an unmanaged gap, so drop them from the
+		// coverage numerator AND denominator entirely — otherwise they would sink the
+		// managed-coverage percentage exactly like an unmanaged device.
+		if d.IsInventoryOnly {
+			invOnly++
+			continue
+		}
 		da := am[d.ID]
 		// MANAGED = proven (successful test or collection evidence), never a bare
 		// bound credential. Count each device under every protocol it is PROVEN by.
@@ -370,7 +378,7 @@ func (s *Server) accessCoverage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	total := len(devices)
+	total := len(devices) - invOnly // inventory-only devices are out of the managed/unmanaged universe
 	unmanaged := total - managed
 
 	protoDTOs := make([]accessProtocolDTO, 0, len(byProto))
@@ -493,8 +501,11 @@ func (s *Server) badgeCounts(w http.ResponseWriter, r *http.Request) {
 		if deviceNeedsClassification(d) {
 			missing++
 		}
-		if st, _ := sm.deriveManagement(d); st != MgmtManaged {
-			unmanaged++ // matches the "needs attention" set the Unmanaged Devices page lists
+		// Use statusFor (not raw deriveManagement) so inventory-only / virtual short-circuits
+		// apply — the badge must equal the Unmanaged Devices page, which excludes both managed
+		// and inventory-only (access opted out) from the "needs attention" set.
+		if st := sm.statusFor(d).Management; st != MgmtManaged && st != MgmtInventoryOnly {
+			unmanaged++
 		}
 		if isUnmappedFabric(d, mapped) {
 			unmapped++

@@ -151,8 +151,12 @@ export function Dashboard() {
   // `management` is set on every device that has a management dimension; "managed"
   // = a credential that actually works. Devices with no management state (n/a) are
   // excluded from the ratio so it reflects the manageable fleet, not phones/VMs.
+  // `inventory_only` (access opted out, monitored only) and `virtual` (manual
+  // placeholder) are NOT manageable gaps — exclude them from the ratio and the
+  // unmanaged count so marking a device inventory-only clears it from both.
+  const NON_MANAGEABLE = new Set(['inventory_only', 'virtual'])
   const managed = devs.filter((d) => d.management === 'managed').length
-  const manageable = devs.filter((d) => !!d.management).length
+  const manageable = devs.filter((d) => !!d.management && !NON_MANAGEABLE.has(d.management)).length
   const unmanagedCount = manageable - managed
   const naCount = total - manageable
   const mgmtPct = manageable > 0 ? Math.round((managed / manageable) * 100) : (total > 0 ? 100 : 0)

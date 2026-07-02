@@ -151,6 +151,11 @@ func (s *Server) cctvSummary(w http.ResponseWriter, r *http.Request) {
 	var direct, viaRecorder, authFailed, noCred, otherUnmanaged, recordersManaged int
 	if maps, err := s.buildStatusMaps(ctx); err == nil {
 		for _, d := range allCCTV {
+			// Inventory-only cameras/recorders are monitored but access is opted out — they
+			// are neither managed nor an unmanaged gap, so exclude them from the split.
+			if d.IsInventoryOnly {
+				continue
+			}
 			state, managedBy := maps.deriveManagement(d)
 			if state == MgmtManaged {
 				if managedViaRecorder(managedBy) {
