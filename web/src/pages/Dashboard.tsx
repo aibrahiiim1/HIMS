@@ -456,7 +456,7 @@ export function Dashboard() {
       {/* ===== C · Collection & Trust — reachable vs managed, kept separate ===== */}
       <SectionTitle icon={ShieldCheck} title="Collection & Trust" hint="online means a device answers the network · managed means HIMS can log in and collect from it — two different things" />
       <ReachManageCards />
-      <div className="grid-side" style={{ alignItems: 'stretch' }}>
+      <div className="grid-2" style={{ alignItems: 'stretch' }}>
         <div className="stack"><ManagementAccessCoverage /></div>
         <div className="stack">
           <Panel title="Live Fleet Health" icon={HeartPulse} subtitle="status of every monitored device right now">
