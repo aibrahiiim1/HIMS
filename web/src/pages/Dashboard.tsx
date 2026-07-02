@@ -508,14 +508,14 @@ export function Dashboard() {
 
       {/* ===== E · Recent Activity — what changed recently ===== */}
       <SectionTitle icon={TrendingUp} title="Recent Activity" hint="what changed recently — alerts opened/resolved and discovery scans" />
-      <div className="grid-side">
+      <div className="grid-2" style={{ alignItems: 'stretch' }}>
         <div className="stack">
-          <Panel title="Latest Events" icon={TrendingUp} subtitle="most recent alerts and scans" actions={<Link className="btn btn-ghost btn-sm" to="/alerts">All alerts →</Link>}>
+          <Panel title="Latest Events" icon={TrendingUp} className="fill" subtitle="most recent alerts and scans" actions={<Link className="btn btn-ghost btn-sm" to="/alerts">All alerts →</Link>}>
             <ActivityFeed items={feed} />
           </Panel>
         </div>
         <div className="stack">
-          <Panel title="Discovery Activity" icon={Radar} subtitle="recent scans that find and refresh devices" actions={<Link className="btn btn-ghost btn-sm" to="/discovery">Open Discovery</Link>}>
+          <Panel title="Discovery Activity" icon={Radar} className="fill" subtitle="recent scans that find and refresh devices" actions={<Link className="btn btn-ghost btn-sm" to="/discovery">Open Discovery</Link>}>
             <div className="row-between" style={{ marginBottom: 12 }}>
               <div>
                 <div className="muted" style={{ fontSize: 12 }}>Devices found per recent scan</div>
