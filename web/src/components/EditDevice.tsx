@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { X, Lock, Save } from 'lucide-react'
+import { X, Lock, Save, ClipboardList } from 'lucide-react'
 import { api, locationPaths, type Device, type Location, type DeviceWebAccess } from '../api'
 
 // Categories the backend accepts (kept in step with internal/api validCategory).
@@ -56,6 +56,7 @@ export function EditDevice({ device, onClose, onSaved }: {
     monitoring_enabled: device.monitoring_enabled ?? true,
     classification_locked: device.classification_locked ?? false,
     manual_classification_reason: device.manual_classification_reason ?? '',
+    is_inventory_only: device.is_inventory_only ?? false,
   })
   const set = <K extends keyof typeof f>(k: K, v: (typeof f)[K]) => setF((s) => ({ ...s, [k]: v }))
   const [saving, setSaving] = useState(false)
@@ -70,8 +71,9 @@ export function EditDevice({ device, onClose, onSaved }: {
         vendor: f.vendor, model: f.model, serial: f.serial, os_version: f.os_version,
         vlan: f.vlan, class: f.class, location_id: f.location_id || '',
         notes: f.notes, criticality: f.criticality,
-        monitoring_enabled: f.monitoring_enabled, classification_locked: f.classification_locked,
+        monitoring_enabled: f.is_inventory_only ? true : f.monitoring_enabled, classification_locked: f.classification_locked,
         manual_classification_reason: f.classification_locked ? f.manual_classification_reason : '',
+        is_inventory_only: f.is_inventory_only,
       }
       const updated = await api.patch<Device>(`/devices/${device.id}`, body)
       // Web/management port override — only PUT when changed (preserve alt_ports /
@@ -190,6 +192,16 @@ export function EditDevice({ device, onClose, onSaved }: {
               <Lock size={13} /> Lock classification (future scans won&apos;t overwrite category/vendor/model/serial/name)
             </label>
             {f.classification_locked && field('Manual classification reason', input('manual_classification_reason'))}
+          </div>
+
+          <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12, display: 'grid', gap: 6 }}>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+              <input type="checkbox" checked={f.is_inventory_only} onChange={(e) => set('is_inventory_only', e.target.checked)} />
+              <ClipboardList size={13} /> Inventory only (record &amp; monitor — access opted out)
+            </label>
+            <span className="muted" style={{ fontSize: 11 }}>
+              For devices HIMS should keep as a record and monitor for offline, but NOT manage — third-party-owned kit, no credentials by policy, or gear that must not be probed. They stop appearing as &ldquo;needs credential / credential failed&rdquo; and are excluded from the trust audit, while reachability monitoring keeps running. Enabling this turns monitoring on.
+            </span>
           </div>
 
           {err && <div className="error-msg" style={{ fontSize: 12 }}>{err}</div>}

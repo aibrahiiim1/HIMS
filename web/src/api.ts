@@ -176,6 +176,7 @@ export interface Device {
   manual_classification_reason?: string
   confidence_score?: number | null
   is_virtual?: boolean // operator-entered placeholder (not auto-discovered/probed)
+  is_inventory_only?: boolean // record-and-monitor-only: monitored for reachability, access opted out
 }
 
 // Virtual device create/import payloads — operator-entered placeholders for gear
@@ -290,6 +291,9 @@ export const MGMT_BADGE: Record<string, { label: string; cls: string }> = {
   managed: { label: 'Managed', cls: 'badge-up' },
   partially_managed: { label: 'Partially managed', cls: 'badge-warning' },
   virtual: { label: 'Manual', cls: 'badge-virtual' },
+  // Record-and-monitor-only — a real device that is monitored for reachability but
+  // whose authenticated access is deliberately opted out. NOT a management gap.
+  inventory_only: { label: 'Inventory only', cls: 'badge-access' },
   unmanaged: { label: 'Unmanaged', cls: 'badge-unknown' },
   needs_credential: { label: 'Needs credential', cls: 'badge-warning' },
   credential_failed: { label: 'Credential failed', cls: 'badge-down' },

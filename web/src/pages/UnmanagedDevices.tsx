@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
-import { useQuery, useMutation } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
-import { ShieldOff, Pencil, RefreshCw, KeyRound, Boxes } from 'lucide-react'
+import { ShieldOff, Pencil, RefreshCw, KeyRound, Boxes, ClipboardList, Undo2 } from 'lucide-react'
 import { api, type Device, MGMT_BADGE } from '../api'
 import { PageHeader, Panel, Kpi, EmptyState, usePaged, Pager, colorFor } from '../components/ui'
 import { ReachabilityBadge, ManagementBadge } from '../components/StatusBadges'
@@ -54,14 +54,28 @@ export function UnmanagedDevices() {
   const filter = sp.get('management') ?? ''
   const [editDev, setEditDev] = useState<Device | null>(null)
   const [q, setQ] = useState('')
+  const qc = useQueryClient()
+  const invView = filter === 'inventory_only'
 
-  // Server returns every non-managed device (proven-only) for management=not_managed.
+  // Server returns every non-managed device (proven-only) for management=not_managed;
+  // inventory-only devices are intentionally EXCLUDED there (access opted out) and
+  // fetched separately so the operator can review / un-mark them.
   const { data, isLoading } = useQuery({
     queryKey: ['devices', 'unmanaged'],
     queryFn: () => api.get<Device[]>('/devices?management=not_managed'),
   })
+  const invOnly = useQuery({
+    queryKey: ['devices', 'inventory_only'],
+    queryFn: () => api.get<Device[]>('/devices?management=inventory_only'),
+  })
   const rescan = useMutation({
     mutationFn: (ip: string) => api.post('/discovery/scan', { mode: 'targets', targets: ip }),
+  })
+  // Toggle record-and-monitor-only. Marking removes the device from the Unmanaged list
+  // (it is no longer an access gap); un-marking returns it to normal management evaluation.
+  const markInv = useMutation({
+    mutationFn: ({ id, on }: { id: string; on: boolean }) => api.post(`/devices/${id}/inventory-only`, { inventory_only: on }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['devices'] }) },
   })
 
   const counts = useMemo(() => {
@@ -71,12 +85,14 @@ export function UnmanagedDevices() {
   }, [data])
 
   const rows = useMemo(() => {
-    let r = data ?? []
-    if (filter) r = r.filter((d) => filter === 'online_unmanaged' ? d.reachability === 'online' : d.management === filter)
+    // The inventory-only chip shows the separately-fetched opted-out set; every other
+    // chip filters the unmanaged (not_managed) list.
+    let r = invView ? (invOnly.data ?? []) : (data ?? [])
+    if (filter && !invView) r = r.filter((d) => filter === 'online_unmanaged' ? d.reachability === 'online' : d.management === filter)
     const t = q.trim().toLowerCase()
     if (t) r = r.filter((d) => d.name.toLowerCase().includes(t) || (d.primary_ip ?? '').includes(t))
     return r
-  }, [data, filter, q])
+  }, [data, invOnly.data, invView, filter, q])
   const paged = usePaged(rows, { pageSize: 15 })
   const setFilter = (v: string) => { const n = new URLSearchParams(sp); if (v) n.set('management', v); else n.delete('management'); setSp(n, { replace: true }) }
 
@@ -89,6 +105,7 @@ export function UnmanagedDevices() {
         <Kpi label="Credential failed" value={counts['credential_failed'] ?? 0} icon={KeyRound} tone={(counts['credential_failed'] ?? 0) > 0 ? 'crit' : 'default'} />
         <Kpi label="Needs credential" value={counts['needs_credential'] ?? 0} icon={KeyRound} tone="default" />
         <Kpi label="Needs / offline agent" value={(counts['needs_agent'] ?? 0) + (counts['agent_offline'] ?? 0)} icon={Boxes} tone="default" />
+        <Kpi label="Inventory only" value={(invOnly.data ?? []).length} icon={ClipboardList} tone="default" sub="monitor-only (access opted out)" onClick={() => setFilter('inventory_only')} />
       </div>
 
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '0 0 12px' }}>
@@ -99,14 +116,18 @@ export function UnmanagedDevices() {
           </button>
         ))}
         <button className={'seg-chip' + (filter === 'online_unmanaged' ? ' active' : '')} onClick={() => setFilter('online_unmanaged')}>Online but unmanaged</button>
+        <button className={'seg-chip' + (invView ? ' active' : '')} onClick={() => setFilter('inventory_only')}>
+          Inventory only <span className="seg-count">{(invOnly.data ?? []).length}</span>
+        </button>
       </div>
 
-      <Panel title="Unmanaged" subtitle="Strict proven-only management. Fix access here; classification problems live under Missing Classification." pad={false}>
+      <Panel title={invView ? 'Inventory only' : 'Unmanaged'} subtitle={invView ? 'Record-and-monitor-only devices — access deliberately opted out (third-party kit, no-credential-by-policy, must-not-probe). Monitored for offline; excluded from access expectations. Un-mark to return one to normal management.' : 'Strict proven-only management. Fix access here; classification problems live under Missing Classification.'} pad={false}>
         <div style={{ padding: '8px 10px' }}>
           <input placeholder="Filter by name / IP…" value={q} onChange={(e) => { setQ(e.target.value); paged.setPage(0) }} style={{ padding: '6px 10px', fontSize: 13, width: 300, maxWidth: '100%' }} />
         </div>
-        {isLoading && <div className="loading">Loading…</div>}
-        {data && rows.length === 0 && <EmptyState icon={ShieldOff} title="Nothing unmanaged here" message="Every device matching this filter has a proven management method." />}
+        {(invView ? invOnly.isLoading : isLoading) && <div className="loading">Loading…</div>}
+        {invView && !invOnly.isLoading && rows.length === 0 && <EmptyState icon={ClipboardList} title="No inventory-only devices" message="Mark a device inventory-only (from its row here or Edit device) to keep it as a record and monitor it for offline without expecting credentials." />}
+        {!invView && data && rows.length === 0 && <EmptyState icon={ShieldOff} title="Nothing unmanaged here" message="Every device matching this filter has a proven management method." />}
         {rows.length > 0 && (
           <>
           <table className="data-table">
@@ -123,11 +144,18 @@ export function UnmanagedDevices() {
                   <td>{d.vendor || '—'}</td>
                   <td><ReachabilityBadge value={d.reachability} /></td>
                   <td><ManagementBadge value={d.management} managedBy={d.managed_by} reason={d.management_reason} /></td>
-                  <td className="muted" style={{ fontSize: 11 }}>{actionFor(d)}</td>
+                  <td className="muted" style={{ fontSize: 11 }}>{invView ? 'Monitored for offline only — access opted out. No credential is expected.' : actionFor(d)}</td>
                   <td style={{ whiteSpace: 'nowrap' }}>
                     <Link className="btn btn-ghost btn-xs" to={`/devices/${d.id}`} title="Open device — bind credential / test / repair">Open</Link>{' '}
                     <button className="btn btn-ghost btn-xs" onClick={() => setEditDev(d)} title="Edit device"><Pencil size={12} /></button>{' '}
-                    <button className="btn btn-ghost btn-xs" disabled={!d.primary_ip || rescan.isPending} onClick={() => d.primary_ip && rescan.mutate(d.primary_ip)} title="Re-scan this device"><RefreshCw size={12} /></button>
+                    {invView ? (
+                      <button className="btn btn-ghost btn-xs" disabled={markInv.isPending} onClick={() => markInv.mutate({ id: d.id, on: false })} title="Un-mark — return to normal management evaluation"><Undo2 size={12} /> Un-mark</button>
+                    ) : (
+                      <>
+                        <button className="btn btn-ghost btn-xs" disabled={markInv.isPending} onClick={() => markInv.mutate({ id: d.id, on: true })} title="Mark inventory only — keep as record & monitor for offline, stop expecting credential/access"><ClipboardList size={12} /></button>{' '}
+                        <button className="btn btn-ghost btn-xs" disabled={!d.primary_ip || rescan.isPending} onClick={() => d.primary_ip && rescan.mutate(d.primary_ip)} title="Re-scan this device"><RefreshCw size={12} /></button>
+                      </>
+                    )}
                   </td>
                 </tr>
               ))}

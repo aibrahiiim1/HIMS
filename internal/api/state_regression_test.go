@@ -112,6 +112,31 @@ func TestRegression_CredentialFailedOnlyWithoutEvidence(t *testing.T) {
 	}
 }
 
+// Inventory-only: a device the operator marked record-and-monitor-only must report the
+// distinct "inventory_only" management state — NEVER a credential/collection gap — even
+// when it has a clean auth rejection that would otherwise be credential_failed. Its
+// reachability still reflects the live monitoring status (it IS monitored), so an offline
+// inventory-only device reads offline, which is exactly what the offline-alert bucket keys on.
+func TestRegression_InventoryOnlyNeverCredentialGap(t *testing.T) {
+	id := uuid.New()
+	m := mgmtMaps(nil, map[uuid.UUID]*deviceTestStatus{
+		id: {tested: true, authFailed: true, failedKinds: map[string]bool{"winrm": true},
+			kindCategory: map[string]string{"winrm": "auth_failed"}},
+	})
+	// Same signals as TestRegression_CredentialFailedOnlyWithoutEvidence (→ credential_failed),
+	// but the inventory-only flag must override it to inventory_only.
+	d := winEndpoint(id)
+	d.IsInventoryOnly = true
+	d.Status = "down"
+	sf := m.statusFor(d)
+	if sf.Management != MgmtInventoryOnly {
+		t.Fatalf("inventory-only management: got %s, want inventory_only", sf.Management)
+	}
+	if sf.Reachability != ReachOffline {
+		t.Fatalf("inventory-only reachability: got %s, want offline (still monitored)", sf.Reachability)
+	}
+}
+
 //  6. Connectivity report and Device Detail share ONE source of truth. The Connectivity
 //     report lists raw failed attempts as history but takes the device's management
 //     state from the same deriveManagement the Inventory/Device-Detail use — so a device
