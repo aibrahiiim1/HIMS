@@ -193,7 +193,7 @@ export function ServerDetail({ initialTab }: { initialTab?: Tab } = {}) {
                 <Kpi label="CPU" value={osInv?.cpu_model ? shortCpu(osInv.cpu_model) : '—'} icon={Cpu} sub={osInv?.cpu_cores ? `${osInv.cpu_cores} cores${osInv.cpu_sockets ? ` · ${osInv.cpu_sockets} socket(s)` : ''}` : undefined} />
                 <Kpi label="Memory" value={osInv?.ram_total_bytes ? fmtBytes(osInv.ram_total_bytes) : (memTotal ? fmtBytes(memTotal) : '—')} icon={MemoryStick} sub="installed" />
                 <Kpi label="Model" value={row?.model || osInv?.model || '—'} icon={Server} sub={osInv?.manufacturer || row?.vendor || undefined} />
-                <Kpi label="BIOS" value={osInv?.bios_version || '—'} icon={Activity} sub={osInv?.serial ? `SN ${osInv.serial}` : undefined} />
+                <Kpi label="BIOS" value={<span className="kpi-value-sm" title={osInv?.bios_version || undefined}>{osInv?.bios_version || '—'}</span>} icon={Activity} sub={osInv?.serial ? `SN ${osInv.serial}` : undefined} />
               </div>
               <Panel title="System & hardware (OS inventory)" icon={Cpu} actions={<CollectOSButton deviceId={deviceId} small />}>
                 <OSInventorySection deviceId={deviceId} section="summary" />

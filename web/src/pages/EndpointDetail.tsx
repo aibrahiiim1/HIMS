@@ -117,7 +117,7 @@ export function EndpointDetail() {
             <Kpi label="CPU" value={inv?.cpu_cores ? `${inv.cpu_cores} cores` : '—'} icon={Cpu} sub={inv?.cpu_sockets ? `${inv.cpu_sockets} socket(s)` : undefined} />
             <Kpi label="Memory" value={fmtBytes(inv?.ram_total_bytes)} icon={MemoryStick} sub={inv?.ram_slots ? `${inv.ram_slots} slot(s)` : 'installed'} />
             <Kpi label="Model" value={row?.model || inv?.model || '—'} icon={Server} sub={inv?.manufacturer || row?.vendor || undefined} />
-            <Kpi label="BIOS" value={inv?.bios_version || '—'} icon={Activity} sub={inv?.bios_date || undefined} />
+            <Kpi label="BIOS" value={<span className="kpi-value-sm" title={inv?.bios_version || undefined}>{inv?.bios_version || '—'}</span>} icon={Activity} sub={inv?.bios_date || undefined} />
           </div>
           <Panel title="System & OS details" icon={Cpu} actions={collectAction}>
             <OSInventorySection deviceId={deviceId} section="summary" isVirtual={isVirtual} />
