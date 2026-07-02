@@ -2,7 +2,9 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
 	"strings"
 	"time"
 
@@ -53,20 +55,37 @@ func (s *Server) routeViaSiteAgent(ctx context.Context, d db.Device, ip, protoco
 	actx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	// Resolve the agent to QUEUE for. Prefer an online agent; but if the site's
-	// assigned agent is only momentarily offline (its heartbeat lagged while it was
-	// busy collecting under a from-zero scan), STILL queue the job for it — the agent
-	// picks it up when it next polls. Refusing to enqueue while the agent was briefly
-	// behind silently DROPPED the work and left hosts "not_attempted" (the exact
-	// from-zero gap). Only a site with NO assigned agent is a hard gate.
-	target, ok := s.onlineSiteAgent(actx, *d.LocationID)
-	if !ok {
-		assigned, has := s.assignedSiteAgent(actx, *d.LocationID)
-		if !has {
-			res.Reason, res.Detail = "agent_missing", "no Relay Agent is assigned to this site — install or assign one to collect legacy/local Windows hosts"
-			return res, false
+	// Per-device COLLECTOR OVERRIDE: an operator can PIN this device to a SPECIFIC relay agent
+	// (one with proven protocol reachability) instead of the site's default agent — for a host the
+	// default site agent cannot reach over DCOM/RPC (e.g. a LocalSystem agent has no network
+	// identity to authenticate a remote workgroup local-admin account, or the agent is on a
+	// different segment). This is an evidence-based operator choice, never a guess, and does NOT
+	// change the site/agent architecture for other devices. Stored as a 'collector.agent_id' fact.
+	var target db.RelayAgent
+	pinned := false
+	if oid := s.deviceCollectorAgent(actx, d.ID); oid != uuid.Nil {
+		if a, e := s.queries.GetRelayAgent(actx, oid); e == nil {
+			target, pinned = a, true
 		}
-		target = assigned // assigned but offline → queue anyway; it drains when the agent returns
+	}
+	// Resolve the site agent to QUEUE for (unless pinned). Prefer an online agent; but if the
+	// site's assigned agent is only momentarily offline (heartbeat lag under load), STILL queue
+	// for it — it drains when it next polls. Only a site with NO assigned agent is a hard gate.
+	if !pinned {
+		var ok bool
+		target, ok = s.onlineSiteAgent(actx, *d.LocationID)
+		if !ok {
+			assigned, has := s.assignedSiteAgent(actx, *d.LocationID)
+			if !has {
+				res.Reason, res.Detail = "agent_missing", "no Relay Agent is assigned to this site — install or assign one to collect legacy/local Windows hosts"
+				return res, false
+			}
+			target = assigned // assigned but offline → queue anyway; it drains when the agent returns
+		}
+	}
+	pinNote := ""
+	if pinned {
+		pinNote = " (pinned collector override)"
 	}
 
 	// Avoid piling up duplicate jobs when the same device is re-scanned before its
@@ -74,7 +93,7 @@ func (s *Server) routeViaSiteAgent(ctx context.Context, d db.Device, ip, protoco
 	if n, _ := s.queries.CountActiveDeviceAgentJobs(actx, &d.ID); n > 0 {
 		res.Status, res.Method = "queued", "relay-agent"
 		res.Reason, res.AgentName = "via_agent", target.Name
-		res.Detail = "collection already queued for site agent " + target.Name + " — awaiting agent poll"
+		res.Detail = "collection already queued for agent " + target.Name + pinNote + " — awaiting agent poll"
 		return res, true
 	}
 
@@ -89,8 +108,68 @@ func (s *Server) routeViaSiteAgent(ctx context.Context, d db.Device, ip, protoco
 	}
 	res.Status, res.Method = "queued", "relay-agent"
 	res.Reason, res.AgentName = "via_agent", target.Name
-	res.Detail = "queued for site agent " + target.Name + " via " + protocol + " (job " + job.ID.String() + ") — inventory appears when the agent reports back"
+	res.Detail = "queued for agent " + target.Name + pinNote + " via " + protocol + " (job " + job.ID.String() + ") — inventory appears when the agent reports back"
 	return res, true
+}
+
+// setDeviceCollectorAgent (POST /devices/{id}/collector-agent) pins this device's OS collection
+// to a specific relay agent (evidence-based operator choice — one with proven reachability to a
+// host the site agent cannot reach over DCOM/RPC). An empty/absent agent_id CLEARS the pin and
+// reverts to the site's default agent. Never a guess; does not affect other devices.
+func (s *Server) setDeviceCollectorAgent(w http.ResponseWriter, r *http.Request) {
+	ctx, id, ok := pathDevice(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		AgentID string `json:"agent_id"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	aid := strings.TrimSpace(req.AgentID)
+	if aid == "" {
+		// Clear the pin: an empty fact value → deviceCollectorAgent parses to uuid.Nil → site default.
+		empty := ""
+		if err := s.queries.UpsertDeviceFact(ctx, db.UpsertDeviceFactParams{DeviceID: id, Key: "collector.agent_id", Value: &empty, Driver: "operator"}); err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"pinned": false, "detail": "collector pin cleared — reverts to the site's default relay agent"})
+		return
+	}
+	agentID, err := uuid.Parse(aid)
+	if err != nil {
+		http.Error(w, "invalid agent_id", http.StatusBadRequest)
+		return
+	}
+	agent, err := s.queries.GetRelayAgent(ctx, agentID)
+	if err != nil {
+		http.Error(w, "relay agent not found", http.StatusBadRequest)
+		return
+	}
+	v := agentID.String()
+	if err := s.queries.UpsertDeviceFact(ctx, db.UpsertDeviceFactParams{DeviceID: id, Key: "collector.agent_id", Value: &v, Driver: "operator"}); err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"pinned": true, "agent_id": v, "agent_name": agent.Name, "detail": "collection pinned to relay agent " + agent.Name})
+}
+
+// deviceCollectorAgent returns the operator-pinned relay-agent id for this device (the
+// 'collector.agent_id' fact), or uuid.Nil when none is set. The pin overrides the site's default
+// agent so a host the site agent cannot reach over DCOM/RPC is collected by a reachable agent.
+func (s *Server) deviceCollectorAgent(ctx context.Context, id uuid.UUID) uuid.UUID {
+	facts, err := s.queries.ListDeviceFacts(ctx, id)
+	if err != nil {
+		return uuid.Nil
+	}
+	for _, f := range facts {
+		if f.Key == "collector.agent_id" && f.Value != nil {
+			if aid, e := uuid.Parse(strings.TrimSpace(*f.Value)); e == nil {
+				return aid
+			}
+		}
+	}
+	return uuid.Nil
 }
 
 // assignedSiteAgent returns the site's assigned, ENABLED agent regardless of its
