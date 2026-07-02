@@ -824,6 +824,10 @@ type Querier interface {
 	// Fleet-wide role rollup: how many devices hold each role (the CMDB role cut).
 	RoleSummary(ctx context.Context) ([]RoleSummaryRow, error)
 	RolesForUser(ctx context.Context, userID uuid.UUID) ([]Role, error)
+	// Every device that is an SVI / VLAN gateway attributed to a switch (fact
+	// svi.gateway_of = switch id), with the owning switch + VLAN — so the discovered
+	// gateway IP reads as "managed via <switch>" instead of an orphan device.
+	SVIGatewayLinks(ctx context.Context) ([]SVIGatewayLinksRow, error)
 	// Global-search: access points by name / MAC / IP / serial / model. Returns the
 	// owning controller so an AP MAC or IP found anywhere resolves to a device.
 	SearchAccessPoints(ctx context.Context, dollar_1 *string) ([]SearchAccessPointsRow, error)

@@ -78,6 +78,17 @@ WHERE ii.ip_address = $1 AND ii.device_id <> $2;
 -- attributed gateway device with its VLAN id).
 SELECT device_id, vlan_id, name FROM vlans WHERE device_id = $1 AND gateway_ip = $2;
 
+-- name: SVIGatewayLinks :many
+-- Every device that is an SVI / VLAN gateway attributed to a switch (fact
+-- svi.gateway_of = switch id), with the owning switch + VLAN — so the discovered
+-- gateway IP reads as "managed via <switch>" instead of an orphan device.
+SELECT f.device_id AS svi_device_id,
+       s.id AS switch_id, s.name AS switch_name, s.primary_ip AS switch_ip,
+       (SELECT vf.value FROM device_facts vf WHERE vf.device_id = f.device_id AND vf.key = 'svi.vlan') AS vlan_id
+FROM device_facts f
+JOIN devices s ON s.id = f.value::uuid AND s.deleted_at IS NULL
+WHERE f.key = 'svi.gateway_of' AND f.value IS NOT NULL;
+
 -- name: UpsertPortVlan :exec
 INSERT INTO port_vlans (device_id, if_index, vlan_id, tagged, collection_source, last_seen_at)
 VALUES ($1,$2,$3,$4,$5,$6)

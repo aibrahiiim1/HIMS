@@ -1041,6 +1041,52 @@ func (q *Queries) ResolvePortMap(ctx context.Context, deviceID uuid.UUID) ([]Res
 	return items, nil
 }
 
+const sVIGatewayLinks = `-- name: SVIGatewayLinks :many
+SELECT f.device_id AS svi_device_id,
+       s.id AS switch_id, s.name AS switch_name, s.primary_ip AS switch_ip,
+       (SELECT vf.value FROM device_facts vf WHERE vf.device_id = f.device_id AND vf.key = 'svi.vlan') AS vlan_id
+FROM device_facts f
+JOIN devices s ON s.id = f.value::uuid AND s.deleted_at IS NULL
+WHERE f.key = 'svi.gateway_of' AND f.value IS NOT NULL
+`
+
+type SVIGatewayLinksRow struct {
+	SviDeviceID uuid.UUID   `json:"svi_device_id"`
+	SwitchID    uuid.UUID   `json:"switch_id"`
+	SwitchName  string      `json:"switch_name"`
+	SwitchIp    *netip.Addr `json:"switch_ip"`
+	VlanID      *string     `json:"vlan_id"`
+}
+
+// Every device that is an SVI / VLAN gateway attributed to a switch (fact
+// svi.gateway_of = switch id), with the owning switch + VLAN — so the discovered
+// gateway IP reads as "managed via <switch>" instead of an orphan device.
+func (q *Queries) SVIGatewayLinks(ctx context.Context) ([]SVIGatewayLinksRow, error) {
+	rows, err := q.db.Query(ctx, sVIGatewayLinks)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SVIGatewayLinksRow{}
+	for rows.Next() {
+		var i SVIGatewayLinksRow
+		if err := rows.Scan(
+			&i.SviDeviceID,
+			&i.SwitchID,
+			&i.SwitchName,
+			&i.SwitchIp,
+			&i.VlanID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const upsertARP = `-- name: UpsertARP :exec
 
 INSERT INTO arp_entries (device_id, ip_address, mac, if_index, collection_source, last_seen_at)

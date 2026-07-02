@@ -134,6 +134,10 @@ type statusMaps struct {
 	// / unknown_server) so the UI can distinguish host types without re-reading facts per row.
 	hvType   map[uuid.UUID]string
 	vmParent map[uuid.UUID]hostRef
+	// sviParent maps a device that IS a VLAN gateway (SVI) → the switch that owns it
+	// (evidence: the IP is on that switch's ipAddrTable). It is managed VIA the
+	// switch, so it must not be reported as an unmanaged/credential gap.
+	sviParent map[uuid.UUID]sviRef
 }
 
 // hostRef is the parent hypervisor of a guest VM, for the device→host reverse link.
@@ -141,6 +145,12 @@ type hostRef struct {
 	ID   uuid.UUID `json:"id"`
 	Name string    `json:"name"`
 	IP   string    `json:"ip,omitempty"`
+}
+
+// sviRef is the switch a VLAN-gateway (SVI) IP lives on, plus its VLAN id.
+type sviRef struct {
+	Switch hostRef `json:"switch"`
+	VLAN   string  `json:"vlan,omitempty"`
 }
 
 func (s *Server) buildStatusMaps(ctx context.Context) (*statusMaps, error) {
@@ -210,8 +220,22 @@ func (s *Server) buildStatusMaps(ctx context.Context) (*statusMaps, error) {
 			vmParent[*r.VmDeviceID] = hostRef{ID: r.HostDeviceID, Name: r.HostName, IP: ip}
 		}
 	}
+	sviParent := map[uuid.UUID]sviRef{}
+	if rows, serr := s.queries.SVIGatewayLinks(ctx); serr == nil {
+		for _, r := range rows {
+			ip := ""
+			if r.SwitchIp != nil {
+				ip = r.SwitchIp.String()
+			}
+			ref := sviRef{Switch: hostRef{ID: r.SwitchID, Name: r.SwitchName, IP: ip}}
+			if r.VlanID != nil {
+				ref.VLAN = *r.VlanID
+			}
+			sviParent[r.SviDeviceID] = ref
+		}
+	}
 	return &statusMaps{access: am, test: tm, cred: cm, onlineSites: onlineSites, anySites: anySites,
-		nvrChannelCams: nvrCams, activeCollect: activeCollect, hvType: hvType, vmParent: vmParent}, nil
+		nvrChannelCams: nvrCams, activeCollect: activeCollect, hvType: hvType, vmParent: vmParent, sviParent: sviParent}, nil
 }
 
 // serverRole derives the operator-facing role used to distinguish virtualization hosts,
@@ -307,6 +331,14 @@ func (m *statusMaps) deriveManagement(d db.Device) (state string, managedBy []st
 	// The recorder is the management point, so report managed-via-NVR instead.
 	if d.Category == "camera" && m.nvrChannelCams[d.ID] {
 		return MgmtManaged, []string{"nvr"}
+	}
+
+	// A VLAN gateway (SVI) IP is an L3 interface ON a switch — proven by the IP
+	// being on that switch's own ipAddrTable. It is managed VIA the switch (not a
+	// standalone host to credential), so report managed-via-switch, never an
+	// unmanaged/credential gap for a phantom gateway device.
+	if _, ok := m.sviParent[d.ID]; ok {
+		return MgmtManaged, []string{"svi"}
 	}
 
 	cs, hasCS := m.cred[d.ID]
@@ -440,6 +472,8 @@ type deviceStatus struct {
 	ServerRole string `json:"server_role,omitempty"`
 	// HostedOn is the parent hypervisor when this device is a discovered guest VM (reverse link).
 	HostedOn *hostRef `json:"hosted_on,omitempty"`
+	// GatewayOn is the switch this device is a VLAN gateway (SVI) on, when applicable.
+	GatewayOn *sviRef `json:"gateway_on,omitempty"`
 	// ClassificationSource is HOW the device's category was decided, for operator trust:
 	// manual_override (operator-locked) | fingerprint | snmp | hostname | service | auto.
 	ClassificationSource string `json:"classification_source,omitempty"`
@@ -589,6 +623,10 @@ func (m *statusMaps) statusFor(d db.Device) deviceStatus {
 	if h, ok := m.vmParent[d.ID]; ok {
 		hc := h
 		st.HostedOn = &hc
+	}
+	if sv, ok := m.sviParent[d.ID]; ok {
+		sc := sv
+		st.GatewayOn = &sc
 	}
 	return st
 }
