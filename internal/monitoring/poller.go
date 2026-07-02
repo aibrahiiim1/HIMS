@@ -26,6 +26,9 @@ var DefaultPorts = map[string]int{
 	"printer":             9100, // raw print / JetDirect
 	"wireless_controller": 443,
 	"access_point":        22,
+	// ZKTeco/access-control biometric terminals speak their native protocol on TCP
+	// 4370 and serve no HTTP/SSH — 443/22 would falsely mark a live terminal "down".
+	"biometric": 4370,
 }
 
 // DefaultPort returns the dial port for a category, falling back to 443 for
@@ -57,7 +60,7 @@ func DefaultPortForDevice(category, osFamily string) int {
 
 // reachabilityPref ranks ports by how meaningful they are as a management/
 // liveness signal, so when a host answered on several we pick the best one.
-var reachabilityPref = []int{443, 8443, 22, 3389, 5985, 5986, 80, 8080, 8000, 9100, 445, 135, 23, 161}
+var reachabilityPref = []int{443, 8443, 22, 3389, 5985, 5986, 80, 8080, 8000, 9100, 445, 135, 4370, 23, 161}
 
 // ReachabilityPort chooses the TCP port the reachability check should dial. It
 // PREFERS a port the host actually answered on during discovery (openPorts), so

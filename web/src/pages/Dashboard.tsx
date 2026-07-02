@@ -130,6 +130,7 @@ function InfraHealthCard({ data }: { data?: InfrastructureHealth }) {
 export function Dashboard() {
   const navigate = useNavigate()
   const [win, setWin] = useState<Win>('24h')
+  const [showRisk, setShowRisk] = useState(false)
   const dash = useQuery({ queryKey: ['dashboard'], queryFn: () => api.get<DashboardData>('/dashboard'), refetchInterval: 30_000 })
   const mon = useQuery({ queryKey: ['mon-overview'], queryFn: () => api.get<MonitoringOverviewRow[]>('/monitoring/overview'), refetchInterval: 30_000 })
   const checks = useQuery({ queryKey: ['mon-checks'], queryFn: () => api.get<MonitoringCheck[]>('/monitoring/checks'), refetchInterval: 30_000 })
@@ -224,7 +225,12 @@ export function Dashboard() {
     .sort((a, b) => (b.down - a.down === 0 ? a.avail - b.avail : b.down - a.down))
 
   // ---- Worst performers ----
-  const worst = (uptime.data ?? []).filter((d) => d.uptime_pct < 100 || d.flaps > 0).slice(0, 6)
+  // At-risk devices dragging fleet availability this window: below 100% uptime OR
+  // flapping. Sorted worst-first (lowest uptime, then most flaps). `worst` (top 6)
+  // still feeds the Lowest Uptime panel; `atRisk` is the full click-through list.
+  const atRisk = (uptime.data ?? []).filter((d) => d.uptime_pct < 100 || d.flaps > 0)
+    .sort((a, b) => a.uptime_pct - b.uptime_pct || b.flaps - a.flaps)
+  const worst = atRisk.slice(0, 6)
 
   return (
     <div>
@@ -264,8 +270,29 @@ export function Dashboard() {
                 <div className="stat-strip" style={{ marginTop: 12 }}>
                   <div className="s-item"><b>{fmtMs(aSum.avg_latency_ms)}</b><small>avg latency</small></div>
                   <div className="s-item"><b>{fmtMs(aSum.p95_latency_ms)}</b><small>p95 latency</small></div>
-                  <div className="s-item"><b style={{ color: worst.length > 0 ? 'var(--warn)' : undefined }}>{worst.length}</b><small>at risk</small></div>
+                  <div className="s-item" style={{ cursor: atRisk.length > 0 ? 'pointer' : undefined }}
+                    onClick={atRisk.length > 0 ? () => setShowRisk((v) => !v) : undefined}
+                    title={atRisk.length > 0 ? 'Show the devices dragging availability' : undefined}>
+                    <b style={{ color: atRisk.length > 0 ? 'var(--warn)' : undefined }}>{atRisk.length}{atRisk.length > 0 ? (showRisk ? ' ▾' : ' ›') : ''}</b><small>at risk</small>
+                  </div>
                 </div>
+                {showRisk && atRisk.length > 0 && (
+                  <div style={{ marginTop: 10, borderTop: '1px solid var(--border)', paddingTop: 8, maxHeight: 220, overflowY: 'auto' }}>
+                    {atRisk.map((d) => (
+                      <Link key={d.device_id} to={`/devices/${d.device_id}`} title="Open device"
+                        style={{ display: 'flex', justifyContent: 'space-between', gap: 8, padding: '4px 2px', fontSize: 12, borderBottom: '1px solid var(--border)', color: 'inherit', textDecoration: 'none' }}>
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {d.name || d.primary_ip || '—'}
+                          <span className="muted" style={{ marginLeft: 6 }}>{d.category?.replace(/_/g, ' ')}</span>
+                        </span>
+                        <span style={{ whiteSpace: 'nowrap' }}>
+                          <b style={{ color: d.uptime_pct >= 99 ? 'var(--warn)' : 'var(--crit)' }}>{fmtPct(d.uptime_pct)}</b>
+                          {d.flaps > 0 && <span className="muted" style={{ marginLeft: 6 }}>{d.flaps} flap{d.flaps === 1 ? '' : 's'}</span>}
+                        </span>
+                      </Link>
+                    ))}
+                  </div>
+                )}
               </>
             ) : <EmptyState icon={HeartPulse} title="No availability history" message="Seed monitoring checks and run a sweep to build SLA history." action={<Link className="btn btn-primary btn-sm" to="/monitoring">Go to Monitoring</Link>} />}
           </Panel>

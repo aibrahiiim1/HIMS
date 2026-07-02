@@ -30,6 +30,10 @@ func TestReachabilityPort(t *testing.T) {
 		{"switch fallback → 22", "switch", "", nil, 22},
 		{"printer fallback → 9100", "printer", "", nil, 9100},
 		{"unmapped fallback → 443", "unknown", "", nil, 443},
+		// ZKTeco biometric terminals speak TCP 4370 and serve no HTTP/SSH.
+		{"biometric fallback → 4370", "biometric", "", nil, 4370},
+		{"biometric only 4370 open", "biometric", "", []int{4370}, 4370},
+		{"biometric prefers 4370 over telnet/23", "biometric", "", []int{23, 4370}, 4370},
 	}
 	for _, c := range cases {
 		if got := ReachabilityPort(c.category, c.os, c.open); got != c.want {
