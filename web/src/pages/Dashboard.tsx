@@ -175,7 +175,7 @@ function ActionRequiredCard() {
   const items = d?.items ?? []
   const tone = (s: string) => (s === 'critical' ? 'var(--crit)' : s === 'warning' ? 'var(--warn)' : 'var(--text-muted)')
   return (
-    <Panel title="Needs attention now" icon={TriangleAlert} subtitle="the real issues to act on, worst-first"
+    <Panel title="Needs attention now" icon={TriangleAlert} subtitle="the real issues to act on, worst-first" className="fill"
       actions={d ? <span className="muted" style={{ fontSize: 11 }}>updated {timeAgo(d.updated_at)}</span> : undefined}>
       {q.isError ? (
         <div className="muted" style={{ fontSize: 12, padding: '8px 2px' }}>Attention summary is unavailable right now. <button className="btn btn-ghost btn-xs" onClick={() => q.refetch()}>Retry</button></div>
@@ -449,13 +449,15 @@ export function Dashboard() {
           hint="Devices with a warranty, licence or certificate expiring within 90 days." sub="next 90 days" />
       </div>
 
-      {/* ===== B · Needs attention now — "what do I do next?" ===== */}
-      <SectionTitle icon={TriangleAlert} title="Needs attention now" hint="the real open issues to act on, worst-first — click any row to fix it" />
-      <ActionRequiredCard />
+      {/* ===== B · Needs attention now + reachability/management posture, side by side ===== */}
+      <SectionTitle icon={TriangleAlert} title="Needs attention now" hint="what to act on now — and how reachable vs managed the fleet is (two separate signals)" />
+      <div className="grid-2" style={{ alignItems: 'stretch' }}>
+        <div className="stack"><ActionRequiredCard /></div>
+        <div className="stack"><ReachManageCards /></div>
+      </div>
 
-      {/* ===== C · Collection & Trust — reachable vs managed, kept separate ===== */}
-      <SectionTitle icon={ShieldCheck} title="Collection & Trust" hint="online means a device answers the network · managed means HIMS can log in and collect from it — two different things" />
-      <ReachManageCards />
+      {/* ===== C · Collection & Trust — what HIMS can collect from ===== */}
+      <SectionTitle icon={ShieldCheck} title="Collection & Trust" hint="what HIMS can log into and collect from — by protocol and by site" />
       <div className="grid-2" style={{ alignItems: 'stretch' }}>
         <div className="stack"><ManagementAccessCoverage /></div>
         <div className="stack">
