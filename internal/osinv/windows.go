@@ -35,6 +35,7 @@ type winSummary struct {
 	Manufacturer string `json:"manufacturer"`
 	Model        string `json:"model"`
 	Serial       string `json:"serial"`
+	UUID         string `json:"uuid"`
 	BIOSVersion  string `json:"bios_version"`
 	BIOSDate     string `json:"bios_date"`
 	CPUModel     string `json:"cpu_model"`
@@ -47,7 +48,7 @@ type winSummary struct {
 // an array with the unary-array trick handled by jsonArray (single object OR
 // array both parse). No backticks (Go raw strings).
 const (
-	winSummaryPS = `$os=Get-CimInstance Win32_OperatingSystem;$cs=Get-CimInstance Win32_ComputerSystem;$b=Get-CimInstance Win32_BIOS;$c=@(Get-CimInstance Win32_Processor);$f=$cs.DNSHostName;if($cs.PartOfDomain){$f="$($cs.DNSHostName).$($cs.Domain)"};$u=0;if($os.LastBootUpTime){$u=[int64]((Get-Date)-$os.LastBootUpTime).TotalSeconds};[pscustomobject]@{hostname=$cs.Name;fqdn=$f;domain=$cs.Domain;workgroup=$cs.Workgroup;logged_on_user=$cs.UserName;caption=$os.Caption;version=$os.Version;build=$os.BuildNumber;arch=$os.OSArchitecture;install_date=($os.InstallDate.ToString('o'));last_boot=($os.LastBootUpTime.ToString('o'));uptime_seconds=$u;timezone=(Get-CimInstance Win32_TimeZone).Caption;manufacturer=$cs.Manufacturer;model=$cs.Model;serial=$b.SerialNumber;bios_version=(@($b.BIOSVersion)-join ' ');bios_date=($b.ReleaseDate.ToString('o'));cpu_model=$c[0].Name;cpu_sockets=$c.Count;cpu_cores=(($c|Measure-Object NumberOfCores -Sum).Sum);ram_total_bytes=[int64]$cs.TotalPhysicalMemory}|ConvertTo-Json -Compress`
+	winSummaryPS = `$os=Get-CimInstance Win32_OperatingSystem;$cs=Get-CimInstance Win32_ComputerSystem;$b=Get-CimInstance Win32_BIOS;$c=@(Get-CimInstance Win32_Processor);$f=$cs.DNSHostName;if($cs.PartOfDomain){$f="$($cs.DNSHostName).$($cs.Domain)"};$u=0;if($os.LastBootUpTime){$u=[int64]((Get-Date)-$os.LastBootUpTime).TotalSeconds};[pscustomobject]@{hostname=$cs.Name;fqdn=$f;domain=$cs.Domain;workgroup=$cs.Workgroup;logged_on_user=$cs.UserName;caption=$os.Caption;version=$os.Version;build=$os.BuildNumber;arch=$os.OSArchitecture;install_date=($os.InstallDate.ToString('o'));last_boot=($os.LastBootUpTime.ToString('o'));uptime_seconds=$u;timezone=(Get-CimInstance Win32_TimeZone).Caption;manufacturer=$cs.Manufacturer;model=$cs.Model;serial=$b.SerialNumber;uuid=(Get-CimInstance Win32_ComputerSystemProduct).UUID;bios_version=(@($b.BIOSVersion)-join ' ');bios_date=($b.ReleaseDate.ToString('o'));cpu_model=$c[0].Name;cpu_sockets=$c.Count;cpu_cores=(($c|Measure-Object NumberOfCores -Sum).Sum);ram_total_bytes=[int64]$cs.TotalPhysicalMemory}|ConvertTo-Json -Compress`
 
 	// winDisksPS returns fixed logical volumes, each annotated with the media type of its backing
 	// physical disk. It first tries the Storage-namespace MSFT_PhysicalDisk (Win8/2012+): MediaType
@@ -129,7 +130,7 @@ func CollectWindows(ctx context.Context, r Runner) (Report, error) {
 	}
 	rep.Identity = Identity{Hostname: sum.Hostname, FQDN: sum.FQDN, Domain: sum.Domain, Workgroup: sum.Workgroup, LoggedOnUser: sum.LoggedOnUser}
 	rep.OS = OSInfo{Caption: sum.Caption, Version: sum.Version, Build: sum.Build, Arch: sum.Arch, InstallDate: sum.InstallDate, LastBoot: sum.LastBoot, UptimeSeconds: sum.Uptime, Timezone: sum.Timezone}
-	rep.Hardware = Hardware{Manufacturer: sum.Manufacturer, Model: sum.Model, Serial: sum.Serial, BIOSVersion: sum.BIOSVersion, BIOSDate: sum.BIOSDate, CPUModel: sum.CPUModel, CPUSockets: sum.CPUSockets, CPUCores: sum.CPUCores, RAMTotalBytes: sum.RAMTotal}
+	rep.Hardware = Hardware{Manufacturer: sum.Manufacturer, Model: sum.Model, Serial: sum.Serial, UUID: sum.UUID, BIOSVersion: sum.BIOSVersion, BIOSDate: sum.BIOSDate, CPUModel: sum.CPUModel, CPUSockets: sum.CPUSockets, CPUCores: sum.CPUCores, RAMTotalBytes: sum.RAMTotal}
 
 	if out, err := r.Run(ctx, winDisksPS); err == nil {
 		rep.Disks, _ = jsonArray[Disk]([]byte(out))

@@ -431,6 +431,38 @@ func (q *Queries) ListDeviceFacts(ctx context.Context, deviceID uuid.UUID) ([]De
 	return items, nil
 }
 
+const listDeviceFactsByKey = `-- name: ListDeviceFactsByKey :many
+SELECT device_id, value FROM device_facts WHERE key = $1 AND value IS NOT NULL
+`
+
+type ListDeviceFactsByKeyRow struct {
+	DeviceID uuid.UUID `json:"device_id"`
+	Value    *string   `json:"value"`
+}
+
+// All (device_id, value) for a fact key across every device — e.g. the proven-working
+// 'vsphere.credential_id' facts, so a new ESXi host can try a credential ALREADY proven on
+// another host FIRST/ALONE instead of spraying (which risks ESXi account lockout).
+func (q *Queries) ListDeviceFactsByKey(ctx context.Context, key string) ([]ListDeviceFactsByKeyRow, error) {
+	rows, err := q.db.Query(ctx, listDeviceFactsByKey, key)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListDeviceFactsByKeyRow{}
+	for rows.Next() {
+		var i ListDeviceFactsByKeyRow
+		if err := rows.Scan(&i.DeviceID, &i.Value); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDeviceRoles = `-- name: ListDeviceRoles :many
 SELECT device_id, role, source, created_at FROM device_roles WHERE device_id = $1 ORDER BY role
 `

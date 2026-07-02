@@ -99,6 +99,9 @@ type Hardware struct {
 	Manufacturer   string `json:"manufacturer"`
 	Model          string `json:"model"`
 	Serial         string `json:"serial"`
+	// UUID is the SMBIOS system UUID (Win32_ComputerSystemProduct.UUID / dmi product_uuid).
+	// Persisted as an "os.uuid" fact so BMC reverse-linking can match by UUID (stronger than serial).
+	UUID           string `json:"uuid"`
 	AssetTag       string `json:"asset_tag"`
 	BIOSVersion    string `json:"bios_version"`
 	BIOSDate       string `json:"bios_date"`

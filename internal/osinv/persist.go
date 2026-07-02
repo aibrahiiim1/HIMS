@@ -26,6 +26,11 @@ type Writer interface {
 	DeleteStaleOSSoftware(ctx context.Context, arg db.DeleteStaleOSSoftwareParams) error
 	UpsertOSRole(ctx context.Context, arg db.UpsertOSRoleParams) error
 	DeleteStaleOSRoles(ctx context.Context, arg db.DeleteStaleOSRolesParams) error
+	// Device-row identity enrichment (serial/vendor/model/os/hostname) + the system UUID fact,
+	// so a Windows/Linux collection's chassis serial + UUID reach the device row and BMC
+	// reverse-linking. COALESCE(NULLIF…) in the query means a blank read never wipes proven values.
+	UpdateDeviceHardwareInfo(ctx context.Context, arg db.UpdateDeviceHardwareInfoParams) error
+	UpsertDeviceFact(ctx context.Context, arg db.UpsertDeviceFactParams) error
 }
 
 // baseSource maps a fine-grained collection method to the base transport family
@@ -64,6 +69,21 @@ func Persist(ctx context.Context, w Writer, deviceID uuid.UUID, rep Report, poll
 
 	if _, err := w.UpsertOSInventory(ctx, buildOSInventoryParams(deviceID, rep)); err != nil {
 		return err
+	}
+
+	// Enrich the DEVICE ROW identity from the collection so it reaches the fields BMC
+	// reverse-linking + the inventory columns use (previously only os_inventory was written by
+	// the native/WMI/agent paths, so serial/UUID never landed on the device — a real linking bug).
+	// COALESCE(NULLIF…) means empty reads never wipe a proven serial/vendor/model.
+	if err := w.UpdateDeviceHardwareInfo(ctx, db.UpdateDeviceHardwareInfoParams{
+		ID: deviceID, Vendor: rep.Hardware.Manufacturer, Model: rep.Hardware.Model,
+		Serial: rep.Hardware.Serial, OsVersion: rep.OS.Caption, Hostname: rep.Identity.Hostname,
+	}); err != nil {
+		return err
+	}
+	// Persist the system UUID as a fact so BMC linking can match by UUID (wins over serial).
+	if u := strings.TrimSpace(rep.Hardware.UUID); u != "" && u != "00000000-0000-0000-0000-000000000000" {
+		_ = w.UpsertDeviceFact(ctx, db.UpsertDeviceFactParams{DeviceID: deviceID, Key: "os.uuid", Value: &u, Driver: "os_inventory"})
 	}
 
 	// A guest VM's disks are all virtual; the per-disk physical-media probe is unreliable across

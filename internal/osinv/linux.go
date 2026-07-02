@@ -23,6 +23,7 @@ echo "@@@SEC timezone"; timedatectl show -p Timezone --value 2>/dev/null || cat 
 echo "@@@SEC meminfo"; cat /proc/meminfo 2>/dev/null
 echo "@@@SEC lscpu"; lscpu 2>/dev/null
 echo "@@@SEC dmi_system"; cat /sys/class/dmi/id/sys_vendor /sys/class/dmi/id/product_name /sys/class/dmi/id/product_serial 2>/dev/null
+echo "@@@SEC dmi_uuid"; cat /sys/class/dmi/id/product_uuid 2>/dev/null
 echo "@@@SEC dmi_bios"; cat /sys/class/dmi/id/bios_version /sys/class/dmi/id/bios_date 2>/dev/null
 echo "@@@SEC df"; df -B1 --output=source,fstype,size,avail,target 2>/dev/null
 echo "@@@SEC lsblk"; lsblk -dn -P -o NAME,ROTA,TRAN,MODEL 2>/dev/null
@@ -111,6 +112,9 @@ func ParseLinux(out string) Report {
 	}
 	if len(dmiSys) >= 3 {
 		rep.Hardware.Serial = dmiSys[2]
+	}
+	if u := firstLine(s["dmi_uuid"]); u != "" { // /sys/class/dmi/id/product_uuid (root-only)
+		rep.Hardware.UUID = u
 	}
 	dmiBios := nonEmptyLines(s["dmi_bios"])
 	if len(dmiBios) >= 1 {

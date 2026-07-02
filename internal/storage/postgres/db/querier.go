@@ -499,6 +499,10 @@ type Querier interface {
 	// Full recent test history for one device (Device Detail → Credential Health).
 	ListDeviceCredentialTests(ctx context.Context, arg ListDeviceCredentialTestsParams) ([]CredentialTestResult, error)
 	ListDeviceFacts(ctx context.Context, deviceID uuid.UUID) ([]DeviceFact, error)
+	// All (device_id, value) for a fact key across every device — e.g. the proven-working
+	// 'vsphere.credential_id' facts, so a new ESXi host can try a credential ALREADY proven on
+	// another host FIRST/ALONE instead of spraying (which risks ESXi account lockout).
+	ListDeviceFactsByKey(ctx context.Context, key string) ([]ListDeviceFactsByKeyRow, error)
 	// All topology links touching a device from EITHER endpoint, with both ends
 	// enriched (name/ip/vendor/category) and an `inbound` flag set when the device
 	// is the link's remote side. The handler normalizes this so the per-device

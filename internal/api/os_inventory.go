@@ -306,19 +306,10 @@ func (s *Server) runOSCollection(ctx context.Context, d db.Device) osCollectResu
 			res.Reason, res.Detail = "persist_error", "collected but failed to save: "+err.Error()
 			return res
 		}
-		// Enrich the device row's identity/hardware fields from the collection so
-		// the Inventory list columns (Vendor / Model / OS) populate — the deep
-		// inventory previously only landed in os_inventory and never surfaced on
-		// the device row. COALESCE(NULLIF…) in the query means blanks never wipe
-		// existing values, so this only adds detail.
-		_ = s.queries.UpdateDeviceHardwareInfo(ctx, db.UpdateDeviceHardwareInfoParams{
-			ID:        d.ID,
-			Vendor:    rep.Hardware.Manufacturer,
-			Model:     rep.Hardware.Model,
-			Serial:    rep.Hardware.Serial,
-			OsVersion: rep.OS.Caption,
-			Hostname:  rep.Identity.Hostname,
-		})
+		// Device-row identity enrichment (serial/UUID/vendor/model/os/hostname) is now done
+		// inside osinv.Persist so EVERY path (direct WinRM, native collector, WMI, relay agent)
+		// enriches the device consistently — previously only this direct path did, so agent/
+		// native-collected servers never got their chassis serial onto the device row.
 		// Bind-on-success so the working credential sticks to this device.
 		cid := cd.id
 		_ = s.queries.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: d.ID, CredentialID: &cid})

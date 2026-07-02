@@ -19,6 +19,22 @@ type mockWriter struct {
 	rolesDeleted int
 	staleCalls   int
 	diskSource   string
+	hwInfo       *db.UpdateDeviceHardwareInfoParams
+	facts        map[string]string
+}
+
+func (m *mockWriter) UpdateDeviceHardwareInfo(_ context.Context, a db.UpdateDeviceHardwareInfoParams) error {
+	m.hwInfo = &a
+	return nil
+}
+func (m *mockWriter) UpsertDeviceFact(_ context.Context, a db.UpsertDeviceFactParams) error {
+	if m.facts == nil {
+		m.facts = map[string]string{}
+	}
+	if a.Value != nil {
+		m.facts[a.Key] = *a.Value
+	}
+	return nil
 }
 
 func (m *mockWriter) UpsertOSInventory(_ context.Context, a db.UpsertOSInventoryParams) (db.OsInventory, error) {
@@ -99,6 +115,37 @@ func TestPersist_Windows(t *testing.T) {
 	// DC + DNS + SQL roles from services.
 	if len(m.rolesAdded) != 3 {
 		t.Errorf("expected 3 roles, got %v", m.rolesAdded)
+	}
+}
+
+// Persist must enrich the DEVICE ROW with the collected chassis serial (so BMC reverse-linking
+// works for ANY collection path) and record the system UUID as an os.uuid fact.
+func TestPersist_DeviceIdentityAndUUID(t *testing.T) {
+	rep := Report{
+		Method:   "wmi",
+		Identity: Identity{Hostname: "SRV200"},
+		OS:       OSInfo{Caption: "Windows Server 2008 R2"},
+		Hardware: Hardware{Manufacturer: "HP", Model: "ProLiant DL380p Gen8", Serial: "CZ22500QF1", UUID: "4C4C4544-0032-3210-8051-B3C04F515131"},
+	}
+	m := &mockWriter{}
+	if err := Persist(context.Background(), m, uuid.New(), rep, time.Now()); err != nil {
+		t.Fatalf("persist: %v", err)
+	}
+	if m.hwInfo == nil || m.hwInfo.Serial != "CZ22500QF1" || m.hwInfo.Vendor != "HP" {
+		t.Fatalf("device hardware not enriched: %+v", m.hwInfo)
+	}
+	if m.facts["os.uuid"] != "4C4C4544-0032-3210-8051-B3C04F515131" {
+		t.Fatalf("os.uuid fact not written: %+v", m.facts)
+	}
+}
+
+// An all-zero UUID is not a real identity and must not be persisted.
+func TestPersist_SkipsZeroUUID(t *testing.T) {
+	rep := Report{Method: "winrm", Hardware: Hardware{Serial: "ABC", UUID: "00000000-0000-0000-0000-000000000000"}}
+	m := &mockWriter{}
+	_ = Persist(context.Background(), m, uuid.New(), rep, time.Now())
+	if _, ok := m.facts["os.uuid"]; ok {
+		t.Fatalf("all-zero UUID should not be persisted, got %+v", m.facts)
 	}
 }
 

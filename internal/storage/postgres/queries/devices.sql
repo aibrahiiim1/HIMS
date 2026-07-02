@@ -169,6 +169,12 @@ ON CONFLICT (device_id, key) DO UPDATE SET
 -- name: ListDeviceFacts :many
 SELECT * FROM device_facts WHERE device_id = $1 ORDER BY key;
 
+-- name: ListDeviceFactsByKey :many
+-- All (device_id, value) for a fact key across every device — e.g. the proven-working
+-- 'vsphere.credential_id' facts, so a new ESXi host can try a credential ALREADY proven on
+-- another host FIRST/ALONE instead of spraying (which risks ESXi account lockout).
+SELECT device_id, value FROM device_facts WHERE key = $1 AND value IS NOT NULL;
+
 -- name: ListSNMPIdentityFacts :many
 -- Bulk fetch of the raw SNMP system-group identity facts across ALL devices, plus the
 -- probed open-TCP-ports fact, for Data Quality checks that re-evaluate fingerprints /

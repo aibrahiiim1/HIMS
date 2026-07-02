@@ -89,14 +89,48 @@ func (s *Server) runVSphereCollection(ctx context.Context, d db.Device) vsphereR
 		u, p := credtest.SplitUserPass(string(plain))
 		cands = append(cands, cc{c.ID, c.Name, u, p})
 	}
+	// (1) This host's OWN proven vSphere credential (stored as a 'vsphere.credential_id' fact on
+	// a prior success) — tried ALONE first. This is kept SEPARATE from device.credential_id so an
+	// ESXi host can hold BOTH an SNMP community (device.credential_id, used by monitoring) AND its
+	// vSphere login — binding the vSphere cred must NOT clobber the SNMP community.
+	addByID := func(id uuid.UUID) {
+		if id == uuid.Nil {
+			return
+		}
+		if c, err := s.queries.GetCredential(ctx, id); err == nil {
+			add(c)
+		}
+	}
+	var boundVSphereCred uuid.UUID
+	for _, f := range func() []db.DeviceFact { ff, _ := s.queries.ListDeviceFacts(ctx, d.ID); return ff }() {
+		if f.Key == "vsphere.credential_id" && f.Value != nil {
+			if id, e := uuid.Parse(strings.TrimSpace(*f.Value)); e == nil {
+				boundVSphereCred = id
+			}
+		}
+	}
+	addByID(boundVSphereCred)
+	// (2) A vSphere-kind credential explicitly bound to this device.
 	if d.CredentialID != nil {
 		if c, err := s.queries.GetCredential(ctx, *d.CredentialID); err == nil {
 			add(c)
 		}
 	}
-	// Spray-discover candidates ONLY when nothing is bound. Once a credential is bound
-	// (a prior successful login), try it ALONE — never re-spray, so a settled ESXi host
-	// is not re-locked on every scan and the proven credential is always used first.
+	// (3) Credentials ALREADY PROVEN on OTHER ESXi/vCenter hosts (their vsphere.credential_id
+	// fact) — tried before any broad spray so a NEW host uses a known-good login first, avoiding
+	// the spray that locks out the ESXi root account.
+	if provens, err := s.queries.ListDeviceFactsByKey(ctx, "vsphere.credential_id"); err == nil {
+		for _, pf := range provens {
+			if pf.Value == nil {
+				continue
+			}
+			if id, e := uuid.Parse(strings.TrimSpace(*pf.Value)); e == nil {
+				addByID(id)
+			}
+		}
+	}
+	// (4) Last resort: capped discovery spray ONLY when nothing proven/bound applied. The cap
+	// (maxVSphereCands) stays below the ESXi lockout threshold.
 	if len(cands) == 0 {
 		if all, err := s.queries.ListCredentials(ctx); err == nil {
 			for _, c := range all {
@@ -144,8 +178,15 @@ func (s *Server) runVSphereCollection(ctx context.Context, d db.Device) vsphereR
 		}
 		s.markVirtualHost(ctx, d.ID, "esxi")
 		s.persistVSphereInventory(ctx, d.ID, inv)
-		cid := cd.id
-		_ = s.queries.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: d.ID, CredentialID: &cid})
+		// Record the working vSphere credential as a FACT (proven), so the next collection tries it
+		// ALONE (no re-spray, no re-lockout) and other new ESXi hosts can reuse it. Only take over
+		// device.credential_id when the host has NONE — never clobber a bound SNMP community, which
+		// monitoring needs (an ESXi host legitimately has both an SNMP community and a vSphere login).
+		s.setDeviceFact(ctx, d.ID, "vsphere.credential_id", cd.id.String(), "vsphere")
+		if d.CredentialID == nil {
+			cid := cd.id
+			_ = s.queries.SetDeviceCredential(ctx, db.SetDeviceCredentialParams{ID: d.ID, CredentialID: &cid})
+		}
 		_ = s.queries.UpdateDeviceMonitoringStatus(ctx, db.UpdateDeviceMonitoringStatusParams{ID: d.ID, Status: "up"})
 
 		res = vsphereResult{
