@@ -48,6 +48,22 @@ func (q *Queries) DeleteStaleARP(ctx context.Context, arg DeleteStaleARPParams) 
 	return err
 }
 
+const deleteStaleIPInterfaces = `-- name: DeleteStaleIPInterfaces :exec
+DELETE FROM ip_interfaces
+WHERE device_id = $1 AND last_seen_at < $2 AND collection_source = $3
+`
+
+type DeleteStaleIPInterfacesParams struct {
+	DeviceID         uuid.UUID `json:"device_id"`
+	LastSeenAt       time.Time `json:"last_seen_at"`
+	CollectionSource string    `json:"collection_source"`
+}
+
+func (q *Queries) DeleteStaleIPInterfaces(ctx context.Context, arg DeleteStaleIPInterfacesParams) error {
+	_, err := q.db.Exec(ctx, deleteStaleIPInterfaces, arg.DeviceID, arg.LastSeenAt, arg.CollectionSource)
+	return err
+}
+
 const deleteStaleInterfaces = `-- name: DeleteStaleInterfaces :exec
 DELETE FROM interfaces
 WHERE device_id = $1 AND last_seen_at < $2 AND collection_source = $3
@@ -223,6 +239,54 @@ func (q *Queries) FindMACOnSwitches(ctx context.Context, mac string) ([]FindMACO
 			&i.PrimaryIp,
 			&i.IfName,
 			&i.PortRole,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const findSwitchByOwnedIP = `-- name: FindSwitchByOwnedIP :many
+SELECT ii.device_id, ii.if_index, ii.net_mask, d.name AS device_name, host(d.primary_ip) AS device_ip
+FROM ip_interfaces ii
+JOIN devices d ON d.id = ii.device_id AND d.deleted_at IS NULL
+WHERE ii.ip_address = $1 AND ii.device_id <> $2
+`
+
+type FindSwitchByOwnedIPParams struct {
+	IpAddress netip.Addr `json:"ip_address"`
+	DeviceID  uuid.UUID  `json:"device_id"`
+}
+
+type FindSwitchByOwnedIPRow struct {
+	DeviceID   uuid.UUID   `json:"device_id"`
+	IfIndex    int32       `json:"if_index"`
+	NetMask    *netip.Addr `json:"net_mask"`
+	DeviceName string      `json:"device_name"`
+	DeviceIp   string      `json:"device_ip"`
+}
+
+// The switch(es) that own a given IP on one of their L3 interfaces — used to
+// attribute a discovered VLAN-gateway/SVI IP to the switch it lives on.
+func (q *Queries) FindSwitchByOwnedIP(ctx context.Context, arg FindSwitchByOwnedIPParams) ([]FindSwitchByOwnedIPRow, error) {
+	rows, err := q.db.Query(ctx, findSwitchByOwnedIP, arg.IpAddress, arg.DeviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []FindSwitchByOwnedIPRow{}
+	for rows.Next() {
+		var i FindSwitchByOwnedIPRow
+		if err := rows.Scan(
+			&i.DeviceID,
+			&i.IfIndex,
+			&i.NetMask,
+			&i.DeviceName,
+			&i.DeviceIp,
 		); err != nil {
 			return nil, err
 		}
@@ -461,6 +525,38 @@ func (q *Queries) ListFabricInterfaceMACs(ctx context.Context) ([]ListFabricInte
 	for rows.Next() {
 		var i ListFabricInterfaceMACsRow
 		if err := rows.Scan(&i.DeviceID, &i.Mac); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listIPInterfaces = `-- name: ListIPInterfaces :many
+SELECT id, device_id, if_index, ip_address, net_mask, collection_source, last_seen_at FROM ip_interfaces WHERE device_id = $1 ORDER BY ip_address
+`
+
+func (q *Queries) ListIPInterfaces(ctx context.Context, deviceID uuid.UUID) ([]IpInterface, error) {
+	rows, err := q.db.Query(ctx, listIPInterfaces, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []IpInterface{}
+	for rows.Next() {
+		var i IpInterface
+		if err := rows.Scan(
+			&i.ID,
+			&i.DeviceID,
+			&i.IfIndex,
+			&i.IpAddress,
+			&i.NetMask,
+			&i.CollectionSource,
+			&i.LastSeenAt,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -776,7 +872,7 @@ func (q *Queries) ListUnknownMACs(ctx context.Context) ([]ListUnknownMACsRow, er
 }
 
 const listVlans = `-- name: ListVlans :many
-SELECT id, device_id, vlan_id, name, collection_source, last_seen_at FROM vlans WHERE device_id = $1 ORDER BY vlan_id
+SELECT id, device_id, vlan_id, name, collection_source, last_seen_at, gateway_ip FROM vlans WHERE device_id = $1 ORDER BY vlan_id
 `
 
 func (q *Queries) ListVlans(ctx context.Context, deviceID uuid.UUID) ([]Vlan, error) {
@@ -795,6 +891,7 @@ func (q *Queries) ListVlans(ctx context.Context, deviceID uuid.UUID) ([]Vlan, er
 			&i.Name,
 			&i.CollectionSource,
 			&i.LastSeenAt,
+			&i.GatewayIp,
 		); err != nil {
 			return nil, err
 		}
@@ -970,6 +1067,38 @@ func (q *Queries) UpsertARP(ctx context.Context, arg UpsertARPParams) error {
 		arg.IpAddress,
 		arg.Mac,
 		arg.IfIndex,
+		arg.CollectionSource,
+		arg.LastSeenAt,
+	)
+	return err
+}
+
+const upsertIPInterface = `-- name: UpsertIPInterface :exec
+INSERT INTO ip_interfaces (device_id, if_index, ip_address, net_mask, collection_source, last_seen_at)
+VALUES ($1,$2,$3,$4,$5,$6)
+ON CONFLICT (device_id, ip_address) DO UPDATE SET
+    if_index = EXCLUDED.if_index,
+    net_mask = EXCLUDED.net_mask,
+    collection_source = EXCLUDED.collection_source,
+    last_seen_at = EXCLUDED.last_seen_at
+`
+
+type UpsertIPInterfaceParams struct {
+	DeviceID         uuid.UUID   `json:"device_id"`
+	IfIndex          int32       `json:"if_index"`
+	IpAddress        netip.Addr  `json:"ip_address"`
+	NetMask          *netip.Addr `json:"net_mask"`
+	CollectionSource string      `json:"collection_source"`
+	LastSeenAt       time.Time   `json:"last_seen_at"`
+}
+
+// One IP configured ON the device (ipAddrTable): SVI gateway, loopback, mgmt IP.
+func (q *Queries) UpsertIPInterface(ctx context.Context, arg UpsertIPInterfaceParams) error {
+	_, err := q.db.Exec(ctx, upsertIPInterface,
+		arg.DeviceID,
+		arg.IfIndex,
+		arg.IpAddress,
+		arg.NetMask,
 		arg.CollectionSource,
 		arg.LastSeenAt,
 	)
@@ -1232,21 +1361,24 @@ func (q *Queries) UpsertTopologyLink(ctx context.Context, arg UpsertTopologyLink
 
 const upsertVlan = `-- name: UpsertVlan :one
 
-INSERT INTO vlans (device_id, vlan_id, name, collection_source, last_seen_at)
-VALUES ($1,$2,$3,$4,$5)
+INSERT INTO vlans (device_id, vlan_id, name, gateway_ip, collection_source, last_seen_at)
+VALUES ($1,$2,$3,$4,$5,$6)
 ON CONFLICT (device_id, vlan_id) DO UPDATE SET
     name = EXCLUDED.name,
+    -- Keep a known gateway if a later (L2-only) pass reports none.
+    gateway_ip = COALESCE(EXCLUDED.gateway_ip, vlans.gateway_ip),
     collection_source = EXCLUDED.collection_source,
     last_seen_at = EXCLUDED.last_seen_at
-RETURNING id, device_id, vlan_id, name, collection_source, last_seen_at
+RETURNING id, device_id, vlan_id, name, collection_source, last_seen_at, gateway_ip
 `
 
 type UpsertVlanParams struct {
-	DeviceID         uuid.UUID `json:"device_id"`
-	VlanID           int32     `json:"vlan_id"`
-	Name             *string   `json:"name"`
-	CollectionSource string    `json:"collection_source"`
-	LastSeenAt       time.Time `json:"last_seen_at"`
+	DeviceID         uuid.UUID   `json:"device_id"`
+	VlanID           int32       `json:"vlan_id"`
+	Name             *string     `json:"name"`
+	GatewayIp        *netip.Addr `json:"gateway_ip"`
+	CollectionSource string      `json:"collection_source"`
+	LastSeenAt       time.Time   `json:"last_seen_at"`
 }
 
 // ---- VLANs ----------------------------------------------------------------
@@ -1255,6 +1387,7 @@ func (q *Queries) UpsertVlan(ctx context.Context, arg UpsertVlanParams) (Vlan, e
 		arg.DeviceID,
 		arg.VlanID,
 		arg.Name,
+		arg.GatewayIp,
 		arg.CollectionSource,
 		arg.LastSeenAt,
 	)
@@ -1266,6 +1399,44 @@ func (q *Queries) UpsertVlan(ctx context.Context, arg UpsertVlanParams) (Vlan, e
 		&i.Name,
 		&i.CollectionSource,
 		&i.LastSeenAt,
+		&i.GatewayIp,
 	)
 	return i, err
+}
+
+const vlanForGatewayIP = `-- name: VlanForGatewayIP :many
+SELECT device_id, vlan_id, name FROM vlans WHERE device_id = $1 AND gateway_ip = $2
+`
+
+type VlanForGatewayIPParams struct {
+	DeviceID  uuid.UUID   `json:"device_id"`
+	GatewayIp *netip.Addr `json:"gateway_ip"`
+}
+
+type VlanForGatewayIPRow struct {
+	DeviceID uuid.UUID `json:"device_id"`
+	VlanID   int32     `json:"vlan_id"`
+	Name     *string   `json:"name"`
+}
+
+// The VLAN whose SVI gateway is this IP, on the given switch (for labelling the
+// attributed gateway device with its VLAN id).
+func (q *Queries) VlanForGatewayIP(ctx context.Context, arg VlanForGatewayIPParams) ([]VlanForGatewayIPRow, error) {
+	rows, err := q.db.Query(ctx, vlanForGatewayIP, arg.DeviceID, arg.GatewayIp)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []VlanForGatewayIPRow{}
+	for rows.Next() {
+		var i VlanForGatewayIPRow
+		if err := rows.Scan(&i.DeviceID, &i.VlanID, &i.Name); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

@@ -8,6 +8,8 @@ package swsnmp
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/coralsearesorts/hims/internal/driver"
@@ -326,6 +328,102 @@ func CollectARP(ctx context.Context, c snmp.Client) []driver.ARPSnap {
 		})
 		return nil
 	})
+	return out
+}
+
+// CollectIPAddresses walks ipAddrTable (RFC 1213) — the IPs configured ON this
+// device, each with its owning ifIndex + netmask. For an L3 switch this yields
+// the SVI / VLAN-interface gateway IPs (and loopbacks / mgmt IP); pure L2
+// switches return an empty table. This is the binding that attributes a VLAN
+// gateway IP (e.g. an SVI on the core switch) to the switch that owns it.
+func CollectIPAddresses(ctx context.Context, c snmp.Client) []driver.IPInterfaceSnap {
+	type row struct {
+		ifIndex int
+		mask    string
+	}
+	rows := map[string]*row{}
+	get := func(ip string) *row {
+		r := rows[ip]
+		if r == nil {
+			r = &row{}
+			rows[ip] = r
+		}
+		return r
+	}
+	_ = c.BulkWalk(ctx, mibs.IPAddrEntry, func(p snmp.PDU) error {
+		col, idx, ok := snmp.ColumnAndIndex(p.OID, mibs.IPAddrEntry)
+		if !ok || len(idx) != 4 { // index = the IPv4 address itself
+			return nil
+		}
+		ip := fmt.Sprintf("%d.%d.%d.%d", idx[0], idx[1], idx[2], idx[3])
+		switch int(col) {
+		case 2: // ipAdEntIfIndex
+			if v, ok := snmp.PDUInt64(p); ok {
+				get(ip).ifIndex = int(v)
+			}
+		case 3: // ipAdEntNetMask (SNMP IpAddress = 4 bytes)
+			get(ip).mask = ipv4Bytes(p.Value)
+		}
+		return nil
+	})
+	out := make([]driver.IPInterfaceSnap, 0, len(rows))
+	for ip, r := range rows {
+		out = append(out, driver.IPInterfaceSnap{IP: ip, IfIndex: r.ifIndex, NetMask: r.mask})
+	}
+	return out
+}
+
+// ipv4Bytes renders an SNMP IpAddress value (4-byte octet string) as dotted quad.
+func ipv4Bytes(v any) string {
+	if b, ok := v.([]byte); ok && len(b) == 4 {
+		return fmt.Sprintf("%d.%d.%d.%d", b[0], b[1], b[2], b[3])
+	}
+	return ""
+}
+
+// sviNameRe extracts a VLAN id from an SVI / VLAN-interface name across vendors:
+// Cisco "Vlan210", Aruba/ProCurve "VLAN210", Comware "Vlan-interface210",
+// Juniper "irb.210" / "vlan.210". Loopbacks/physical ports don't match.
+var sviNameRe = regexp.MustCompile(`(?i)^(?:vlan\D*?|irb\.)(\d{1,4})$`)
+
+// DetectSVIGateways binds each L3 IP to a VLAN when its owning interface is an
+// SVI (name like "Vlan210"), setting that VLAN's GatewayIP. VLANs with no SVI
+// are returned unchanged; an SVI whose VLAN wasn't in the static table is added
+// so a gateway IP is never dropped. The first IP per VLAN wins (stable).
+func DetectSVIGateways(ifaces []driver.InterfaceSnap, ips []driver.IPInterfaceSnap, vlans []driver.VLANSnap) []driver.VLANSnap {
+	sviVlan := map[int]int{} // ifIndex → vlan id
+	for _, f := range ifaces {
+		name := strings.TrimSpace(f.IfName)
+		if name == "" {
+			name = strings.TrimSpace(f.IfDescr)
+		}
+		if m := sviNameRe.FindStringSubmatch(name); m != nil {
+			if vid, err := strconv.Atoi(m[1]); err == nil && vid > 0 && vid < 4096 {
+				sviVlan[int(f.IfIndex)] = vid
+			}
+		}
+	}
+	gw := map[int]string{} // vlan id → gateway ip
+	for _, ip := range ips {
+		if vid, ok := sviVlan[ip.IfIndex]; ok {
+			if _, seen := gw[vid]; !seen {
+				gw[vid] = ip.IP
+			}
+		}
+	}
+	out := make([]driver.VLANSnap, len(vlans))
+	copy(out, vlans)
+	byID := map[int]int{} // vlan id → index in out
+	for i := range out {
+		byID[out[i].VLANID] = i
+	}
+	for vid, ip := range gw {
+		if i, ok := byID[vid]; ok {
+			out[i].GatewayIP = ip
+		} else {
+			out = append(out, driver.VLANSnap{VLANID: vid, GatewayIP: ip})
+		}
+	}
 	return out
 }
 

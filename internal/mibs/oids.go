@@ -58,6 +58,15 @@ const (
 	IPNetToMediaEntry    = "1.3.6.1.2.1.4.22.1"   // ipNetToMediaEntry (for index parsing)
 	IPNetToMediaColPhys  = 2
 
+	// --- ipAddrTable (RFC 1213) — the device's OWN L3 IP addresses, one row per
+	// configured IP (incl. SVI / VLAN-interface gateway IPs and loopbacks). The
+	// row index IS the IPv4 address; columns give the owning ifIndex + netmask.
+	// This is how a switch's VLAN gateway IP (e.g. an SVI on the core) is bound to
+	// the switch — pure L2 switches with no L3 return an empty table.
+	IPAddrEntry      = "1.3.6.1.2.1.4.20.1" // ipAddrEntry (index = ipv4 address)
+	IPAddrColIfIndex = "1.3.6.1.2.1.4.20.1.2"
+	IPAddrColNetMask = "1.3.6.1.2.1.4.20.1.3"
+
 	// --- LLDP-MIB ----------------------------------------------------------
 	LldpLocPortEntry           = "1.0.8802.1.1.2.1.3.7.1" // local port table
 	LldpRemEntry               = "1.0.8802.1.1.2.1.4.1.1" // remote table (composite index)

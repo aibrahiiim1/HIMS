@@ -207,6 +207,7 @@ type Querier interface {
 	DeleteStaleDatastores(ctx context.Context, arg DeleteStaleDatastoresParams) error
 	DeleteStaleHAMembers(ctx context.Context, arg DeleteStaleHAMembersParams) error
 	DeleteStaleHostNics(ctx context.Context, arg DeleteStaleHostNicsParams) error
+	DeleteStaleIPInterfaces(ctx context.Context, arg DeleteStaleIPInterfacesParams) error
 	DeleteStaleInterfaces(ctx context.Context, arg DeleteStaleInterfacesParams) error
 	DeleteStaleLicenses(ctx context.Context, arg DeleteStaleLicensesParams) error
 	DeleteStaleMACEntries(ctx context.Context, arg DeleteStaleMACEntriesParams) error
@@ -300,6 +301,9 @@ type Querier interface {
 	// with directory number, registration + registrar. Compares the MAC ignoring
 	// separators/case so 00:23:eb:.. , 0023eb.. and 00-23-.. all match.
 	FindPhoneByMAC(ctx context.Context, translate string) ([]FindPhoneByMACRow, error)
+	// The switch(es) that own a given IP on one of their L3 interfaces — used to
+	// attribute a discovered VLAN-gateway/SVI IP to the switch it lives on.
+	FindSwitchByOwnedIP(ctx context.Context, arg FindSwitchByOwnedIPParams) ([]FindSwitchByOwnedIPRow, error)
 	// Path Finder: exact-match a search term (MAC / IP / hostname) to an associated
 	// wireless client that has a known AP, so the traced path can START at the access
 	// point the client is connected to. Exact (not substring) match avoids tracing an
@@ -554,6 +558,7 @@ type Querier interface {
 	ListFabricInterfaceMACs(ctx context.Context) ([]ListFabricInterfaceMACsRow, error)
 	ListHAMembers(ctx context.Context, deviceID uuid.UUID) ([]FirewallHaMember, error)
 	ListHostNicsByHost(ctx context.Context, hostDeviceID uuid.UUID) ([]VhHostNic, error)
+	ListIPInterfaces(ctx context.Context, deviceID uuid.UUID) ([]IpInterface, error)
 	ListInterfaces(ctx context.Context, deviceID uuid.UUID) ([]Interface, error)
 	// Per-device scan dispositions across recent jobs (newest first). Powers the
 	// scan-stability Data Quality issues: missed-last-scan, flapping (recovered by
@@ -988,6 +993,8 @@ type Querier interface {
 	UpsertFirewallStatus(ctx context.Context, arg UpsertFirewallStatusParams) error
 	UpsertHAMember(ctx context.Context, arg UpsertHAMemberParams) error
 	UpsertHostNic(ctx context.Context, arg UpsertHostNicParams) error
+	// One IP configured ON the device (ipAddrTable): SVI gateway, loopback, mgmt IP.
+	UpsertIPInterface(ctx context.Context, arg UpsertIPInterfaceParams) error
 	// ---- Interfaces -----------------------------------------------------------
 	UpsertInterface(ctx context.Context, arg UpsertInterfaceParams) (Interface, error)
 	UpsertLicense(ctx context.Context, arg UpsertLicenseParams) error
@@ -1045,6 +1052,9 @@ type Querier interface {
 	UpsertWirelessSSID(ctx context.Context, arg UpsertWirelessSSIDParams) (WirelessSsid, error)
 	VMCountsByHost(ctx context.Context) ([]VMCountsByHostRow, error)
 	VMLinkSummary(ctx context.Context) (VMLinkSummaryRow, error)
+	// The VLAN whose SVI gateway is this IP, on the given switch (for labelling the
+	// attributed gateway device with its VLAN id).
+	VlanForGatewayIP(ctx context.Context, arg VlanForGatewayIPParams) ([]VlanForGatewayIPRow, error)
 }
 
 var _ Querier = (*Queries)(nil)

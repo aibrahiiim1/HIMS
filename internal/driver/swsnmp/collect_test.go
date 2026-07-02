@@ -3,6 +3,8 @@ package swsnmp
 import (
 	"reflect"
 	"testing"
+
+	"github.com/coralsearesorts/hims/internal/driver"
 )
 
 func TestDecodePortBitmap(t *testing.T) {
@@ -90,5 +92,48 @@ func TestEgressUntaggedClassification(t *testing.T) {
 	}
 	if !reflect.DeepEqual(decodePortBitmap(egress), []int{1, 2}) {
 		t.Fatal("both ports should be VLAN members")
+	}
+}
+
+// SVI gateway detection: an IP on an interface named "Vlan<id>" (any vendor
+// spelling) becomes that VLAN's gateway; physical-port IPs and loopbacks don't
+// map; an SVI whose VLAN isn't in the static table is added.
+func TestDetectSVIGateways(t *testing.T) {
+	ifaces := []driver.InterfaceSnap{
+		{IfIndex: 10, IfName: "Vlan210"},              // Cisco/Aruba SVI
+		{IfIndex: 11, IfName: "Vlan-interface150"},    // Comware SVI
+		{IfIndex: 12, IfName: "irb.96"},               // Juniper SVI
+		{IfIndex: 20, IfName: "GigabitEthernet1/0/1"}, // physical port (not SVI)
+		{IfIndex: 30, IfName: "loopback0"},            // loopback (no vlan match)
+	}
+	ips := []driver.IPInterfaceSnap{
+		{IP: "172.21.210.250", IfIndex: 10},
+		{IP: "172.21.150.1", IfIndex: 11},
+		{IP: "172.21.96.2", IfIndex: 12},
+		{IP: "10.9.9.1", IfIndex: 20}, // on a physical port -> not a VLAN gateway
+		{IP: "1.1.1.1", IfIndex: 30},  // loopback -> ignored
+	}
+	vlans := []driver.VLANSnap{{VLANID: 210, Name: "GUEST"}, {VLANID: 96, Name: "MGMT"}}
+	out := DetectSVIGateways(ifaces, ips, vlans)
+
+	gw := map[int]string{}
+	for _, v := range out {
+		gw[v.VLANID] = v.GatewayIP
+	}
+	if gw[210] != "172.21.210.250" {
+		t.Errorf("VLAN 210 gateway: got %q want 172.21.210.250", gw[210])
+	}
+	if gw[96] != "172.21.96.2" {
+		t.Errorf("VLAN 96 gateway: got %q want 172.21.96.2", gw[96])
+	}
+	// VLAN 150 wasn't in the static table but the SVI adds it.
+	if gw[150] != "172.21.150.1" {
+		t.Errorf("VLAN 150 (SVI-only) gateway: got %q want 172.21.150.1", gw[150])
+	}
+	// The physical-port IP (10.9.9.1) must not create a phantom VLAN.
+	for _, v := range out {
+		if v.GatewayIP == "10.9.9.1" || v.GatewayIP == "1.1.1.1" {
+			t.Errorf("non-SVI IP wrongly mapped to a VLAN gateway: %+v", v)
+		}
 	}
 }

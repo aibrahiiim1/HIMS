@@ -100,6 +100,12 @@ func (f *fakeWriter) UpsertARP(_ context.Context, arg db.UpsertARPParams) error 
 	return nil
 }
 func (f *fakeWriter) DeleteStaleARP(_ context.Context, _ db.DeleteStaleARPParams) error { return nil }
+func (f *fakeWriter) UpsertIPInterface(_ context.Context, _ db.UpsertIPInterfaceParams) error {
+	return nil
+}
+func (f *fakeWriter) DeleteStaleIPInterfaces(_ context.Context, _ db.DeleteStaleIPInterfacesParams) error {
+	return nil
+}
 func (f *fakeWriter) UpsertNeighbor(_ context.Context, arg db.UpsertNeighborParams) (db.Neighbor, error) {
 	f.neighbors = append(f.neighbors, arg)
 	return db.Neighbor{}, nil

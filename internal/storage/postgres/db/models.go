@@ -508,6 +508,16 @@ type Interface struct {
 	UpdatedAt        time.Time `json:"updated_at"`
 }
 
+type IpInterface struct {
+	ID               uuid.UUID   `json:"id"`
+	DeviceID         uuid.UUID   `json:"device_id"`
+	IfIndex          int32       `json:"if_index"`
+	IpAddress        netip.Addr  `json:"ip_address"`
+	NetMask          *netip.Addr `json:"net_mask"`
+	CollectionSource string      `json:"collection_source"`
+	LastSeenAt       time.Time   `json:"last_seen_at"`
+}
+
 type Location struct {
 	ID        uuid.UUID  `json:"id"`
 	ParentID  *uuid.UUID `json:"parent_id"`
@@ -1206,6 +1216,8 @@ type Vlan struct {
 	Name             *string   `json:"name"`
 	CollectionSource string    `json:"collection_source"`
 	LastSeenAt       time.Time `json:"last_seen_at"`
+	// The VLAN's L3 SVI gateway IP on this switch (from ipAddrTable); null for pure L2.
+	GatewayIp *netip.Addr `json:"gateway_ip"`
 }
 
 type VmDisk struct {

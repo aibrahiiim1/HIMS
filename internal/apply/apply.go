@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"net/netip"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -52,6 +53,8 @@ type Writer interface {
 	DeleteStaleMACEntries(ctx context.Context, arg db.DeleteStaleMACEntriesParams) error
 	UpsertARP(ctx context.Context, arg db.UpsertARPParams) error
 	DeleteStaleARP(ctx context.Context, arg db.DeleteStaleARPParams) error
+	UpsertIPInterface(ctx context.Context, arg db.UpsertIPInterfaceParams) error
+	DeleteStaleIPInterfaces(ctx context.Context, arg db.DeleteStaleIPInterfacesParams) error
 	UpsertNeighbor(ctx context.Context, arg db.UpsertNeighborParams) (db.Neighbor, error)
 	DeleteStaleNeighbors(ctx context.Context, arg db.DeleteStaleNeighborsParams) error
 	UpsertServerStorage(ctx context.Context, arg db.UpsertServerStorageParams) error
@@ -303,11 +306,12 @@ func (a *Applier) applyFacts(ctx context.Context, devID uuid.UUID, f *driver.Fac
 		_ = a.w.DeleteStaleInterfaces(ctx, db.DeleteStaleInterfacesParams{DeviceID: devID, LastSeenAt: poll, CollectionSource: sourceSNMP})
 	}
 
-	// VLANs.
+	// VLANs (with the SVI gateway IP when the switch has an L3 interface for it).
 	if len(f.VLANs) > 0 {
 		for _, v := range f.VLANs {
 			_, _ = a.w.UpsertVlan(ctx, db.UpsertVlanParams{
-				DeviceID: devID, VlanID: int32(v.VLANID), Name: nonEmpty(v.Name), CollectionSource: sourceSNMP, LastSeenAt: poll,
+				DeviceID: devID, VlanID: int32(v.VLANID), Name: nonEmpty(v.Name), GatewayIp: ipPtr(v.GatewayIP),
+				CollectionSource: sourceSNMP, LastSeenAt: poll,
 			})
 		}
 		_ = a.w.DeleteStaleVlans(ctx, db.DeleteStaleVlansParams{DeviceID: devID, LastSeenAt: poll, CollectionSource: sourceSNMP})
@@ -352,6 +356,47 @@ func (a *Applier) applyFacts(ctx context.Context, devID uuid.UUID, f *driver.Fac
 			})
 		}
 		_ = a.w.DeleteStaleARP(ctx, db.DeleteStaleARPParams{DeviceID: devID, LastSeenAt: poll, CollectionSource: sourceSNMP})
+	}
+
+	// IP interfaces (ipAddrTable): the L3 IPs configured ON this switch — SVI/VLAN
+	// gateways, loopbacks, mgmt IP. Persist them, then ATTRIBUTE each gateway IP to
+	// this switch: if a standalone (phantom) device exists for that IP — e.g. a
+	// VLAN gateway that only answered a ping — link it via facts so it's shown as a
+	// "VLAN gateway on <this switch>" instead of an orphan device. Evidence-based:
+	// the IP is literally on the switch's own ipAddrTable.
+	if len(f.IPAddresses) > 0 {
+		gwVlan := map[string]int{} // ip → vlan id (from the SVI mapping)
+		for _, v := range f.VLANs {
+			if v.GatewayIP != "" && v.VLANID > 0 {
+				gwVlan[v.GatewayIP] = v.VLANID
+			}
+		}
+		for _, ipi := range f.IPAddresses {
+			addr := ipPtr(ipi.IP)
+			if addr == nil {
+				continue
+			}
+			_ = a.w.UpsertIPInterface(ctx, db.UpsertIPInterfaceParams{
+				DeviceID: devID, IfIndex: int32(ipi.IfIndex), IpAddress: *addr, NetMask: ipPtr(ipi.NetMask),
+				CollectionSource: sourceSNMP, LastSeenAt: poll,
+			})
+			// Attribute a matching standalone device to this switch (skip loopbacks
+			// and the switch's own management IP — that row IS this device).
+			if addr.IsLoopback() {
+				continue
+			}
+			dev, err := a.w.LiveDeviceByIP(ctx, addr)
+			if err != nil || dev.ID == devID {
+				continue
+			}
+			sw := devID.String()
+			_ = a.w.UpsertDeviceFact(ctx, db.UpsertDeviceFactParams{DeviceID: dev.ID, Key: "svi.gateway_of", Value: &sw, Driver: "snmp"})
+			if vid, ok := gwVlan[ipi.IP]; ok {
+				vs := strconv.Itoa(vid)
+				_ = a.w.UpsertDeviceFact(ctx, db.UpsertDeviceFactParams{DeviceID: dev.ID, Key: "svi.vlan", Value: &vs, Driver: "snmp"})
+			}
+		}
+		_ = a.w.DeleteStaleIPInterfaces(ctx, db.DeleteStaleIPInterfacesParams{DeviceID: devID, LastSeenAt: poll, CollectionSource: sourceSNMP})
 	}
 
 	// Neighbors (LLDP/CDP).
@@ -764,3 +809,15 @@ func nonEmpty(s string) *string {
 	return &s
 }
 func strptr(s string) *string { return &s }
+
+// ipPtr parses a dotted IP string to a *netip.Addr for an inet column, or nil.
+func ipPtr(s string) *netip.Addr {
+	if s == "" {
+		return nil
+	}
+	a, err := netip.ParseAddr(s)
+	if err != nil || !a.IsValid() {
+		return nil
+	}
+	return &a
+}

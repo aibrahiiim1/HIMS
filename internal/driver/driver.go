@@ -80,12 +80,13 @@ type Facts struct {
 	// Raw is the unparsed snapshot kept for audit/debug.
 	Raw map[string]any
 	// Typed collections for switch inventory.
-	Interfaces []InterfaceSnap
-	VLANs      []VLANSnap
-	PortVLANs  []PortVlanSnap
-	MACs       []MACSnap
-	ARP        []ARPSnap
-	Neighbors  []NeighborSnap
+	Interfaces  []InterfaceSnap
+	VLANs       []VLANSnap
+	PortVLANs   []PortVlanSnap
+	MACs        []MACSnap
+	ARP         []ARPSnap
+	IPAddresses []IPInterfaceSnap // ipAddrTable — the device's own L3 IPs (SVI gateways, loopbacks)
+	Neighbors   []NeighborSnap
 	// Server inventory (HOST-RESOURCES-MIB).
 	Storage []StorageSnap
 	// Firewall current-state (FortiGate).
@@ -350,6 +351,20 @@ type InterfaceSnap struct {
 type VLANSnap struct {
 	VLANID int
 	Name   string
+	// GatewayIP is the VLAN's L3 SVI gateway address (e.g. 172.21.210.250), set
+	// when the switch has an SVI interface for this VLAN with a configured IP
+	// (derived from the ipAddrTable). Empty for pure L2 VLANs.
+	GatewayIP string
+}
+
+// IPInterfaceSnap is one row of the device's ipAddrTable — an IP configured ON
+// this device (SVI / VLAN-interface gateway, loopback, mgmt IP), with the owning
+// ifIndex and its netmask. This is the evidence that binds a VLAN gateway IP to
+// the switch that owns it.
+type IPInterfaceSnap struct {
+	IP      string // dotted IPv4 (e.g. 172.21.210.250)
+	IfIndex int
+	NetMask string // dotted (e.g. 255.255.255.0)
 }
 
 // PortVlanSnap is one (port, VLAN) membership from Q-BRIDGE egress/untagged

@@ -31,10 +31,12 @@ WHERE device_id = $1 AND last_seen_at < $2 AND collection_source = $3;
 -- ---- VLANs ----------------------------------------------------------------
 
 -- name: UpsertVlan :one
-INSERT INTO vlans (device_id, vlan_id, name, collection_source, last_seen_at)
-VALUES ($1,$2,$3,$4,$5)
+INSERT INTO vlans (device_id, vlan_id, name, gateway_ip, collection_source, last_seen_at)
+VALUES ($1,$2,$3,$4,$5,$6)
 ON CONFLICT (device_id, vlan_id) DO UPDATE SET
     name = EXCLUDED.name,
+    -- Keep a known gateway if a later (L2-only) pass reports none.
+    gateway_ip = COALESCE(EXCLUDED.gateway_ip, vlans.gateway_ip),
     collection_source = EXCLUDED.collection_source,
     last_seen_at = EXCLUDED.last_seen_at
 RETURNING *;
@@ -45,6 +47,36 @@ SELECT * FROM vlans WHERE device_id = $1 ORDER BY vlan_id;
 -- name: DeleteStaleVlans :exec
 DELETE FROM vlans
 WHERE device_id = $1 AND last_seen_at < $2 AND collection_source = $3;
+
+-- name: UpsertIPInterface :exec
+-- One IP configured ON the device (ipAddrTable): SVI gateway, loopback, mgmt IP.
+INSERT INTO ip_interfaces (device_id, if_index, ip_address, net_mask, collection_source, last_seen_at)
+VALUES ($1,$2,$3,$4,$5,$6)
+ON CONFLICT (device_id, ip_address) DO UPDATE SET
+    if_index = EXCLUDED.if_index,
+    net_mask = EXCLUDED.net_mask,
+    collection_source = EXCLUDED.collection_source,
+    last_seen_at = EXCLUDED.last_seen_at;
+
+-- name: ListIPInterfaces :many
+SELECT * FROM ip_interfaces WHERE device_id = $1 ORDER BY ip_address;
+
+-- name: DeleteStaleIPInterfaces :exec
+DELETE FROM ip_interfaces
+WHERE device_id = $1 AND last_seen_at < $2 AND collection_source = $3;
+
+-- name: FindSwitchByOwnedIP :many
+-- The switch(es) that own a given IP on one of their L3 interfaces — used to
+-- attribute a discovered VLAN-gateway/SVI IP to the switch it lives on.
+SELECT ii.device_id, ii.if_index, ii.net_mask, d.name AS device_name, host(d.primary_ip) AS device_ip
+FROM ip_interfaces ii
+JOIN devices d ON d.id = ii.device_id AND d.deleted_at IS NULL
+WHERE ii.ip_address = $1 AND ii.device_id <> $2;
+
+-- name: VlanForGatewayIP :many
+-- The VLAN whose SVI gateway is this IP, on the given switch (for labelling the
+-- attributed gateway device with its VLAN id).
+SELECT device_id, vlan_id, name FROM vlans WHERE device_id = $1 AND gateway_ip = $2;
 
 -- name: UpsertPortVlan :exec
 INSERT INTO port_vlans (device_id, if_index, vlan_id, tagged, collection_source, last_seen_at)
