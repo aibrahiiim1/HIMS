@@ -580,6 +580,12 @@ select.field { cursor: pointer; }
 .donut-wrap { display: inline-flex; }
 .donut-value { font-size: 26px; font-weight: 800; }
 .donut-label { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
+/* Rounded "activity-ring" donut: soft depth + animated draw-in, coloured segments
+   sit above a faint track. */
+.donut-round .donut circle { transition: stroke-dasharray .6s ease; }
+.donut-round .donut circle[stroke^="var(--surface"] { opacity: .55; }
+.donut-round .donut { filter: drop-shadow(0 3px 5px rgba(0, 0, 0, .12)); }
+.donut-round .donut-value { font-size: 30px; }
 
 .legend { list-style: none; display: flex; flex-direction: column; gap: 8px; }
 .legend li { display: flex; align-items: center; gap: 9px; font-size: var(--fs-md); }

@@ -131,29 +131,38 @@ export function HealthRing({ score, size = 120, label = 'Health' }: { score: num
 }
 
 /* ---- Donut chart ---------------------------------------------------------- */
-export function Donut({ data, size = 160, thickness = 26, centerLabel, centerValue }: {
+export function Donut({ data, size = 160, thickness = 26, centerLabel, centerValue, rounded = false }: {
   data: { label: string; value: number; color: string }[]
   size?: number; thickness?: number; centerLabel?: string; centerValue?: ReactNode
+  // rounded: a modern activity-ring look — rounded caps + small gaps between
+  // segments, and a tiny slice still shows as a small rounded dot (so an offline
+  // or warning sliver is never invisible). Best for a few status segments.
+  rounded?: boolean
 }) {
   const total = data.reduce((a, d) => a + d.value, 0)
   const r = (size - thickness) / 2
   const c = 2 * Math.PI * r
+  const segs = data.filter((d) => d.value > 0)
+  const gap = rounded && segs.length > 1 ? thickness : 0
+  const cap = rounded ? 'round' : 'butt'
   let acc = 0
   return (
-    <div className="donut-wrap">
+    <div className={`donut-wrap${rounded ? ' donut-round' : ''}`}>
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="donut">
         <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--surface-3)" strokeWidth={thickness} />
-        {total > 0 && data.map((d, i) => {
-          const frac = d.value / total
-          const dash = c * frac
+        {total > 0 && segs.map((d, i) => {
+          const arc = c * (d.value / total)
+          const dash = Math.max(arc - gap, rounded ? 0.4 : arc)
           const seg = (
             <circle
-              key={i} cx={size / 2} cy={size / 2} r={r} fill="none" stroke={d.color} strokeWidth={thickness}
-              strokeDasharray={`${dash} ${c - dash}`} strokeDashoffset={-acc}
+              key={i} cx={size / 2} cy={size / 2} r={r} fill="none" stroke={d.color} strokeWidth={thickness} strokeLinecap={cap}
+              strokeDasharray={`${dash} ${c - dash}`} strokeDashoffset={-(acc + gap / 2)}
               transform={`rotate(-90 ${size / 2} ${size / 2})`}
-            />
+            >
+              <title>{`${d.label}: ${d.value}`}</title>
+            </circle>
           )
-          acc += dash
+          acc += arc
           return seg
         })}
         {(centerValue != null || centerLabel) && (

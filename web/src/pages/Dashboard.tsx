@@ -477,7 +477,7 @@ export function Dashboard() {
           <Panel title="Live Fleet Health" icon={HeartPulse} subtitle="status of every monitored device right now">
             {statusDonut.length > 0 ? (
               <div className="row" style={{ alignItems: 'center', gap: 18, flexWrap: 'wrap' }}>
-                <Donut data={statusDonut} centerValue={monitored} centerLabel="monitored" size={120} />
+                <Donut data={statusDonut} centerValue={monitored} centerLabel="monitored" size={128} thickness={15} rounded />
                 <div style={{ flex: 1, minWidth: 130 }}><Legend data={statusDonut} total={monitored} /></div>
               </div>
             ) : <EmptyState icon={Activity} title="No monitoring checks yet" message="Seed checks to compute a health score." action={<Link className="btn btn-primary btn-sm" to="/monitoring">Go to Monitoring</Link>} />}
