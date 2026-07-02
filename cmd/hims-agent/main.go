@@ -39,7 +39,7 @@ import (
 	"github.com/coralsearesorts/hims/internal/osinv"
 )
 
-const agentVersion = "1.2.20"
+const agentVersion = "1.2.21"
 
 // agentMaxConcurrent bounds how many collection jobs the agent runs in parallel
 // per poll. The HIMS server already caps how many jobs it dispatches to one agent
@@ -591,6 +591,18 @@ try {
       foreach($pdk in @(Get-PhysicalDisk -ErrorAction Stop)){ $mt=[string]$pdk.MediaType; if($mt -eq 'Unspecified'){$mt=''}; if([string]$pdk.BusType -eq 'NVMe'){$mt='NVMe'}; if([string]$pdk.FriendlyName -match 'Virtual'){$mt='Virtual'}; $byNum[[string]$pdk.DeviceId]=$mt }
       foreach($pt in @(Get-Partition -ErrorAction SilentlyContinue)){ if($pt.DriveLetter){ $k=[string]$pt.DiskNumber; if($byNum.ContainsKey($k)){ $media[([string]$pt.DriveLetter)+':']=$byNum[$k] } } }
     }catch{}
+    if($media.Count -eq 0){
+      # LEGACY (Windows 7 / Server 2008 R2 — no Storage cmdlets): derive media from the physical
+      # disk MODEL via Win32_DiskDrive (NVMe/SSD when the model advertises it; Virtual for a VM
+      # disk), mapped to drive letters through WMI relations. HDD is NEVER assumed when unknown —
+      # the media stays empty rather than guessing.
+      try{
+        foreach($dd in @(Get-WmiObject Win32_DiskDrive -ErrorAction SilentlyContinue)){
+          $mt='';if($dd.Model -match 'NVMe'){$mt='NVMe'}elseif($dd.Model -match 'SSD|Solid State'){$mt='SSD'}elseif($dd.Model -match 'Virtual|VMware|Msft'){$mt='Virtual'}
+          if($mt){ foreach($pa in @($dd.GetRelated('Win32_DiskPartition'))){ foreach($ld in @($pa.GetRelated('Win32_LogicalDisk'))){ if($ld.DeviceID){ $media[[string]$ld.DeviceID]=$mt } } } }
+        }
+      }catch{}
+    }
     $disks=@(HimsInv Win32_LogicalDisk|?{$_.DriveType -eq 3}|%{$mt='';if($media.ContainsKey([string]$_.DeviceID)){$mt=$media[[string]$_.DeviceID]};@{name=$_.DeviceID;filesystem=$_.FileSystem;total_bytes=[int64]$_.Size;free_bytes=[int64]$_.FreeSpace;size_bytes=[int64]$_.Size;media_type=$mt}})
     $nics=@(HimsInv Win32_NetworkAdapterConfiguration|?{$_.IPEnabled}|%{@{name=$_.Description;mac=$_.MACAddress;ip_addresses=(@($_.IPAddress)-join',');gateway=(@($_.DefaultIPGateway)-join',');dns_servers=(@($_.DNSServerSearchOrder)-join',');dhcp_enabled=[bool]$_.DHCPEnabled}})
     $svc=@(HimsInv Win32_Service|%{@{name=$_.Name;display_name=$_.DisplayName;status=$_.State;start_type=$_.StartMode;account=$_.StartName}})
@@ -741,7 +753,25 @@ if($sess -eq 'cim'){
 }
 $os=&$g Win32_OperatingSystem; $cs=&$g Win32_ComputerSystem; $bios=&$g Win32_BIOS; $cpu=@(&$g Win32_Processor)
 $cores=($cpu|Measure-Object NumberOfCores -Sum).Sum; if(-not $cores){$cores=($cpu|Measure-Object NumberOfLogicalProcessors -Sum).Sum}
-$disks=@(&$g Win32_LogicalDisk|?{$_.DriveType -eq 3}|%{@{name=$_.DeviceID;filesystem=$_.FileSystem;total_bytes=[int64]$_.Size;free_bytes=[int64]$_.FreeSpace;size_bytes=[int64]$_.Size}})
+# Disk media (SSD/NVMe/Virtual) over WMI/DCOM: Get-PhysicalDisk is unavailable across this
+# transport, so derive it from the physical disk MODEL via Win32_DiskDrive (works on Win7+),
+# mapped to drive letters through disk->partition->logical-disk relations (Get-CimAssociatedInstance
+# on the CIM session, GetRelated on classic WMI). HDD is NEVER assumed when the model is silent.
+$media=@{}
+try{
+  foreach($dd in @(&$g Win32_DiskDrive)){
+    $mt='';if($dd.Model -match 'NVMe'){$mt='NVMe'}elseif($dd.Model -match 'SSD|Solid State'){$mt='SSD'}elseif($dd.Model -match 'Virtual|VMware|Msft'){$mt='Virtual'}
+    if(-not $mt){continue}
+    if($useCim){
+      foreach($pa in @(Get-CimAssociatedInstance -CimSession $sess -InputObject $dd -ResultClassName Win32_DiskPartition -ErrorAction SilentlyContinue)){
+        foreach($ld in @(Get-CimAssociatedInstance -CimSession $sess -InputObject $pa -ResultClassName Win32_LogicalDisk -ErrorAction SilentlyContinue)){ if($ld.DeviceID){ $media[[string]$ld.DeviceID]=$mt } }
+      }
+    } else {
+      foreach($pa in @($dd.GetRelated('Win32_DiskPartition'))){ foreach($ld in @($pa.GetRelated('Win32_LogicalDisk'))){ if($ld.DeviceID){ $media[[string]$ld.DeviceID]=$mt } } }
+    }
+  }
+}catch{}
+$disks=@(&$g Win32_LogicalDisk|?{$_.DriveType -eq 3}|%{$mt='';if($media.ContainsKey([string]$_.DeviceID)){$mt=$media[[string]$_.DeviceID]};@{name=$_.DeviceID;filesystem=$_.FileSystem;total_bytes=[int64]$_.Size;free_bytes=[int64]$_.FreeSpace;size_bytes=[int64]$_.Size;media_type=$mt}})
 $nics=@(&$g Win32_NetworkAdapterConfiguration|?{$_.IPEnabled}|%{@{name=$_.Description;mac=$_.MACAddress;ip_addresses=(@($_.IPAddress)-join',');gateway=(@($_.DefaultIPGateway)-join',');dns_servers=(@($_.DNSServerSearchOrder)-join',');dhcp_enabled=[bool]$_.DHCPEnabled}})
 $svc=@(&$g Win32_Service|%{@{name=$_.Name;display_name=$_.DisplayName;status=$_.State;start_type=$_.StartMode;account=$_.StartName}})
 # Top processes by working set. Win32_Process works over BOTH transports (WMI/DCOM
