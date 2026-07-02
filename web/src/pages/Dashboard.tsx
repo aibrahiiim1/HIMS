@@ -461,7 +461,15 @@ export function Dashboard() {
       <div className="grid-side">
         <div className="stack"><ManagementAccessCoverage /></div>
         <div className="stack">
-          {siteRows.length > 0 ? (
+          <Panel title="Live Fleet Health" icon={HeartPulse} subtitle="status of every monitored device right now">
+            {statusDonut.length > 0 ? (
+              <div className="row" style={{ alignItems: 'center', gap: 18, flexWrap: 'wrap' }}>
+                <Donut data={statusDonut} centerValue={monitored} centerLabel="monitored" size={120} />
+                <div style={{ flex: 1, minWidth: 130 }}><Legend data={statusDonut} total={monitored} /></div>
+              </div>
+            ) : <EmptyState icon={Activity} title="No monitoring checks yet" message="Seed checks to compute a health score." action={<Link className="btn btn-primary btn-sm" to="/monitoring">Go to Monitoring</Link>} />}
+          </Panel>
+          {siteRows.length > 0 && (
             <Panel title="Site Health" icon={Building2} subtitle="up / down / open alerts per site · worst first" actions={<Link className="btn btn-ghost btn-sm" to="/sites">Multi-Site →</Link>}>
               <table className="site-matrix">
                 <thead><tr><th>Site</th><th>Devices</th><th>On</th><th>Off</th><th>Availability</th><th>Alerts</th></tr></thead>
@@ -481,15 +489,6 @@ export function Dashboard() {
                   })}
                 </tbody>
               </table>
-            </Panel>
-          ) : (
-            <Panel title="Live Fleet Health" icon={HeartPulse} subtitle="status of every monitored device right now">
-              {statusDonut.length > 0 ? (
-                <div className="row" style={{ alignItems: 'center', gap: 18, flexWrap: 'wrap' }}>
-                  <Donut data={statusDonut} centerValue={monitored} centerLabel="monitored" size={120} />
-                  <div style={{ flex: 1, minWidth: 130 }}><Legend data={statusDonut} total={monitored} /></div>
-                </div>
-              ) : <EmptyState icon={Activity} title="No monitoring checks yet" message="Seed checks to compute a health score." action={<Link className="btn btn-primary btn-sm" to="/monitoring">Go to Monitoring</Link>} />}
             </Panel>
           )}
         </div>

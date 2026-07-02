@@ -63,12 +63,12 @@ export function ManagementAccessCoverage() {
           {d.by_protocol.length === 0 ? (
             <p className="muted" style={{ fontSize: 13 }}>No working management methods detected yet. Bind credentials or run an authenticated collection.</p>
           ) : (
-            <div style={{ display: 'grid', gap: 6 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))', gap: '4px 18px' }}>
               {d.by_protocol.map((p) => (
                 <Link key={p.protocol} to={`/inventory?accessProtocol=${encodeURIComponent(p.protocol)}`}
-                  className="access-row" style={{ display: 'grid', gridTemplateColumns: '130px 1fr 40px', alignItems: 'center', gap: 10, textDecoration: 'none', color: 'inherit', padding: '2px 0' }}>
-                  <span style={{ fontSize: 13 }}>{p.label}</span>
-                  <span style={{ height: 8, borderRadius: 4, background: 'var(--surface-2)', overflow: 'hidden' }}>
+                  className="access-row" style={{ display: 'grid', gridTemplateColumns: '104px 1fr 34px', alignItems: 'center', gap: 8, textDecoration: 'none', color: 'inherit', padding: '3px 0' }}>
+                  <span style={{ fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={p.label}>{p.label}</span>
+                  <span style={{ height: 7, borderRadius: 4, background: 'var(--surface-2)', overflow: 'hidden' }}>
                     <span style={{ display: 'block', width: `${Math.round((p.device_count / maxCount) * 100)}%`, height: '100%', background: 'var(--brand)' }} />
                   </span>
                   <span style={{ textAlign: 'right', fontWeight: 600, fontSize: 13 }}>{p.device_count}</span>
