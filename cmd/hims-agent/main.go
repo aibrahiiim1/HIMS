@@ -622,10 +622,11 @@ try {
         $vms+=@{ name=[string]$vm.ElementName; vm_id=[string]$vm.Name; power_state=$vps; vcpu=$vc; memory_mb=$vmem; guest_os=''; ip=(($vips|Select-Object -Unique) -join ','); mac=(($vmacs|Select-Object -Unique) -join ',') }
       }
     } catch {}
+    $csp_uuid=''; try { $csp_uuid=[string](HimsInv Win32_ComputerSystemProduct).UUID } catch {}
     @{ method='winrm-native';
        identity=@{hostname=$os.CSName;fqdn=("{0}.{1}" -f $cs.Name,$cs.Domain).TrimEnd('.');domain=$cs.Domain;workgroup=$cs.Workgroup;logged_on_user=$cs.UserName};
        os=@{caption=$os.Caption;version=$os.Version;build="$($os.BuildNumber)";arch=$os.OSArchitecture;install_date="$($os.InstallDate)";last_boot="$($os.LastBootUpTime)"};
-       hardware=@{manufacturer=$cs.Manufacturer;model=$cs.Model;serial=$bios.SerialNumber;uuid=(HimsInv Win32_ComputerSystemProduct).UUID;bios_version=(@($bios.SMBIOSBIOSVersion)-join' ');cpu_model=$cpu[0].Name;cpu_sockets=$cpu.Count;cpu_cores=[int]$cores;ram_total_bytes=[int64]$cs.TotalPhysicalMemory};
+       hardware=@{manufacturer=$cs.Manufacturer;model=$cs.Model;serial=$bios.SerialNumber;uuid=$csp_uuid;bios_version=(@($bios.SMBIOSBIOSVersion)-join' ');cpu_model=$cpu[0].Name;cpu_sockets=$cpu.Count;cpu_cores=[int]$cores;ram_total_bytes=[int64]$cs.TotalPhysicalMemory};
        disks=$disks; nics=$nics; services=$svc; software=$sw; processes=$procs; roles=@(); events=$null; software_note=$swnote; vms=$vms }
   }
   $out|ConvertTo-Json -Depth 8 -Compress
@@ -829,9 +830,14 @@ if($sw.Count -eq 0){
   }
 }
 if($swnote -eq '' -and $sw.Count -eq 0){ $swnote='no_software_method_succeeded' }
+# System UUID via the SAME accessor the rest of this script uses ($g = Get-WmiObject/CIM). A
+# stray HimsInv reference here (it is only defined in the native-PSRP path, NOT this DCOM/CIM
+# script) crashed the ENTIRE WMI collection with "HimsInv is not recognized" — wrapped in try so
+# a UUID hiccup can never break the collection.
+$csp_uuid=''; try { $csp_uuid=[string](@(&$g Win32_ComputerSystemProduct)[0].UUID) } catch {}
 @{ method='wmi'; identity=@{hostname=$os.CSName;fqdn=("{0}.{1}" -f $cs.Name,$cs.Domain).TrimEnd('.');domain=$cs.Domain;workgroup=$cs.Workgroup;logged_on_user=$cs.UserName};
    os=@{caption=$os.Caption;version=$os.Version;build="$($os.BuildNumber)";arch=$os.OSArchitecture;install_date="$($os.InstallDate)";last_boot="$($os.LastBootUpTime)"};
-   hardware=@{manufacturer=$cs.Manufacturer;model=$cs.Model;serial=$bios.SerialNumber;uuid=(HimsInv Win32_ComputerSystemProduct).UUID;bios_version=(@($bios.SMBIOSBIOSVersion)-join' ');cpu_model=$cpu[0].Name;cpu_sockets=$cpu.Count;cpu_cores=[int]$cores;ram_total_bytes=[int64]$cs.TotalPhysicalMemory};
+   hardware=@{manufacturer=$cs.Manufacturer;model=$cs.Model;serial=$bios.SerialNumber;uuid=$csp_uuid;bios_version=(@($bios.SMBIOSBIOSVersion)-join' ');cpu_model=$cpu[0].Name;cpu_sockets=$cpu.Count;cpu_cores=[int]$cores;ram_total_bytes=[int64]$cs.TotalPhysicalMemory};
    disks=$disks; nics=$nics; services=$svc; software=$sw; processes=$procs; roles=@(); events=$null; software_note=$swnote } | ConvertTo-Json -Depth 8 -Compress`
 	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
 	// Strip any inherited PSModulePath so Windows PowerShell 5.1 uses its own
