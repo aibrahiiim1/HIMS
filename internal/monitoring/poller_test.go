@@ -34,6 +34,11 @@ func TestReachabilityPort(t *testing.T) {
 		{"biometric fallback → 4370", "biometric", "", nil, 4370},
 		{"biometric only 4370 open", "biometric", "", []int{4370}, 4370},
 		{"biometric prefers 4370 over telnet/23", "biometric", "", []int{23, 4370}, 4370},
+		// 4370 is ranked above 443/22 in reachabilityPref (item: 4370 above 443/22/23).
+		{"biometric 4370 outranks 443", "biometric", "", []int{443, 4370}, 4370},
+		{"biometric 4370 outranks 22", "biometric", "", []int{22, 4370}, 4370},
+		// Non-biometric categories never expose 4370, so their selection is unchanged.
+		{"switch still prefers 443 (no 4370)", "switch", "", []int{80, 443, 8080, 9100}, 443},
 	}
 	for _, c := range cases {
 		if got := ReachabilityPort(c.category, c.os, c.open); got != c.want {

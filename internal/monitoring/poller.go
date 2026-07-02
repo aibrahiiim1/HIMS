@@ -60,7 +60,11 @@ func DefaultPortForDevice(category, osFamily string) int {
 
 // reachabilityPref ranks ports by how meaningful they are as a management/
 // liveness signal, so when a host answered on several we pick the best one.
-var reachabilityPref = []int{443, 8443, 22, 3389, 5985, 5986, 80, 8080, 8000, 9100, 445, 135, 4370, 23, 161}
+// 4370 (ZKTeco native protocol) is ranked FIRST: it is exclusive to biometric/
+// access-control terminals, which serve no HTTP/SSH, so preferring it never
+// affects any other category (no server/switch/etc. exposes 4370) while
+// guaranteeing a biometric terminal is probed on the one port it actually serves.
+var reachabilityPref = []int{4370, 443, 8443, 22, 3389, 5985, 5986, 80, 8080, 8000, 9100, 445, 135, 23, 161}
 
 // ReachabilityPort chooses the TCP port the reachability check should dial. It
 // PREFERS a port the host actually answered on during discovery (openPorts), so
