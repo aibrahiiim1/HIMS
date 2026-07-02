@@ -660,6 +660,13 @@ select.field { cursor: pointer; }
 .grid-2 { align-items: stretch; }
 .grid-2 > .panel, .grid-3 > .panel { height: 100%; margin-bottom: 0; }
 .stack > .panel { margin-bottom: 0; }
+/* A .stack used directly as a hero column fills the row height, and a panel it
+   marks `.fill` grows to take the leftover space so the stacked pair lines up
+   with the tall cards beside it (e.g. Manageability + Critical Assets column). */
+.grid-hero > .stack { height: 100%; }
+.stack { min-height: 0; }
+.stack > .panel.fill { flex: 1; display: flex; flex-direction: column; }
+.stack > .panel.fill > .panel-body { flex: 1; }
 /* Even KPI tile row that never leaves an orphan: 6 → 3 → 2 (all divide 6). */
 .kpi-grid.kpi-6 { grid-template-columns: repeat(6, 1fr); }
 @media (max-width: 1280px) { .kpi-grid.kpi-6 { grid-template-columns: repeat(3, 1fr); } }

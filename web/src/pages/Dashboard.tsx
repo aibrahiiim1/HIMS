@@ -370,6 +370,7 @@ export function Dashboard() {
               </>
             ) : <EmptyState icon={HeartPulse} title="No availability history" message="Seed monitoring checks and run a sweep to build SLA history." action={<Link className="btn btn-primary btn-sm" to="/monitoring">Go to Monitoring</Link>} />}
           </Panel>
+          <div className="stack">
           <Panel
             title="Manageability" icon={KeyRound} subtitle="can HIMS log in and collect?"
             actions={<span className={`badge ${mgmtTone === 'ok' ? 'badge-up' : mgmtTone === 'warn' ? 'badge-warning' : 'badge-down'}`} title="Managed devices as a share of the manageable fleet.">{mgmtPct}% managed</span>}
@@ -392,6 +393,28 @@ export function Dashboard() {
               <div className="s-item"><b>{naCount.toLocaleString()}</b><small>n/a<InfoHint text="Not applicable for management — phones, VMs, inventory-only and virtual placeholders that HIMS doesn't log into." label="Not applicable" /></small></div>
             </div>
           </Panel>
+          <Panel title="Critical Assets" icon={TriangleAlert} subtitle="offline or flagged, needing attention now" className="fill" actions={critical.length > 0 ? <Link className="btn btn-ghost btn-sm" to="/inventory?reachability=offline">View all</Link> : undefined}>
+            {critical.length === 0
+              ? <EmptyState icon={Wifi} title="All systems operational" message="No devices are offline or flagged for attention." />
+              : (
+                <ul className="activity">
+                  {critical.map((d) => {
+                    const base = detailBase[d.category] ?? '/devices'
+                    return (
+                      <li key={d.id} className="activity-item">
+                        <span className="activity-dot tone-crit"><WifiOff size={13} /></span>
+                        <div className="activity-body">
+                          <div className="activity-title">{base ? <Link to={`${base}/${d.id}`}>{d.name}</Link> : d.name}</div>
+                          <div className="activity-meta">{d.primary_ip || '—'} · {d.category.replace(/_/g, ' ')}</div>
+                        </div>
+                        <StatusPill status={d.status} />
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
+          </Panel>
+          </div>
       </div>
 
       {/* KPI row */}
@@ -428,32 +451,7 @@ export function Dashboard() {
 
       {/* ===== B · Needs attention now — "what do I do next?" ===== */}
       <SectionTitle icon={TriangleAlert} title="Needs attention now" hint="the real open issues to act on, worst-first — click any row to fix it" />
-      <div className="grid-side">
-        <div className="stack"><ActionRequiredCard /></div>
-        <div className="stack">
-          <Panel title="Critical Assets" icon={TriangleAlert} subtitle="offline or flagged, needing attention now" actions={critical.length > 0 ? <Link className="btn btn-ghost btn-sm" to="/inventory?reachability=offline">View all</Link> : undefined}>
-            {critical.length === 0
-              ? <EmptyState icon={Wifi} title="All systems operational" message="No devices are offline or flagged for attention." />
-              : (
-                <ul className="activity">
-                  {critical.map((d) => {
-                    const base = detailBase[d.category] ?? '/devices'
-                    return (
-                      <li key={d.id} className="activity-item">
-                        <span className="activity-dot tone-crit"><WifiOff size={13} /></span>
-                        <div className="activity-body">
-                          <div className="activity-title">{base ? <Link to={`${base}/${d.id}`}>{d.name}</Link> : d.name}</div>
-                          <div className="activity-meta">{d.primary_ip || '—'} · {d.category.replace(/_/g, ' ')}</div>
-                        </div>
-                        <StatusPill status={d.status} />
-                      </li>
-                    )
-                  })}
-                </ul>
-              )}
-          </Panel>
-        </div>
-      </div>
+      <ActionRequiredCard />
 
       {/* ===== C · Collection & Trust — reachable vs managed, kept separate ===== */}
       <SectionTitle icon={ShieldCheck} title="Collection & Trust" hint="online means a device answers the network · managed means HIMS can log in and collect from it — two different things" />
