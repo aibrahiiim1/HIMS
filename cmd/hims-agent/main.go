@@ -592,13 +592,40 @@ try {
       foreach($pt in @(Get-Partition -ErrorAction SilentlyContinue)){ if($pt.DriveLetter){ $k=[string]$pt.DiskNumber; if($byNum.ContainsKey($k)){ $media[([string]$pt.DriveLetter)+':']=$byNum[$k] } } }
     }catch{}
     if($media.Count -eq 0){
-      # LEGACY (Windows 7 / Server 2008 R2 — no Storage cmdlets): derive media from the physical
-      # disk MODEL via Win32_DiskDrive (NVMe/SSD when the model advertises it; Virtual for a VM
-      # disk), mapped to drive letters through WMI relations. HDD is NEVER assumed when unknown —
-      # the media stays empty rather than guessing.
+      # LEGACY (Windows 7 / Server 2008 R2 — no Storage cmdlets). Use a REAL hardware signal, not
+      # a model guess: the StorageDeviceSeekPenaltyProperty IOCTL. IncursSeekPenalty=$false means a
+      # solid-state device (SSD), $true means a rotational disk (HDD) — definitive, works on Win7's
+      # .NET 3.5 with a 0-access query handle (no admin needed). The disk model only refines NVMe
+      # and serves as a last resort if the IOCTL is unavailable. Nothing is fabricated: a disk whose
+      # media truly can't be determined keeps an empty type.
+      try{ Add-Type -ErrorAction Stop -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class HimsSeek {
+  [DllImport("kernel32.dll", SetLastError=true)] static extern IntPtr CreateFileW(string n, uint a, uint s, IntPtr sec, uint d, uint f, IntPtr t);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern bool DeviceIoControl(IntPtr h, uint c, ref SPQ inb, int ins, ref SEEK outb, int outs, out uint ret, IntPtr ov);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern bool CloseHandle(IntPtr h);
+  [StructLayout(LayoutKind.Sequential)] struct SPQ { public uint PropertyId; public uint QueryType; public byte Extra; }
+  [StructLayout(LayoutKind.Sequential)] struct SEEK { public uint Version; public uint Size; [MarshalAs(UnmanagedType.U1)] public bool Penalty; }
+  public static int Query(int n){
+    IntPtr h = CreateFileW(@"\\.\PhysicalDrive"+n, 0, 3, IntPtr.Zero, 3, 0, IntPtr.Zero);
+    if(h.ToInt64()==-1) return -1;
+    try { SPQ q=new SPQ(); q.PropertyId=7; q.QueryType=0; SEEK d=new SEEK(); uint r;
+      if(!DeviceIoControl(h, 0x2D1400, ref q, Marshal.SizeOf(q), ref d, Marshal.SizeOf(d), out r, IntPtr.Zero)) return -1;
+      return d.Penalty ? 0 : 1; }
+    finally { CloseHandle(h); }
+  }
+}
+'@ }catch{}
       try{
         foreach($dd in @(Get-WmiObject Win32_DiskDrive -ErrorAction SilentlyContinue)){
-          $mt='';if($dd.Model -match 'NVMe'){$mt='NVMe'}elseif($dd.Model -match 'SSD|Solid State'){$mt='SSD'}elseif($dd.Model -match 'Virtual|VMware|Msft'){$mt='Virtual'}
+          $pen=-1; try{ $pen=[HimsSeek]::Query([int]$dd.Index) }catch{}
+          $mt=''
+          if($dd.Model -match 'NVMe'){$mt='NVMe'}
+          elseif($pen -eq 1){$mt='SSD'}
+          elseif($pen -eq 0){$mt='HDD'}
+          elseif($dd.Model -match 'SSD|Solid State'){$mt='SSD'}
+          elseif($dd.Model -match 'Virtual|VMware|Msft'){$mt='Virtual'}
           if($mt){ foreach($pa in @($dd.GetRelated('Win32_DiskPartition'))){ foreach($ld in @($pa.GetRelated('Win32_LogicalDisk'))){ if($ld.DeviceID){ $media[[string]$ld.DeviceID]=$mt } } } }
         }
       }catch{}
