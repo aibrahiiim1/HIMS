@@ -171,6 +171,7 @@ func (s *Server) routes() {
 		r.Get("/dashboard", s.dashboard)
 		r.Get("/dashboard/operational-health", s.operationalHealth)
 		r.Get("/dashboard/infrastructure-health", s.infrastructureHealth)
+		r.Get("/dashboard/action-required", s.dashboardActionRequired) // consolidated "needs attention now"
 		r.Get("/dashboard/access-coverage", s.accessCoverage)
 		r.Get("/dashboard/badge-counts", s.badgeCounts)
 

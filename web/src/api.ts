@@ -1853,6 +1853,12 @@ export async function unlockEncryption(key: string, adopt = false): Promise<Encr
 export interface ReentryCred { id: string; name: string; kind: string; weak: boolean; needs_secret_reentry: boolean; created_at: string; updated_at: string }
 export interface GuideSection { title: string; body: string }
 
+export interface ActionItem {
+  key: string; label: string; count: number; status: string
+  explanation: string; reason_code: string; route: string
+}
+export interface ActionRequired { updated_at: string; items: ActionItem[]; all_clear: boolean }
+
 export interface InfraSection {
   name: string; status: string; score: number; included: boolean
   reason: string; reason_code: string; link: string; drivers: number

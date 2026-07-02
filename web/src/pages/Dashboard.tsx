@@ -4,9 +4,9 @@ import { Link, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard, Server, Wifi, WifiOff, Bell, ClipboardList, ShieldAlert,
   Radar, Activity, TriangleAlert, RefreshCw, Clock, Boxes, TrendingUp, Lock, KeyRound, HeartPulse, Network,
-  ShieldCheck, Building2, ArrowUpDown, Zap, Layers,
+  ShieldCheck, Building2, Layers,
 } from 'lucide-react'
-import { api, type Device, type Alert, type DiscoveryJob, type MonitoringOverviewRow, type MonitoringCheck, type RoleSummaryRow, type ExpenseByCategory, type EncryptionStatus, type OperationalHealth, type InfrastructureHealth, type RelayAgent, type AvailabilityAnalytics, type DeviceUptime, type SiteRollup } from '../api'
+import { api, type Device, type Alert, type DiscoveryJob, type MonitoringOverviewRow, type MonitoringCheck, type RoleSummaryRow, type ExpenseByCategory, type EncryptionStatus, type OperationalHealth, type InfrastructureHealth, type RelayAgent, type AvailabilityAnalytics, type DeviceUptime, type SiteRollup, type ActionRequired } from '../api'
 import {
   PageHeader, Panel, Kpi, HealthRing, Donut, Legend, BarList, Sparkline, AreaChart,
   ActivityFeed, EmptyState, StatusPill, OperationalHealthPanel, colorFor, timeAgo, InfoHint,
@@ -176,6 +176,43 @@ function InfraHealthCard({ data }: { data?: InfrastructureHealth }) {
   )
 }
 
+// ActionRequiredCard — the single "what do I do next?" card. One prioritized list
+// (worst-first) of REAL open issues from /dashboard/action-required: each row is a
+// count + plain-English explanation + a one-click drill-down to the page that fixes
+// it. Empty list => an explicit "All clear", never a fabricated problem.
+function ActionRequiredCard() {
+  const navigate = useNavigate()
+  const q = useQuery({ queryKey: ['action-required'], queryFn: () => api.get<ActionRequired>('/dashboard/action-required'), refetchInterval: 30_000, retry: 0 })
+  const d = q.data
+  const items = d?.items ?? []
+  const tone = (s: string) => (s === 'critical' ? 'var(--crit)' : s === 'warning' ? 'var(--warn)' : 'var(--text-muted)')
+  return (
+    <Panel title="Needs attention now" icon={TriangleAlert} subtitle="the real issues to act on, worst-first"
+      actions={d ? <span className="muted" style={{ fontSize: 11 }}>updated {timeAgo(d.updated_at)}</span> : undefined}>
+      {!d ? <div className="loading">Loading…</div> : items.length === 0 ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 2px' }}>
+          <span style={{ width: 22, height: 22, borderRadius: '50%', background: 'var(--ok)', color: '#fff', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700 }}>✓</span>
+          <div><div style={{ fontWeight: 600 }}>All clear</div><div className="muted" style={{ fontSize: 12 }}>No open critical alerts or management gaps right now.</div></div>
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gap: 6 }}>
+          {items.map((it) => (
+            <div key={it.key} onClick={() => navigate(it.route)} title={`${it.explanation}  →  ${it.route}`}
+              style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', borderLeft: `3px solid ${tone(it.status)}`, cursor: 'pointer' }}>
+              <span style={{ fontSize: 22, fontWeight: 800, color: tone(it.status), minWidth: 34, textAlign: 'center' }}>{it.count}</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 600, fontSize: 13 }}>{it.label}</div>
+                <div className="muted" style={{ fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{it.explanation}</div>
+              </div>
+              <span style={{ color: tone(it.status), fontSize: 18 }}>›</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </Panel>
+  )
+}
+
 export function Dashboard() {
   const navigate = useNavigate()
   const [win, setWin] = useState<Win>('24h')
@@ -264,7 +301,6 @@ export function Dashboard() {
   const aSeries = avail.data?.series ?? []
   const aLabels = aSeries.map((p) => bucketLabel(p.ts, aBucket))
   const aPts = aSeries.map((p) => p.uptime_pct)
-  const aLat = aSeries.map((p) => p.avg_latency_ms ?? 0)
   const aMin = Math.min(SLA_TARGET, ...(aPts.length ? aPts : [100]))
   const availTone = aSum == null ? 'default' : aSum.uptime_pct >= SLA_TARGET ? 'ok' : aSum.uptime_pct >= 99 ? 'warn' : 'crit'
 
@@ -279,7 +315,6 @@ export function Dashboard() {
   // still feeds the Lowest Uptime panel; `atRisk` is the full click-through list.
   const atRisk = (uptime.data ?? []).filter((d) => d.uptime_pct < 100 || d.flaps > 0)
     .sort((a, b) => a.uptime_pct - b.uptime_pct || b.flaps - a.flaps)
-  const worst = atRisk.slice(0, 6)
 
   return (
     <div>
@@ -404,15 +439,16 @@ export function Dashboard() {
           hint="Devices with a warranty, licence or certificate expiring within 90 days." sub="next 90 days" />
       </div>
 
+      {/* ===== Needs attention now — the single "what do I do next?" section ===== */}
+      <SectionTitle icon={TriangleAlert} title="Needs attention now" hint="the real open issues to act on, worst-first — click any row to fix it" />
+      <ActionRequiredCard />
+
       {/* ===== Availability & Performance ===== */}
       <SectionTitle icon={Activity} title="Availability & Performance" hint={`are devices reachable, and how fast do they respond? · last ${win}`} />
       <div className="grid-side">
         <div className="stack">
           <Panel title={`Fleet Availability · ${win}`} icon={ShieldCheck} subtitle={aSum ? `${fmtPct(aSum.uptime_pct)} uptime · avg ${fmtMs(aSum.avg_latency_ms)} · p95 ${fmtMs(aSum.p95_latency_ms)}` : undefined} actions={<Link className="btn btn-ghost btn-sm" to="/monitoring">Health Overview →</Link>}>
             {aSeries.length > 1 ? <AreaChart points={aPts} labels={aLabels} height={150} min={Math.max(0, aMin - 0.4)} max={100} unit="%" baseline={SLA_TARGET} color="var(--ok)" valueFmt={(v) => fmtPct(v)} ariaLabel="Fleet availability trend" /> : <div className="chart-empty" style={{ height: 150 }}>No availability history in this window</div>}
-          </Panel>
-          <Panel title={`Latency Trend · ${win}`} icon={Zap} subtitle={aSum ? `avg ${fmtMs(aSum.avg_latency_ms)} · p95 ${fmtMs(aSum.p95_latency_ms)} round-trip` : undefined}>
-            {aSeries.some((p) => p.avg_latency_ms != null) ? <AreaChart points={aLat} labels={aLabels} height={110} min={0} unit=" ms" color="var(--brand)" valueFmt={(v) => fmtMs(v)} ariaLabel="Latency trend" /> : <div className="chart-empty" style={{ height: 110 }}>No latency samples in this window</div>}
           </Panel>
         </div>
         <div className="stack">
@@ -425,27 +461,11 @@ export function Dashboard() {
               </div>
             ) : <EmptyState icon={Activity} title="No monitoring checks yet" message="Seed checks to compute a health score." action={<Link className="btn btn-primary btn-sm" to="/monitoring">Go to Monitoring</Link>} />}
           </Panel>
-          <Panel title={`Lowest Uptime · ${win}`} icon={ArrowUpDown} subtitle="devices that were down most or flapped" actions={<Link className="btn btn-ghost btn-sm" to="/monitoring">Analyze →</Link>}>
-            {worst.length > 0 ? (
-              <ul className="activity">
-                {worst.map((d) => (
-                  <li key={d.device_id} className="activity-item">
-                    <span className={`activity-dot ${d.uptime_pct >= 99 ? 'tone-warn' : 'tone-crit'}`}><ArrowUpDown size={13} /></span>
-                    <div className="activity-body">
-                      <div className="activity-title"><Link to={`/devices/${d.device_id}`}>{d.name}</Link></div>
-                      <div className="activity-meta">{d.primary_ip || '—'}{d.flaps > 0 ? ` · ${d.flaps} flaps` : ''}</div>
-                    </div>
-                    <span className={`badge badge-${d.uptime_pct >= SLA_TARGET ? 'up' : d.uptime_pct >= 99 ? 'warning' : 'down'}`}>{fmtPct(d.uptime_pct)}</span>
-                  </li>
-                ))}
-              </ul>
-            ) : <EmptyState icon={Wifi} title="All steady" message="Every device held 100% with no flaps in this window." />}
-          </Panel>
         </div>
       </div>
 
-      {/* ===== Access & Coverage ===== */}
-      <SectionTitle icon={ShieldCheck} title="Access & Coverage" hint="online means a device answers the network — managed means HIMS can log in and collect from it. They are different." />
+      {/* ===== Collection & Trust ===== */}
+      <SectionTitle icon={ShieldCheck} title="Collection & Trust" hint="online means a device answers the network — managed means HIMS can log in and collect from it. They are different." />
       <ReachManageCards />
       <div className="grid-side">
         <div className="stack"><ManagementAccessCoverage /></div>
@@ -606,7 +626,7 @@ export function Dashboard() {
       </div>
 
       {/* ===== Inventory ===== */}
-      <SectionTitle icon={Boxes} title="Inventory" hint={`${total} devices · ${byType.length} types`} />
+      <SectionTitle icon={Boxes} title="Fleet Overview" hint={`what's on the network — ${total} devices across ${byType.length} types`} />
       <div className="grid-2">
         <Panel title="Devices by Type" icon={Layers} subtitle="what kinds of devices are on the network">
           {typeDonut.length > 0 ? (
