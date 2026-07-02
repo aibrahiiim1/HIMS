@@ -30,6 +30,16 @@ export function PageHeader({ title, subtitle, icon: Icon, actions }: {
   )
 }
 
+/* ---- Info hint (inline "?" with a plain-language tooltip) ----------------- */
+// A tiny, dependency-free help affordance: a circled "?" that reveals a plain-
+// language explanation on hover/focus. Makes jargon self-explanatory so a
+// non-technical operator understands a metric without asking. Dark-mode safe.
+export function InfoHint({ text, label }: { text: string; label?: string }) {
+  return (
+    <span className="info-hint" tabIndex={0} role="note" aria-label={label ? `${label}: ${text}` : text} title={text}>?</span>
+  )
+}
+
 /* ---- Panel (card with header) -------------------------------------------- */
 export function Panel({ title, subtitle, icon: Icon, actions, children, className = '', pad = true }: {
   title?: ReactNode; subtitle?: ReactNode; icon?: IconType; actions?: ReactNode
@@ -54,16 +64,18 @@ export function Panel({ title, subtitle, icon: Icon, actions, children, classNam
 
 /* ---- KPI / stat card ------------------------------------------------------ */
 export type Tone = 'default' | 'ok' | 'warn' | 'crit' | 'info'
-export function Kpi({ label, value, sub, tone = 'default', icon: Icon, onClick, footerLeft, footerRight }: {
+export function Kpi({ label, value, sub, tone = 'default', icon: Icon, onClick, footerLeft, footerRight, hint }: {
   label: string; value: ReactNode; sub?: ReactNode; tone?: Tone; icon?: IconType; onClick?: () => void
   // Optional split footer pinned to the bottom of the card: a left chip and a
   // right chip (e.g. "1 extra check" on the left, "1 offline" on the right).
   footerLeft?: ReactNode; footerRight?: ReactNode
+  // Plain-language explanation of what this number means (shown as a "?" hint).
+  hint?: string
 }) {
   return (
     <div className={`kpi tone-${tone}${onClick ? ' is-clickable' : ''}`} onClick={onClick}>
       <div className="kpi-top">
-        <span className="kpi-label">{label}</span>
+        <span className="kpi-label">{label}{hint && <InfoHint text={hint} label={label} />}</span>
         {Icon && <span className="kpi-icon"><Icon size={18} /></span>}
       </div>
       <div className="kpi-value">{value}</div>

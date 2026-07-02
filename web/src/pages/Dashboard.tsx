@@ -9,7 +9,7 @@ import {
 import { api, type Device, type Alert, type DiscoveryJob, type MonitoringOverviewRow, type MonitoringCheck, type RoleSummaryRow, type ExpenseByCategory, type EncryptionStatus, type OperationalHealth, type InfrastructureHealth, type RelayAgent, type AvailabilityAnalytics, type DeviceUptime, type SiteRollup } from '../api'
 import {
   PageHeader, Panel, Kpi, HealthRing, Donut, Legend, BarList, Sparkline, AreaChart,
-  ActivityFeed, EmptyState, StatusPill, OperationalHealthPanel, colorFor, timeAgo,
+  ActivityFeed, EmptyState, StatusPill, OperationalHealthPanel, colorFor, timeAgo, InfoHint,
 } from '../components/ui'
 import { ManagementAccessCoverage } from '../components/AccessCoverageCard'
 import { ReachManageCards } from '../components/ReachManageCards'
@@ -285,7 +285,7 @@ export function Dashboard() {
     <div>
       <PageHeader
         title="Executive Dashboard"
-        subtitle="Fleet-wide health, availability SLAs, coverage, operations and inventory at a glance"
+        subtitle="Your whole network at a glance — is it healthy, reachable, and under management? Hover any “?” for a plain-language explanation."
         icon={LayoutDashboard}
         actions={
           <>
@@ -306,23 +306,26 @@ export function Dashboard() {
       <div className="grid-hero">
         <InfraHealthCard data={infra.data} />
           <Panel
-            title={`Availability · ${win}`} icon={ShieldCheck}
-            actions={aSum ? <span className={`badge ${availTone === 'ok' ? 'badge-up' : availTone === 'warn' ? 'badge-warning' : availTone === 'crit' ? 'badge-down' : 'badge-unknown'}`} title="Target SLA — the goal line, not measured uptime">Target {SLA_TARGET}%</span> : undefined}
+            title={`Availability · ${win}`} icon={ShieldCheck} subtitle="did devices stay reachable?"
+            actions={aSum ? <span className={`badge ${availTone === 'ok' ? 'badge-up' : availTone === 'warn' ? 'badge-warning' : availTone === 'crit' ? 'badge-down' : 'badge-unknown'}`} title={`Target SLA — the goal line we aim for (${SLA_TARGET}% uptime), not the measured value.`}>Target {SLA_TARGET}%</span> : undefined}
           >
             {aSum ? (
               <>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
                   <div style={{ fontSize: 40, fontWeight: 800, color: availTone === 'ok' ? 'var(--ok)' : availTone === 'warn' ? 'var(--warn)' : availTone === 'crit' ? 'var(--crit)' : 'var(--text)' }}>{fmtPct(aSum.uptime_pct)}</div>
-                  <div className="muted" style={{ fontSize: 12 }}>uptime · {aSum.devices} devices<br />{aSum.up.toLocaleString()}/{aSum.samples.toLocaleString()} polls up</div>
+                  <div className="muted" style={{ fontSize: 12 }}>
+                    uptime<InfoHint text="Share of monitoring checks that got a response in this window. 100% means every check succeeded." label="Uptime" /><br />
+                    {aSum.up.toLocaleString()}/{aSum.samples.toLocaleString()} checks OK · {aSum.devices} devices
+                  </div>
                 </div>
                 {aPts.length > 1 && <div style={{ marginTop: 8 }}><AreaChart points={aPts} labels={aLabels} height={70} min={Math.max(0, aMin - 0.4)} max={100} baseline={SLA_TARGET} color="var(--ok)" valueFmt={(v) => fmtPct(v)} ariaLabel="Availability trend" /></div>}
                 <div className="stat-strip" style={{ marginTop: 12 }}>
-                  <div className="s-item"><b>{fmtMs(aSum.avg_latency_ms)}</b><small>avg latency</small></div>
-                  <div className="s-item"><b>{fmtMs(aSum.p95_latency_ms)}</b><small>p95 latency</small></div>
+                  <div className="s-item"><b>{fmtMs(aSum.avg_latency_ms)}</b><small>avg latency<InfoHint text="Average round-trip response time across all checks — how quickly devices reply." label="Average latency" /></small></div>
+                  <div className="s-item"><b>{fmtMs(aSum.p95_latency_ms)}</b><small>p95 latency<InfoHint text="95% of responses were faster than this. A worst-case-ish figure that ignores rare spikes." label="p95 latency" /></small></div>
                   <div className="s-item" style={{ cursor: atRisk.length > 0 ? 'pointer' : undefined }}
                     onClick={atRisk.length > 0 ? () => setShowRisk((v) => !v) : undefined}
-                    title={atRisk.length > 0 ? 'Show the devices dragging availability' : undefined}>
-                    <b style={{ color: atRisk.length > 0 ? 'var(--warn)' : undefined }}>{atRisk.length}{atRisk.length > 0 ? (showRisk ? ' ▾' : ' ›') : ''}</b><small>at risk</small>
+                    title={atRisk.length > 0 ? 'Click to list the devices dragging availability down' : undefined}>
+                    <b style={{ color: atRisk.length > 0 ? 'var(--warn)' : undefined }}>{atRisk.length}{atRisk.length > 0 ? (showRisk ? ' ▾' : ' ›') : ''}</b><small>at risk<InfoHint text="Devices below 100% uptime or that flapped (went down and up) in this window. Click to see them." label="At risk" /></small>
                   </div>
                 </div>
                 {showRisk && atRisk.length > 0 && (
@@ -346,22 +349,25 @@ export function Dashboard() {
             ) : <EmptyState icon={HeartPulse} title="No availability history" message="Seed monitoring checks and run a sweep to build SLA history." action={<Link className="btn btn-primary btn-sm" to="/monitoring">Go to Monitoring</Link>} />}
           </Panel>
           <Panel
-            title="Manageability" icon={KeyRound}
-            actions={<span className={`badge ${mgmtTone === 'ok' ? 'badge-up' : mgmtTone === 'warn' ? 'badge-warning' : 'badge-down'}`}>{mgmtPct}% managed</span>}
+            title="Manageability" icon={KeyRound} subtitle="can HIMS log in and collect?"
+            actions={<span className={`badge ${mgmtTone === 'ok' ? 'badge-up' : mgmtTone === 'warn' ? 'badge-warning' : 'badge-down'}`} title="Managed devices as a share of the manageable fleet.">{mgmtPct}% managed</span>}
           >
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
               <div style={{ fontSize: 40, fontWeight: 800, color: 'var(--ok)' }}>{managed.toLocaleString()}</div>
-              <div className="muted" style={{ fontSize: 12 }}>of {total.toLocaleString()} devices managed<br />{manageable.toLocaleString()} manageable · {mgmtPct}% covered</div>
+              <div className="muted" style={{ fontSize: 12 }}>
+                of {manageable.toLocaleString()} manageable devices<InfoHint text="Manageable = devices HIMS should be able to log into (switches, servers, Windows/Linux hosts…). Phones, VMs and inventory-only devices are excluded." label="Manageable" /><br />
+                {mgmtPct}% have a working credential
+              </div>
             </div>
-            <div style={{ marginTop: 10, height: 8, borderRadius: 4, background: 'var(--border)', overflow: 'hidden' }}>
-              <div style={{ width: `${manageable > 0 ? (managed / manageable) * 100 : 0}%`, height: '100%', background: 'var(--ok)' }} />
+            <div style={{ marginTop: 10, height: 8, borderRadius: 4, background: 'var(--border)', overflow: 'hidden' }} title={`${mgmtPct}% of manageable devices are managed`}>
+              <div style={{ width: `${manageable > 0 ? (managed / manageable) * 100 : 0}%`, height: '100%', background: mgmtTone === 'crit' ? 'var(--crit)' : mgmtTone === 'warn' ? 'var(--warn)' : 'var(--ok)' }} />
             </div>
             <div className="stat-strip" style={{ marginTop: 12 }}>
-              <div className="s-item"><b style={{ color: 'var(--ok)' }}>{managed.toLocaleString()}</b><small>managed</small></div>
-              <div className="s-item" style={{ cursor: unmanagedCount > 0 ? 'pointer' : undefined }} onClick={unmanagedCount > 0 ? () => navigate('/inventory/unmanaged') : undefined}>
-                <b style={{ color: unmanagedCount > 0 ? 'var(--warn)' : undefined }}>{unmanagedCount.toLocaleString()}{unmanagedCount > 0 ? ' ›' : ''}</b><small>unmanaged</small>
+              <div className="s-item"><b style={{ color: 'var(--ok)' }}>{managed.toLocaleString()}</b><small>managed<InfoHint text="HIMS has a credential that actually authenticates and collects — proven access, not just an open port." label="Managed" /></small></div>
+              <div className="s-item" style={{ cursor: unmanagedCount > 0 ? 'pointer' : undefined }} onClick={unmanagedCount > 0 ? () => navigate('/inventory/unmanaged') : undefined} title={unmanagedCount > 0 ? 'Open the Unmanaged Devices list' : undefined}>
+                <b style={{ color: unmanagedCount > 0 ? 'var(--warn)' : undefined }}>{unmanagedCount.toLocaleString()}{unmanagedCount > 0 ? ' ›' : ''}</b><small>unmanaged<InfoHint text="Manageable devices with no proven working access yet — need a credential or an agent. Click to fix." label="Unmanaged" /></small>
               </div>
-              <div className="s-item"><b>{naCount.toLocaleString()}</b><small>n/a</small></div>
+              <div className="s-item"><b>{naCount.toLocaleString()}</b><small>n/a<InfoHint text="Not applicable for management — phones, VMs, inventory-only and virtual placeholders that HIMS doesn't log into." label="Not applicable" /></small></div>
             </div>
           </Panel>
       </div>
@@ -369,6 +375,7 @@ export function Dashboard() {
       {/* KPI row */}
       <div className="kpi-grid kpi-6">
         <Kpi label="Total Devices" value={total} icon={Boxes} tone="info"
+          hint="Every device in inventory — discovered on the network plus any manually-added (virtual) placeholders."
           sub={h.virtual_devices ? `${h.discovered_devices ?? (total - h.virtual_devices)} discovered · ${h.virtual_devices} virtual` : `${byType.length} categories`}
           footerRight={manageable > 0 ? <span style={{ color: 'var(--ok)' }}>{managed.toLocaleString()} managed</span> : undefined} />
         <Kpi
@@ -376,6 +383,7 @@ export function Dashboard() {
           value={up}
           icon={Wifi}
           tone="ok"
+          hint="Devices responding to their monitoring check right now. 'Online' is about reachability, not whether HIMS can manage them."
           sub={monitored > 0 ? `${Math.round((up / monitored) * 100)}% of monitored` : 'no checks'}
           footerLeft={extraChecks.length > 0 ? `${extraChecks.length} extra check${extraChecks.length !== 1 ? 's' : ''}` : undefined}
           footerRight={extraChecks.length > 0
@@ -384,14 +392,20 @@ export function Dashboard() {
                 : <span style={{ color: 'var(--ok)' }}>all OK</span>)
             : undefined}
         />
-        <Kpi label="Offline" value={down} icon={WifiOff} tone={down > 0 ? 'crit' : 'default'} sub={down > 0 ? 'view offline →' : (warning > 0 ? `${warning} warning` : 'all clear')} onClick={down > 0 ? () => navigate('/inventory?reachability=offline') : undefined} />
-        <Kpi label="Active Alerts" value={h.open_alerts ?? 0} icon={Bell} tone={(h.open_alerts ?? 0) > 0 ? 'crit' : 'default'} sub="unresolved" />
-        <Kpi label="Open Work Orders" value={h.open_work_orders ?? 0} icon={ClipboardList} tone={(h.open_work_orders ?? 0) > 0 ? 'warn' : 'default'} sub="in progress" />
-        <Kpi label="Expiring Systems" value={h.expiring_systems ?? 0} icon={ShieldAlert} tone={(h.expiring_systems ?? 0) > 0 ? 'warn' : 'default'} sub="next 90 days" />
+        <Kpi label="Offline" value={down} icon={WifiOff} tone={down > 0 ? 'crit' : 'default'}
+          hint="Devices whose monitoring check failed (no response). Click to see them and why."
+          sub={down > 0 ? 'view offline →' : (warning > 0 ? `${warning} warning` : 'all clear')} onClick={down > 0 ? () => navigate('/inventory?reachability=offline') : undefined} />
+        <Kpi label="Active Alerts" value={h.open_alerts ?? 0} icon={Bell} tone={(h.open_alerts ?? 0) > 0 ? 'crit' : 'default'}
+          hint="Open, unresolved alerts (critical or warning) that need a look — outages, stale collection, low disk, etc."
+          sub="unresolved" onClick={(h.open_alerts ?? 0) > 0 ? () => navigate('/alerts') : undefined} />
+        <Kpi label="Open Work Orders" value={h.open_work_orders ?? 0} icon={ClipboardList} tone={(h.open_work_orders ?? 0) > 0 ? 'warn' : 'default'}
+          hint="Maintenance/remediation tasks that are still in progress." sub="in progress" />
+        <Kpi label="Expiring Systems" value={h.expiring_systems ?? 0} icon={ShieldAlert} tone={(h.expiring_systems ?? 0) > 0 ? 'warn' : 'default'}
+          hint="Devices with a warranty, licence or certificate expiring within 90 days." sub="next 90 days" />
       </div>
 
       {/* ===== Availability & Performance ===== */}
-      <SectionTitle icon={Activity} title="Availability & Performance" hint={`reachability over ${win}`} />
+      <SectionTitle icon={Activity} title="Availability & Performance" hint={`are devices reachable, and how fast do they respond? · last ${win}`} />
       <div className="grid-side">
         <div className="stack">
           <Panel title={`Fleet Availability · ${win}`} icon={ShieldCheck} subtitle={aSum ? `${fmtPct(aSum.uptime_pct)} uptime · avg ${fmtMs(aSum.avg_latency_ms)} · p95 ${fmtMs(aSum.p95_latency_ms)}` : undefined} actions={<Link className="btn btn-ghost btn-sm" to="/monitoring">Health Overview →</Link>}>
@@ -402,7 +416,7 @@ export function Dashboard() {
           </Panel>
         </div>
         <div className="stack">
-          <Panel title="Live Fleet Health" icon={HeartPulse}>
+          <Panel title="Live Fleet Health" icon={HeartPulse} subtitle="status of every monitored device right now">
             {statusDonut.length > 0 ? (
               <div className="row" style={{ alignItems: 'center', gap: 18, flexWrap: 'wrap' }}>
                 <HealthRing score={health} label="Now" />
@@ -411,7 +425,7 @@ export function Dashboard() {
               </div>
             ) : <EmptyState icon={Activity} title="No monitoring checks yet" message="Seed checks to compute a health score." action={<Link className="btn btn-primary btn-sm" to="/monitoring">Go to Monitoring</Link>} />}
           </Panel>
-          <Panel title={`Lowest Uptime · ${win}`} icon={ArrowUpDown} subtitle="worst availability + flapping" actions={<Link className="btn btn-ghost btn-sm" to="/monitoring">Analyze →</Link>}>
+          <Panel title={`Lowest Uptime · ${win}`} icon={ArrowUpDown} subtitle="devices that were down most or flapped" actions={<Link className="btn btn-ghost btn-sm" to="/monitoring">Analyze →</Link>}>
             {worst.length > 0 ? (
               <ul className="activity">
                 {worst.map((d) => (
@@ -431,7 +445,7 @@ export function Dashboard() {
       </div>
 
       {/* ===== Access & Coverage ===== */}
-      <SectionTitle icon={ShieldCheck} title="Access & Coverage" hint="reachability vs management" />
+      <SectionTitle icon={ShieldCheck} title="Access & Coverage" hint="online means a device answers the network — managed means HIMS can log in and collect from it. They are different." />
       <ReachManageCards />
       <div className="grid-side">
         <div className="stack"><ManagementAccessCoverage /></div>
@@ -464,7 +478,7 @@ export function Dashboard() {
       </div>
 
       {/* ===== Operations ===== */}
-      <SectionTitle icon={ClipboardList} title="Operations" hint="discovery · monitoring · topology · alerts · agents" />
+      <SectionTitle icon={ClipboardList} title="Operations" hint="health of the systems that keep inventory current — discovery, monitoring, topology, alerts and agents" />
       <div className="grid-side">
         <div className="stack">
           {(() => {
@@ -532,7 +546,7 @@ export function Dashboard() {
           })()}
 
           <Panel
-            title="Discovery Activity" icon={Radar}
+            title="Discovery Activity" icon={Radar} subtitle="recent network scans that find and refresh devices"
             actions={<Link className="btn btn-ghost btn-sm" to="/discovery">Open Discovery</Link>}
           >
             <div className="row-between" style={{ marginBottom: 12 }}>
@@ -565,7 +579,7 @@ export function Dashboard() {
 
         <div className="stack">
           <AgentHealthPanel />
-          <Panel title="Critical Assets" icon={TriangleAlert} actions={critical.length > 0 ? <Link className="btn btn-ghost btn-sm" to="/monitoring">View all</Link> : undefined}>
+          <Panel title="Critical Assets" icon={TriangleAlert} subtitle="offline or flagged, needing attention" actions={critical.length > 0 ? <Link className="btn btn-ghost btn-sm" to="/monitoring">View all</Link> : undefined}>
             {critical.length === 0
               ? <EmptyState icon={Wifi} title="All systems operational" message="No devices are offline or flagged for attention." />
               : (
@@ -586,15 +600,15 @@ export function Dashboard() {
                 </ul>
               )}
           </Panel>
-          <Panel title="Security Health" icon={Lock} actions={<Link className="btn btn-ghost btn-sm" to="/security/encryption">Manage</Link>}>{securityRows(enc.data)}</Panel>
-          <Panel title="Recent Activity" icon={TrendingUp}><ActivityFeed items={feed} /></Panel>
+          <Panel title="Security Health" icon={Lock} subtitle="are stored credentials safely encrypted?" actions={<Link className="btn btn-ghost btn-sm" to="/security/encryption">Manage</Link>}>{securityRows(enc.data)}</Panel>
+          <Panel title="Recent Activity" icon={TrendingUp} subtitle="latest alerts and discovery scans"><ActivityFeed items={feed} /></Panel>
         </div>
       </div>
 
       {/* ===== Inventory ===== */}
       <SectionTitle icon={Boxes} title="Inventory" hint={`${total} devices · ${byType.length} types`} />
       <div className="grid-2">
-        <Panel title="Devices by Type" icon={Layers}>
+        <Panel title="Devices by Type" icon={Layers} subtitle="what kinds of devices are on the network">
           {typeDonut.length > 0 ? (
             <div className="row" style={{ alignItems: 'center', gap: 20 }}>
               <Donut data={typeDonut} centerValue={total} centerLabel="devices" size={140} />
@@ -602,7 +616,7 @@ export function Dashboard() {
             </div>
           ) : <div className="muted">No devices yet.</div>}
         </Panel>
-        <Panel title="Top Vendors" icon={Server}><BarList rows={topVendors} /></Panel>
+        <Panel title="Top Vendors" icon={Server} subtitle="most common hardware makers in inventory"><BarList rows={topVendors} /></Panel>
       </div>
     </div>
   )

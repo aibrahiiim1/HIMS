@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { KeyRound, ShieldCheck, AlertTriangle } from 'lucide-react'
 import { api, type AccessCoverage } from '../api'
-import { Panel, EmptyState } from './ui'
+import { Panel, EmptyState, InfoHint } from './ui'
 
 const REASON_LABEL: Record<string, string> = {
   no_credential_bound: 'No credential bound',
@@ -28,6 +28,7 @@ export function ManagementAccessCoverage() {
   return (
     <Panel
       title={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><ShieldCheck size={15} /> Management Access Coverage</span>}
+      subtitle="how much of the fleet HIMS can log into, and how"
       actions={
         <span style={{ display: 'inline-flex', gap: 6 }}>
           <Link className="btn btn-ghost btn-xs" to="/credentials"><KeyRound size={12} /> Credentials</Link>
@@ -50,7 +51,7 @@ export function ManagementAccessCoverage() {
             </Link>
             <div style={{ textAlign: 'right' }}>
               <div style={{ fontSize: 26, fontWeight: 700, lineHeight: 1, color: d.coverage_percent >= 75 ? 'var(--ok)' : d.coverage_percent >= 40 ? 'var(--warn)' : 'var(--crit)' }}>{d.coverage_percent}%</div>
-              <div className="muted" style={{ fontSize: 12 }}>coverage</div>
+              <div className="muted" style={{ fontSize: 12 }}>coverage<InfoHint text="Managed devices as a share of the total HIMS is expected to manage. Higher is better." label="Coverage" /></div>
             </div>
           </div>
           {/* Coverage bar */}
