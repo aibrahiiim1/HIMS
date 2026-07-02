@@ -3,19 +3,18 @@ import { useQuery } from '@tanstack/react-query'
 import { Link, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard, Server, Wifi, WifiOff, Bell, ClipboardList, ShieldAlert,
-  Radar, Activity, TriangleAlert, RefreshCw, Clock, Boxes, TrendingUp, Lock, KeyRound, HeartPulse, Network,
+  Radar, Activity, TriangleAlert, RefreshCw, Clock, Boxes, TrendingUp, KeyRound, HeartPulse,
   ShieldCheck, Building2, Layers,
 } from 'lucide-react'
-import { api, type Device, type Alert, type DiscoveryJob, type MonitoringOverviewRow, type MonitoringCheck, type RoleSummaryRow, type ExpenseByCategory, type EncryptionStatus, type OperationalHealth, type InfrastructureHealth, type RelayAgent, type AvailabilityAnalytics, type DeviceUptime, type SiteRollup, type ActionRequired } from '../api'
+import { api, type Device, type Alert, type DiscoveryJob, type MonitoringOverviewRow, type MonitoringCheck, type RoleSummaryRow, type ExpenseByCategory, type InfrastructureHealth, type AvailabilityAnalytics, type DeviceUptime, type SiteRollup, type ActionRequired } from '../api'
 import {
   PageHeader, Panel, Kpi, HealthRing, Donut, Legend, BarList, Sparkline, AreaChart,
-  ActivityFeed, EmptyState, StatusPill, OperationalHealthPanel, colorFor, timeAgo, InfoHint,
+  ActivityFeed, EmptyState, StatusPill, colorFor, timeAgo, InfoHint,
 } from '../components/ui'
 import { ManagementAccessCoverage } from '../components/AccessCoverageCard'
 import { ReachManageCards } from '../components/ReachManageCards'
 
 // timeAgo for an ISO string, with "Never" for null.
-const ago = (iso?: string | null) => (iso ? timeAgo(iso) : 'Never')
 
 type Win = '1h' | '24h' | '7d' | '30d'
 const WINDOWS: { k: Win; label: string }[] = [{ k: '1h', label: '1h' }, { k: '24h', label: '24h' }, { k: '7d', label: '7d' }, { k: '30d', label: '30d' }]
@@ -49,17 +48,6 @@ interface DashboardData {
 
 const STATUS_DONUT_COLOR: Record<string, string> = { up: '#16a34a', warning: '#d97706', down: '#dc2626', unknown: '#94a3b8' }
 
-function dayLabel(iso?: string | null): string {
-  if (!iso) return 'never'
-  const t = new Date(iso).getTime()
-  if (Number.isNaN(t)) return '—'
-  const days = Math.floor((Date.now() - t) / 86_400_000)
-  if (days <= 0) return 'Today'
-  if (days === 1) return 'Yesterday'
-  return `${days} days ago`
-}
-
-interface SecRow { label: string; value: React.ReactNode }
 const OVERALL_LABEL: Record<string, string> = { excellent: 'Excellent', good: 'Good', needs_attention: 'Needs Attention', critical: 'Critical', unknown: 'Not enough data' }
 const OVERALL_BADGE: Record<string, string> = { excellent: 'badge-up', good: 'badge-up', needs_attention: 'badge-warning', critical: 'badge-down', unknown: 'badge-unknown' }
 
@@ -225,8 +213,6 @@ export function Dashboard() {
   const devices = useQuery({ queryKey: ['devices', 'all'], queryFn: () => api.get<Device[]>('/devices?category=all') })
   const jobs = useQuery({ queryKey: ['discovery-jobs'], queryFn: () => api.get<DiscoveryJob[]>('/discovery/jobs'), refetchInterval: 30_000 })
   const alerts = useQuery({ queryKey: ['alerts'], queryFn: () => api.get<Alert[]>('/alerts'), refetchInterval: 30_000 })
-  const enc = useQuery({ queryKey: ['enc-status'], queryFn: () => api.get<EncryptionStatus>('/security/encryption/status'), refetchInterval: 60_000, retry: 0 })
-  const oph = useQuery({ queryKey: ['operational-health'], queryFn: () => api.get<OperationalHealth>('/dashboard/operational-health'), refetchInterval: 30_000, retry: 0 })
   const infra = useQuery({ queryKey: ['infra-health'], queryFn: () => api.get<InfrastructureHealth>('/dashboard/infrastructure-health'), refetchInterval: 30_000, retry: 0 })
   const avail = useQuery({ queryKey: ['analytics-availability', win], queryFn: () => api.get<AvailabilityAnalytics>(`/analytics/availability?window=${win}`), refetchInterval: 60_000, retry: 0 })
   const sites = useQuery({ queryKey: ['sites-overview'], queryFn: () => api.get<SiteRollup[]>('/sites/overview'), refetchInterval: 60_000, retry: 0 })
@@ -254,7 +240,6 @@ export function Dashboard() {
   const monMap = new Map((mon.data ?? []).map((r) => [r.status, r.count]))
   const up = monMap.get('up') ?? 0, warning = monMap.get('warning') ?? 0, down = monMap.get('down') ?? 0, unknown = monMap.get('unknown') ?? 0
   const monitored = up + warning + down
-  const health = monitored > 0 ? Math.round(((up + warning * 0.5) / monitored) * 100) : (total > 0 ? 100 : 0)
   // Extra (supplemental) checks summary for the Online card footer.
   const allChecks = checks.data ?? []
   const extraChecks = allChecks.filter((c) => c.role === 'supplemental')
@@ -441,39 +426,43 @@ export function Dashboard() {
           hint="Devices with a warranty, licence or certificate expiring within 90 days." sub="next 90 days" />
       </div>
 
-      {/* ===== Needs attention now — the single "what do I do next?" section ===== */}
+      {/* ===== B · Needs attention now — "what do I do next?" ===== */}
       <SectionTitle icon={TriangleAlert} title="Needs attention now" hint="the real open issues to act on, worst-first — click any row to fix it" />
-      <ActionRequiredCard />
-
-      {/* ===== Availability & Performance ===== */}
-      <SectionTitle icon={Activity} title="Availability & Performance" hint={`are devices reachable, and how fast do they respond? · last ${win}`} />
       <div className="grid-side">
+        <div className="stack"><ActionRequiredCard /></div>
         <div className="stack">
-          <Panel title={`Fleet Availability · ${win}`} icon={ShieldCheck} subtitle={aSum ? `${fmtPct(aSum.uptime_pct)} uptime · avg ${fmtMs(aSum.avg_latency_ms)} · p95 ${fmtMs(aSum.p95_latency_ms)}` : undefined} actions={<Link className="btn btn-ghost btn-sm" to="/monitoring">Health Overview →</Link>}>
-            {aSeries.length > 1 ? <AreaChart points={aPts} labels={aLabels} height={150} min={Math.max(0, aMin - 0.4)} max={100} unit="%" baseline={SLA_TARGET} color="var(--ok)" valueFmt={(v) => fmtPct(v)} ariaLabel="Fleet availability trend" /> : <div className="chart-empty" style={{ height: 150 }}>No availability history in this window</div>}
-          </Panel>
-        </div>
-        <div className="stack">
-          <Panel title="Live Fleet Health" icon={HeartPulse} subtitle="status of every monitored device right now">
-            {statusDonut.length > 0 ? (
-              <div className="row" style={{ alignItems: 'center', gap: 18, flexWrap: 'wrap' }}>
-                <HealthRing score={health} label="Now" />
-                <Donut data={statusDonut} centerValue={monitored} centerLabel="monitored" size={120} />
-                <div style={{ flex: 1, minWidth: 130 }}><Legend data={statusDonut} total={monitored} /></div>
-              </div>
-            ) : <EmptyState icon={Activity} title="No monitoring checks yet" message="Seed checks to compute a health score." action={<Link className="btn btn-primary btn-sm" to="/monitoring">Go to Monitoring</Link>} />}
+          <Panel title="Critical Assets" icon={TriangleAlert} subtitle="offline or flagged, needing attention now" actions={critical.length > 0 ? <Link className="btn btn-ghost btn-sm" to="/inventory?reachability=offline">View all</Link> : undefined}>
+            {critical.length === 0
+              ? <EmptyState icon={Wifi} title="All systems operational" message="No devices are offline or flagged for attention." />
+              : (
+                <ul className="activity">
+                  {critical.map((d) => {
+                    const base = detailBase[d.category] ?? '/devices'
+                    return (
+                      <li key={d.id} className="activity-item">
+                        <span className="activity-dot tone-crit"><WifiOff size={13} /></span>
+                        <div className="activity-body">
+                          <div className="activity-title">{base ? <Link to={`${base}/${d.id}`}>{d.name}</Link> : d.name}</div>
+                          <div className="activity-meta">{d.primary_ip || '—'} · {d.category.replace(/_/g, ' ')}</div>
+                        </div>
+                        <StatusPill status={d.status} />
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
           </Panel>
         </div>
       </div>
 
-      {/* ===== Collection & Trust ===== */}
-      <SectionTitle icon={ShieldCheck} title="Collection & Trust" hint="online means a device answers the network — managed means HIMS can log in and collect from it. They are different." />
+      {/* ===== C · Collection & Trust — reachable vs managed, kept separate ===== */}
+      <SectionTitle icon={ShieldCheck} title="Collection & Trust" hint="online means a device answers the network · managed means HIMS can log in and collect from it — two different things" />
       <ReachManageCards />
       <div className="grid-side">
         <div className="stack"><ManagementAccessCoverage /></div>
         <div className="stack">
           {siteRows.length > 0 ? (
-            <Panel title="Site Health" icon={Building2} subtitle={`${siteRows.length} sites · worst first`} actions={<Link className="btn btn-ghost btn-sm" to="/sites">Multi-Site →</Link>}>
+            <Panel title="Site Health" icon={Building2} subtitle="up / down / open alerts per site · worst first" actions={<Link className="btn btn-ghost btn-sm" to="/sites">Multi-Site →</Link>}>
               <table className="site-matrix">
                 <thead><tr><th>Site</th><th>Devices</th><th>On</th><th>Off</th><th>Availability</th><th>Alerts</th></tr></thead>
                 <tbody>
@@ -494,83 +483,42 @@ export function Dashboard() {
               </table>
             </Panel>
           ) : (
-            <Panel title="Security Health" icon={Lock} actions={<Link className="btn btn-ghost btn-sm" to="/security/encryption">Manage</Link>}>{securityRows(enc.data)}</Panel>
+            <Panel title="Live Fleet Health" icon={HeartPulse} subtitle="status of every monitored device right now">
+              {statusDonut.length > 0 ? (
+                <div className="row" style={{ alignItems: 'center', gap: 18, flexWrap: 'wrap' }}>
+                  <Donut data={statusDonut} centerValue={monitored} centerLabel="monitored" size={120} />
+                  <div style={{ flex: 1, minWidth: 130 }}><Legend data={statusDonut} total={monitored} /></div>
+                </div>
+              ) : <EmptyState icon={Activity} title="No monitoring checks yet" message="Seed checks to compute a health score." action={<Link className="btn btn-primary btn-sm" to="/monitoring">Go to Monitoring</Link>} />}
+            </Panel>
           )}
         </div>
       </div>
 
-      {/* ===== Operations ===== */}
-      <SectionTitle icon={ClipboardList} title="Operations" hint="health of the systems that keep inventory current — discovery, monitoring, topology, alerts and agents" />
+      {/* ===== D · Fleet Overview — what's on the network ===== */}
+      <SectionTitle icon={Boxes} title="Fleet Overview" hint={`what's on the network — ${total} devices across ${byType.length} types`} />
+      <div className="grid-2">
+        <Panel title="Devices by Type" icon={Layers} subtitle="what kinds of devices are on the network">
+          {typeDonut.length > 0 ? (
+            <div className="row" style={{ alignItems: 'center', gap: 20 }}>
+              <Donut data={typeDonut} centerValue={total} centerLabel="devices" size={140} />
+              <div style={{ flex: 1, minWidth: 140 }}><Legend data={typeDonut} total={total} /></div>
+            </div>
+          ) : <div className="muted">No devices yet.</div>}
+        </Panel>
+        <Panel title="Top Vendors" icon={Server} subtitle="most common hardware makers in inventory"><BarList rows={topVendors} /></Panel>
+      </div>
+
+      {/* ===== E · Recent Activity — what changed recently ===== */}
+      <SectionTitle icon={TrendingUp} title="Recent Activity" hint="what changed recently — alerts opened/resolved and discovery scans" />
       <div className="grid-side">
         <div className="stack">
-          {(() => {
-            const o = oph.data
-            const d = o?.discovery, m = o?.monitoring, tp = o?.topology
-            const a = infra.data?.alerts
-            return (
-              <div className="grid-2">
-                <OperationalHealthPanel
-                  title="Discovery Health" icon={Radar} status={d?.status ?? 'unknown'}
-                  notCollectedReason="No discovery scans have run yet — launch a scan to populate inventory."
-                  rows={d ? [
-                    { label: 'Last Scan', value: ago(d.last_scan_at) },
-                    { label: 'Last Scan Status', value: <span style={{ textTransform: 'capitalize' }}>{d.last_scan_status}</span> },
-                    { label: 'Successful Scans', value: d.successful_scan_percent == null ? 'Not collected yet' : `${d.successful_scan_percent}%` },
-                    { label: 'Failed Scans', value: <span style={{ color: d.failed_scan_count > 0 ? 'var(--crit)' : undefined }}>{d.failed_scan_count}</span> },
-                    { label: 'Pending Jobs', value: d.pending_job_count },
-                  ] : []}
-                  impact="Discovery keeps the inventory current; failures mean devices may be missing or stale."
-                  action={<Link className="btn btn-ghost btn-sm" to="/discovery">Open Discovery →</Link>}
-                />
-                <OperationalHealthPanel
-                  title="Monitoring Health" icon={HeartPulse} status={m?.status ?? 'unknown'}
-                  notCollectedReason="No monitoring checks are configured — seed checks to track availability."
-                  rows={m ? [
-                    { label: 'Monitored Devices', value: m.monitored_devices },
-                    { label: 'Online', value: m.online_devices },
-                    { label: 'Offline', value: <span style={{ color: m.offline_devices > 0 ? 'var(--crit)' : undefined }}>{m.offline_devices}</span> },
-                    { label: 'Critical Alerts', value: <span style={{ color: m.critical_alerts > 0 ? 'var(--crit)' : undefined }}>{m.critical_alerts}</span> },
-                    { label: 'Last Collection', value: ago(m.last_collection_at) },
-                    { label: 'Collection Status', value: <span style={{ textTransform: 'capitalize' }}>{m.collection_status}</span> },
-                  ] : []}
-                  impact={m && !m.last_collection_at ? 'Monitoring collection has not run yet — run a sweep to populate availability.' : 'Monitoring detects outages; stale collection or offline devices need attention.'}
-                  action={<Link className="btn btn-ghost btn-sm" to="/monitoring">Open Monitoring →</Link>}
-                />
-                <OperationalHealthPanel
-                  title="Topology Health" icon={Network} status={tp?.status ?? 'unknown'}
-                  notCollectedReason="No topology links computed yet — discover switches to gather LLDP/CDP neighbors."
-                  rows={tp ? [
-                    { label: 'Mapped switches/routers', value: tp.mapped_devices },
-                    { label: 'Unmapped switches/routers', value: tp.unmapped_devices },
-                    { label: 'Missing Neighbors', value: tp.missing_neighbors },
-                    { label: 'Fabric Coverage', value: tp.coverage_percent == null ? 'No switches/routers yet' : `${tp.coverage_percent}%` },
-                    { label: 'Last Refresh', value: ago(tp.last_topology_refresh_at) },
-                  ] : []}
-                  impact="Coverage is measured over switches & routers only (the LLDP/CDP fabric); low coverage means part of the fabric isn't mapped."
-                  action={<Link className="btn btn-ghost btn-sm" to="/topology">Open Topology →</Link>}
-                />
-                <OperationalHealthPanel
-                  title="Alert Health" icon={Bell} status={a?.status ?? 'unknown'}
-                  notCollectedReason="Alert data is unavailable."
-                  rows={a ? [
-                    { label: 'Open Critical Alerts', value: <span style={{ color: a.open_critical > 0 ? 'var(--crit)' : undefined }}>{a.open_critical}</span> },
-                    { label: 'Open Warning Alerts', value: a.open_warning },
-                    { label: 'Acknowledged', value: a.acknowledged },
-                    { label: 'Unresolved', value: a.unresolved },
-                    { label: 'Last Alert', value: ago(a.last_alert_at) },
-                    { label: 'Active Rules', value: a.active_rules },
-                  ] : []}
-                  impact="Unresolved critical alerts mean active incidents needing attention."
-                  action={<Link className="btn btn-ghost btn-sm" to="/alerts">Open Alerts →</Link>}
-                />
-              </div>
-            )
-          })()}
-
-          <Panel
-            title="Discovery Activity" icon={Radar} subtitle="recent network scans that find and refresh devices"
-            actions={<Link className="btn btn-ghost btn-sm" to="/discovery">Open Discovery</Link>}
-          >
+          <Panel title="Latest Events" icon={TrendingUp} subtitle="most recent alerts and scans" actions={<Link className="btn btn-ghost btn-sm" to="/alerts">All alerts →</Link>}>
+            <ActivityFeed items={feed} />
+          </Panel>
+        </div>
+        <div className="stack">
+          <Panel title="Discovery Activity" icon={Radar} subtitle="recent scans that find and refresh devices" actions={<Link className="btn btn-ghost btn-sm" to="/discovery">Open Discovery</Link>}>
             <div className="row-between" style={{ marginBottom: 12 }}>
               <div>
                 <div className="muted" style={{ fontSize: 12 }}>Devices found per recent scan</div>
@@ -598,102 +546,8 @@ export function Dashboard() {
               )}
           </Panel>
         </div>
-
-        <div className="stack">
-          <AgentHealthPanel />
-          <Panel title="Critical Assets" icon={TriangleAlert} subtitle="offline or flagged, needing attention" actions={critical.length > 0 ? <Link className="btn btn-ghost btn-sm" to="/monitoring">View all</Link> : undefined}>
-            {critical.length === 0
-              ? <EmptyState icon={Wifi} title="All systems operational" message="No devices are offline or flagged for attention." />
-              : (
-                <ul className="activity">
-                  {critical.map((d) => {
-                    const base = detailBase[d.category] ?? '/devices'
-                    return (
-                      <li key={d.id} className="activity-item">
-                        <span className="activity-dot tone-crit"><WifiOff size={13} /></span>
-                        <div className="activity-body">
-                          <div className="activity-title">{base ? <Link to={`${base}/${d.id}`}>{d.name}</Link> : d.name}</div>
-                          <div className="activity-meta">{d.primary_ip || '—'} · {d.category.replace(/_/g, ' ')}</div>
-                        </div>
-                        <StatusPill status={d.status} />
-                      </li>
-                    )
-                  })}
-                </ul>
-              )}
-          </Panel>
-          <Panel title="Security Health" icon={Lock} subtitle="are stored credentials safely encrypted?" actions={<Link className="btn btn-ghost btn-sm" to="/security/encryption">Manage</Link>}>{securityRows(enc.data)}</Panel>
-          <Panel title="Recent Activity" icon={TrendingUp} subtitle="latest alerts and discovery scans"><ActivityFeed items={feed} /></Panel>
-        </div>
-      </div>
-
-      {/* ===== Inventory ===== */}
-      <SectionTitle icon={Boxes} title="Fleet Overview" hint={`what's on the network — ${total} devices across ${byType.length} types`} />
-      <div className="grid-2">
-        <Panel title="Devices by Type" icon={Layers} subtitle="what kinds of devices are on the network">
-          {typeDonut.length > 0 ? (
-            <div className="row" style={{ alignItems: 'center', gap: 20 }}>
-              <Donut data={typeDonut} centerValue={total} centerLabel="devices" size={140} />
-              <div style={{ flex: 1, minWidth: 140 }}><Legend data={typeDonut} total={total} /></div>
-            </div>
-          ) : <div className="muted">No devices yet.</div>}
-        </Panel>
-        <Panel title="Top Vendors" icon={Server} subtitle="most common hardware makers in inventory"><BarList rows={topVendors} /></Panel>
       </div>
     </div>
   )
 }
 
-// securityRows renders the encryption/credential health list (shared between the
-// Access section fallback and the Operations sidebar).
-function securityRows(e?: EncryptionStatus) {
-  const health = !e ? { label: 'Unknown', cls: 'badge-unknown' }
-    : e.status === 'enabled' && e.fingerprint_match && e.undecryptable_count === 0 ? { label: 'Healthy', cls: 'badge-up' }
-      : e.status === 'enabled' ? { label: 'Degraded', cls: 'badge-warning' }
-        : e.status === 'pending_restart' ? { label: 'Pending restart', cls: 'badge-warning' }
-          : e.status === 'fingerprint_mismatch' ? { label: 'Key mismatch', cls: 'badge-down' }
-            : e.status === 'invalid_key' ? { label: 'Invalid key', cls: 'badge-down' }
-              : e.status === 'missing_key' ? { label: 'Key missing', cls: 'badge-down' }
-                : { label: 'Not configured', cls: 'badge-unknown' }
-  const rows: SecRow[] = [
-    { label: 'Encryption', value: <span className={`badge ${health.cls}`}>{health.label}</span> },
-    { label: 'Credentials', value: e?.encrypted_count ?? '—' },
-    { label: 'Needs Re-entry', value: <span style={{ color: (e?.needs_reset_count ?? 0) > 0 ? 'var(--crit)' : 'var(--text)', fontWeight: 600 }}>{e?.needs_reset_count ?? 0}</span> },
-    { label: 'Last Validation', value: dayLabel(e?.last_validation_at) },
-    { label: 'Last Rotation', value: dayLabel(e?.last_rotation_at) },
-  ]
-  return (
-    <>
-      <ul className="sec-health">
-        {rows.map((r) => (<li key={r.label}><span className="muted">{r.label}</span><span className="sec-val">{r.value}</span></li>))}
-      </ul>
-      {e && !e.enabled && (
-        <div style={{ marginTop: 10 }}><Link className="badge badge-down" to="/security/encryption" style={{ textDecoration: 'none' }}><KeyRound size={11} style={{ verticalAlign: -1 }} /> Configure encryption →</Link></div>
-      )}
-    </>
-  )
-}
-
-// AgentHealthPanel — Relay Agent fleet status.
-function AgentHealthPanel() {
-  const q = useQuery({ queryKey: ['relay-agents'], queryFn: () => api.get<RelayAgent[]>('/agents'), refetchInterval: 20_000 })
-  const agents = q.data ?? []
-  const online = agents.filter((a) => a.online).length
-  const offline = agents.filter((a) => a.enabled && !a.online).length
-  const failing = agents.filter((a) => (a.failed_jobs ?? 0) > 0).length
-  const status = agents.length === 0 ? 'unknown' : offline > 0 ? 'critical' : failing > 0 ? 'warning' : 'healthy'
-  return (
-    <OperationalHealthPanel
-      title="Relay Agents" icon={Radar} status={status}
-      notCollectedReason="No Relay Agents registered yet. Install one in a site to collect legacy/local Windows hosts (WMI/DCOM) and other site-local devices."
-      rows={[
-        { label: 'Total', value: agents.length },
-        { label: 'Online', value: online },
-        { label: 'Offline', value: <span style={{ color: offline > 0 ? 'var(--crit)' : undefined }}>{offline}</span> },
-        { label: 'With failed jobs', value: <span style={{ color: failing > 0 ? 'var(--warn)' : undefined }}>{failing}</span> },
-      ]}
-      impact="Relay Agents are the preferred collector for legacy/local Windows; an offline agent blocks collection for its site."
-      action={<Link className="btn btn-ghost btn-sm" to="/agents">Open Relay Agents →</Link>}
-    />
-  )
-}
