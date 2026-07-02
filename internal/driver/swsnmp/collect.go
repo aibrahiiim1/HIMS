@@ -8,6 +8,7 @@ package swsnmp
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"regexp"
 	"strconv"
 	"strings"
@@ -374,9 +375,23 @@ func CollectIPAddresses(ctx context.Context, c snmp.Client) []driver.IPInterface
 }
 
 // ipv4Bytes renders an SNMP IpAddress value (4-byte octet string) as dotted quad.
+// ipv4Bytes normalises an SNMP IpAddress value (used by ipAddrTable netmask) to a
+// dotted-quad string. gosnmp decodes the ASN.1 IpAddress type into a Go string
+// already in "a.b.c.d" form, but some agents/paths surface the 4 raw octets as
+// []byte (or a 4-char string) — handle all three so the mask is never dropped.
 func ipv4Bytes(v any) string {
-	if b, ok := v.([]byte); ok && len(b) == 4 {
-		return fmt.Sprintf("%d.%d.%d.%d", b[0], b[1], b[2], b[3])
+	switch t := v.(type) {
+	case string:
+		if a, err := netip.ParseAddr(strings.TrimSpace(t)); err == nil && a.Is4() {
+			return a.String()
+		}
+		if len(t) == 4 {
+			return fmt.Sprintf("%d.%d.%d.%d", t[0], t[1], t[2], t[3])
+		}
+	case []byte:
+		if len(t) == 4 {
+			return fmt.Sprintf("%d.%d.%d.%d", t[0], t[1], t[2], t[3])
+		}
 	}
 	return ""
 }

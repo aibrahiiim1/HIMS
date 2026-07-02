@@ -137,3 +137,25 @@ func TestDetectSVIGateways(t *testing.T) {
 		}
 	}
 }
+
+func TestIPv4Bytes(t *testing.T) {
+	cases := []struct {
+		name string
+		in   any
+		want string
+	}{
+		{"gosnmp dotted-quad string", "255.255.255.0", "255.255.255.0"}, // the real ipAddrTable netmask case
+		{"string with spaces", " 172.21.210.1 ", "172.21.210.1"},
+		{"four raw bytes", []byte{255, 255, 255, 128}, "255.255.255.128"},
+		{"four-char raw string", string([]byte{255, 255, 0, 0}), "255.255.0.0"},
+		{"empty", "", ""},
+		{"non-ipv4 string", "not-an-ip", ""},
+		{"wrong-length bytes", []byte{1, 2, 3}, ""},
+		{"nil", nil, ""},
+	}
+	for _, c := range cases {
+		if got := ipv4Bytes(c.in); got != c.want {
+			t.Errorf("%s: ipv4Bytes(%v) = %q, want %q", c.name, c.in, got, c.want)
+		}
+	}
+}
