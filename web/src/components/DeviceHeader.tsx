@@ -1,7 +1,7 @@
 import { useMemo, useState, type ComponentType } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from 'react-router-dom'
-import { HardDrive, Radar, ShieldCheck, MapPin, Wifi, Wrench, Pencil, Lock, Ghost, Trash2 } from 'lucide-react'
+import { HardDrive, Radar, ShieldCheck, MapPin, Wifi, Wrench, Pencil, Lock, Ghost, Trash2, Router } from 'lucide-react'
 import { api, type Device, type Location, type MonitoringCheck, locationPaths } from '../api'
 import { HealthRing, colorFor, timeAgo } from './ui'
 import { ReachabilityBadge, ManagementBadge } from './StatusBadges'
@@ -155,6 +155,11 @@ export function DeviceHeader({ deviceId, icon: Icon = HardDrive, showCredential 
               )}
               {d.is_virtual && (
                 <span className="badge" title="Virtual device — manually entered, not probed" style={{ background: 'rgba(139,92,246,.15)', color: '#8b5cf6' }}><Ghost size={11} style={{ verticalAlign: -1 }} /> Virtual</span>
+              )}
+              {d.gateway_on && (
+                <Link to={`/devices/${d.gateway_on.switch.id}`} className="badge" title={`This IP is a VLAN gateway (SVI) on ${d.gateway_on.switch.name} — managed via that switch, not a standalone host`} style={{ background: 'rgba(14,165,233,.15)', color: '#0ea5e9' }}>
+                  <Router size={11} style={{ verticalAlign: -1 }} /> VLAN gateway on {d.gateway_on.switch.name}{d.gateway_on.vlan ? ` · VLAN ${d.gateway_on.vlan}` : ''}
+                </Link>
               )}
               <button className="btn btn-ghost btn-xs" onClick={() => setEditing(true)} title="Edit device identity, location, criticality, classification lock"><Pencil size={12} /> Edit</button>
             </span>

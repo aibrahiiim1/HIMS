@@ -167,6 +167,7 @@ export interface Device {
   server_role?: string // virtual_host_esxi | virtual_host_hyperv | virtual_machine | physical_server | unknown_server
   classification_source?: string // manual_override | fingerprint | snmp | hostname | service | auto
   hosted_on?: { id: string; name: string; ip?: string } // parent hypervisor when this device is a discovered VM
+  gateway_on?: { switch: { id: string; name: string; ip?: string }; vlan?: string } // switch this device is a VLAN gateway (SVI) on
   // Operator-editable management attributes (Edit Device).
   subtype?: string
   notes?: string
@@ -331,7 +332,21 @@ export interface VLAN {
   device_id: string
   vlan_id: number
   name?: string | null
+  gateway_ip?: string | null // L3 SVI gateway IP (null for pure-L2 VLANs)
   last_seen_at: string
+}
+
+// An L3/SVI interface on a switch (from ipAddrTable): a VLAN gateway IP,
+// loopback, or the mgmt IP. Links a former phantom gateway device back here.
+export interface VLANGateway {
+  if_index: number
+  ip: string
+  net_mask?: string
+  vlan_id?: number
+  vlan_name?: string
+  is_gateway: boolean
+  gateway_device_id?: string
+  gateway_device_name?: string
 }
 
 export interface PortVlan {

@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { useParams } from 'react-router-dom'
+import { useParams, Link } from 'react-router-dom'
 import { Network, Cable, Layers, Share2, Activity, Settings, Gauge, LayoutGrid, Table, Router, KeyRound } from 'lucide-react'
-import { api, type Interface, type VLAN, type Neighbor, type TopologyLink, type MonitoringCheck, type MonitoringSample, type MacEntry, type ArpEntry } from '../api'
+import { api, type Interface, type VLAN, type VLANGateway, type Neighbor, type TopologyLink, type MonitoringCheck, type MonitoringSample, type MacEntry, type ArpEntry } from '../api'
 import { DeviceHeader } from '../components/DeviceHeader'
 import { ClassificationCard } from '../components/ClassificationCard'
 import { DeepOSInventory } from '../components/DeepOSInventory'
@@ -22,6 +22,7 @@ export function SwitchDetail() {
 
   const ifaces = useQuery({ queryKey: ['interfaces', id], queryFn: () => api.get<Interface[]>(`/devices/${id}/interfaces`) })
   const vlans = useQuery({ queryKey: ['vlans', id], queryFn: () => api.get<VLAN[]>(`/devices/${id}/vlans`) })
+  const gateways = useQuery({ queryKey: ['vlan-gateways', id], queryFn: () => api.get<VLANGateway[]>(`/devices/${id}/vlan-gateways`) })
   const neighbors = useQuery({ queryKey: ['neighbors', id], queryFn: () => api.get<Neighbor[]>(`/devices/${id}/neighbors`) })
   const topo = useQuery({ queryKey: ['device-topology', id], queryFn: () => api.get<TopologyLink[]>(`/devices/${id}/topology`) })
 
@@ -36,6 +37,8 @@ export function SwitchDetail() {
   const neighEndpoints = neighList.length - neighInfra
   const linkList = topo.data ?? []
   const macLinks = linkList.filter((l) => l.link_source === 'mac').length
+  const gwList = gateways.data ?? []
+  const gwCount = gwList.filter((g) => g.is_gateway).length
   const roleCount = (role: string) => ifList.filter((i) => i.port_role === role).length
   const accessPorts = roleCount('access'), trunkPorts = roleCount('trunk') + roleCount('uplink')
   const utilPct = ifList.length ? Math.round((ifUp / ifList.length) * 100) : 0
@@ -116,15 +119,41 @@ export function SwitchDetail() {
       )}
 
       {tab === 'vlans' && (
-        <Panel title="VLANs" subtitle={`${vlans.data?.length ?? 0}`} pad={false}>
-          {vlans.isLoading && <div className="loading">Loading VLANs…</div>}
-          {vlans.data && vlans.data.length === 0 && <EmptyState icon={Layers} title="No VLANs collected" />}
-          {(vlans.data?.length ?? 0) > 0 && (
-            <table className="data-table"><thead><tr><th>VLAN ID</th><th>Name</th></tr></thead>
-              <tbody>{vlans.data!.map((v) => <tr key={v.id}><td className="cell-name">{v.vlan_id}</td><td>{v.name ?? '—'}</td></tr>)}</tbody>
-            </table>
-          )}
-        </Panel>
+        <div>
+          <Panel title="VLANs" subtitle={`${vlans.data?.length ?? 0}`} pad={false}>
+            {vlans.isLoading && <div className="loading">Loading VLANs…</div>}
+            {vlans.data && vlans.data.length === 0 && <EmptyState icon={Layers} title="No VLANs collected" />}
+            {(vlans.data?.length ?? 0) > 0 && (
+              <table className="data-table"><thead><tr><th>VLAN ID</th><th>Name</th><th>Gateway (SVI)</th></tr></thead>
+                <tbody>{vlans.data!.map((v) => <tr key={v.id}>
+                  <td className="cell-name">{v.vlan_id}</td>
+                  <td>{v.name ?? '—'}</td>
+                  <td>{v.gateway_ip ? <span className="mono">{v.gateway_ip}</span> : <span className="muted">L2 only</span>}</td>
+                </tr>)}</tbody>
+              </table>
+            )}
+          </Panel>
+
+          <Panel title="VLAN Gateways / L3 interfaces" icon={Router} pad={false}
+            subtitle={gwList.length ? `${gwCount} SVI gateway${gwCount === 1 ? '' : 's'} · ${gwList.length} L3 IP${gwList.length === 1 ? '' : 's'} on this switch (ipAddrTable)` : 'the switch’s own L3 IPs (SVI gateways, loopbacks, mgmt)'}>
+            {gateways.isLoading && <div className="loading">Loading L3 interfaces…</div>}
+            {gateways.data && gwList.length === 0 && <EmptyState icon={Router} title="No L3 interfaces collected"
+              message="Pure-L2 switches have no SVIs. If this is a layer-3 switch, bind a working SNMP credential and re-scan to collect its ipAddrTable (SVI gateway IPs, loopbacks)." />}
+            {gwList.length > 0 && (
+              <table className="data-table"><thead><tr><th>VLAN</th><th>Gateway IP</th><th>Netmask</th><th>ifIndex</th><th>Discovered device</th></tr></thead>
+                <tbody>{gwList.map((g) => <tr key={`${g.if_index}-${g.ip}`}>
+                  <td className="cell-name">{g.vlan_id != null ? `VLAN ${g.vlan_id}${g.vlan_name ? ` · ${g.vlan_name}` : ''}` : <span className="muted">{g.is_gateway ? '—' : 'loopback / mgmt'}</span>}</td>
+                  <td><span className="mono">{g.ip}</span></td>
+                  <td className="mono muted">{g.net_mask || '—'}</td>
+                  <td className="mono muted">{g.if_index}</td>
+                  <td>{g.gateway_device_id
+                    ? <Link to={`/devices/${g.gateway_device_id}`}>{g.gateway_device_name || g.ip} <small className="muted">(linked)</small></Link>
+                    : <span className="muted">not a separate device</span>}</td>
+                </tr>)}</tbody>
+              </table>
+            )}
+          </Panel>
+        </div>
       )}
 
       {tab === 'neighbors' && (
