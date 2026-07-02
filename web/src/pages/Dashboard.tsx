@@ -117,9 +117,9 @@ function InfraHealthCard({ data }: { data?: InfrastructureHealth }) {
       {/* Section chips — click to drill into the real page/filter */}
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 12 }}>
         {data.sections.map((s) => (
-          <button key={s.name} className="seg-chip" onClick={() => navigate(s.link)}
-            title={`${s.reason}  (click to open ${s.link})`}
-            style={{ display: 'flex', alignItems: 'center', gap: 6, borderColor: s.status !== 'healthy' && s.included ? SEC_DOT[s.status] : undefined }}>
+          <button key={s.name} className="seg-chip" onClick={() => s.link && navigate(s.link)}
+            title={s.reason ? `${s.reason}${s.link ? `  (click to open ${s.link})` : ''}` : s.name}
+            style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: s.link ? 'pointer' : 'default', borderColor: s.status !== 'healthy' && s.included ? SEC_DOT[s.status] : undefined }}>
             <span style={{ width: 8, height: 8, borderRadius: '50%', background: SEC_DOT[s.status] ?? 'var(--text-faint)', display: 'inline-block' }} />
             {s.name}
             <span className="muted" style={{ fontSize: 11 }}>{s.included ? s.score : 'n/a'}</span>
@@ -132,8 +132,8 @@ function InfraHealthCard({ data }: { data?: InfrastructureHealth }) {
         <div style={{ marginTop: 12 }}>
           <div className="muted" style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4 }}>Why needs attention</div>
           {problems.map((s) => (
-            <div key={s.name} onClick={() => navigate(s.link)} title={`Open ${s.link}`}
-              style={{ display: 'flex', gap: 8, alignItems: 'baseline', fontSize: 12, padding: '3px 0', cursor: 'pointer' }}>
+            <div key={s.name} onClick={() => s.link && navigate(s.link)} title={s.link ? `Open ${s.link}` : undefined}
+              style={{ display: 'flex', gap: 8, alignItems: 'baseline', fontSize: 12, padding: '3px 0', cursor: s.link ? 'pointer' : 'default' }}>
               <span style={{ color: SEC_DOT[s.status], fontWeight: 700, minWidth: 92 }}>{s.name}</span>
               <span>{s.reason}</span>
             </div>
