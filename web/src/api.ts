@@ -1853,13 +1853,28 @@ export async function unlockEncryption(key: string, adopt = false): Promise<Encr
 export interface ReentryCred { id: string; name: string; kind: string; weak: boolean; needs_secret_reentry: boolean; created_at: string; updated_at: string }
 export interface GuideSection { title: string; body: string }
 
+export interface InfraSection {
+  name: string; status: string; score: number; included: boolean
+  reason: string; reason_code: string; link: string; drivers: number
+}
+export interface InfraDriver {
+  device_id?: string; ip?: string; name: string; section: string
+  severity: string; label: string; protocol?: string; port?: number
+  last_changed?: string | null; link: string
+}
+export interface InfraHygiene { null_check_id_open: number; note: string; link: string }
 export interface InfrastructureHealth {
-  overall: { score: number; status: string; confidence: string; limited_reasons: string[] }
-  sections: { name: string; status: string; score: number; included: boolean; reason: string }[]
+  overall: {
+    score: number; status: string; confidence: string; confidence_reason: string
+    limited_reasons: string[]; summary: string; calculated_at: string
+  }
+  sections: InfraSection[]
   alerts: {
     status: string; open_critical: number; open_warning: number; acknowledged: number
     unresolved: number; last_alert_at?: string | null; active_rules: number
   }
+  top_drivers: InfraDriver[]
+  alert_hygiene: InfraHygiene
 }
 
 export interface OperationalHealth {

@@ -2,7 +2,12 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
@@ -299,11 +304,38 @@ func (s *Server) topologyHealth(ctx context.Context) topologyHealth {
 // ---- Infrastructure health score (aggregate of all health sections) --------
 
 type sectionHealth struct {
-	Name     string `json:"name"`
-	Status   string `json:"status"`
-	Score    int    `json:"score"`
-	Included bool   `json:"included"`
-	Reason   string `json:"reason"`
+	Name       string `json:"name"`
+	Status     string `json:"status"`
+	Score      int    `json:"score"`
+	Included   bool   `json:"included"`
+	Reason     string `json:"reason"`
+	ReasonCode string `json:"reason_code"` // machine-readable driver (e.g. "critical_alerts_open")
+	Link       string `json:"link"`        // real frontend route/filter to drill into this section
+	Drivers    int    `json:"drivers"`     // count of contributing items (alerts/offline/etc.)
+}
+
+// infraDriver is one concrete contributor to a degraded score — a real open alert
+// (never fabricated). It carries everything the card needs to render a row and a
+// deep link, so the UI shows no hardcoded blockers.
+type infraDriver struct {
+	DeviceID    string  `json:"device_id,omitempty"`
+	IP          string  `json:"ip,omitempty"`
+	Name        string  `json:"name"`
+	Section     string  `json:"section"`  // which health section this drives
+	Severity    string  `json:"severity"` // critical | warning
+	Label       string  `json:"label"`    // the alert message
+	Protocol    string  `json:"protocol,omitempty"`
+	Port        int     `json:"port,omitempty"`
+	LastChanged *string `json:"last_changed,omitempty"`
+	Link        string  `json:"link"`
+}
+
+// infraHygiene surfaces the alert-hygiene signal (open alerts with no check
+// linkage) so the operator sees it without it silently affecting the score.
+type infraHygiene struct {
+	NullCheckIDOpen int    `json:"null_check_id_open"`
+	Note            string `json:"note"`
+	Link            string `json:"link"`
 }
 type alertHealthDTO struct {
 	Status       string  `json:"status"`
@@ -315,10 +347,13 @@ type alertHealthDTO struct {
 	ActiveRules  int     `json:"active_rules"`
 }
 type infraOverall struct {
-	Score          int      `json:"score"`
-	Status         string   `json:"status"`
-	Confidence     string   `json:"confidence"`
-	LimitedReasons []string `json:"limited_reasons"`
+	Score            int      `json:"score"`
+	Status           string   `json:"status"`
+	Confidence       string   `json:"confidence"`
+	ConfidenceReason string   `json:"confidence_reason"`
+	LimitedReasons   []string `json:"limited_reasons"`
+	Summary          string   `json:"summary"`       // one-line plain-English "why"
+	CalculatedAt     string   `json:"calculated_at"` // when this was computed
 }
 
 func scoreForStatus(s string) int {
@@ -402,37 +437,89 @@ func (s *Server) alertHealth(ctx context.Context) (alertHealthDTO, bool) {
 
 func (s *Server) infrastructureHealth(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	now := time.Now().UTC()
+
+	// Every section's status + the metrics behind its reason come from live data.
+	sec := s.securitySection(ctx)
+	disc := s.discoveryHealth(r)
+	mon := s.monitoringHealth(r)
+	topo := s.topologyHealth(ctx)
 	al, _ := s.alertHealth(ctx)
-	sections := []sectionHealth{
-		s.securitySection(ctx),
-		{Name: "Discovery", Status: s.discoveryHealth(r).Status},
-		{Name: "Monitoring", Status: s.monitoringHealth(r).Status},
-		{Name: "Topology", Status: s.topologyHealth(ctx).Status},
-		{Name: "Alert Health", Status: al.Status},
+
+	secReason := sec.Reason
+	if secReason == "" && sec.Status == "healthy" {
+		secReason = "Encryption key loaded; no credential-key mismatches."
 	}
+	discReason, discCode := "Recent scans are succeeding.", "ok"
+	switch disc.Status {
+	case "critical":
+		discReason, discCode = "The last discovery scan failed.", "last_scan_failed"
+	case "warning":
+		discReason, discCode = fmt.Sprintf("%d recent scan(s) failed.", disc.FailedScanCount), "some_scans_failed"
+	}
+	monReason, monCode := fmt.Sprintf("%d of %d monitored devices offline.", mon.OfflineDevices, mon.MonitoredDevices), "ok"
+	if mon.CriticalAlerts > 0 {
+		monReason, monCode = fmt.Sprintf("%d open critical monitoring alert(s).", mon.CriticalAlerts), "critical_alerts_open"
+	} else if mon.Status == "warning" {
+		monCode = "degraded"
+		if mon.CollectionStatus == "stale" {
+			monReason = "The monitoring sweep is stale."
+		}
+	}
+	topoReason, topoCode := "Fabric topology coverage is healthy.", "ok"
+	if topo.CoveragePercent != nil {
+		topoReason = fmt.Sprintf("Fabric coverage %d%% (%d unmapped).", *topo.CoveragePercent, topo.UnmappedDevices)
+	}
+	if topo.Status == "warning" || topo.Status == "critical" {
+		topoCode = "low_coverage"
+	}
+	alReason, alCode := "No open critical or warning alerts.", "ok"
+	if al.OpenCritical > 0 {
+		alReason, alCode = fmt.Sprintf("%d critical + %d warning alert(s) open.", al.OpenCritical, al.OpenWarning), "critical_alerts_open"
+	} else if al.OpenWarning > 0 {
+		alReason, alCode = fmt.Sprintf("%d warning alert(s) open.", al.OpenWarning), "warning_alerts_open"
+	}
+
+	sections := []sectionHealth{
+		{Name: "Security", Status: sec.Status, Reason: secReason, ReasonCode: statusCode(sec.Status), Link: "/security/encryption"},
+		{Name: "Discovery", Status: disc.Status, Reason: discReason, ReasonCode: discCode, Link: "/discovery", Drivers: disc.FailedScanCount},
+		{Name: "Monitoring", Status: mon.Status, Reason: monReason, ReasonCode: monCode, Link: "/monitoring", Drivers: mon.CriticalAlerts + int(mon.OfflineDevices)},
+		{Name: "Topology", Status: topo.Status, Reason: topoReason, ReasonCode: topoCode, Link: "/topology", Drivers: topo.UnmappedDevices},
+		{Name: "Alert Health", Status: al.Status, Reason: alReason, ReasonCode: alCode, Link: "/alerts", Drivers: al.OpenCritical + al.OpenWarning},
+	}
+
 	sum, n := 0, 0
-	reasons := []string{}
+	limited := []string{}
+	var problems []string
 	for i := range sections {
 		sections[i].Score = scoreForStatus(sections[i].Status)
 		sections[i].Included = sections[i].Status != "unknown" && sections[i].Status != ""
 		if sections[i].Included {
 			sum += sections[i].Score
 			n++
+			if sections[i].Status != "healthy" {
+				problems = append(problems, sections[i].Name)
+			}
 		} else {
 			rsn := sections[i].Reason
 			if rsn == "" {
 				rsn = sections[i].Name + " not collected yet"
 			}
-			reasons = append(reasons, rsn)
+			limited = append(limited, rsn)
 		}
 	}
-	overall := infraOverall{Confidence: "high", LimitedReasons: reasons}
+
+	overall := infraOverall{Confidence: "high", LimitedReasons: limited, CalculatedAt: now.Format(isoFmt)}
 	if n == 0 {
 		overall.Status, overall.Confidence = "unknown", "unknown"
+		overall.ConfidenceReason = "No health sections have data yet."
+		overall.Summary = "Infrastructure health cannot be computed — no section has data."
 	} else {
 		overall.Score = int(float64(sum)/float64(n) + 0.5)
-		if len(reasons) > 0 {
+		overall.ConfidenceReason = fmt.Sprintf("Score averaged over all %d health sections, each with live data.", n)
+		if len(limited) > 0 {
 			overall.Confidence = "limited"
+			overall.ConfidenceReason = fmt.Sprintf("%d of %d sections have no data yet, so the score is averaged over %d — treat it as indicative.", len(limited), len(sections), n)
 		}
 		switch {
 		case overall.Score >= 90:
@@ -444,6 +531,117 @@ func (s *Server) infrastructureHealth(w http.ResponseWriter, r *http.Request) {
 		default:
 			overall.Status = "critical"
 		}
+		if len(problems) == 0 {
+			overall.Summary = "All health sections are healthy."
+		} else {
+			verb := "are"
+			if len(problems) == 1 {
+				verb = "is"
+			}
+			overall.Summary = "Needs attention because " + joinAnd(problems) + " " + verb + " degraded."
+		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"overall": overall, "sections": sections, "alerts": al})
+
+	drivers, hygiene := s.infraDrivers(ctx)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"overall": overall, "sections": sections, "alerts": al,
+		"top_drivers": drivers, "alert_hygiene": hygiene,
+	})
+}
+
+// statusCode maps a section status to a short machine-readable reason code.
+func statusCode(status string) string {
+	switch status {
+	case "healthy":
+		return "ok"
+	case "warning":
+		return "degraded"
+	case "critical":
+		return "critical"
+	default:
+		return "unknown"
+	}
+}
+
+// joinAnd renders ["A"] → "A", ["A","B"] → "A and B", ["A","B","C"] → "A, B and C".
+func joinAnd(xs []string) string {
+	switch len(xs) {
+	case 0:
+		return ""
+	case 1:
+		return xs[0]
+	case 2:
+		return xs[0] + " and " + xs[1]
+	default:
+		return strings.Join(xs[:len(xs)-1], ", ") + " and " + xs[len(xs)-1]
+	}
+}
+
+var alertPortRe = regexp.MustCompile(`tcp:(\d+)`)
+
+// infraDrivers returns the REAL open alerts pulling the score down (critical
+// first, longest-outstanding first) plus the alert-hygiene signal (open alerts
+// with no check linkage). Nothing is fabricated — every row is a live alert.
+func (s *Server) infraDrivers(ctx context.Context) ([]infraDriver, infraHygiene) {
+	hyg := infraHygiene{Link: "/alerts"}
+	alerts, err := s.queries.ListAlerts(ctx)
+	if err != nil {
+		return nil, hyg
+	}
+	devByID := map[uuid.UUID]db.Device{}
+	if devs, derr := s.queries.ListAllDevices(ctx); derr == nil {
+		for _, d := range devs {
+			devByID[d.ID] = d
+		}
+	}
+	drivers := []infraDriver{}
+	for _, a := range alerts {
+		if a.Status == "resolved" {
+			continue
+		}
+		if a.CheckID == nil {
+			hyg.NullCheckIDOpen++
+		}
+		if a.Severity != "critical" {
+			continue // top drivers = the critical blockers behind Monitoring/Alert Health
+		}
+		d := infraDriver{Name: "(system)", Severity: a.Severity, Label: a.Message, Section: "Alert Health", Link: "/alerts"}
+		if a.DeviceID != nil {
+			if dev, ok := devByID[*a.DeviceID]; ok {
+				d.DeviceID = dev.ID.String()
+				d.Name = dev.Name
+				d.Link = "/devices/" + dev.ID.String()
+				if dev.PrimaryIp != nil {
+					d.IP = dev.PrimaryIp.String()
+				}
+			}
+		}
+		if m := alertPortRe.FindStringSubmatch(a.Message); m != nil {
+			d.Protocol = "tcp"
+			d.Port, _ = strconv.Atoi(m[1])
+			d.Section = "Monitoring" // a down reachability check drives Monitoring
+		}
+		last := a.OpenedAt
+		if a.EscalatedAt != nil && a.EscalatedAt.After(last) {
+			last = *a.EscalatedAt
+		}
+		ls := last.Format(isoFmt)
+		d.LastChanged = &ls
+		drivers = append(drivers, d)
+	}
+	// Worst-first = longest outstanding (oldest opened) at the top — most actionable.
+	sort.SliceStable(drivers, func(i, j int) bool {
+		return deref(drivers[i].LastChanged) < deref(drivers[j].LastChanged)
+	})
+	if hyg.NullCheckIDOpen > 0 {
+		hyg.Note = fmt.Sprintf("%d open alert(s) have no monitoring-check linkage (state-based collection/datastore/virtualization alerts). They are resolved by their own state evaluation, not by a check recovery.", hyg.NullCheckIDOpen)
+	}
+	return drivers, hyg
+}
+
+func deref(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }

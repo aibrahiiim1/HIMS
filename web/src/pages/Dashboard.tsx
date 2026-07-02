@@ -60,7 +60,6 @@ function dayLabel(iso?: string | null): string {
 }
 
 interface SecRow { label: string; value: React.ReactNode }
-const SEC_BADGE: Record<string, string> = { healthy: 'badge-up', warning: 'badge-warning', critical: 'badge-down', unknown: 'badge-unknown' }
 const OVERALL_LABEL: Record<string, string> = { excellent: 'Excellent', good: 'Good', needs_attention: 'Needs Attention', critical: 'Critical', unknown: 'Not enough data' }
 const OVERALL_BADGE: Record<string, string> = { excellent: 'badge-up', good: 'badge-up', needs_attention: 'badge-warning', critical: 'badge-down', unknown: 'badge-unknown' }
 
@@ -74,55 +73,105 @@ function SectionTitle({ icon: Icon, title, hint }: { icon: ComponentType<{ size?
   )
 }
 
+const SEC_DOT: Record<string, string> = { healthy: 'var(--ok)', warning: 'var(--warn)', critical: 'var(--crit)', unknown: 'var(--text-faint)' }
+
+// Overall Infrastructure Health — self-explanatory: score ring + plain-English
+// "why", clickable section chips that drill into real filters, the top real
+// blockers (worst-first, deep-linked), and the alert-hygiene signal. Every value
+// comes from /dashboard/infrastructure-health — no hardcoded reasons/blockers.
 function InfraHealthCard({ data }: { data?: InfrastructureHealth }) {
+  const navigate = useNavigate()
   if (!data) return <Panel title="Overall Infrastructure Health" icon={Activity}><div className="loading">Loading…</div></Panel>
   const o = data.overall
   const confCls = o.confidence === 'high' ? 'badge-up' : o.confidence === 'limited' ? 'badge-warning' : 'badge-unknown'
-  // When the overall status is anything other than healthy ("excellent"/"good"),
-  // explain WHY on hover: which sections are degraded/critical, plus any
-  // limited-confidence reasons. Operators hover the status word for the detail.
-  const healthy = o.status === 'excellent' || o.status === 'good'
-  const problems = data.sections.filter((s) => s.included && s.status !== 'healthy' && s.status !== 'unknown')
-  const tip = healthy
-    ? undefined
-    : [
-        problems.length
-          ? `Affected: ${problems.map((s) => `${s.name} (${s.status})`).join(', ')}`
-          : '',
-        o.confidence === 'limited' && o.limited_reasons.length > 0
-          ? `Limited confidence: ${o.limited_reasons.join('; ')}`
-          : '',
-      ].filter(Boolean).join(' · ') || 'Overall status is below healthy — see the section breakdown.'
   const statusLabel = OVERALL_LABEL[o.status] ?? o.status
+  const problems = data.sections.filter((s) => s.included && s.status !== 'healthy' && s.status !== 'unknown')
+  const drivers = data.top_drivers ?? []
+  const hyg = data.alert_hygiene
+  const calcTip = 'Overall = average of the 5 section scores (Healthy 100 · Warning 65 · Critical 25). Sections with no data yet are excluded and lower confidence instead of the score.'
+  const sevColor = (s: string) => (s === 'critical' ? 'var(--crit)' : s === 'warning' ? 'var(--warn)' : 'var(--text)')
+
   return (
     <Panel
       title="Overall Infrastructure Health"
       icon={Activity}
-      actions={<span className={`badge ${OVERALL_BADGE[o.status] ?? 'badge-unknown'}`} title={tip} style={tip ? { cursor: 'help', textDecoration: 'underline dotted', textUnderlineOffset: 3 } : undefined}>{statusLabel}</span>}
+      actions={<span className={`badge ${OVERALL_BADGE[o.status] ?? 'badge-unknown'}`}>{statusLabel}</span>}
     >
-      <div className="infra-card">
-        <div className="infra-score">
-          {o.confidence === 'unknown'
-            ? <div style={{ fontSize: 40, fontWeight: 800, color: 'var(--text-faint)' }}>—</div>
-            : <HealthRing score={o.score} size={120} label="Score" />}
-          <span className="infra-score-label" title={tip} style={tip ? { cursor: 'help' } : undefined}>{statusLabel}</span>
-        </div>
-        <div className="infra-sections">
-          {data.sections.map((s) => (
-            <div key={s.name} className="infra-sec-row">
-              <span className="muted">{s.name}{!s.included && s.reason ? <small> — {s.reason}</small> : null}</span>
-              <span className={`badge ${SEC_BADGE[s.status] ?? 'badge-unknown'}`}>{s.status === 'unknown' ? 'Not collected' : s.status}</span>
-            </div>
-          ))}
-          <div className="infra-conf">
-            <span className="muted" style={{ fontSize: 12 }}>Confidence:</span>
-            <span className={`badge ${confCls}`} style={{ textTransform: 'capitalize' }}>{o.confidence}</span>
-            {o.confidence === 'limited' && o.limited_reasons.length > 0 && (
-              <span className="infra-reason">Reason: {o.limited_reasons.join('; ')}</span>
-            )}
+      {/* Score + headline + one-line why */}
+      <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
+        {o.confidence === 'unknown'
+          ? <div style={{ fontSize: 40, fontWeight: 800, color: 'var(--text-faint)', width: 120, textAlign: 'center' }}>—</div>
+          : <HealthRing score={o.score} size={110} label="Score" />}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 16, fontWeight: 700 }}>{statusLabel}</div>
+          <div className="muted" style={{ fontSize: 13, marginTop: 2 }}>{o.summary}</div>
+          <div className="muted" style={{ fontSize: 11, marginTop: 6, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            <span title={calcTip} style={{ cursor: 'help', textDecoration: 'underline dotted', textUnderlineOffset: 2 }}>How is this calculated?</span>
+            <span>·</span>
+            <span title={o.confidence_reason} style={{ cursor: 'help' }}>Confidence: <span className={`badge ${confCls}`} style={{ textTransform: 'capitalize' }}>{o.confidence}</span></span>
+            {o.calculated_at && <><span>·</span><span title={new Date(o.calculated_at).toLocaleString()}>calculated {timeAgo(o.calculated_at)}</span></>}
           </div>
         </div>
       </div>
+
+      {/* Section chips — click to drill into the real page/filter */}
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 12 }}>
+        {data.sections.map((s) => (
+          <button key={s.name} className="seg-chip" onClick={() => navigate(s.link)}
+            title={`${s.reason}  (click to open ${s.link})`}
+            style={{ display: 'flex', alignItems: 'center', gap: 6, borderColor: s.status !== 'healthy' && s.included ? SEC_DOT[s.status] : undefined }}>
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: SEC_DOT[s.status] ?? 'var(--text-faint)', display: 'inline-block' }} />
+            {s.name}
+            <span className="muted" style={{ fontSize: 11 }}>{s.included ? s.score : 'n/a'}</span>
+          </button>
+        ))}
+      </div>
+
+      {/* Why needs attention — real reasons for each degraded section */}
+      {problems.length > 0 && (
+        <div style={{ marginTop: 12 }}>
+          <div className="muted" style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4 }}>Why needs attention</div>
+          {problems.map((s) => (
+            <div key={s.name} onClick={() => navigate(s.link)} title={`Open ${s.link}`}
+              style={{ display: 'flex', gap: 8, alignItems: 'baseline', fontSize: 12, padding: '3px 0', cursor: 'pointer' }}>
+              <span style={{ color: SEC_DOT[s.status], fontWeight: 700, minWidth: 92 }}>{s.name}</span>
+              <span>{s.reason}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Top blockers — the real open critical alerts, worst-first, deep-linked */}
+      {drivers.length > 0 && (
+        <div style={{ marginTop: 12 }}>
+          <div className="muted" style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4 }}>Top blockers ({drivers.length})</div>
+          <div style={{ marginTop: 4, maxHeight: 168, overflowY: 'auto' }}>
+            {drivers.map((d, i) => (
+              <Link key={i} to={d.link} title={d.label}
+                style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center', padding: '5px 2px', fontSize: 12, borderBottom: '1px solid var(--border)', color: 'inherit', textDecoration: 'none' }}>
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: sevColor(d.severity), display: 'inline-block', marginRight: 6 }} />
+                  <span className="mono">{d.ip || d.name}</span>
+                  {d.protocol && <span className="muted" style={{ marginLeft: 6 }}>{d.protocol}:{d.port}</span>}
+                  <span className="muted" style={{ marginLeft: 6 }}>{d.section}</span>
+                </span>
+                <span style={{ whiteSpace: 'nowrap', color: sevColor(d.severity) }}>
+                  {d.severity}{d.last_changed ? <span className="muted" style={{ marginLeft: 6 }}>{timeAgo(d.last_changed)}</span> : null}
+                </span>
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Alert hygiene — surfaced, never auto-closed here */}
+      {hyg && hyg.null_check_id_open > 0 && (
+        <div onClick={() => navigate(hyg.link)} title={hyg.note}
+          style={{ marginTop: 10, padding: '6px 8px', borderRadius: 6, background: 'var(--surface-2, rgba(255,180,0,.08))', border: '1px solid var(--warn)', fontSize: 12, cursor: 'pointer', display: 'flex', gap: 8, alignItems: 'center' }}>
+          <span style={{ color: 'var(--warn)' }}>⚠ Alert hygiene</span>
+          <span className="muted">{hyg.null_check_id_open} open alert{hyg.null_check_id_open === 1 ? '' : 's'} with no check linkage →</span>
+        </div>
+      )}
     </Panel>
   )
 }
