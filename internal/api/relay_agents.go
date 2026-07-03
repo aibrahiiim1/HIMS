@@ -710,8 +710,13 @@ func humanAgentCategory(cat string) string {
 	switch cat {
 	case "auth_failed", "authentication_failed":
 		return "authentication rejected — wrong username/password for this host"
-	case "access_denied", "wmi_access_denied":
-		return "authenticated but WMI/DCOM access denied (host-side: grant the account DCOM + WMI rights / UAC remote restrictions / firewall)"
+	case "access_denied":
+		// From WinRM/PSRP: the credential authenticated and the host denied authorization.
+		return "authenticated but access denied (host-side: UAC remote restrictions / DCOM+WMI rights / group membership)"
+	case "wmi_access_denied":
+		// WMI/DCOM 0x80070005 is ambiguous — same code for authz denial AND a wrong local
+		// password, and DCOM never surfaces a distinct logon failure. Don't claim it authenticated.
+		return "WMI/DCOM access denied (0x80070005) — either NOT authorized on this host (UAC LocalAccountTokenFilterPolicy / DCOM rights) OR a wrong local password; DCOM can't tell them apart. Enable WinRM to disambiguate, or verify this host's local admin password."
 	case "namespace_unavailable":
 		return "authenticated but the host's WMI repository is unavailable (host-side: winmgmt /resetrepository, or OS too old)"
 	case "winrm_connect_timeout", "winrm_negotiate_error", "unreachable", "transport_blocked", "rpc_unavailable":

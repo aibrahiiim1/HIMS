@@ -67,7 +67,12 @@ func ClassifyWMIError(err error) (category, detail string) {
 	e := strings.ToLower(err.Error())
 	switch {
 	case strings.Contains(e, "access is denied") || strings.Contains(e, "access denied") || strings.Contains(e, "0x80070005"):
-		return WMIAccessDenied, "authenticated but WMI/DCOM access was denied (DCOM launch/activation or namespace permissions)"
+		// DCOM/RPC returns 0x80070005 "Access is denied" for BOTH a valid-but-unauthorized
+		// credential (UAC LocalAccountTokenFilterPolicy / DCOM / namespace rights) AND a WRONG
+		// local password — it does NOT surface a distinct 0x8007052e logon failure over the
+		// launch path. So over WMI/DCOM alone the two are indistinguishable; only WinRM/PSRP can
+		// tell them apart. Say so honestly instead of asserting the credential authenticated.
+		return WMIAccessDenied, "WMI/DCOM access denied (0x80070005): either NOT AUTHORIZED on this host (UAC LocalAccountTokenFilterPolicy / DCOM / namespace rights) OR a WRONG local password for this host — DCOM cannot distinguish them. Enable WinRM on the host to disambiguate, or verify this host's local admin password."
 	case strings.Contains(e, "logon failure") || strings.Contains(e, "auth") || strings.Contains(e, "0x8007052e") || strings.Contains(e, "bad username or password"):
 		return WMIAuthFailed, "WMI authentication rejected"
 	case strings.Contains(e, "rpc server is unavailable") || strings.Contains(e, "0x800706ba") || strings.Contains(e, "rpc"):

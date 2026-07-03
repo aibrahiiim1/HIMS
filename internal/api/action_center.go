@@ -86,7 +86,7 @@ func (s *Server) actionCenter(w http.ResponseWriter, r *http.Request) {
 	staleQ := def("stale_collection", "Stale collection", "Managed deep-collected hosts with no successful collection recently.", "recollect", "warning", true)
 	relayQ := def("relay_job_failed", "Relay job failed", "Latest agent collection failed and no newer success exists.", "recollect", "warning", true)
 	credQ := def("credential_failed", "Credential failed", "Every applicable credential was cleanly rejected — needs a correct credential.", "credential", "warning", false)
-	authQ := def("not_authorized", "Not authorized (WMI/DCOM)", "A credential authenticates but the host denies WMI/DCOM access — host-side fix.", "host_fix", "warning", false)
+	authQ := def("not_authorized", "Not authorized (WMI/DCOM)", "The host denied access after a credential reached it. Proven over WinRM/PSRP (host authorization/UAC policy); over WMI/DCOM-only it can equally be a wrong local password — DCOM returns \"Access is denied\" for both. Enable WinRM to disambiguate or verify the host's local password.", "host_fix", "warning", false)
 	agentQ := def("needs_agent", "Requires site agent", "Needs a site Relay Agent to collect (legacy WSMan / WMI-DCOM).", "agent", "warning", false)
 	webQ := def("web_authenticated", "Web-authenticated only", "A web/identity credential works but no deep OS/hypervisor collection exists.", "recollect", "info", true)
 	add := func(qq *acQueue, d db.Device, issueKey, reason, rec string) {
@@ -115,7 +115,7 @@ func (s *Server) actionCenter(w http.ResponseWriter, r *http.Request) {
 		case MgmtCredentialFailed:
 			add(credQ, d, "credential_failed", "all applicable credentials rejected", "Update the credential, then Test / Re-collect.")
 		case MgmtNotAuthorized:
-			add(authQ, d, "not_authorized", "authenticated but WMI/DCOM access denied", "Grant the account WMI/DCOM rights on the host (see remediation checklist), then re-scan.")
+			add(authQ, d, "not_authorized", "host denied access (WMI/DCOM 0x80070005 — authz OR wrong local password)", "Enable WinRM on the host (winrm quickconfig) to get a full-token collection and disambiguate; OR set LocalAccountTokenFilterPolicy=1; OR verify this host's local admin password. Then re-scan.")
 		case MgmtNeedsAgent:
 			rec := "Install/assign a Relay Agent to this site."
 			if d.LocationID != nil && maps.anySites[*d.LocationID] {
