@@ -6,7 +6,7 @@ import {
   Radar, Activity, TriangleAlert, RefreshCw, Clock, Boxes, TrendingUp, KeyRound, HeartPulse,
   ShieldCheck, Building2, Layers,
 } from 'lucide-react'
-import { api, type Device, type Alert, type DiscoveryJob, type MonitoringOverviewRow, type MonitoringCheck, type RoleSummaryRow, type ExpenseByCategory, type InfrastructureHealth, type AvailabilityAnalytics, type DeviceUptime, type SiteRollup, type ActionRequired } from '../api'
+import { api, type Device, type Alert, type DiscoveryJob, type MonitoringOverviewRow, type RoleSummaryRow, type ExpenseByCategory, type InfrastructureHealth, type AvailabilityAnalytics, type DeviceUptime, type SiteRollup, type ActionRequired } from '../api'
 import {
   PageHeader, Panel, Kpi, HealthRing, Donut, Legend, BarList, Sparkline, AreaChart,
   ActivityFeed, EmptyState, StatusPill, colorFor, timeAgo, InfoHint,
@@ -209,7 +209,6 @@ export function Dashboard() {
   const [showRisk, setShowRisk] = useState(false)
   const dash = useQuery({ queryKey: ['dashboard'], queryFn: () => api.get<DashboardData>('/dashboard'), refetchInterval: 30_000 })
   const mon = useQuery({ queryKey: ['mon-overview'], queryFn: () => api.get<MonitoringOverviewRow[]>('/monitoring/overview'), refetchInterval: 30_000 })
-  const checks = useQuery({ queryKey: ['mon-checks'], queryFn: () => api.get<MonitoringCheck[]>('/monitoring/checks'), refetchInterval: 30_000 })
   const devices = useQuery({ queryKey: ['devices', 'all'], queryFn: () => api.get<Device[]>('/devices?category=all') })
   const jobs = useQuery({ queryKey: ['discovery-jobs'], queryFn: () => api.get<DiscoveryJob[]>('/discovery/jobs'), refetchInterval: 30_000 })
   const alerts = useQuery({ queryKey: ['alerts'], queryFn: () => api.get<Alert[]>('/alerts'), refetchInterval: 30_000 })
@@ -240,10 +239,6 @@ export function Dashboard() {
   const monMap = new Map((mon.data ?? []).map((r) => [r.status, r.count]))
   const up = monMap.get('up') ?? 0, warning = monMap.get('warning') ?? 0, down = monMap.get('down') ?? 0, unknown = monMap.get('unknown') ?? 0
   const monitored = up + warning + down
-  // Extra (supplemental) checks summary for the Online card footer.
-  const allChecks = checks.data ?? []
-  const extraChecks = allChecks.filter((c) => c.role === 'supplemental')
-  const extraDown = extraChecks.filter((c) => (c.last_status || '').toLowerCase() === 'down').length
   const statusDonut = [
     { label: 'Online', value: up, color: STATUS_DONUT_COLOR.up },
     { label: 'Warning', value: warning, color: STATUS_DONUT_COLOR.warning },
@@ -445,12 +440,9 @@ export function Dashboard() {
           hint={`Devices reachable right now (responding to their monitoring check). Reachability only — not whether HIMS can manage them. Of ${monitored} monitored: ${up} online, ${warning} warning, ${down} offline (${up} + ${warning} + ${down} = ${monitored}).`}
           sub={monitored > 0 ? `${Math.round((up / monitored) * 100)}% of ${monitored} monitored` : 'no checks'}
           onClick={up > 0 ? () => navigate('/inventory?reachability=online') : undefined}
-          footerLeft={extraChecks.length > 0 ? `${extraChecks.length} extra check${extraChecks.length !== 1 ? 's' : ''}` : undefined}
-          footerRight={extraChecks.length > 0
-            ? (extraDown > 0
-                ? <span style={{ color: 'var(--warn)', cursor: 'pointer' }} title="Supplemental (extra) checks currently failing on otherwise-online devices — the device shows as Degraded/Warning, NOT offline. Click to review." onClick={(e) => { e.stopPropagation(); navigate('/inventory?reachability=warning') }}>{extraDown} degraded ›</span>
-                : <span style={{ color: 'var(--ok)' }}>all OK</span>)
-            : undefined}
+          footerRight={warning > 0
+            ? <span style={{ color: 'var(--warn)', cursor: 'pointer' }} title="Reachable but degraded — a supplemental check (e.g. SNMP) is failing while the device still responds. Counted as Warning, NOT offline. Click to review." onClick={(e) => { e.stopPropagation(); navigate('/inventory?reachability=warning') }}>{warning} degraded ›</span>
+            : <span style={{ color: 'var(--ok)' }}>none degraded</span>}
         />
         <Kpi label="Offline" value={down} icon={WifiOff} tone={down > 0 ? 'crit' : 'default'}
           hint="Devices whose monitoring check failed (no response = down/unreachable). Warning/degraded devices are NOT counted here. Click to see them and why."
