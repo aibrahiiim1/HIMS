@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/coralsearesorts/hims/internal/osinv"
@@ -120,5 +122,41 @@ func TestPickHeadlineAttempt_ReachedVerdictBeatsTransient(t *testing.T) {
 	// All transient → falls back to a transient (last/any), never panics.
 	if hl3 := pickHeadlineAttempt([]map[string]any{{"category": "unreachable"}}); hl3 == nil {
 		t.Error("nil headline for single transient")
+	}
+}
+
+// TestWMICollectorReusesDcomSession is a regression guard for the 172.21.210.26 /
+// CHV-CCTV1 failure: the WMI/DCOM collector must use a SINGLE reused CIM/DCOM session
+// (New-CimSession -Protocol Dcom) for every query — including the StdRegProv software
+// reads via Invoke-CimMethod on that session — NOT per-call Get-WmiObject/Invoke-WmiMethod
+// with -ComputerName -Credential, which reconnect+reauthenticate on EVERY call (~4-5s each
+// across a routed subnet). The old per-call software loop issued hundreds of reads, took
+// >10 min cross-VLAN, and was killed by the collection timeout AFTER the core data was
+// gathered — the host was then misreported not_authorized despite a valid credential and
+// working DCOM. The reused session collects the same host in ~20s.
+func TestWMICollectorReusesDcomSession(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	s := string(src)
+	mustContain := []string{
+		`New-CimSession -ComputerName $t -Credential $c -SessionOption (New-CimSessionOption -Protocol Dcom)`,
+		`Invoke-CimMethod -CimSession $sess -Namespace 'root\default' -ClassName StdRegProv`,
+	}
+	for _, p := range mustContain {
+		if !strings.Contains(s, p) {
+			t.Errorf("WMI collector must use the reused DCOM CIM session; missing pattern:\n  %s", p)
+		}
+	}
+	// The per-call anti-patterns that reconnect on every call must NOT return.
+	mustNotContain := []string{
+		`Invoke-WmiMethod -ComputerName $t -Credential $c -Namespace 'root\default'`,
+		`Get-WmiObject -ComputerName $t -Credential $c -Class $cls`,
+	}
+	for _, p := range mustNotContain {
+		if strings.Contains(s, p) {
+			t.Errorf("WMI collector regressed to a per-call (reconnect-per-query) pattern:\n  %s", p)
+		}
 	}
 }

@@ -761,23 +761,29 @@ $c=New-Object System.Management.Automation.PSCredential($u,$p); $t=$env:HIMS_J_T
 # host with WMI/DCOM blocked but WinRM open still inventories. CIM classes match
 # Win32_* property names, so the rest of the script is unchanged.
 $sess=$null
-$probe=$null
-$useCim=$false
+$useCim=$true
+$proto=''
 $dcomErr=''
-try { $probe=Get-WmiObject -ComputerName $t -Credential $c -Class Win32_OperatingSystem -ErrorAction Stop } catch { $sess='cim'; $dcomErr=$_.Exception.Message }
-if($sess -eq 'cim'){
-  $opt=New-CimSessionOption -Protocol Wsman
-  # When the WSMan-CIM fallback ALSO fails (e.g. WinRM disabled — 5985 closed), surface the
-  # REAL primary DCOM/WMI error too. Otherwise the host's actual blocker (e.g. "RPC server
-  # unavailable" = dynamic RPC ports firewalled) is hidden behind the generic CIM-connect
-  # message, mislabeling a DCOM-blocked host as an unreachable/unknown one (the .156 case).
-  try { $sess=New-CimSession -ComputerName $t -Credential $c -SessionOption $opt -OperationTimeoutSec 60 -ErrorAction Stop }
+# Primary: a SINGLE reused CIM/DCOM session (New-CimSession -Protocol Dcom). One
+# authenticated DCOM connection is negotiated once and reused for EVERY query below.
+# The old path used Get-WmiObject / Invoke-WmiMethod with -ComputerName -Credential,
+# which open a FRESH authenticated DCOM connection PER CALL (~4-5s each across a routed
+# subnet). The software inventory alone issues hundreds of StdRegProv reads, so cross-VLAN
+# that blew the 6-min collection timeout and the process was killed AFTER the core data
+# was already gathered — the host was then misreported not_authorized even though DCOM,
+# the credential, and Win32_OperatingSystem all worked (the 172.21.210.26 / CHV-CCTV1 case).
+# A reused session makes every subsequent call a cheap round-trip on the open connection.
+try { $sess=New-CimSession -ComputerName $t -Credential $c -SessionOption (New-CimSessionOption -Protocol Dcom) -OperationTimeoutSec 60 -ErrorAction Stop; $null=Get-CimInstance -CimSession $sess -ClassName Win32_OperatingSystem -ErrorAction Stop; $proto='dcom' }
+catch {
+  $dcomErr=$_.Exception.Message
+  if($sess){ Remove-CimSession $sess -ErrorAction SilentlyContinue; $sess=$null }
+  # Fallback: a WSMan CIM session when DCOM/RPC is blocked but WinRM (5985) is up. Surfacing
+  # the REAL primary DCOM error too keeps a DCOM-blocked host (RPC ports firewalled) from being
+  # mislabeled unreachable behind the generic CIM-connect message (the .156 case).
+  try { $sess=New-CimSession -ComputerName $t -Credential $c -SessionOption (New-CimSessionOption -Protocol Wsman) -OperationTimeoutSec 60 -ErrorAction Stop; $proto='wsman' }
   catch { throw ("wmi/dcom failed [{0}]; wsman-cim fallback failed [{1}]" -f $dcomErr, $_.Exception.Message) }
-  $g={param($cls) Get-CimInstance -CimSession $sess -ClassName $cls -ErrorAction Stop}
-  $useCim=$true
-} else {
-  $g={param($cls) Get-WmiObject -ComputerName $t -Credential $c -Class $cls -ErrorAction Stop}
 }
+$g={param($cls) Get-CimInstance -CimSession $sess -ClassName $cls -ErrorAction Stop}
 $os=&$g Win32_OperatingSystem; $cs=&$g Win32_ComputerSystem; $bios=&$g Win32_BIOS; $cpu=@(&$g Win32_Processor)
 $cores=($cpu|Measure-Object NumberOfCores -Sum).Sum; if(-not $cores){$cores=($cpu|Measure-Object NumberOfLogicalProcessors -Sum).Sum}
 # Disk media (SSD/NVMe/Virtual) over WMI/DCOM: Get-PhysicalDisk is unavailable across this
@@ -817,8 +823,13 @@ $procs=@(); try { $procs=@(&$g Win32_Process | Sort-Object WorkingSetSize -Desce
 #        and then restored to its prior state (never left changed silently).
 $sw=@()
 $swnote=''
+# Never let software inventory dominate the collection budget: the core identity/OS/
+# hardware/services data is already gathered above, so the software step is best-effort
+# and hard-bounded. If it runs long (a huge Uninstall hive, or a slow link), it stops and
+# the report returns with a note instead of the whole collection being killed by timeout.
+$swDeadline=[DateTime]::UtcNow.AddSeconds(120)
 try {
-  if($useCim){
+  if($proto -eq 'wsman'){
     # WSMan path: the host speaks WinRM, so read the Uninstall registry with native
     # PS remoting (Get-ItemProperty runs locally on the target) — more reliable than
     # StdRegProv method-invocation over WSMan on legacy stacks.
@@ -828,16 +839,25 @@ try {
     $sw=@($items|%{@{name=$_.n;version=$_.v;publisher=$_.p;install_date=$_.d}})
     if($sw.Count -gt 0){$swnote='collected via winrm_invoke'}
   } else {
-    # DCOM path: no WinRM, so read the registry remotely via StdRegProv over WMI.
+    # DCOM path: no WinRM, so read the Uninstall hive via StdRegProv over the REUSED
+    # CIM/DCOM session (Invoke-CimMethod on $sess). Reusing the one open session makes each
+    # of the hundreds of registry reads a cheap round-trip — the old Invoke-WmiMethod
+    # -ComputerName -Credential reconnected+reauthenticated on EVERY call (~4-5s each across
+    # a routed subnet), so a full Uninstall hive took >10 min and blew the collection timeout
+    # (172.21.210.26). Same StdRegProv semantics, one connection.
     $HKLM=[uint32]2147483650
-    $ek={param($k) (Invoke-WmiMethod -ComputerName $t -Credential $c -Namespace 'root\default' -Class StdRegProv -Name EnumKey -ArgumentList $HKLM,$k).sNames}
-    $gv={param($k,$v) (Invoke-WmiMethod -ComputerName $t -Credential $c -Namespace 'root\default' -Class StdRegProv -Name GetStringValue -ArgumentList $HKLM,$k,$v).sValue}
+    $ek={param($k) (Invoke-CimMethod -CimSession $sess -Namespace 'root\default' -ClassName StdRegProv -MethodName EnumKey -Arguments @{hDefKey=$HKLM;sSubKeyName=$k} -ErrorAction Stop).sNames}
+    $gv={param($k,$v) (Invoke-CimMethod -CimSession $sess -Namespace 'root\default' -ClassName StdRegProv -MethodName GetStringValue -Arguments @{hDefKey=$HKLM;sSubKeyName=$k;sValueName=$v} -ErrorAction Stop).sValue}
+    $swCapped=$false
     foreach($base in @('SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall','SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall')){
       $subs=&$ek $base
-      if($subs){ foreach($s in $subs){ $kp="$base\$s"; $dn=&$gv $kp 'DisplayName'
+      if($subs){ foreach($s in $subs){
+        if([DateTime]::UtcNow -gt $swDeadline){ $swCapped=$true; break }
+        $kp="$base\$s"; $dn=&$gv $kp 'DisplayName'
         if($dn){ $sw+=@{name=[string]$dn;version=[string](&$gv $kp 'DisplayVersion');publisher=[string](&$gv $kp 'Publisher');install_date=[string](&$gv $kp 'InstallDate')} } } }
+      if($swCapped){ break }
     }
-    if($sw.Count -gt 0){$swnote='collected via wmi_stdregprov'}
+    if($sw.Count -gt 0){$swnote='collected via cim_stdregprov'; if($swCapped){$swnote+=' (partial: 120s cap)'}}
   }
 } catch { $swnote=('inband_failed: '+$_.Exception.Message) }
 # Remote Registry over SMB fallback when the in-band method returned no software.
