@@ -49,3 +49,19 @@ func TestLiveFailedJobs_KeepsGenuineFailures(t *testing.T) {
 		t.Errorf("target-keyed supersede failed: expected 0 live, got %d", n)
 	}
 }
+
+// TestLiveFailedJobs_MixedIdentifiers is the exact 172.21.210.26 regression: a NEW success
+// carries a device_id, but older stale failures for the SAME host IP recorded device_id=NULL
+// (target-only). Marking both device_id AND target on success must supersede all of them.
+func TestLiveFailedJobs_MixedIdentifiers(t *testing.T) {
+	dev := uuid.New()
+	jobs := []db.ListRecentAgentJobsAllRow{
+		{DeviceID: &dev, Target: "172.21.210.26", Status: "done"},   // newest success (has device_id)
+		{DeviceID: &dev, Target: "172.21.210.26", Status: "failed"}, // failure WITH device_id -> superseded
+		{DeviceID: nil, Target: "172.21.210.26", Status: "failed"},  // OLD failure, device_id NULL -> must also be superseded (by target)
+		{DeviceID: nil, Target: "172.21.210.26", Status: "failed"},  // ditto
+	}
+	if n := len(liveFailedJobs(jobs)); n != 0 {
+		t.Fatalf("all .26 failures (device_id AND target-only) must be superseded by the newer success; got %d live", n)
+	}
+}

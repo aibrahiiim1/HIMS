@@ -668,21 +668,27 @@ func (s *Server) dataQuality(w http.ResponseWriter, r *http.Request) {
 // dropped as stale. This keeps a lingering timeout (the 172.21.210.26 case) from being
 // reported as an outstanding failure after the reused-session fix collected the host cleanly.
 func liveFailedJobs(jobs []db.ListRecentAgentJobsAllRow) []db.ListRecentAgentJobsAllRow {
-	succeeded := map[string]bool{}
-	key := func(j db.ListRecentAgentJobsAllRow) string {
-		if j.DeviceID != nil {
-			return "d:" + j.DeviceID.String()
-		}
-		return "t:" + j.Target
-	}
+	// A success must supersede an older failure for the SAME host even when the two jobs
+	// don't carry the same identifier — early jobs recorded no device_id and key only on
+	// target IP, while later jobs carry device_id (the 172.21.210.26 case: the new success
+	// had a device_id but two stale 2026-06-27 failures had device_id=NULL). So mark BOTH
+	// the device_id AND the target on every success, and drop a failure if EITHER matches.
+	succeededDev := map[string]bool{}
+	succeededTgt := map[string]bool{}
 	var out []db.ListRecentAgentJobsAllRow
 	for _, j := range jobs {
-		k := key(j)
 		switch j.Status {
 		case "done", "success":
-			succeeded[k] = true
+			if j.DeviceID != nil {
+				succeededDev[j.DeviceID.String()] = true
+			}
+			if j.Target != "" {
+				succeededTgt[j.Target] = true
+			}
 		case "failed":
-			if !succeeded[k] {
+			superseded := (j.DeviceID != nil && succeededDev[j.DeviceID.String()]) ||
+				(j.Target != "" && succeededTgt[j.Target])
+			if !superseded {
 				out = append(out, j)
 			}
 		}
