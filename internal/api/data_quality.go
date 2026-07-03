@@ -545,12 +545,13 @@ func (s *Server) dataQuality(w http.ResponseWriter, r *http.Request) {
 				for _, a := range agents {
 					name[a.ID] = a.Name
 				}
+				// Drop failures already superseded by a newer successful collection of the
+				// same device (the 172.21.210.26 case) so a stale timeout can't linger as an
+				// outstanding failure after the host is collected cleanly.
+				live := liveFailedJobs(jobs)
 				var jobFails []dqDevice
 				total := 0
-				for _, j := range jobs {
-					if j.Status != "failed" {
-						continue
-					}
+				for _, j := range live {
 					total++
 					if len(jobFails) >= dqSampleCap {
 						continue
@@ -560,7 +561,7 @@ func (s *Server) dataQuality(w http.ResponseWriter, r *http.Request) {
 						Note: strings.TrimSpace(j.Category + " " + truncate(j.Error, 120)),
 					})
 				}
-				addDQ("relay_job_failed", "Relay collection job failed", "Recent Relay Agent collection jobs that failed. Review the cause (credential rejected, target unreachable, or collection error) and retry.", "warning", jobFails, total)
+				addDQ("relay_job_failed", "Relay collection job failed", "Recent Relay Agent collection jobs that failed and have NOT since been collected successfully. Review the cause (credential rejected, target unreachable, or collection error) and retry.", "warning", jobFails, total)
 			}
 		}
 	}
@@ -658,6 +659,35 @@ func (s *Server) dataQuality(w http.ResponseWriter, r *http.Request) {
 		"clean":         clean,
 		"issues":        issues,
 	})
+}
+
+// liveFailedJobs returns the failed relay jobs that have NOT been superseded by a
+// newer successful collection of the SAME device (falling back to target when a job
+// has no device_id). Input MUST be newest-first (created_at DESC, as ListRecentAgentJobsAll
+// returns): a "done"/"success" seen first marks that device, so any older failure for it is
+// dropped as stale. This keeps a lingering timeout (the 172.21.210.26 case) from being
+// reported as an outstanding failure after the reused-session fix collected the host cleanly.
+func liveFailedJobs(jobs []db.ListRecentAgentJobsAllRow) []db.ListRecentAgentJobsAllRow {
+	succeeded := map[string]bool{}
+	key := func(j db.ListRecentAgentJobsAllRow) string {
+		if j.DeviceID != nil {
+			return "d:" + j.DeviceID.String()
+		}
+		return "t:" + j.Target
+	}
+	var out []db.ListRecentAgentJobsAllRow
+	for _, j := range jobs {
+		k := key(j)
+		switch j.Status {
+		case "done", "success":
+			succeeded[k] = true
+		case "failed":
+			if !succeeded[k] {
+				out = append(out, j)
+			}
+		}
+	}
+	return out
 }
 
 func toDQ(d db.Device) dqDevice {
