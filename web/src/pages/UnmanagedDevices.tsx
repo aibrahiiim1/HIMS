@@ -4,6 +4,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { ShieldOff, Pencil, RefreshCw, KeyRound, Boxes, ClipboardList, Undo2 } from 'lucide-react'
 import { api, type Device, MGMT_BADGE } from '../api'
 import { PageHeader, Panel, Kpi, EmptyState, usePaged, Pager, colorFor } from '../components/ui'
+import { useQueryParam, useQueryNum } from '../lib/urlState'
 import { ReachabilityBadge, ManagementBadge } from '../components/StatusBadges'
 import { EditDevice } from '../components/EditDevice'
 import { ExportDevicesButton } from '../components/ExportDevicesButton'
@@ -53,7 +54,10 @@ export function UnmanagedDevices() {
   const [sp, setSp] = useSearchParams()
   const filter = sp.get('management') ?? ''
   const [editDev, setEditDev] = useState<Device | null>(null)
-  const [q, setQ] = useState('')
+  // Search + page in the URL so browser Back restores the exact view.
+  const [q, setQRaw] = useQueryParam('q', '')
+  const [pageNum, setPageNum] = useQueryNum('page', 1)
+  const setQ = (v: string) => { setQRaw(v); setPageNum(1) }
   const qc = useQueryClient()
   const invView = filter === 'inventory_only'
 
@@ -93,7 +97,7 @@ export function UnmanagedDevices() {
     if (t) r = r.filter((d) => d.name.toLowerCase().includes(t) || (d.primary_ip ?? '').includes(t))
     return r
   }, [data, invOnly.data, invView, filter, q])
-  const paged = usePaged(rows, { pageSize: 15 })
+  const paged = usePaged(rows, { pageSize: 15, page: pageNum - 1, onPage: (p) => setPageNum(p + 1) })
   const setFilter = (v: string) => { const n = new URLSearchParams(sp); if (v) n.set('management', v); else n.delete('management'); setSp(n, { replace: true }) }
 
   return (
@@ -123,7 +127,7 @@ export function UnmanagedDevices() {
 
       <Panel title={invView ? 'Inventory only' : 'Unmanaged'} subtitle={invView ? 'Record-and-monitor-only devices — access deliberately opted out (third-party kit, no-credential-by-policy, must-not-probe). Monitored for offline; excluded from access expectations. Un-mark to return one to normal management.' : 'Strict proven-only management. Fix access here; classification problems live under Missing Classification.'} pad={false}>
         <div style={{ padding: '8px 10px' }}>
-          <input placeholder="Filter by name / IP…" value={q} onChange={(e) => { setQ(e.target.value); paged.setPage(0) }} style={{ padding: '6px 10px', fontSize: 13, width: 300, maxWidth: '100%' }} />
+          <input placeholder="Filter by name / IP…" value={q} onChange={(e) => setQ(e.target.value)} style={{ padding: '6px 10px', fontSize: 13, width: 300, maxWidth: '100%' }} />
         </div>
         {(invView ? invOnly.isLoading : isLoading) && <div className="loading">Loading…</div>}
         {invView && !invOnly.isLoading && rows.length === 0 && <EmptyState icon={ClipboardList} title="No inventory-only devices" message="Mark a device inventory-only (from its row here or Edit device) to keep it as a record and monitor it for offline without expecting credentials." />}

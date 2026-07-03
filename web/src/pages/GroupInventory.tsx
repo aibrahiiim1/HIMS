@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom'
 import { Boxes } from 'lucide-react'
 import { api, type Device } from '../api'
 import { PageHeader, Panel, EmptyState, colorFor, usePaged, Pager } from '../components/ui'
+import { useQueryParam, useQueryNum } from '../lib/urlState'
 import { ManagementBadge, ReachabilityBadge } from '../components/StatusBadges'
 import { SummaryCards, type SummaryCard } from '../components/SummaryCards'
 import { ManualClassify } from '../components/ManualClassify'
@@ -47,16 +48,23 @@ export function GroupInventory({ title, subtitle, categories, allowManualClassif
   })
   const all = data ?? []
 
-  const [type, setType] = useState('')
+  // Page + the drill-relevant filters (search, type, management, reachability) live
+  // in the URL so browser Back from a device restores the exact filtered page.
+  const [pageNum, setPageNum] = useQueryNum('page', 1)
+  const [q, setQU] = useQueryParam('q', '')
+  const [type, setTypeU] = useQueryParam('type', '')
+  const [mgmt, setMgmtU] = useQueryParam('mgmt', '')
+  const [reach, setReachU] = useQueryParam('reach', '')
+  const setQ = (v: string) => { setQU(v); setPageNum(1) }
+  const setType = (v: string) => { setTypeU(v); setPageNum(1) }
+  const setMgmt = (v: string) => { setMgmtU(v); setPageNum(1) }
+  const setReach = (v: string) => { setReachU(v); setPageNum(1) }
   const [subtype, setSubtype] = useState('')
   const [vendor, setVendor] = useState('')
-  const [mgmt, setMgmt] = useState('')
   const [site, setSite] = useState('')
   const [proto, setProto] = useState('')
-  const [reach, setReach] = useState('')
   const [credReq, setCredReq] = useState(false)
   const [manualOnly, setManualOnly] = useState(false)
-  const [q, setQ] = useState('')
   const reset = () => { setType(''); setSubtype(''); setVendor(''); setMgmt(''); setSite(''); setProto(''); setReach(''); setCredReq(false); setManualOnly(false) }
 
   const opts = useMemo(() => {
@@ -87,7 +95,7 @@ export function GroupInventory({ title, subtitle, categories, allowManualClassif
         (d.hostname ?? '').toLowerCase().includes(t) || (d.model ?? '').toLowerCase().includes(t)),
     )
   }, [data, type, subtype, vendor, mgmt, site, proto, reach, credReq, manualOnly, q])
-  const paged = usePaged(filtered, { pageSize: 15 })
+  const paged = usePaged(filtered, { pageSize: 15, page: pageNum - 1, onPage: (p) => setPageNum(p + 1) })
 
   // Data-driven, clickable summary cards. Counts come from `all` (the same source as the
   // table), so a card value equals the table count when that card's filter is applied.

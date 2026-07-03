@@ -4,6 +4,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { Boxes, Trash2, Search, Wifi, WifiOff, Server, TriangleAlert, Package, Plus, Ghost } from 'lucide-react'
 import { api, type Device, type Lookup, type Location, locationPaths } from '../api'
 import { PageHeader, Panel, Kpi, BarList, EmptyState, colorFor, usePaged, Pager } from '../components/ui'
+import { useQueryParam, useQueryNum } from '../lib/urlState'
 import { ReachabilityBadge, ManagementBadge } from '../components/StatusBadges'
 import { DeleteAllToggle } from '../components/DeleteAllToggle'
 import { RescanSplit } from '../components/RescanSplit'
@@ -66,10 +67,18 @@ export function Inventory() {
     next.delete('reachability'); next.delete('management')
     setSp(next, { replace: true })
   }
-  const [cat, setCat] = useState('all')
-  const [classF, setClassF] = useState('all')
-  const [locF, setLocF] = useState('all')
-  const [q, setQ] = useState('')
+  // Category / class / location / search / page live in the URL so browser Back
+  // from a device restores the exact filtered page (and the view is shareable).
+  const [cat, setCatRaw] = useQueryParam('cat', 'all')
+  const [classF, setClassFRaw] = useQueryParam('class', 'all')
+  const [locF, setLocFRaw] = useQueryParam('loc', 'all')
+  const [q, setQRaw] = useQueryParam('q', '')
+  const [pageNum, setPageNum] = useQueryNum('page', 1)
+  // Any filter/search change returns to page 1 (URL-synced).
+  const setCat = (v: string) => { setCatRaw(v); setPageNum(1) }
+  const setClassF = (v: string) => { setClassFRaw(v); setPageNum(1) }
+  const setLocF = (v: string) => { setLocFRaw(v); setPageNum(1) }
+  const setQ = (v: string) => { setQRaw(v); setPageNum(1) }
   const [sel, setSel] = useState<Set<string>>(new Set())
   const [editing, setEditing] = useState<Device | null>(null)
   const [msg, setMsg] = useState('')
@@ -126,7 +135,7 @@ export function Inventory() {
   }, [data, cat, classF, locF, q, locPath])
 
   // Paginate the (already-filtered) rows so a 600+ device table stays snappy.
-  const paged = usePaged(rows, { pageSize: 10 })
+  const paged = usePaged(rows, { pageSize: 10, page: pageNum - 1, onPage: (p) => setPageNum(p + 1) })
   const pageRows = paged.slice
 
   const refresh = () => qc.invalidateQueries({ queryKey: ['devices'] })

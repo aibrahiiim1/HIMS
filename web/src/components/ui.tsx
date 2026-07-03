@@ -381,9 +381,14 @@ export function DefList({ items }: { items: { label: string; value: ReactNode }[
 // optional case-insensitive text filter. Heavy collections (services, software,
 // device lists) are fully fetched, so this keeps the DOM small + scrollable
 // without a backend change. Returns the current page slice + Pager props.
-export function usePaged<T>(items: T[], opts?: { pageSize?: number; filter?: string; match?: (it: T, q: string) => boolean }) {
+// Pass opts.page + opts.onPage to make the page CONTROLLED (e.g. mirrored to a URL
+// query param so browser Back restores it). Omit them for the default internal
+// useState behaviour — fully backward compatible with existing callers.
+export function usePaged<T>(items: T[], opts?: { pageSize?: number; filter?: string; match?: (it: T, q: string) => boolean; page?: number; onPage?: (p: number) => void }) {
   const pageSize = opts?.pageSize ?? 10
-  const [page, setPage] = useState(0)
+  const [localPage, setLocalPage] = useState(0)
+  const page = opts?.page ?? localPage
+  const setPage = opts?.onPage ?? setLocalPage
   const q = (opts?.filter ?? '').trim().toLowerCase()
   const filtered = useMemo(() => {
     if (!q || !opts?.match) return items
@@ -391,7 +396,7 @@ export function usePaged<T>(items: T[], opts?: { pageSize?: number; filter?: str
   }, [items, q, opts])
   const total = filtered.length
   const pages = Math.max(1, Math.ceil(total / pageSize))
-  const cur = Math.min(page, pages - 1)
+  const cur = Math.min(Math.max(0, page), pages - 1)
   const slice = filtered.slice(cur * pageSize, cur * pageSize + pageSize)
   return { slice, total, page: cur, pages, pageSize, setPage }
 }

@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom'
 import { Boxes, Wifi, WifiOff, Server, Radar, Pencil } from 'lucide-react'
 import { api, type Device } from '../api'
 import { PageHeader, Panel, Kpi, StatusPill, EmptyState, colorFor, usePaged, Pager } from '../components/ui'
+import { useQueryParam, useQueryNum } from '../lib/urlState'
 import { DeleteAllToggle } from '../components/DeleteAllToggle'
 import { EditDevice } from '../components/EditDevice'
 import { ExportDevicesButton } from '../components/ExportDevicesButton'
@@ -66,14 +67,17 @@ export function DeviceList({ category, title, detailBase, headerExtra, preConten
   const offline = all.filter((d) => isOffline(d.status)).length
   const vendors = useMemo(() => new Set(all.map((d) => d.vendor || 'Unknown')).size, [data])
 
-  const [q, setQ] = useState('')
+  // Search + page live in the URL so browser Back from a device restores them.
+  const [q, setQRaw] = useQueryParam('q', '')
+  const [pageNum, setPageNum] = useQueryNum('page', 1)
+  const setQ = (v: string) => { setQRaw(v); setPageNum(1) }
   const filtered = useMemo(() => {
     const t = q.trim().toLowerCase()
     if (!t) return all
     return all.filter((d) => d.name.toLowerCase().includes(t) || (d.primary_ip ?? '').includes(t) ||
       (d.vendor ?? '').toLowerCase().includes(t) || (d.model ?? '').toLowerCase().includes(t) || (d.hostname ?? '').toLowerCase().includes(t))
   }, [data, q])
-  const paged = usePaged(filtered, { pageSize: 10 })
+  const paged = usePaged(filtered, { pageSize: 10, page: pageNum - 1, onPage: (p) => setPageNum(p + 1) })
 
   return (
     <div>
@@ -112,7 +116,7 @@ export function DeviceList({ category, title, detailBase, headerExtra, preConten
         {data && data.length > 0 && (
           <>
           <div style={{ padding: '8px 10px' }}>
-            <input placeholder="Filter by name / IP / vendor / model…" value={q} onChange={(e) => { setQ(e.target.value); paged.setPage(0) }}
+            <input placeholder="Filter by name / IP / vendor / model…" value={q} onChange={(e) => setQ(e.target.value)}
               style={{ padding: '6px 10px', border: '1px solid #2a3a47', borderRadius: 6, fontSize: 13, width: 320, maxWidth: '100%' }} />
           </div>
           <table className="data-table">

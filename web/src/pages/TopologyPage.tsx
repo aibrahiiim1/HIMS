@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import cytoscape from 'cytoscape'
-import { Network, Cable, RefreshCw, Layers } from 'lucide-react'
-import { api, type TopologyGraph } from '../api'
+import cytoscape, { type Core } from 'cytoscape'
+import { Network, Cable, RefreshCw, Layers, ImageDown, FileDown } from 'lucide-react'
+import { api, saveBlob, type TopologyGraph } from '../api'
 import { PageHeader, Panel, Kpi, EmptyState } from '../components/ui'
 import { LAYER_COLOR, layerColor, CONF_COLOR } from '../components/topologyColors'
+import { topologyPngBlob, topologyPdfBlob, type TopologyExportMeta } from '../lib/topologyExport'
 
 export function TopologyPage() {
   const qc = useQueryClient()
@@ -22,11 +23,42 @@ export function TopologyPage() {
     onError: (e) => setMsg((e as Error).message),
   })
   const ref = useRef<HTMLDivElement>(null)
+  const cyRef = useRef<Core | null>(null)
+  const [exporting, setExporting] = useState<'' | 'png' | 'pdf'>('')
 
   const layers = data?.layers ?? {}
   const nodeCount = data?.nodes.length ?? 0
   const edgeCount = data?.edges.length ?? 0
   const lowConf = useMemo(() => (data?.edges ?? []).filter((e) => e.confidence === 'low').length, [data])
+
+  // Export the ALREADY-RENDERED graph (cy.png of the live instance) — no re-layout,
+  // no synthetic links. Filename: HIMS-topology-<YYYY-MM-DD-HHmm>.<ext>.
+  const exportMap = async (fmt: 'png' | 'pdf') => {
+    const cy = cyRef.current
+    if (!cy || nodeCount === 0) return
+    setExporting(fmt)
+    try {
+      const now = new Date()
+      const pad = (n: number) => String(n).padStart(2, '0')
+      const stampFile = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}`
+      const meta: TopologyExportMeta = {
+        title: 'HIMS — Network Topology',
+        subtitle: `${nodeCount} nodes · ${edgeCount} links${lowConf ? ` · ${lowConf} low-confidence` : ''} · full map`,
+        stamp: now.toLocaleString(),
+        layers,
+        theme: (document.documentElement.getAttribute('data-theme') as 'light' | 'dark') || 'light',
+      }
+      if (fmt === 'png') {
+        saveBlob(await topologyPngBlob(cy, meta), `HIMS-topology-${stampFile}.png`)
+      } else {
+        saveBlob(await topologyPdfBlob(cy, meta), `HIMS-topology-${stampFile}.pdf`)
+      }
+    } catch (e) {
+      setMsg(`Export failed: ${(e as Error).message}`)
+    } finally {
+      setExporting('')
+    }
+  }
 
   useEffect(() => {
     if (!ref.current || !data || data.nodes.length === 0) return
@@ -57,6 +89,7 @@ export function TopologyPage() {
       ],
       layout: { name: 'cose', animate: false, padding: 30 },
     })
+    cyRef.current = cy
     // Device neighborhood: tapping a node highlights it + its direct neighbors.
     cy.on('tap', 'node', (ev) => {
       const node = ev.target
@@ -65,7 +98,7 @@ export function TopologyPage() {
       hood.style('opacity', 1)
     })
     cy.on('tap', (ev) => { if (ev.target === cy) cy.elements().style('opacity', 1) })
-    return () => cy.destroy()
+    return () => { cyRef.current = null; cy.destroy() }
   }, [data])
 
   const hasData = nodeCount > 0
@@ -76,9 +109,19 @@ export function TopologyPage() {
         title="Network Topology" icon={Network}
         subtitle="Layer-aware map from LLDP/CDP — core/distribution/access detection, link confidence, auto stale-pruning"
         actions={
-          <button className="btn btn-primary" disabled={rebuild.isPending} onClick={() => rebuild.mutate()}>
-            <RefreshCw size={15} className={rebuild.isPending ? 'spin' : ''} /> {rebuild.isPending ? 'Rebuilding…' : 'Rebuild links'}
-          </button>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button className="btn btn-ghost" disabled={!hasData || exporting !== ''} onClick={() => exportMap('png')}
+              title="Export the full network map as a PNG image (title, timestamp + legend included)">
+              <ImageDown size={15} /> {exporting === 'png' ? 'Exporting…' : 'PNG'}
+            </button>
+            <button className="btn btn-ghost" disabled={!hasData || exporting !== ''} onClick={() => exportMap('pdf')}
+              title="Export the full network map as a PDF for sharing/reports">
+              <FileDown size={15} /> {exporting === 'pdf' ? 'Exporting…' : 'PDF'}
+            </button>
+            <button className="btn btn-primary" disabled={rebuild.isPending} onClick={() => rebuild.mutate()}>
+              <RefreshCw size={15} className={rebuild.isPending ? 'spin' : ''} /> {rebuild.isPending ? 'Rebuilding…' : 'Rebuild links'}
+            </button>
+          </div>
         }
       />
       {msg && <div className="enc-banner info" style={{ marginBottom: 12 }}>{msg}</div>}

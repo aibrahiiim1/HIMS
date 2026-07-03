@@ -442,18 +442,23 @@ export function Dashboard() {
           value={up}
           icon={Wifi}
           tone="ok"
-          hint="Devices responding to their monitoring check right now. 'Online' is about reachability, not whether HIMS can manage them."
-          sub={monitored > 0 ? `${Math.round((up / monitored) * 100)}% of monitored` : 'no checks'}
+          hint={`Devices reachable right now (responding to their monitoring check). Reachability only — not whether HIMS can manage them. Of ${monitored} monitored: ${up} online, ${warning} warning, ${down} offline (${up} + ${warning} + ${down} = ${monitored}).`}
+          sub={monitored > 0 ? `${Math.round((up / monitored) * 100)}% of ${monitored} monitored` : 'no checks'}
+          onClick={up > 0 ? () => navigate('/inventory?reachability=online') : undefined}
           footerLeft={extraChecks.length > 0 ? `${extraChecks.length} extra check${extraChecks.length !== 1 ? 's' : ''}` : undefined}
           footerRight={extraChecks.length > 0
             ? (extraDown > 0
-                ? <span style={{ color: 'var(--crit)', cursor: 'pointer' }} title="Extra checks currently offline — the devices show as Degraded, not offline" onClick={() => navigate('/inventory?reachability=warning')}>{extraDown} offline ›</span>
+                ? <span style={{ color: 'var(--warn)', cursor: 'pointer' }} title="Supplemental (extra) checks currently failing on otherwise-online devices — the device shows as Degraded/Warning, NOT offline. Click to review." onClick={(e) => { e.stopPropagation(); navigate('/inventory?reachability=warning') }}>{extraDown} degraded ›</span>
                 : <span style={{ color: 'var(--ok)' }}>all OK</span>)
             : undefined}
         />
         <Kpi label="Offline" value={down} icon={WifiOff} tone={down > 0 ? 'crit' : 'default'}
-          hint="Devices whose monitoring check failed (no response). Click to see them and why."
-          sub={down > 0 ? 'view offline →' : (warning > 0 ? `${warning} warning` : 'all clear')} onClick={down > 0 ? () => navigate('/inventory?reachability=offline') : undefined} />
+          hint="Devices whose monitoring check failed (no response = down/unreachable). Warning/degraded devices are NOT counted here. Click to see them and why."
+          sub={down > 0 ? 'view offline →' : 'all reachable'}
+          onClick={down > 0 ? () => navigate('/inventory?reachability=offline') : undefined}
+          footerRight={warning > 0
+            ? <span style={{ color: 'var(--warn)', cursor: 'pointer' }} title="Devices reachable but degraded (a check is failing / high latency). Separate from offline. Click to review." onClick={(e) => { e.stopPropagation(); navigate('/inventory?reachability=warning') }}>{warning} warning ›</span>
+            : undefined} />
         <Kpi label="Active Alerts" value={h.open_alerts ?? 0} icon={Bell} tone={(h.open_alerts ?? 0) > 0 ? 'crit' : 'default'}
           hint="Open, unresolved alerts (critical or warning) that need a look — outages, stale collection, low disk, etc."
           sub="unresolved" onClick={(h.open_alerts ?? 0) > 0 ? () => navigate('/alerts') : undefined} />
