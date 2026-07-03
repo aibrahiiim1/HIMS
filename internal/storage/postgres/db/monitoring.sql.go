@@ -34,6 +34,27 @@ func (q *Queries) DeleteMonitoringCheck(ctx context.Context, id uuid.UUID) error
 	return err
 }
 
+const deleteSupplementalSNMPForSVIGateways = `-- name: DeleteSupplementalSNMPForSVIGateways :execrows
+DELETE FROM monitoring_checks m
+USING device_facts f
+WHERE m.device_id = f.device_id
+  AND f.key = 'svi.gateway_of'
+  AND m.kind = 'snmp'
+  AND m.role = 'supplemental'
+`
+
+// Remove any DIRECT SNMP supplemental check seeded against a VLAN-gateway/SVI IP
+// while it was treated as a standalone switch. SNMP health for an SVI comes from
+// the owning switch's collection (ipAddrTable/interface/VLAN evidence), never a
+// direct poll of the gateway IP — so such a check must not exist or degrade it.
+func (q *Queries) DeleteSupplementalSNMPForSVIGateways(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteSupplementalSNMPForSVIGateways)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getMonitoringCheck = `-- name: GetMonitoringCheck :one
 SELECT id, device_id, kind, target_port, oid, interval_seconds, down_threshold, enabled, last_run_at, last_status, last_latency_ms, consecutive_failures, created_at, updated_at, role FROM monitoring_checks WHERE id = $1
 `
@@ -129,7 +150,8 @@ func (q *Queries) ListDevicesNeedingDefaultCheck(ctx context.Context) ([]ListDev
 }
 
 const listDevicesNeedingSNMPHealthCheck = `-- name: ListDevicesNeedingSNMPHealthCheck :many
-SELECT d.id, d.primary_ip, d.category
+SELECT d.id, d.primary_ip, d.category,
+  EXISTS (SELECT 1 FROM device_facts f WHERE f.device_id = d.id AND f.key = 'svi.gateway_of') AS is_svi_gateway
 FROM devices d
 JOIN credentials c ON c.id = d.credential_id
 WHERE d.deleted_at IS NULL
@@ -141,16 +163,19 @@ LIMIT 2000
 `
 
 type ListDevicesNeedingSNMPHealthCheckRow struct {
-	ID        uuid.UUID   `json:"id"`
-	PrimaryIp *netip.Addr `json:"primary_ip"`
-	Category  string      `json:"category"`
+	ID           uuid.UUID   `json:"id"`
+	PrimaryIp    *netip.Addr `json:"primary_ip"`
+	Category     string      `json:"category"`
+	IsSviGateway bool        `json:"is_svi_gateway"`
 }
 
 // SNMP-managed infrastructure (category in the arg list) with a BOUND SNMP
 // credential but no SNMP check yet. The seeder adds a SUPPLEMENTAL sysUpTime
 // check for each — real SNMP-layer health that degrades to "warning" (never
 // offline) and authenticates with the device's own credential, so it can never
-// raise a false-down alert.
+// raise a false-down alert. is_svi_gateway flags a VLAN-gateway/SVI IP (attributed
+// to an owning switch); the seeder SKIPS those — SNMP belongs to the owning switch's
+// management IP, not the gateway IP, so a direct poll there is not real health.
 func (q *Queries) ListDevicesNeedingSNMPHealthCheck(ctx context.Context, categories []string) ([]ListDevicesNeedingSNMPHealthCheckRow, error) {
 	rows, err := q.db.Query(ctx, listDevicesNeedingSNMPHealthCheck, categories)
 	if err != nil {
@@ -160,7 +185,12 @@ func (q *Queries) ListDevicesNeedingSNMPHealthCheck(ctx context.Context, categor
 	items := []ListDevicesNeedingSNMPHealthCheckRow{}
 	for rows.Next() {
 		var i ListDevicesNeedingSNMPHealthCheckRow
-		if err := rows.Scan(&i.ID, &i.PrimaryIp, &i.Category); err != nil {
+		if err := rows.Scan(
+			&i.ID,
+			&i.PrimaryIp,
+			&i.Category,
+			&i.IsSviGateway,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

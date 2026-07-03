@@ -31,6 +31,7 @@ type Repo interface {
 	UpsertMonitoringCheck(ctx context.Context, arg db.UpsertMonitoringCheckParams) (db.MonitoringCheck, error)
 	ListDevicesNeedingSNMPHealthCheck(ctx context.Context, categories []string) ([]db.ListDevicesNeedingSNMPHealthCheckRow, error)
 	UpsertSupplementalSNMPCheck(ctx context.Context, arg db.UpsertSupplementalSNMPCheckParams) (db.MonitoringCheck, error)
+	DeleteSupplementalSNMPForSVIGateways(ctx context.Context) (int64, error)
 	GetCredential(ctx context.Context, id uuid.UUID) (db.Credential, error)
 }
 
@@ -109,6 +110,15 @@ var SNMPHealthCategories = []string{"switch", "router", "firewall", "ups", "prin
 // "warning" — it NEVER flips it offline. It authenticates with the device's own
 // bound credential, so it cannot raise a false-down alert. Idempotent.
 func (e *Engine) SeedSNMPHealthChecks(ctx context.Context) (int, error) {
+	// First remove any direct SNMP supplemental check on a VLAN-gateway/SVI IP —
+	// SNMP health for an SVI comes from the owning switch, never a direct poll of
+	// the gateway IP. Self-healing: it undoes checks seeded before this guard AND,
+	// combined with the is_svi_gateway skip below, they are never recreated.
+	if removed, err := e.repo.DeleteSupplementalSNMPForSVIGateways(ctx); err != nil {
+		e.log.Warn("svi supplemental snmp cleanup failed", "error", err)
+	} else if removed > 0 {
+		e.log.Info("removed direct SNMP checks on SVI gateway IPs", "count", removed)
+	}
 	rows, err := e.repo.ListDevicesNeedingSNMPHealthCheck(ctx, SNMPHealthCategories)
 	if err != nil {
 		return 0, err
@@ -116,6 +126,11 @@ func (e *Engine) SeedSNMPHealthChecks(ctx context.Context) (int, error) {
 	oid := SysUpTimeOID
 	n := 0
 	for _, d := range rows {
+		// A VLAN-gateway/SVI IP is not a standalone SNMP host — skip it. (Belt-and-
+		// suspenders on top of the cleanup so a re-seed after cleanup never re-adds it.)
+		if d.IsSviGateway {
+			continue
+		}
 		if _, err := e.repo.UpsertSupplementalSNMPCheck(ctx, db.UpsertSupplementalSNMPCheckParams{
 			DeviceID: d.ID, Oid: &oid, IntervalSeconds: 120, DownThreshold: 2,
 		}); err != nil {

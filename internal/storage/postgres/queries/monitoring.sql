@@ -115,8 +115,11 @@ LIMIT 1000;
 -- credential but no SNMP check yet. The seeder adds a SUPPLEMENTAL sysUpTime
 -- check for each — real SNMP-layer health that degrades to "warning" (never
 -- offline) and authenticates with the device's own credential, so it can never
--- raise a false-down alert.
-SELECT d.id, d.primary_ip, d.category
+-- raise a false-down alert. is_svi_gateway flags a VLAN-gateway/SVI IP (attributed
+-- to an owning switch); the seeder SKIPS those — SNMP belongs to the owning switch's
+-- management IP, not the gateway IP, so a direct poll there is not real health.
+SELECT d.id, d.primary_ip, d.category,
+  EXISTS (SELECT 1 FROM device_facts f WHERE f.device_id = d.id AND f.key = 'svi.gateway_of') AS is_svi_gateway
 FROM devices d
 JOIN credentials c ON c.id = d.credential_id
 WHERE d.deleted_at IS NULL
@@ -125,6 +128,18 @@ WHERE d.deleted_at IS NULL
   AND d.category = ANY(@categories::text[])
   AND NOT EXISTS (SELECT 1 FROM monitoring_checks m WHERE m.device_id = d.id AND m.kind = 'snmp')
 LIMIT 2000;
+
+-- name: DeleteSupplementalSNMPForSVIGateways :execrows
+-- Remove any DIRECT SNMP supplemental check seeded against a VLAN-gateway/SVI IP
+-- while it was treated as a standalone switch. SNMP health for an SVI comes from
+-- the owning switch's collection (ipAddrTable/interface/VLAN evidence), never a
+-- direct poll of the gateway IP — so such a check must not exist or degrade it.
+DELETE FROM monitoring_checks m
+USING device_facts f
+WHERE m.device_id = f.device_id
+  AND f.key = 'svi.gateway_of'
+  AND m.kind = 'snmp'
+  AND m.role = 'supplemental';
 
 -- name: UpsertSupplementalSNMPCheck :one
 -- Register a SUPPLEMENTAL SNMP sysUpTime health check (role=supplemental → it

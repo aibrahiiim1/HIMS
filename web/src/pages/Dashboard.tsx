@@ -239,10 +239,17 @@ export function Dashboard() {
   const monMap = new Map((mon.data ?? []).map((r) => [r.status, r.count]))
   const up = monMap.get('up') ?? 0, warning = monMap.get('warning') ?? 0, down = monMap.get('down') ?? 0, unknown = monMap.get('unknown') ?? 0
   const monitored = up + warning + down
+  // Reachability model: a device is REACHABLE (online) when its primary reachability
+  // check is up — this INCLUDES degraded devices (reachable, but a supplemental check
+  // like SNMP is failing). Degraded ("warning") is an overlay/subset of reachable, never
+  // a third bucket. Offline = primary reachability down. So Total = Reachable + Offline + Unknown.
+  const reachable = up + warning // primary reachability UP (healthy + degraded)
+  const degraded = warning // subset of reachable
+  const offline = down
   const statusDonut = [
-    { label: 'Online', value: up, color: STATUS_DONUT_COLOR.up },
-    { label: 'Warning', value: warning, color: STATUS_DONUT_COLOR.warning },
-    { label: 'Offline', value: down, color: STATUS_DONUT_COLOR.down },
+    { label: 'Online (healthy)', value: up, color: STATUS_DONUT_COLOR.up },
+    { label: 'Degraded (reachable)', value: degraded, color: STATUS_DONUT_COLOR.warning },
+    { label: 'Offline', value: offline, color: STATUS_DONUT_COLOR.down },
     { label: 'Unknown', value: unknown, color: STATUS_DONUT_COLOR.unknown },
   ].filter((d) => d.value > 0)
 
@@ -434,23 +441,20 @@ export function Dashboard() {
           footerRight={manageable > 0 ? <span style={{ color: 'var(--ok)' }}>{managed.toLocaleString()} managed</span> : undefined} />
         <Kpi
           label="Online"
-          value={up}
+          value={reachable}
           icon={Wifi}
           tone="ok"
-          hint={`Devices reachable right now (responding to their monitoring check). Reachability only — not whether HIMS can manage them. Of ${monitored} monitored: ${up} online, ${warning} warning, ${down} offline (${up} + ${warning} + ${down} = ${monitored}).`}
-          sub={monitored > 0 ? `${Math.round((up / monitored) * 100)}% of ${monitored} monitored` : 'no checks'}
-          onClick={up > 0 ? () => navigate('/inventory?reachability=online') : undefined}
-          footerRight={warning > 0
-            ? <span style={{ color: 'var(--warn)', cursor: 'pointer' }} title="Reachable but degraded — a supplemental check (e.g. SNMP) is failing while the device still responds. Counted as Warning, NOT offline. Click to review." onClick={(e) => { e.stopPropagation(); navigate('/inventory?reachability=warning') }}>{warning} degraded ›</span>
+          hint={`Reachable = the device's PRIMARY reachability check is UP. This INCLUDES ${degraded} degraded (reachable, but a supplemental check such as SNMP is failing). Degraded is a subset of Online, not a separate state. Of ${monitored} monitored: ${reachable} reachable (incl. ${degraded} degraded) + ${offline} offline = ${monitored}.`}
+          sub={degraded > 0 ? `reachable · includes ${degraded} degraded` : 'reachable · all healthy'}
+          onClick={reachable > 0 ? () => navigate('/inventory?reachability=reachable') : undefined}
+          footerRight={degraded > 0
+            ? <span style={{ color: 'var(--warn)', cursor: 'pointer' }} title="Degraded means the device is reachable, but a supplemental check such as SNMP is failing. It still counts as Online. Click to review these devices." onClick={(e) => { e.stopPropagation(); navigate('/inventory?reachability=warning') }}>{degraded} degraded monitoring ›</span>
             : <span style={{ color: 'var(--ok)' }}>none degraded</span>}
         />
-        <Kpi label="Offline" value={down} icon={WifiOff} tone={down > 0 ? 'crit' : 'default'}
-          hint="Devices whose monitoring check failed (no response = down/unreachable). Warning/degraded devices are NOT counted here. Click to see them and why."
-          sub={down > 0 ? 'view offline →' : 'all reachable'}
-          onClick={down > 0 ? () => navigate('/inventory?reachability=offline') : undefined}
-          footerRight={warning > 0
-            ? <span style={{ color: 'var(--warn)', cursor: 'pointer' }} title="Devices reachable but degraded (a check is failing / high latency). Separate from offline. Click to review." onClick={(e) => { e.stopPropagation(); navigate('/inventory?reachability=warning') }}>{warning} warning ›</span>
-            : undefined} />
+        <Kpi label="Offline" value={offline} icon={WifiOff} tone={offline > 0 ? 'crit' : 'default'}
+          hint="Unreachable — the device's PRIMARY reachability check is DOWN (no response). Degraded devices (reachable with a failing supplemental check) are NOT counted here — they're under Online. Click to see the offline devices and why."
+          sub={offline > 0 ? 'unreachable · view →' : 'none unreachable'}
+          onClick={offline > 0 ? () => navigate('/inventory?reachability=offline') : undefined} />
         <Kpi label="Active Alerts" value={h.open_alerts ?? 0} icon={Bell} tone={(h.open_alerts ?? 0) > 0 ? 'crit' : 'default'}
           hint="Open, unresolved alerts (critical or warning) that need a look — outages, stale collection, low disk, etc."
           sub="unresolved" onClick={(h.open_alerts ?? 0) > 0 ? () => navigate('/alerts') : undefined} />
@@ -472,7 +476,7 @@ export function Dashboard() {
       <div className="grid-2" style={{ alignItems: 'stretch' }}>
         <div className="stack"><ManagementAccessCoverage /></div>
         <div className="stack">
-          <Panel title="Live Fleet Health" icon={HeartPulse} subtitle="status of every monitored device right now">
+          <Panel title="Live Fleet Health" icon={HeartPulse} subtitle={`reachable ${reachable} (${up} healthy + ${degraded} degraded) · offline ${offline} · of ${monitored} monitored`}>
             {statusDonut.length > 0 ? (
               <div className="row" style={{ alignItems: 'center', gap: 18, flexWrap: 'wrap' }}>
                 <Donut data={statusDonut} centerValue={monitored} centerLabel="monitored" size={128} thickness={15} rounded />

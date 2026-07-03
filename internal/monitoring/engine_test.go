@@ -28,6 +28,8 @@ type fakeRepo struct {
 	needSNMP    []db.ListDevicesNeedingSNMPHealthCheckRow
 	snmpUpserts []db.UpsertSupplementalSNMPCheckParams
 	creds       map[uuid.UUID]db.Credential
+	sviCleanups int
+	sviRemoved  int64
 }
 
 func (f *fakeRepo) ListDueMonitoringChecks(context.Context) ([]db.MonitoringCheck, error) {
@@ -78,6 +80,10 @@ func (f *fakeRepo) ListDevicesNeedingSNMPHealthCheck(context.Context, []string) 
 func (f *fakeRepo) UpsertSupplementalSNMPCheck(_ context.Context, arg db.UpsertSupplementalSNMPCheckParams) (db.MonitoringCheck, error) {
 	f.snmpUpserts = append(f.snmpUpserts, arg)
 	return db.MonitoringCheck{}, nil
+}
+func (f *fakeRepo) DeleteSupplementalSNMPForSVIGateways(context.Context) (int64, error) {
+	f.sviCleanups++
+	return f.sviRemoved, nil
 }
 func (f *fakeRepo) GetCredential(_ context.Context, id uuid.UUID) (db.Credential, error) {
 	if c, ok := f.creds[id]; ok {
@@ -214,6 +220,41 @@ func TestSeedSNMPHealthChecks(t *testing.T) {
 	}
 	if f.snmpUpserts[0].Oid == nil || *f.snmpUpserts[0].Oid != SysUpTimeOID {
 		t.Fatalf("snmp check OID = %v; want sysUpTime", f.snmpUpserts[0].Oid)
+	}
+}
+
+// TestSeedSNMPHealthChecks_SkipsSVIGateway is the regression for 172.21.210.250:
+// a VLAN-gateway/SVI IP (category switch, but attributed to an owning switch) must
+// NEVER get a direct SNMP supplemental check — SNMP lives on the owning switch's
+// management IP. The seeder must (a) run the SVI cleanup and (b) skip is_svi_gateway
+// rows so a re-seed after cleanup can't recreate the check.
+func TestSeedSNMPHealthChecks_SkipsSVIGateway(t *testing.T) {
+	normal, svi := uuid.New(), uuid.New()
+	f := &fakeRepo{
+		sviRemoved: 1, // pretend one stale SVI check existed and was cleaned up
+		needSNMP: []db.ListDevicesNeedingSNMPHealthCheckRow{
+			{ID: normal, Category: "switch", IsSviGateway: false},
+			{ID: svi, Category: "switch", IsSviGateway: true},
+		},
+	}
+	e := NewEngine(f, NewPoller(nil, time.Second), nil)
+	n, err := e.SeedSNMPHealthChecks(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.sviCleanups != 1 {
+		t.Fatalf("SVI cleanup called %d times; want exactly 1", f.sviCleanups)
+	}
+	if n != 1 || len(f.snmpUpserts) != 1 {
+		t.Fatalf("seeded %d checks (%d upserts); want exactly 1 (the non-SVI switch)", n, len(f.snmpUpserts))
+	}
+	if f.snmpUpserts[0].DeviceID != normal {
+		t.Fatalf("seeded the wrong device: got %v, want the non-SVI %v", f.snmpUpserts[0].DeviceID, normal)
+	}
+	for _, u := range f.snmpUpserts {
+		if u.DeviceID == svi {
+			t.Fatalf("SVI gateway %v must NOT get a direct SNMP supplemental check", svi)
+		}
 	}
 }
 

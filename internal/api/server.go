@@ -616,6 +616,18 @@ func (s *Server) serveSPA(w http.ResponseWriter, r *http.Request) {
 
 // ---- Device handlers --------------------------------------------------------
 
+// reachabilityMatchesFilter matches a device's reachability against a filter value.
+// "reachable" is a meta-value = online OR warning: a degraded device (reachable, but a
+// supplemental check is failing) is a SUBSET of reachable, not a third state. It backs the
+// dashboard "Online / reachable" drill-down so its count matches the card (which includes
+// degraded). Any other value ("online", "offline", "warning", "unknown") is an exact match.
+func reachabilityMatchesFilter(filter, reach string) bool {
+	if filter == "reachable" {
+		return reach == "online" || reach == "warning"
+	}
+	return reach == filter
+}
+
 func (s *Server) listDevices(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	q := r.URL.Query()
@@ -701,7 +713,7 @@ func (s *Server) listDevices(w http.ResponseWriter, r *http.Request) {
 	if reachFilter != "" || mgmtFilter != "" {
 		filtered := enriched[:0]
 		for _, d := range enriched {
-			if reachFilter != "" && d.Reachability != reachFilter {
+			if reachFilter != "" && !reachabilityMatchesFilter(reachFilter, d.Reachability) {
 				continue
 			}
 			// `not_managed` is a meta-value: any management state except managed.

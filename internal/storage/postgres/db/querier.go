@@ -233,6 +233,11 @@ type Querier interface {
 	DeleteStaleWirelessRadios(ctx context.Context, arg DeleteStaleWirelessRadiosParams) error
 	DeleteStaleWirelessSSIDs(ctx context.Context, arg DeleteStaleWirelessSSIDsParams) error
 	DeleteSubnet(ctx context.Context, id uuid.UUID) error
+	// Remove any DIRECT SNMP supplemental check seeded against a VLAN-gateway/SVI IP
+	// while it was treated as a standalone switch. SNMP health for an SVI comes from
+	// the owning switch's collection (ipAddrTable/interface/VLAN evidence), never a
+	// direct poll of the gateway IP — so such a check must not exist or degrade it.
+	DeleteSupplementalSNMPForSVIGateways(ctx context.Context) (int64, error)
 	DeleteSystem(ctx context.Context, id uuid.UUID) error
 	DeleteUser(ctx context.Context, id uuid.UUID) error
 	DeleteUserSessions(ctx context.Context, userID uuid.UUID) error
@@ -532,7 +537,9 @@ type Querier interface {
 	// credential but no SNMP check yet. The seeder adds a SUPPLEMENTAL sysUpTime
 	// check for each — real SNMP-layer health that degrades to "warning" (never
 	// offline) and authenticates with the device's own credential, so it can never
-	// raise a false-down alert.
+	// raise a false-down alert. is_svi_gateway flags a VLAN-gateway/SVI IP (attributed
+	// to an owning switch); the seeder SKIPS those — SNMP belongs to the owning switch's
+	// management IP, not the gateway IP, so a direct poll there is not real health.
 	ListDevicesNeedingSNMPHealthCheck(ctx context.Context, categories []string) ([]ListDevicesNeedingSNMPHealthCheckRow, error)
 	// Device ids with an in-flight collect_os job (queued or dispatched). Feeds the
 	// pending_collection management state so an in-flight host is not misreported as a
