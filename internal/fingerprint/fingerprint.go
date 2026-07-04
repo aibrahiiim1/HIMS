@@ -452,7 +452,9 @@ func Library() []Print {
 		// --- Open ports (weak, last-resort signals) ---
 		p(KindPort, "9100", "Generic", "printer", 55),
 		p(KindPort, "554", "Generic", "camera", 50),
-		p(KindPort, "5060", "Generic", "voip", 50),
+		// NB: no bare-5060 fingerprint — a Windows PC running a softphone also opens 5060, so
+		// port-5060 classification lives in classify.OpenPorts where it is guarded against
+		// Windows mgmt ports (a pure SIP phone → ip_phone; a PC with a softphone stays a PC).
 
 		// ============================================================
 		// Phase 4 — Network & firewall pack (SC1)

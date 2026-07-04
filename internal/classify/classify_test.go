@@ -213,9 +213,19 @@ func TestEvidenceSortedStrongestFirst(t *testing.T) {
 // devices: SIP phones (only 5060), NAS appliances (NFS/QNAP), and the OmniPCX telnet
 // banner NOT overriding a Windows management PC.
 func TestClassify_SIPPhone(t *testing.T) {
-	got := catOf(OpenPorts([]int{5060}))
-	if got != "ip_phone" {
+	// A bare SIP host (only 5060) is a phone.
+	if got := catOf(OpenPorts([]int{5060})); got != "ip_phone" {
 		t.Errorf("a SIP-only host (5060) must classify as ip_phone; got %q", got)
+	}
+	// A Windows PC running a softphone (5060 + RPC/SMB/RDP) is a workstation, NOT a phone —
+	// the SIP hint is suppressed so the Windows evidence wins.
+	for _, e := range OpenPorts([]int{135, 445, 3389, 5060}) {
+		if e.Category == "ip_phone" {
+			t.Errorf("a Windows host with a softphone must NOT be ip_phone; got SIP evidence %+v", e)
+		}
+	}
+	if got := catOf(OpenPorts([]int{135, 445, 3389, 5060})); got != "endpoint" {
+		t.Errorf("Windows+softphone should land on endpoint; got %q", got)
 	}
 }
 

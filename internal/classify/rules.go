@@ -205,10 +205,11 @@ func OpenPorts(tcp []int) []domain.ClassificationEvidence {
 	}
 	// SIP signalling — an IP phone / voice endpoint (Alcatel, Cisco, Yealink, Grandstream…).
 	// Many SIP phones expose ONLY 5060 (no web/SSH), so without this rule they answer no
-	// scanned port and are never enrolled. Weak on its own (a PBX/voice gateway also speaks
-	// SIP), so keep the confidence modest — a Windows/RPC surface or a PBX web marker outranks it.
-	if has[5060] || has[5061] {
-		out = append(out, ev(domain.EvidenceSourcePort, "tcp/5060 (SIP)", string(domain.CatIPPhone), domain.OSFamilyEmbedded, "", 50))
+	// scanned port and are never enrolled. Guarded against a Windows/RPC surface: a PC running
+	// a SOFTPHONE also opens 5060 but is a workstation, not a phone — let the Windows evidence win.
+	winMgmt := has[135] || has[445] || has[3389] || has[5985] || has[5986]
+	if (has[5060] || has[5061]) && !winMgmt {
+		out = append(out, ev(domain.EvidenceSourcePort, "tcp/5060 (SIP)", string(domain.CatIPPhone), domain.OSFamilyEmbedded, "", 55))
 	}
 	// NFS export (2049, usually with the 111 portmapper) is a file-serving / NAS signal.
 	// A device exposing NFS — especially alongside SMB + a web admin UI — is storage

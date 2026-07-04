@@ -293,7 +293,7 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 	// 902 = VMware ESXi vpxa/authd host-agent port — near-unique to ESXi, so probing it lets
 	// classification detect ESXi (→ virtual_host) even when the host's web banner does not
 	// advertise vmware/esxi, which is what routes vSphere/vendor_api collection automatically.
-	ports := []int{22, 23, 53, 80, 88, 135, 161, 389, 443, 445, 554, 636, 902, 1433, 1521, 3389, 5060, 5061, 5432, 5985, 5986, 8000, 8008, 8010, 8080, 8443, 9100}
+	ports := []int{22, 23, 53, 80, 88, 111, 135, 161, 389, 443, 445, 554, 636, 902, 1433, 1521, 2049, 3389, 5060, 5061, 5432, 5985, 5986, 8000, 8008, 8010, 8080, 8443, 9100}
 	// Hikvision/CCTV convention: a recorder/camera's web/ISAPI port is commonly
 	// 8000 + the host's last octet (.2 -> 8002, .15 -> 8015). Probe it per-host so
 	// these recorders are discovered automatically — the operator never has to
@@ -395,6 +395,13 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 	// Redfish credential. Gated to 443/80 so it adds at most one cheap GET.
 	if hasPortN(r.OpenPorts, 443) || hasPortN(r.OpenPorts, 80) {
 		probeRedfish(ctx, ip, &r, cfg.PortTimeout)
+	}
+	// Step 2b-qnap: one cheap GET of the QNAP QTS authLogin.cgi. Every QNAP NAS serves a
+	// <QDocRoot> XML there even pre-login — a definitive marker the generic "/" banner
+	// misses (QTS root is a JS redirect). On a hit it seeds the http_body marker so the
+	// host classifies as storage/QNAP instead of a generic SSH-server. Never authenticates.
+	if httpPort(r.OpenPorts) {
+		probeQNAP(ctx, ip, &r, cfg.PortTimeout)
 	}
 
 	// Step 2c: Protocol plan — decide the expected protocol(s) and which credential
@@ -661,7 +668,11 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 	// deep OS collection (run by the orchestrator for WinRM/SSH binds) then
 	// refines workstation vs server from the real OS caption.
 	if authedKind != "" {
-		if cat := provisionalCategory(authedKind); cat != domain.CatUnknown {
+		// The auth-provisional category is a FALLBACK — it must not clobber a stronger
+		// evidence-based classification. A QNAP NAS answers SSH (→ generic server, 60), but a
+		// definitive QDocRoot/NFS storage classification (≥60) is the truth; only fill in when
+		// the current classification is weaker/absent.
+		if cat := provisionalCategory(authedKind); cat != domain.CatUnknown && r.Match.Confidence < 60 {
 			r.Match = driver.Match{Category: cat, Confidence: 60}
 		}
 	}
@@ -879,6 +890,50 @@ var titleRe = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
 // inventory's honest redfish_status) and sets the canonical vendor / controller
 // subtype / real serial (Dell ServiceTag). It NEVER authenticates and NEVER marks
 // Redfish collected — full inventory still requires a real Redfish credential.
+// probeQNAP GETs the QNAP QTS authLogin.cgi across the host's open web ports and, on the
+// <QDocRoot> marker every QNAP serves, seeds the http_body hint so WebVendorMarkers
+// classifies it as storage/QNAP. One small unauthenticated GET per web port; no secrets.
+func probeQNAP(ctx context.Context, ip netip.Addr, r *HostResult, timeout time.Duration) {
+	if timeout < 3*time.Second {
+		timeout = 3 * time.Second
+	}
+	host := ip.String()
+	if ip.Is6() {
+		host = "[" + host + "]"
+	}
+	var bases []string
+	for _, p := range []int{8080, 80} {
+		if hasPortN(r.OpenPorts, p) {
+			bases = append(bases, fmt.Sprintf("http://%s:%d", host, p))
+		}
+	}
+	for _, p := range []int{443, 8443} {
+		if hasPortN(r.OpenPorts, p) {
+			bases = append(bases, fmt.Sprintf("https://%s:%d", host, p))
+		}
+	}
+	doer := isapi.PermissiveClient(timeout)
+	for _, base := range bases {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/cgi-bin/authLogin.cgi", nil)
+		if err != nil {
+			continue
+		}
+		resp, err := doer.Do(req)
+		if err != nil {
+			continue
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		resp.Body.Close()
+		if strings.Contains(string(body), "QDocRoot") {
+			if r.Probe.Hints == nil {
+				r.Probe.Hints = map[string]string{}
+			}
+			r.Probe.Hints["http_body"] = strings.TrimSpace(r.Probe.Hints["http_body"] + " QDocRoot qnap-qts")
+			return
+		}
+	}
+}
+
 func probeRedfish(ctx context.Context, ip netip.Addr, r *HostResult, timeout time.Duration) {
 	// A BMC's ServiceRoot is a single small GET, but its management NIC + legacy-TLS
 	// handshake can be slow — give it a floor of 5s so a real iLO/iDRAC isn't missed
