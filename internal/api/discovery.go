@@ -14,10 +14,12 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/coralsearesorts/hims/internal/apply"
+	"github.com/coralsearesorts/hims/internal/classify"
 	"github.com/coralsearesorts/hims/internal/credresolver"
 	"github.com/coralsearesorts/hims/internal/credtest"
 	"github.com/coralsearesorts/hims/internal/discovery"
 	"github.com/coralsearesorts/hims/internal/domain"
+	"github.com/coralsearesorts/hims/internal/driver"
 	"github.com/coralsearesorts/hims/internal/nas"
 	"github.com/coralsearesorts/hims/internal/scan"
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
@@ -601,6 +603,7 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 		// Persist on a fresh budget from the job context so a discovered host is never
 		// lost just because its probe ran long.
 		actx, acancel := context.WithTimeout(ctx, 30*time.Second)
+		s.refineClassByOUI(actx, ip, &r)
 		id, err := applier.Apply(actx, r, resolveLoc(ip))
 		acancel()
 		// Post-onboarding follow-ups for an enrolled host (best-effort).
@@ -1099,6 +1102,7 @@ func (s *Server) retryMissedKnown(ctx context.Context, jobID uuid.UUID, resolveL
 			actx, acancel := context.WithTimeout(ctx, 40*time.Second)
 			rr := discovery.Run(actx, ip, resolveLoc(ip), rcfg)
 			if rr.Alive {
+				s.refineClassByOUI(actx, ip, &rr)
 				id, aerr := applier.Apply(actx, rr, resolveLoc(ip))
 				if aerr == nil && id != uuid.Nil {
 					if d2, e := s.queries.GetDevice(actx, id); e == nil {
@@ -1452,6 +1456,34 @@ func scanNextActionWithPlan(category string, bound bool, boundKind string, pr *s
 		return "Printer — add an SNMP credential (Printer-MIB) to collect supplies/status"
 	}
 	return scanNextActionWithProfile(category, bound, boundKind, pr)
+}
+
+// refineClassByOUI corrects a WEAK port-only classification using the device's MAC
+// vendor. In a POS/hotel environment a Posiflex terminal or an Epson receipt printer
+// can expose only SIP/5060 during a scan (no SNMP/HTTP), which the port classifier
+// reads as an IP phone. The MAC OUI — learned from switch ARP tables (FindMACByIP) —
+// is strong vendor evidence a bare port is not: a single-category vendor
+// (Epson→printer, Posiflex→pos) overrides the weak guess. It ONLY overrides when the
+// OUI category outranks the current confidence, so an authenticated SNMP/driver
+// classification (≥78) always wins; a real IP phone (Alcatel/Cisco/… — multi-category
+// vendors, intentionally unmapped) is untouched and stays ip_phone from its 5060 port.
+// Manual classification locks are honoured downstream by apply.Apply.
+func (s *Server) refineClassByOUI(ctx context.Context, ip netip.Addr, r *discovery.HostResult) {
+	rows, err := s.queries.FindMACByIP(ctx, ip)
+	if err != nil || len(rows) == 0 {
+		return
+	}
+	vendor, cat, conf := classify.OUIClassify(rows[0].Mac)
+	if cat == "" || conf <= r.Match.Confidence {
+		return
+	}
+	r.Match = driver.Match{Category: cat, Confidence: conf}
+	if r.Vendor == "" {
+		r.Vendor = vendor
+	}
+	if r.Classification != nil {
+		r.Classification.FinalSource = "mac_oui"
+	}
 }
 
 // recordResult writes one actionable discovery_results row for an alive host.
