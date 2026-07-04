@@ -327,6 +327,20 @@ export interface Interface {
   last_seen_at: string
 }
 
+// Operator-managed device category (built-in ∪ custom). Managed under Settings →
+// Device Categories; feeds the Edit-device picker.
+export interface DeviceCategory {
+  value: string
+  label: string
+  icon: string
+  builtin: boolean
+  enabled: boolean
+  sort_order: number
+  device_count: number
+  created_at?: string
+  updated_at?: string
+}
+
 // NAS deep-inventory (QNAP over SNMP). info/disks/volumes are the persisted snapshot;
 // network interfaces reuse the shared Interface type via /devices/{id}/interfaces.
 export interface NASInfo {

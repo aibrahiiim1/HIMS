@@ -41,6 +41,7 @@ import { Agents } from './pages/Agents'
 import { AgentDetail } from './pages/AgentDetail'
 import { Mibs } from './pages/Mibs'
 import { Settings } from './pages/Settings'
+import { DeviceCategories } from './pages/DeviceCategories'
 import { Inventory } from './pages/Inventory'
 import { VirtualDeviceForm } from './pages/VirtualDeviceForm'
 import { AddVirtualButton } from './components/AddVirtualButton'
@@ -164,6 +165,7 @@ function Shell({ me, onLogout }: { me?: AuthMe; onLogout: () => void }) {
             <Route path="/access-control" element={<AccessControl />} />
             <Route path="/access-control/:tab" element={<AccessControl />} />
             <Route path="/device-templates" element={<DeviceTemplates />} />
+            <Route path="/device-categories" element={<DeviceCategories />} />
             <Route path="/vendor-fingerprints" element={<VendorFingerprints />} />
             <Route path="/audit-log" element={<AuditLog />} />
             <Route path="/security/encryption" element={<Encryption />} />

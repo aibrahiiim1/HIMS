@@ -79,6 +79,7 @@ type Querier interface {
 	CountCredentialsNeedingReentry(ctx context.Context) (int64, error)
 	// Total live devices (for the dashboard total / discovered split).
 	CountDevices(ctx context.Context) (int64, error)
+	CountDevicesInCategory(ctx context.Context, category string) (int64, error)
 	CountDevicesNeedingAttention(ctx context.Context) (int64, error)
 	// Jobs currently handed to the agent and not yet reported back — the in-flight
 	// count subtracted from the dispatch cap to compute the poll budget.
@@ -127,6 +128,7 @@ type Querier interface {
 	CreateCredential(ctx context.Context, arg CreateCredentialParams) (Credential, error)
 	CreateCredentialGroup(ctx context.Context, arg CreateCredentialGroupParams) (CredentialGroup, error)
 	CreateDevice(ctx context.Context, arg CreateDeviceParams) (Device, error)
+	CreateDeviceCategory(ctx context.Context, arg CreateDeviceCategoryParams) (DeviceCategory, error)
 	CreateDeviceTemplate(ctx context.Context, arg CreateDeviceTemplateParams) (DeviceTemplate, error)
 	CreateDiscoveryJob(ctx context.Context, arg CreateDiscoveryJobParams) (DiscoveryJob, error)
 	// Persist one live-discovery event for completed-job playback (the live SSE feed
@@ -173,6 +175,8 @@ type Querier interface {
 	DeleteCredential(ctx context.Context, id uuid.UUID) error
 	// Hard delete (cascades to inventory child rows via FK ON DELETE CASCADE).
 	DeleteDevice(ctx context.Context, id uuid.UUID) error
+	// Guarded in the handler: only builtin=false rows are ever passed here.
+	DeleteDeviceCategory(ctx context.Context, value string) error
 	DeleteDeviceLifecycle(ctx context.Context, deviceID uuid.UUID) error
 	// Remove a device's TCP reachability checks so a fresh, evidence-based one can
 	// replace them (used when a scan re-points the check at a port the host
@@ -361,6 +365,7 @@ type Querier interface {
 	GetConfigBackupContent(ctx context.Context, id uuid.UUID) (GetConfigBackupContentRow, error)
 	GetCredential(ctx context.Context, id uuid.UUID) (Credential, error)
 	GetDevice(ctx context.Context, id uuid.UUID) (Device, error)
+	GetDeviceCategory(ctx context.Context, value string) (DeviceCategory, error)
 	GetDeviceLifecycle(ctx context.Context, deviceID uuid.UUID) (DeviceLifecycle, error)
 	GetDeviceTemplate(ctx context.Context, id uuid.UUID) (DeviceTemplate, error)
 	GetDiscoveryJob(ctx context.Context, id uuid.UUID) (DiscoveryJob, error)
@@ -419,6 +424,10 @@ type Querier interface {
 	// (channel, alert) a no-op, so RETURNING yields a row only on a real insert.
 	InsertNotificationLog(ctx context.Context, arg InsertNotificationLogParams) (NotificationLog, error)
 	InsertWirelessEvent(ctx context.Context, arg InsertWirelessEventParams) error
+	// App-level replacement for the dropped CHECK constraint: a category is valid if a
+	// row exists for it (built-in or custom). Enabled/disabled does not affect validity
+	// (a hidden built-in a device already has stays valid; hiding only removes it from pickers).
+	IsCategoryValid(ctx context.Context, value string) (bool, error)
 	// Per discovery job: how many of its devices still have a collect_os job IN FLIGHT
 	// (pending) and how many are still ELIGIBLE for automatic self-heal (healing). A job is
 	// NOT fully settled while either is > 0 — so the Scan Jobs LIST shows "collecting" or
@@ -522,6 +531,8 @@ type Querier interface {
 	// (a child table that only exists because an authenticated collection succeeded).
 	// Aggregation/normalisation of protocol tokens happens in Go (access_coverage.go).
 	ListDeviceAccessSignals(ctx context.Context) ([]ListDeviceAccessSignalsRow, error)
+	// All categories with a live device count, ordered for the picker + settings UI.
+	ListDeviceCategories(ctx context.Context) ([]ListDeviceCategoriesRow, error)
 	// Full recent test history for one device (Device Detail → Credential Health).
 	ListDeviceCredentialTests(ctx context.Context, arg ListDeviceCredentialTestsParams) ([]CredentialTestResult, error)
 	ListDeviceFacts(ctx context.Context, deviceID uuid.UUID) ([]DeviceFact, error)
@@ -789,6 +800,7 @@ type Querier interface {
 	PermissionsForRole(ctx context.Context, roleID uuid.UUID) ([]Permission, error)
 	// All permission codes a user holds via any of their roles.
 	PermissionsForUser(ctx context.Context, userID uuid.UUID) ([]string, error)
+	ReassignDeviceCategory(ctx context.Context, arg ReassignDeviceCategoryParams) error
 	// Link every NVR/DVR channel to the live device at its camera_ip, so a channel
 	// and the standalone camera device cross-reference regardless of the order they
 	// were discovered/collected. The per-channel link is computed once at NVR-collect
@@ -964,6 +976,8 @@ type Querier interface {
 	// serial) from being overwritten by future discovery scans (see the reconcile
 	// path UpdateDiscoveredDeviceRespectingLock).
 	UpdateDevice(ctx context.Context, arg UpdateDeviceParams) (Device, error)
+	// Cosmetic/visibility fields only; value + builtin are immutable.
+	UpdateDeviceCategory(ctx context.Context, arg UpdateDeviceCategoryParams) (DeviceCategory, error)
 	// Auto-classification write: set category + OS family + subtype + confidence +
 	// evidence trail in one shot. The `classification_locked = false` guard makes
 	// this an atomic no-op on operator-overridden devices (0 rows affected →

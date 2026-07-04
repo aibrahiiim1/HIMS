@@ -501,6 +501,11 @@ func (s *Server) routes() {
 		r.Post("/settings/web-ports", s.createWebPort)
 		r.Patch("/settings/web-ports/{id}", s.updateWebPort)
 		r.Delete("/settings/web-ports/{id}", s.deleteWebPort)
+		// Operator-managed device categories (built-in ∪ custom); Edit-device picker + settings CRUD.
+		r.Get("/device-categories", s.listDeviceCategories)
+		r.Post("/device-categories", s.createDeviceCategory)
+		r.Patch("/device-categories/{value}", s.updateDeviceCategory)
+		r.Delete("/device-categories/{value}", s.deleteDeviceCategory)
 		r.Get("/lookups", s.listLookups)
 		r.Post("/lookups", s.createLookup)
 		r.Delete("/lookups/{id}", s.deleteLookup)

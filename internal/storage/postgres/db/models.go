@@ -329,6 +329,17 @@ type Device struct {
 	IsInventoryOnly bool `json:"is_inventory_only"`
 }
 
+type DeviceCategory struct {
+	Value     string    `json:"value"`
+	Label     string    `json:"label"`
+	Icon      string    `json:"icon"`
+	Builtin   bool      `json:"builtin"`
+	Enabled   bool      `json:"enabled"`
+	SortOrder int32     `json:"sort_order"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 type DeviceFact struct {
 	ID         uuid.UUID `json:"id"`
 	DeviceID   uuid.UUID `json:"device_id"`

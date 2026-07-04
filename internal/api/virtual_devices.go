@@ -209,7 +209,7 @@ func (s *Server) createVirtualDevice(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if _, err := manualDeviceParams(req.manualDeviceReq); err != nil { // clean 400 on bad name/category/ip
+	if _, err := manualDeviceParams(req.manualDeviceReq, func(c string) bool { return s.isValidCategory(r.Context(), c) }); err != nil { // clean 400 on bad name/category/ip
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -252,7 +252,7 @@ func (s *Server) updateVirtualDevice(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(req.Name) == "" {
 		req.Name = cur.Name
 	}
-	if c := strings.TrimSpace(req.Category); c != "" && !validCategory(c) {
+	if c := strings.TrimSpace(req.Category); c != "" && !s.isValidCategory(r.Context(), c) {
 		http.Error(w, "invalid category "+strconv.Quote(c), http.StatusBadRequest)
 		return
 	}
@@ -1226,7 +1226,7 @@ func (s *Server) persistVirtual(ctx context.Context, req *virtualDeviceReq, cur 
 	}
 	if cur != nil { // update
 		cat := strings.TrimSpace(req.Category)
-		if cat == "" || !validCategory(cat) {
+		if cat == "" || !s.isValidCategory(ctx, cat) {
 			cat = cur.Category
 		}
 		notes := cur.Notes
@@ -1254,7 +1254,7 @@ func (s *Server) persistVirtual(ctx context.Context, req *virtualDeviceReq, cur 
 		return dev, "updated", nil
 	}
 	// create
-	params, err := manualDeviceParams(req.manualDeviceReq)
+	params, err := manualDeviceParams(req.manualDeviceReq, func(c string) bool { return s.isValidCategory(ctx, c) })
 	if err != nil {
 		return db.Device{}, "", err
 	}

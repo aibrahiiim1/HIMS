@@ -46,7 +46,7 @@ func (s *Server) createManualDevice(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	params, err := manualDeviceParams(req)
+	params, err := manualDeviceParams(req, func(c string) bool { return s.isValidCategory(r.Context(), c) })
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -60,7 +60,7 @@ func (s *Server) createManualDevice(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, dev)
 }
 
-func manualDeviceParams(req manualDeviceReq) (db.CreateDeviceParams, error) {
+func manualDeviceParams(req manualDeviceReq, isValidCat func(string) bool) (db.CreateDeviceParams, error) {
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
 		return db.CreateDeviceParams{}, errBadRequest("name is required")
@@ -69,8 +69,8 @@ func manualDeviceParams(req manualDeviceReq) (db.CreateDeviceParams, error) {
 	if cat == "" {
 		cat = string(domain.CatUnknown)
 	}
-	if !validCategory(cat) {
-		return db.CreateDeviceParams{}, errBadRequest("invalid category " + strconv.Quote(cat) + "; use one of: " + strings.Join(categoryList, ", "))
+	if !isValidCat(cat) {
+		return db.CreateDeviceParams{}, errBadRequest("invalid category " + strconv.Quote(cat) + " (not a built-in or a managed custom category)")
 	}
 	var ipPtr *netip.Addr
 	if v := strings.TrimSpace(req.PrimaryIP); v != "" {
@@ -164,8 +164,8 @@ func (s *Server) updateDevice(w http.ResponseWriter, r *http.Request) {
 		if cat == "" {
 			cat = string(domain.CatUnknown)
 		}
-		if !validCategory(cat) {
-			http.Error(w, "invalid category "+strconv.Quote(cat)+"; use one of: "+strings.Join(categoryList, ", "), http.StatusBadRequest)
+		if !s.isValidCategory(r.Context(), cat) {
+			http.Error(w, "invalid category "+strconv.Quote(cat)+" (not a built-in or a managed custom category)", http.StatusBadRequest)
 			return
 		}
 	}
@@ -545,7 +545,7 @@ func (s *Server) importRows(w http.ResponseWriter, r *http.Request, rows [][]str
 				req.Location = loc
 			}
 		}
-		params, perr := manualDeviceParams(req)
+		params, perr := manualDeviceParams(req, func(c string) bool { return s.isValidCategory(r.Context(), c) })
 		if perr != nil {
 			res.Failed++
 			res.Errors = append(res.Errors, fmt.Sprintf("row %d: %v", line, perr))

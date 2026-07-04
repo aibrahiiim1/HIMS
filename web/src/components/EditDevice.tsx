@@ -1,14 +1,20 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { X, Lock, Save, ClipboardList } from 'lucide-react'
-import { api, locationPaths, type Device, type Location, type DeviceWebAccess } from '../api'
+import { api, locationPaths, type Device, type Location, type DeviceWebAccess, type DeviceCategory } from '../api'
 
-// Categories the backend accepts (kept in step with internal/api validCategory).
+// Categories the backend accepts — kept in step with internal/api categoryList
+// (the devices.category CHECK constraint). Full list so every real category
+// (POS, biometric, DVR, BMC, network gear…) is manually selectable.
 const CATEGORIES = [
-  'unknown', 'switch', 'router', 'firewall', 'access_point', 'wireless_controller',
-  'server', 'virtual_host', 'virtual_machine', 'storage', 'nvr', 'camera', 'printer',
-  'ip_phone', 'pbx', 'voice_gateway', 'database', 'directory', 'dns', 'dhcp',
-  'endpoint', 'ups', 'isp_router', 'application',
+  'unknown', 'network_device_unclassified', 'switch', 'router', 'firewall',
+  'access_point', 'wireless_controller', 'isp_router', 'load_balancer',
+  'server', 'virtual_host', 'virtual_machine', 'bmc', 'storage',
+  'nvr', 'dvr', 'camera',
+  'printer', 'ip_phone', 'pbx', 'voice_gateway',
+  'pos', 'pos_device_unclassified', 'biometric', 'biometric_device_unclassified',
+  'endpoint', 'ups', 'pdu',
+  'database', 'directory', 'dns', 'dhcp', 'fingerprint', 'application',
 ]
 const CRITICALITY = ['', 'low', 'normal', 'high', 'critical']
 
@@ -30,6 +36,20 @@ export function EditDevice({ device, onClose, onSaved }: {
   // port (+ scheme) when discovery missed it (e.g. a camera/NVR on a non-standard
   // port). webCandidateBases reads this FIRST, so the next scan/Collect tries it.
   const webAcc = useQuery({ queryKey: ['web-access', device.id], queryFn: () => api.get<DeviceWebAccess>(`/devices/${device.id}/web-access`) })
+  // Data-driven category list (built-in ∪ operator custom, managed under Settings →
+  // Device Categories). Falls back to the built-in CATEGORIES constant if the endpoint
+  // isn't available (older backend), so the picker always works.
+  const catsQ = useQuery({ queryKey: ['device-categories'], queryFn: () => api.get<DeviceCategory[]>('/device-categories') })
+  const catOptions: { value: string; label: string }[] = (() => {
+    const rows = catsQ.data
+    if (rows && rows.length) {
+      const list = rows.filter((c) => c.enabled).map((c) => ({ value: c.value, label: c.label || c.value }))
+      // Always include the device's current category even if hidden, so it's not lost.
+      if (device.category && !list.some((c) => c.value === device.category)) list.unshift({ value: device.category, label: device.category })
+      return list
+    }
+    return CATEGORIES.map((c) => ({ value: c, label: c.replace(/_/g, ' ') }))
+  })()
   const [web, setWeb] = useState({ port: '', scheme: '' })
   const [webLoaded, setWebLoaded] = useState(false)
   useEffect(() => {
@@ -126,7 +146,7 @@ export function EditDevice({ device, onClose, onSaved }: {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
             {field('Category', (
               <select value={f.category} onChange={(e) => set('category', e.target.value)} style={{ padding: '6px 8px', fontSize: 13 }}>
-                {CATEGORIES.map((c) => <option key={c} value={c}>{c.replace(/_/g, ' ')}</option>)}
+                {catOptions.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
               </select>
             ))}
             {field('Subtype', input('subtype'))}
