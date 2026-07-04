@@ -64,6 +64,22 @@ func TestExclusion_RealProCurveSwitchStillMatches(t *testing.T) {
 	}
 }
 
+// TestNoBareSIPtoPBX locks the 150.0.0.132 regression: a Windows PC running a
+// softphone (RPC/SMB/RDP + SIP 5060, no telnet) must NEVER be fingerprinted as a
+// voip/pbx device. The root cause of the original flip was a bare p(KindPort,"5060",
+// "voip",...) rule (voip -> pbx via ModelFromDeviceType); it was removed, and this
+// test makes sure no future rule reintroduces a port-only path to pbx.
+func TestNoBareSIPtoPBX(t *testing.T) {
+	lib := Library()
+	for _, ports := range [][]int{{5060}, {5061}, {135, 445, 3389, 5060}, {135, 445, 3389, 5060, 5061}} {
+		for _, r := range Match(Evidence{Ports: ports}, lib) {
+			if r.DeviceType == "voip" || r.DeviceType == "pbx" {
+				t.Errorf("ports %v produced a voip/pbx fingerprint %+v — a softphone/Windows host must never fingerprint as pbx", ports, r)
+			}
+		}
+	}
+}
+
 func contains(s, sub string) bool {
 	for i := 0; i+len(sub) <= len(s); i++ {
 		if s[i:i+len(sub)] == sub {

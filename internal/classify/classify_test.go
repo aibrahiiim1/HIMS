@@ -217,15 +217,20 @@ func TestClassify_SIPPhone(t *testing.T) {
 	if got := catOf(OpenPorts([]int{5060})); got != "ip_phone" {
 		t.Errorf("a SIP-only host (5060) must classify as ip_phone; got %q", got)
 	}
-	// A Windows PC running a softphone (5060 + RPC/SMB/RDP) is a workstation, NOT a phone —
-	// the SIP hint is suppressed so the Windows evidence wins.
-	for _, e := range OpenPorts([]int{135, 445, 3389, 5060}) {
-		if e.Category == "ip_phone" {
-			t.Errorf("a Windows host with a softphone must NOT be ip_phone; got SIP evidence %+v", e)
+	// A Windows PC running a softphone (5060 + RPC/SMB/RDP, no telnet) is a workstation,
+	// NOT a phone and NOT a PBX — the SIP hint is suppressed so the Windows evidence wins.
+	// This is the 150.0.0.132 regression lock: the port classifier must never emit ip_phone
+	// OR pbx for this set (pbx only ever comes from an HTTP voice web-marker or the guarded
+	// OmniPCX telnet-banner path — never from these ports).
+	for _, set := range [][]int{{135, 445, 3389, 5060}, {135, 445, 3389, 5060, 5061}} {
+		for _, e := range OpenPorts(set) {
+			if e.Category == "ip_phone" || e.Category == "pbx" {
+				t.Errorf("Windows+softphone %v must NOT be ip_phone/pbx; got evidence %+v", set, e)
+			}
 		}
-	}
-	if got := catOf(OpenPorts([]int{135, 445, 3389, 5060})); got != "endpoint" {
-		t.Errorf("Windows+softphone should land on endpoint; got %q", got)
+		if got := catOf(OpenPorts(set)); got != "endpoint" {
+			t.Errorf("Windows+softphone %v should land on endpoint; got %q", set, got)
+		}
 	}
 }
 
