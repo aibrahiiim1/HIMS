@@ -217,6 +217,9 @@ type Querier interface {
 	DeleteStaleLicenses(ctx context.Context, arg DeleteStaleLicensesParams) error
 	DeleteStaleMACEntries(ctx context.Context, arg DeleteStaleMACEntriesParams) error
 	DeleteStaleNASDisks(ctx context.Context, arg DeleteStaleNASDisksParams) error
+	DeleteStaleNASFans(ctx context.Context, arg DeleteStaleNASFansParams) error
+	DeleteStaleNASISCSI(ctx context.Context, arg DeleteStaleNASISCSIParams) error
+	DeleteStaleNASPools(ctx context.Context, arg DeleteStaleNASPoolsParams) error
 	DeleteStaleNASVolumes(ctx context.Context, arg DeleteStaleNASVolumesParams) error
 	DeleteStaleNeighbors(ctx context.Context, arg DeleteStaleNeighborsParams) error
 	DeleteStaleNetworks(ctx context.Context, arg DeleteStaleNetworksParams) error
@@ -613,6 +616,9 @@ type Querier interface {
 	ListMonitoringSamplesByCheck(ctx context.Context, arg ListMonitoringSamplesByCheckParams) ([]MonitoringSample, error)
 	ListMonitoringSamplesByDevice(ctx context.Context, arg ListMonitoringSamplesByDeviceParams) ([]MonitoringSample, error)
 	ListNASDisks(ctx context.Context, deviceID uuid.UUID) ([]NasDisk, error)
+	ListNASFans(ctx context.Context, deviceID uuid.UUID) ([]NasFan, error)
+	ListNASISCSI(ctx context.Context, deviceID uuid.UUID) ([]NasIscsi, error)
+	ListNASPools(ctx context.Context, deviceID uuid.UUID) ([]NasPool, error)
 	ListNASVolumes(ctx context.Context, deviceID uuid.UUID) ([]NasVolume, error)
 	ListNVRChannels(ctx context.Context, nvrDeviceID uuid.UUID) ([]NvrChannel, error)
 	ListNVRStorage(ctx context.Context, nvrDeviceID uuid.UUID) ([]NvrStorage, error)
@@ -1031,7 +1037,10 @@ type Querier interface {
 	// updates the schedule knobs without resetting the live status counters.
 	UpsertMonitoringCheck(ctx context.Context, arg UpsertMonitoringCheckParams) (MonitoringCheck, error)
 	UpsertNASDisk(ctx context.Context, arg UpsertNASDiskParams) error
+	UpsertNASFan(ctx context.Context, arg UpsertNASFanParams) error
+	UpsertNASISCSI(ctx context.Context, arg UpsertNASISCSIParams) error
 	UpsertNASInfo(ctx context.Context, arg UpsertNASInfoParams) error
+	UpsertNASPool(ctx context.Context, arg UpsertNASPoolParams) error
 	UpsertNASVolume(ctx context.Context, arg UpsertNASVolumeParams) error
 	UpsertNVRChannel(ctx context.Context, arg UpsertNVRChannelParams) (NvrChannel, error)
 	UpsertNVRInfo(ctx context.Context, arg UpsertNVRInfoParams) (NvrInfo, error)

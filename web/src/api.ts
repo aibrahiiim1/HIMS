@@ -367,6 +367,34 @@ export interface NASVolume {
   fs_type?: string | null
   total_bytes?: number | null
   used_bytes?: number | null
+  status?: string | null
+  pool?: string | null
+  last_seen_at: string
+}
+export interface NASPool {
+  device_id: string
+  idx: number
+  name?: string | null
+  raid_type?: string | null
+  raw_bytes?: number | null
+  status?: string | null
+  last_seen_at: string
+}
+export interface NASISCSI {
+  device_id: string
+  kind: string // lun | target
+  idx: number
+  name: string
+  capacity_bytes?: number | null
+  status?: string | null
+  iqn?: string | null
+  last_seen_at: string
+}
+export interface NASFan {
+  device_id: string
+  idx: number
+  name: string
+  rpm?: number | null
   last_seen_at: string
 }
 export interface NASData {
@@ -374,6 +402,10 @@ export interface NASData {
   info?: NASInfo
   disks?: NASDisk[]
   volumes?: NASVolume[]
+  pools?: NASPool[]
+  luns?: NASISCSI[]
+  targets?: NASISCSI[]
+  fans?: NASFan[]
 }
 
 export interface VLAN {

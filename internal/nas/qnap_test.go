@@ -15,16 +15,32 @@ func TestParsePct(t *testing.T) {
 	}
 }
 
-func TestParseMB(t *testing.T) {
+func TestParseSize(t *testing.T) {
 	mb := 3839.8
-	if got := parseMB("3839.8 MB"); got != int64(mb*1024*1024) {
-		t.Fatalf("parseMB(3839.8 MB) = %d", got)
+	if got := parseSize("3839.8 MB"); got != int64(mb*1024*1024) {
+		t.Fatalf("parseSize(3839.8 MB) = %d", got)
 	}
-	if got := parseMB("2 GB"); got != 2*1024*1024*1024 {
-		t.Fatalf("parseMB(2 GB) = %d", got)
+	gb := 1014.41
+	if got := parseSize("1014.41 GB"); got != int64(gb*1024*1024*1024) {
+		t.Fatalf("parseSize(1014.41 GB) = %d", got)
 	}
-	if got := parseMB(""); got != 0 {
-		t.Fatalf("parseMB(empty) = %d", got)
+	if got := parseSize("2 GB"); got != 2*1024*1024*1024 {
+		t.Fatalf("parseSize(2 GB) = %d", got)
+	}
+	if got := parseSize("27934135943168"); got != 27934135943168 {
+		t.Fatalf("parseSize(bare bytes) = %d", got)
+	}
+	if got := parseSize(""); got != 0 {
+		t.Fatalf("parseSize(empty) = %d", got)
+	}
+}
+
+func TestParseInt64(t *testing.T) {
+	if got := parseInt64("4000787030016"); got != 4000787030016 {
+		t.Fatalf("parseInt64 = %d", got)
+	}
+	if got := parseInt64("N/A"); got != 0 {
+		t.Fatalf("parseInt64(N/A) = %d", got)
 	}
 }
 
@@ -57,6 +73,32 @@ func TestModelFirmwareFromDescr(t *testing.T) {
 	}
 }
 
+func TestSplitVolumeDescr(t *testing.T) {
+	name, pool := splitVolumeDescr("[Volume DataVol1, Pool 1]")
+	if name != "DataVol1" || pool != "Pool 1" {
+		t.Fatalf("splitVolumeDescr = %q,%q", name, pool)
+	}
+	name, pool = splitVolumeDescr("System")
+	if name != "System" || pool != "" {
+		t.Fatalf("splitVolumeDescr(no pool) = %q,%q", name, pool)
+	}
+}
+
+func TestRaidLabel(t *testing.T) {
+	cases := map[string]string{"5": "RAID 5", "1": "RAID 1", "": "", "-1": "", "RAID 6": "RAID 6"}
+	for in, want := range cases {
+		if got := raidLabel(in); got != want {
+			t.Errorf("raidLabel(%q) = %q want %q", in, got, want)
+		}
+	}
+}
+
+func TestIscsiStatus(t *testing.T) {
+	if iscsiStatus("1") != "Ready" || iscsiStatus("0") != "Offline" || iscsiStatus("") != "" {
+		t.Fatal("iscsiStatus mapping wrong")
+	}
+}
+
 func TestIsDataVolume(t *testing.T) {
 	keep := []string{"/share/CACHEDEV1_DATA", "/mnt/pool1", "/share/ZFS530_DATA"}
 	drop := []string{"/proc", "/sys", "/tmp", "/mnt/HDA_ROOT", "/dev/shm",
@@ -74,19 +116,17 @@ func TestIsDataVolume(t *testing.T) {
 }
 
 func TestRollupHealth(t *testing.T) {
-	if h := rollupHealth(nil); h != "Unknown" {
+	if h := rollupHealth(nil, nil, nil); h != "Unknown" {
 		t.Fatalf("empty = %q", h)
 	}
 	allGood := []Disk{{Health: "Good"}, {Health: "Good"}}
-	if h := rollupHealth(allGood); h != "OK" {
+	if h := rollupHealth(allGood, []Pool{{Status: "Ready"}}, []Volume{{Status: "Ready"}}); h != "OK" {
 		t.Fatalf("allGood = %q", h)
 	}
-	warn := []Disk{{Health: "Good"}, {Health: "Warning"}}
-	if h := rollupHealth(warn); h != "Warning" {
-		t.Fatalf("warn = %q", h)
+	if h := rollupHealth(allGood, []Pool{{Status: "Degraded"}}, nil); h != "Warning" {
+		t.Fatalf("degraded pool = %q", h)
 	}
-	bad := []Disk{{Health: "Good"}, {Health: "Error"}}
-	if h := rollupHealth(bad); h != "Critical" {
-		t.Fatalf("bad = %q", h)
+	if h := rollupHealth([]Disk{{Health: "Error"}}, nil, nil); h != "Critical" {
+		t.Fatalf("bad disk = %q", h)
 	}
 }

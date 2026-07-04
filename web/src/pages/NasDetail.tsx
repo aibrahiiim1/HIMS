@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { HardDrive, Database, Network, Thermometer, Activity, Server, Cpu, MemoryStick, LayoutDashboard, Clock, Gauge } from 'lucide-react'
+import { HardDrive, Database, Network, Thermometer, Activity, Server, Cpu, MemoryStick, LayoutDashboard, Clock, Gauge, Boxes, Fan, Layers } from 'lucide-react'
 import { api, type NASData, type Interface } from '../api'
 import { Panel, Kpi, StatusPill, EmptyState, DefList, TabBar } from '../components/ui'
 import { DeviceHeader } from '../components/DeviceHeader'
@@ -49,7 +49,7 @@ const operLabel = (o?: number | null) => (o === 1 ? 'up' : o === 2 ? 'down' : 'u
 // Physical NICs first (ethX / bondX); loopback and container bridges kept but sorted last.
 const isRealNic = (i: Interface) => /^(eth|bond|lan|nic|em|en|p\d)/i.test(i.if_name || i.if_descr || '')
 
-type Tab = 'overview' | 'storage' | 'network' | 'health'
+type Tab = 'overview' | 'storage' | 'iscsi' | 'network' | 'health'
 
 export function NasDetail() {
   const { id } = useParams<{ id: string }>()
@@ -62,19 +62,26 @@ export function NasDetail() {
   const info = nas?.info
   const disks = nas?.disks ?? []
   const volumes = nas?.volumes ?? []
+  const pools = nas?.pools ?? []
+  const luns = nas?.luns ?? []
+  const targets = nas?.targets ?? []
+  const fans = nas?.fans ?? []
   const collected = !!nas?.collected
   const ifaces = [...(ifQ.data ?? [])].sort((a, b) => (isRealNic(b) ? 1 : 0) - (isRealNic(a) ? 1 : 0) || a.if_index - b.if_index)
   const nicCount = ifaces.filter(isRealNic).length
   const totalCap = disks.reduce((s, d) => s + (d.capacity_bytes || 0), 0)
   const volTotal = volumes.reduce((s, v) => s + (v.total_bytes || 0), 0)
   const volUsed = volumes.reduce((s, v) => s + (v.used_bytes || 0), 0)
+  const lunTotal = luns.reduce((s, l) => s + (l.capacity_bytes || 0), 0)
   const badDisks = disks.filter((d) => healthTone(d.health) === 'crit' || healthTone(d.health) === 'warn').length
+  const raid = pools.map((p) => p.raid_type).filter(Boolean).join(', ')
 
   if (nasQ.isLoading) return <div className="loading">Loading…</div>
 
   const tabs = [
     { key: 'overview', label: 'Overview', icon: LayoutDashboard },
-    { key: 'storage', label: 'Storage', icon: HardDrive, count: collected ? disks.length + volumes.length : undefined },
+    { key: 'storage', label: 'Storage', icon: HardDrive, count: collected ? disks.length + volumes.length + pools.length : undefined },
+    { key: 'iscsi', label: 'iSCSI', icon: Boxes, count: collected ? luns.length : undefined },
     { key: 'network', label: 'Network', icon: Network, count: nicCount || undefined },
     { key: 'health', label: 'Health', icon: Thermometer },
   ]
@@ -122,7 +129,9 @@ export function NasDetail() {
                 { label: 'Hostname', value: info?.hostname || '—' },
                 { label: 'Serial', value: <span className="mono">{info?.serial || 'not exposed over SNMP'}</span> },
                 { label: 'Disks', value: collected ? `${disks.length} disk(s) · ${fmtBytes(totalCap)} raw` : '—' },
+                { label: 'Storage pool', value: collected && pools.length ? `${pools.length} pool(s)${raid ? ` · ${raid}` : ''}` : (collected ? '—' : '—') },
                 { label: 'Volumes', value: collected ? `${volumes.length} volume(s) · ${fmtBytes(volTotal)}` : '—' },
+                { label: 'iSCSI LUNs', value: collected && luns.length ? `${luns.length} LUN(s) · ${fmtBytes(lunTotal)} · ${targets.length} target(s)` : (collected ? 'none configured' : '—') },
                 { label: 'Collected', value: info?.last_seen_at ? new Date(info.last_seen_at).toLocaleString() : '—' },
               ]} />
             </Panel>
@@ -157,7 +166,7 @@ export function NasDetail() {
                       <td className="mono" style={{ fontSize: 12 }}>{d.serial || '—'}</td>
                       <td>{d.interface_type ? <span className="badge badge-unknown">{d.interface_type}</span> : '—'}</td>
                       <td className="mono">{fmtBytes(d.capacity_bytes)}</td>
-                      <td className="mono" style={{ color: tempTone(d.temp_c) === 'crit' ? 'var(--danger)' : tempTone(d.temp_c) === 'warn' ? 'var(--warning)' : undefined }}>{d.temp_c != null ? `${d.temp_c}°C` : '—'}</td>
+                      <td className="mono" style={{ color: tempTone(d.temp_c) === 'crit' ? 'var(--crit)' : tempTone(d.temp_c) === 'warn' ? 'var(--warn)' : undefined }}>{d.temp_c != null ? `${d.temp_c}°C` : '—'}</td>
                       <td><StatusPill status={pillTone(d.health)} label={d.health || '—'} /></td>
                     </tr>
                   ))}</tbody>
@@ -167,21 +176,23 @@ export function NasDetail() {
             <Panel title="Logical volumes" icon={Database} subtitle={`${volumes.length} volume(s)`} pad={false}>
               {volumes.length === 0 ? <div style={{ padding: 14 }} className="muted">No data volumes were reported. Only operator data volumes/pools are shown (OS/system mounts are filtered out).</div> : (
                 <table className="data-table">
-                  <thead><tr><th>Volume</th><th>Type</th><th>Total</th><th>Used</th><th>Free</th><th>Usage</th></tr></thead>
+                  <thead><tr><th>Volume</th><th>Pool</th><th>Type</th><th>Status</th><th>Total</th><th>Used</th><th>Free</th><th>Usage</th></tr></thead>
                   <tbody>{volumes.map((v) => {
                     const total = v.total_bytes || 0, used = v.used_bytes || 0
                     const pct = total ? Math.round((used / total) * 100) : 0
                     return (
                       <tr key={v.idx}>
-                        <td className="cell-name mono" style={{ fontSize: 12 }}>{v.name}</td>
+                        <td className="cell-name">{v.name}</td>
+                        <td className="muted">{v.pool || '—'}</td>
                         <td>{v.fs_type ? <span className="badge badge-unknown">{v.fs_type}</span> : '—'}</td>
+                        <td><StatusPill status={pillTone(v.status)} label={v.status || '—'} /></td>
                         <td className="mono">{fmtBytes(total)}</td>
                         <td className="mono">{fmtBytes(used)}</td>
                         <td className="mono">{fmtBytes(total - used)}</td>
                         <td>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                             <div style={{ flex: 1, minWidth: 60, height: 6, background: 'var(--border)', borderRadius: 4, overflow: 'hidden' }}>
-                              <div style={{ width: `${pct}%`, height: '100%', background: pct >= 90 ? 'var(--danger)' : pct >= 75 ? 'var(--warning)' : 'var(--accent)' }} />
+                              <div style={{ width: `${pct}%`, height: '100%', background: pct >= 90 ? 'var(--crit)' : pct >= 75 ? 'var(--warn)' : 'var(--brand)' }} />
                             </div>
                             <span className="mono" style={{ fontSize: 12 }}>{pct}%</span>
                           </div>
@@ -192,8 +203,59 @@ export function NasDetail() {
                 </table>
               )}
             </Panel>
+            <Panel title="Storage pools" icon={Layers} subtitle={`${pools.length} pool(s)`} pad={false}>
+              {pools.length === 0 ? <div style={{ padding: 14 }} className="muted">No RAID storage pools were reported by this appliance.</div> : (
+                <table className="data-table">
+                  <thead><tr><th>Pool</th><th>RAID</th><th>Raw capacity</th><th>Status</th></tr></thead>
+                  <tbody>{pools.map((p) => (
+                    <tr key={p.idx}>
+                      <td className="cell-name">{p.name || `Pool ${p.idx}`}</td>
+                      <td>{p.raid_type ? <span className="badge badge-info">{p.raid_type}</span> : '—'}</td>
+                      <td className="mono">{fmtBytes(p.raw_bytes)}</td>
+                      <td><StatusPill status={pillTone(p.status)} label={p.status || '—'} /></td>
+                    </tr>
+                  ))}</tbody>
+                </table>
+              )}
+            </Panel>
           </>
-        ) : <GatedTab deviceId={deviceId} what="physical disks & logical volumes" />
+        ) : <GatedTab deviceId={deviceId} what="physical disks, pools & logical volumes" />
+      )}
+
+      {/* ============================ iSCSI ============================ */}
+      {tab === 'iscsi' && (
+        collected ? (
+          <>
+            <Panel title="iSCSI LUNs" icon={Boxes} subtitle={`${luns.length} LUN(s) · ${fmtBytes(lunTotal)}`} pad={false}>
+              {luns.length === 0 ? <div style={{ padding: 14 }} className="muted">No iSCSI LUNs are configured on this appliance.</div> : (
+                <table className="data-table">
+                  <thead><tr><th>LUN</th><th>Capacity</th><th>Status</th></tr></thead>
+                  <tbody>{luns.map((l) => (
+                    <tr key={l.idx}>
+                      <td className="cell-name">{l.name}</td>
+                      <td className="mono">{fmtBytes(l.capacity_bytes)}</td>
+                      <td><StatusPill status={pillTone(l.status)} label={l.status || '—'} /></td>
+                    </tr>
+                  ))}</tbody>
+                </table>
+              )}
+            </Panel>
+            <Panel title="iSCSI targets" icon={Server} subtitle={`${targets.length} target(s)`} pad={false}>
+              {targets.length === 0 ? <div style={{ padding: 14 }} className="muted">No iSCSI targets are configured.</div> : (
+                <table className="data-table">
+                  <thead><tr><th>Target</th><th>IQN</th><th>Status</th></tr></thead>
+                  <tbody>{targets.map((t) => (
+                    <tr key={t.idx}>
+                      <td className="cell-name">{t.name}</td>
+                      <td className="mono" style={{ fontSize: 11, wordBreak: 'break-all' }}>{t.iqn || '—'}</td>
+                      <td><StatusPill status={pillTone(t.status)} label={t.status || '—'} /></td>
+                    </tr>
+                  ))}</tbody>
+                </table>
+              )}
+            </Panel>
+          </>
+        ) : <GatedTab deviceId={deviceId} what="iSCSI LUNs & targets" />
       )}
 
       {/* ============================ NETWORK ============================ */}
@@ -225,8 +287,22 @@ export function NasDetail() {
               <Kpi label="Overall" value={info?.health || 'OK'} icon={Activity} tone={healthTone(info?.health)} />
               <Kpi label="CPU temp" value={info?.cpu_temp_c != null ? `${info.cpu_temp_c}°C` : '—'} icon={Thermometer} tone={tempTone(info?.cpu_temp_c)} />
               <Kpi label="System temp" value={info?.sys_temp_c != null ? `${info.sys_temp_c}°C` : '—'} icon={Thermometer} tone={tempTone(info?.sys_temp_c)} />
-              <Kpi label="CPU load" value={info?.cpu_pct != null ? `${info.cpu_pct.toFixed(1)}%` : '—'} icon={Cpu} tone={info?.cpu_pct != null && info.cpu_pct >= 90 ? 'crit' : 'default'} />
+              <Kpi label="Fans" value={fans.length ? `${fans.length}` : '—'} icon={Fan} tone={fans.length ? 'ok' : 'default'} sub={fans.length ? fans.map((f) => `${f.rpm ?? '—'} rpm`).join(' · ') : undefined} />
             </div>
+            {fans.length > 0 && (
+              <Panel title="Cooling fans" icon={Fan} subtitle={`${fans.length} fan(s)`} pad={false}>
+                <table className="data-table">
+                  <thead><tr><th>Fan</th><th>Speed</th><th>Status</th></tr></thead>
+                  <tbody>{fans.map((f) => (
+                    <tr key={f.idx}>
+                      <td className="cell-name">{f.name}</td>
+                      <td className="mono">{f.rpm != null ? `${f.rpm} RPM` : '—'}</td>
+                      <td><StatusPill status={f.rpm && f.rpm > 0 ? 'up' : 'unknown'} label={f.rpm && f.rpm > 0 ? 'spinning' : '—'} /></td>
+                    </tr>
+                  ))}</tbody>
+                </table>
+              </Panel>
+            )}
             <Panel title="Disk health & temperature" icon={HardDrive} pad={false}>
               <table className="data-table">
                 <thead><tr><th>Bay</th><th>Model</th><th>Serial</th><th>Temp</th><th>Health</th></tr></thead>
@@ -235,7 +311,7 @@ export function NasDetail() {
                     <td className="cell-name">#{d.slot}</td>
                     <td>{d.model || '—'}</td>
                     <td className="mono" style={{ fontSize: 12 }}>{d.serial || '—'}</td>
-                    <td className="mono" style={{ color: tempTone(d.temp_c) === 'crit' ? 'var(--danger)' : tempTone(d.temp_c) === 'warn' ? 'var(--warning)' : undefined }}>{d.temp_c != null ? `${d.temp_c}°C` : '—'}</td>
+                    <td className="mono" style={{ color: tempTone(d.temp_c) === 'crit' ? 'var(--crit)' : tempTone(d.temp_c) === 'warn' ? 'var(--warn)' : undefined }}>{d.temp_c != null ? `${d.temp_c}°C` : '—'}</td>
                     <td><StatusPill status={pillTone(d.health)} label={d.health || '—'} /></td>
                   </tr>
                 ))}</tbody>

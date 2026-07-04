@@ -64,7 +64,7 @@ func (s *Server) persistNAS(ctx context.Context, devID uuid.UUID, rep nas.Report
 		Vendor:           nonEmptyStr(rep.Vendor),
 		Model:            nonEmptyStr(rep.Model),
 		Firmware:         nonEmptyStr(rep.Firmware),
-		Serial:           nil, // SNMP does not expose a QNAP serial (QTS-API only) — honest NULL
+		Serial:           nonEmptyStr(rep.Serial), // QNAP exposes the enclosure serial via the NAS-MIB
 		Hostname:         nonEmptyStr(rep.Hostname),
 		CpuPct:           rep.CPUPct,
 		MemTotalBytes:    nonZero64(rep.MemTotalBytes),
@@ -101,10 +101,42 @@ func (s *Server) persistNAS(ctx context.Context, devID uuid.UUID, rep nas.Report
 			FsType:     nonEmptyStr(v.FSType),
 			TotalBytes: nonZero64(v.TotalBytes),
 			UsedBytes:  nonZero64(v.UsedBytes),
+			Status:     nonEmptyStr(v.Status),
+			Pool:       nonEmptyStr(v.Pool),
 			LastSeenAt: poll,
 		})
 	}
 	_ = s.queries.DeleteStaleNASVolumes(ctx, db.DeleteStaleNASVolumesParams{DeviceID: devID, LastSeenAt: poll})
+
+	for _, p := range rep.Pools {
+		_ = s.queries.UpsertNASPool(ctx, db.UpsertNASPoolParams{
+			DeviceID: devID, Idx: int32(p.Index), Name: nonEmptyStr(p.Name),
+			RaidType: nonEmptyStr(p.RaidType), RawBytes: nonZero64(p.RawBytes),
+			Status: nonEmptyStr(p.Status), LastSeenAt: poll,
+		})
+	}
+	_ = s.queries.DeleteStaleNASPools(ctx, db.DeleteStaleNASPoolsParams{DeviceID: devID, LastSeenAt: poll})
+
+	for _, l := range rep.LUNs {
+		_ = s.queries.UpsertNASISCSI(ctx, db.UpsertNASISCSIParams{
+			DeviceID: devID, Kind: "lun", Idx: int32(l.Index), Name: l.Name,
+			CapacityBytes: nonZero64(l.CapacityBytes), Status: nonEmptyStr(l.Status), Iqn: nil, LastSeenAt: poll,
+		})
+	}
+	for _, t := range rep.Targets {
+		_ = s.queries.UpsertNASISCSI(ctx, db.UpsertNASISCSIParams{
+			DeviceID: devID, Kind: "target", Idx: int32(t.Index), Name: t.Name,
+			CapacityBytes: nil, Status: nonEmptyStr(t.Status), Iqn: nonEmptyStr(t.IQN), LastSeenAt: poll,
+		})
+	}
+	_ = s.queries.DeleteStaleNASISCSI(ctx, db.DeleteStaleNASISCSIParams{DeviceID: devID, LastSeenAt: poll})
+
+	for _, f := range rep.Fans {
+		_ = s.queries.UpsertNASFan(ctx, db.UpsertNASFanParams{
+			DeviceID: devID, Idx: int32(f.Index), Name: f.Name, Rpm: i32ptr(int32(f.RPM)), LastSeenAt: poll,
+		})
+	}
+	_ = s.queries.DeleteStaleNASFans(ctx, db.DeleteStaleNASFansParams{DeviceID: devID, LastSeenAt: poll})
 }
 
 // deviceNAS is GET /devices/{id}/nas — the persisted NAS inventory for the detail page.
@@ -120,11 +152,27 @@ func (s *Server) deviceNAS(w http.ResponseWriter, r *http.Request) {
 	}
 	disks, _ := s.queries.ListNASDisks(ctx, id)
 	vols, _ := s.queries.ListNASVolumes(ctx, id)
+	pools, _ := s.queries.ListNASPools(ctx, id)
+	iscsi, _ := s.queries.ListNASISCSI(ctx, id)
+	fans, _ := s.queries.ListNASFans(ctx, id)
+	luns := make([]db.NasIscsi, 0)
+	targets := make([]db.NasIscsi, 0)
+	for _, x := range iscsi {
+		if x.Kind == "target" {
+			targets = append(targets, x)
+		} else {
+			luns = append(luns, x)
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"collected": true,
 		"info":      info,
 		"disks":     disks,
 		"volumes":   vols,
+		"pools":     pools,
+		"luns":      luns,
+		"targets":   targets,
+		"fans":      fans,
 	})
 }
 

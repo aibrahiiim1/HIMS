@@ -45,13 +45,15 @@ SELECT * FROM nas_disks WHERE device_id = $1 ORDER BY slot;
 DELETE FROM nas_disks WHERE device_id = $1 AND last_seen_at < $2;
 
 -- name: UpsertNASVolume :exec
-INSERT INTO nas_volumes (device_id, idx, name, fs_type, total_bytes, used_bytes, last_seen_at)
-VALUES ($1,$2,$3,$4,$5,$6,$7)
+INSERT INTO nas_volumes (device_id, idx, name, fs_type, total_bytes, used_bytes, status, pool, last_seen_at)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
 ON CONFLICT (device_id, idx) DO UPDATE SET
     name = EXCLUDED.name,
     fs_type = EXCLUDED.fs_type,
     total_bytes = EXCLUDED.total_bytes,
     used_bytes = EXCLUDED.used_bytes,
+    status = EXCLUDED.status,
+    pool = EXCLUDED.pool,
     last_seen_at = EXCLUDED.last_seen_at;
 
 -- name: ListNASVolumes :many
@@ -59,3 +61,49 @@ SELECT * FROM nas_volumes WHERE device_id = $1 ORDER BY total_bytes DESC, idx;
 
 -- name: DeleteStaleNASVolumes :exec
 DELETE FROM nas_volumes WHERE device_id = $1 AND last_seen_at < $2;
+
+-- name: UpsertNASISCSI :exec
+INSERT INTO nas_iscsi (device_id, kind, idx, name, capacity_bytes, status, iqn, last_seen_at)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+ON CONFLICT (device_id, kind, idx) DO UPDATE SET
+    name = EXCLUDED.name,
+    capacity_bytes = EXCLUDED.capacity_bytes,
+    status = EXCLUDED.status,
+    iqn = EXCLUDED.iqn,
+    last_seen_at = EXCLUDED.last_seen_at;
+
+-- name: ListNASISCSI :many
+SELECT * FROM nas_iscsi WHERE device_id = $1 ORDER BY kind, idx;
+
+-- name: DeleteStaleNASISCSI :exec
+DELETE FROM nas_iscsi WHERE device_id = $1 AND last_seen_at < $2;
+
+-- name: UpsertNASPool :exec
+INSERT INTO nas_pools (device_id, idx, name, raid_type, raw_bytes, status, last_seen_at)
+VALUES ($1,$2,$3,$4,$5,$6,$7)
+ON CONFLICT (device_id, idx) DO UPDATE SET
+    name = EXCLUDED.name,
+    raid_type = EXCLUDED.raid_type,
+    raw_bytes = EXCLUDED.raw_bytes,
+    status = EXCLUDED.status,
+    last_seen_at = EXCLUDED.last_seen_at;
+
+-- name: ListNASPools :many
+SELECT * FROM nas_pools WHERE device_id = $1 ORDER BY idx;
+
+-- name: DeleteStaleNASPools :exec
+DELETE FROM nas_pools WHERE device_id = $1 AND last_seen_at < $2;
+
+-- name: UpsertNASFan :exec
+INSERT INTO nas_fans (device_id, idx, name, rpm, last_seen_at)
+VALUES ($1,$2,$3,$4,$5)
+ON CONFLICT (device_id, idx) DO UPDATE SET
+    name = EXCLUDED.name,
+    rpm = EXCLUDED.rpm,
+    last_seen_at = EXCLUDED.last_seen_at;
+
+-- name: ListNASFans :many
+SELECT * FROM nas_fans WHERE device_id = $1 ORDER BY idx;
+
+-- name: DeleteStaleNASFans :exec
+DELETE FROM nas_fans WHERE device_id = $1 AND last_seen_at < $2;

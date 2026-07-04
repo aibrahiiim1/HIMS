@@ -26,6 +26,48 @@ func (q *Queries) DeleteStaleNASDisks(ctx context.Context, arg DeleteStaleNASDis
 	return err
 }
 
+const deleteStaleNASFans = `-- name: DeleteStaleNASFans :exec
+DELETE FROM nas_fans WHERE device_id = $1 AND last_seen_at < $2
+`
+
+type DeleteStaleNASFansParams struct {
+	DeviceID   uuid.UUID `json:"device_id"`
+	LastSeenAt time.Time `json:"last_seen_at"`
+}
+
+func (q *Queries) DeleteStaleNASFans(ctx context.Context, arg DeleteStaleNASFansParams) error {
+	_, err := q.db.Exec(ctx, deleteStaleNASFans, arg.DeviceID, arg.LastSeenAt)
+	return err
+}
+
+const deleteStaleNASISCSI = `-- name: DeleteStaleNASISCSI :exec
+DELETE FROM nas_iscsi WHERE device_id = $1 AND last_seen_at < $2
+`
+
+type DeleteStaleNASISCSIParams struct {
+	DeviceID   uuid.UUID `json:"device_id"`
+	LastSeenAt time.Time `json:"last_seen_at"`
+}
+
+func (q *Queries) DeleteStaleNASISCSI(ctx context.Context, arg DeleteStaleNASISCSIParams) error {
+	_, err := q.db.Exec(ctx, deleteStaleNASISCSI, arg.DeviceID, arg.LastSeenAt)
+	return err
+}
+
+const deleteStaleNASPools = `-- name: DeleteStaleNASPools :exec
+DELETE FROM nas_pools WHERE device_id = $1 AND last_seen_at < $2
+`
+
+type DeleteStaleNASPoolsParams struct {
+	DeviceID   uuid.UUID `json:"device_id"`
+	LastSeenAt time.Time `json:"last_seen_at"`
+}
+
+func (q *Queries) DeleteStaleNASPools(ctx context.Context, arg DeleteStaleNASPoolsParams) error {
+	_, err := q.db.Exec(ctx, deleteStaleNASPools, arg.DeviceID, arg.LastSeenAt)
+	return err
+}
+
 const deleteStaleNASVolumes = `-- name: DeleteStaleNASVolumes :exec
 DELETE FROM nas_volumes WHERE device_id = $1 AND last_seen_at < $2
 `
@@ -104,8 +146,103 @@ func (q *Queries) ListNASDisks(ctx context.Context, deviceID uuid.UUID) ([]NasDi
 	return items, nil
 }
 
+const listNASFans = `-- name: ListNASFans :many
+SELECT device_id, idx, name, rpm, last_seen_at FROM nas_fans WHERE device_id = $1 ORDER BY idx
+`
+
+func (q *Queries) ListNASFans(ctx context.Context, deviceID uuid.UUID) ([]NasFan, error) {
+	rows, err := q.db.Query(ctx, listNASFans, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []NasFan{}
+	for rows.Next() {
+		var i NasFan
+		if err := rows.Scan(
+			&i.DeviceID,
+			&i.Idx,
+			&i.Name,
+			&i.Rpm,
+			&i.LastSeenAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listNASISCSI = `-- name: ListNASISCSI :many
+SELECT device_id, kind, idx, name, capacity_bytes, status, iqn, last_seen_at FROM nas_iscsi WHERE device_id = $1 ORDER BY kind, idx
+`
+
+func (q *Queries) ListNASISCSI(ctx context.Context, deviceID uuid.UUID) ([]NasIscsi, error) {
+	rows, err := q.db.Query(ctx, listNASISCSI, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []NasIscsi{}
+	for rows.Next() {
+		var i NasIscsi
+		if err := rows.Scan(
+			&i.DeviceID,
+			&i.Kind,
+			&i.Idx,
+			&i.Name,
+			&i.CapacityBytes,
+			&i.Status,
+			&i.Iqn,
+			&i.LastSeenAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listNASPools = `-- name: ListNASPools :many
+SELECT device_id, idx, name, raid_type, raw_bytes, status, last_seen_at FROM nas_pools WHERE device_id = $1 ORDER BY idx
+`
+
+func (q *Queries) ListNASPools(ctx context.Context, deviceID uuid.UUID) ([]NasPool, error) {
+	rows, err := q.db.Query(ctx, listNASPools, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []NasPool{}
+	for rows.Next() {
+		var i NasPool
+		if err := rows.Scan(
+			&i.DeviceID,
+			&i.Idx,
+			&i.Name,
+			&i.RaidType,
+			&i.RawBytes,
+			&i.Status,
+			&i.LastSeenAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listNASVolumes = `-- name: ListNASVolumes :many
-SELECT device_id, idx, name, fs_type, total_bytes, used_bytes, last_seen_at FROM nas_volumes WHERE device_id = $1 ORDER BY total_bytes DESC, idx
+SELECT device_id, idx, name, fs_type, total_bytes, used_bytes, last_seen_at, status, pool FROM nas_volumes WHERE device_id = $1 ORDER BY total_bytes DESC, idx
 `
 
 func (q *Queries) ListNASVolumes(ctx context.Context, deviceID uuid.UUID) ([]NasVolume, error) {
@@ -125,6 +262,8 @@ func (q *Queries) ListNASVolumes(ctx context.Context, deviceID uuid.UUID) ([]Nas
 			&i.TotalBytes,
 			&i.UsedBytes,
 			&i.LastSeenAt,
+			&i.Status,
+			&i.Pool,
 		); err != nil {
 			return nil, err
 		}
@@ -175,6 +314,70 @@ func (q *Queries) UpsertNASDisk(ctx context.Context, arg UpsertNASDiskParams) er
 		arg.CapacityBytes,
 		arg.TempC,
 		arg.Health,
+		arg.LastSeenAt,
+	)
+	return err
+}
+
+const upsertNASFan = `-- name: UpsertNASFan :exec
+INSERT INTO nas_fans (device_id, idx, name, rpm, last_seen_at)
+VALUES ($1,$2,$3,$4,$5)
+ON CONFLICT (device_id, idx) DO UPDATE SET
+    name = EXCLUDED.name,
+    rpm = EXCLUDED.rpm,
+    last_seen_at = EXCLUDED.last_seen_at
+`
+
+type UpsertNASFanParams struct {
+	DeviceID   uuid.UUID `json:"device_id"`
+	Idx        int32     `json:"idx"`
+	Name       string    `json:"name"`
+	Rpm        *int32    `json:"rpm"`
+	LastSeenAt time.Time `json:"last_seen_at"`
+}
+
+func (q *Queries) UpsertNASFan(ctx context.Context, arg UpsertNASFanParams) error {
+	_, err := q.db.Exec(ctx, upsertNASFan,
+		arg.DeviceID,
+		arg.Idx,
+		arg.Name,
+		arg.Rpm,
+		arg.LastSeenAt,
+	)
+	return err
+}
+
+const upsertNASISCSI = `-- name: UpsertNASISCSI :exec
+INSERT INTO nas_iscsi (device_id, kind, idx, name, capacity_bytes, status, iqn, last_seen_at)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+ON CONFLICT (device_id, kind, idx) DO UPDATE SET
+    name = EXCLUDED.name,
+    capacity_bytes = EXCLUDED.capacity_bytes,
+    status = EXCLUDED.status,
+    iqn = EXCLUDED.iqn,
+    last_seen_at = EXCLUDED.last_seen_at
+`
+
+type UpsertNASISCSIParams struct {
+	DeviceID      uuid.UUID `json:"device_id"`
+	Kind          string    `json:"kind"`
+	Idx           int32     `json:"idx"`
+	Name          string    `json:"name"`
+	CapacityBytes *int64    `json:"capacity_bytes"`
+	Status        *string   `json:"status"`
+	Iqn           *string   `json:"iqn"`
+	LastSeenAt    time.Time `json:"last_seen_at"`
+}
+
+func (q *Queries) UpsertNASISCSI(ctx context.Context, arg UpsertNASISCSIParams) error {
+	_, err := q.db.Exec(ctx, upsertNASISCSI,
+		arg.DeviceID,
+		arg.Kind,
+		arg.Idx,
+		arg.Name,
+		arg.CapacityBytes,
+		arg.Status,
+		arg.Iqn,
 		arg.LastSeenAt,
 	)
 	return err
@@ -247,14 +450,50 @@ func (q *Queries) UpsertNASInfo(ctx context.Context, arg UpsertNASInfoParams) er
 	return err
 }
 
-const upsertNASVolume = `-- name: UpsertNASVolume :exec
-INSERT INTO nas_volumes (device_id, idx, name, fs_type, total_bytes, used_bytes, last_seen_at)
+const upsertNASPool = `-- name: UpsertNASPool :exec
+INSERT INTO nas_pools (device_id, idx, name, raid_type, raw_bytes, status, last_seen_at)
 VALUES ($1,$2,$3,$4,$5,$6,$7)
+ON CONFLICT (device_id, idx) DO UPDATE SET
+    name = EXCLUDED.name,
+    raid_type = EXCLUDED.raid_type,
+    raw_bytes = EXCLUDED.raw_bytes,
+    status = EXCLUDED.status,
+    last_seen_at = EXCLUDED.last_seen_at
+`
+
+type UpsertNASPoolParams struct {
+	DeviceID   uuid.UUID `json:"device_id"`
+	Idx        int32     `json:"idx"`
+	Name       *string   `json:"name"`
+	RaidType   *string   `json:"raid_type"`
+	RawBytes   *int64    `json:"raw_bytes"`
+	Status     *string   `json:"status"`
+	LastSeenAt time.Time `json:"last_seen_at"`
+}
+
+func (q *Queries) UpsertNASPool(ctx context.Context, arg UpsertNASPoolParams) error {
+	_, err := q.db.Exec(ctx, upsertNASPool,
+		arg.DeviceID,
+		arg.Idx,
+		arg.Name,
+		arg.RaidType,
+		arg.RawBytes,
+		arg.Status,
+		arg.LastSeenAt,
+	)
+	return err
+}
+
+const upsertNASVolume = `-- name: UpsertNASVolume :exec
+INSERT INTO nas_volumes (device_id, idx, name, fs_type, total_bytes, used_bytes, status, pool, last_seen_at)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
 ON CONFLICT (device_id, idx) DO UPDATE SET
     name = EXCLUDED.name,
     fs_type = EXCLUDED.fs_type,
     total_bytes = EXCLUDED.total_bytes,
     used_bytes = EXCLUDED.used_bytes,
+    status = EXCLUDED.status,
+    pool = EXCLUDED.pool,
     last_seen_at = EXCLUDED.last_seen_at
 `
 
@@ -265,6 +504,8 @@ type UpsertNASVolumeParams struct {
 	FsType     *string   `json:"fs_type"`
 	TotalBytes *int64    `json:"total_bytes"`
 	UsedBytes  *int64    `json:"used_bytes"`
+	Status     *string   `json:"status"`
+	Pool       *string   `json:"pool"`
 	LastSeenAt time.Time `json:"last_seen_at"`
 }
 
@@ -276,6 +517,8 @@ func (q *Queries) UpsertNASVolume(ctx context.Context, arg UpsertNASVolumeParams
 		arg.FsType,
 		arg.TotalBytes,
 		arg.UsedBytes,
+		arg.Status,
+		arg.Pool,
 		arg.LastSeenAt,
 	)
 	return err

@@ -673,6 +673,14 @@ type NasDisk struct {
 	LastSeenAt    time.Time `json:"last_seen_at"`
 }
 
+type NasFan struct {
+	DeviceID   uuid.UUID `json:"device_id"`
+	Idx        int32     `json:"idx"`
+	Name       string    `json:"name"`
+	Rpm        *int32    `json:"rpm"`
+	LastSeenAt time.Time `json:"last_seen_at"`
+}
+
 type NasInfo struct {
 	DeviceID         uuid.UUID `json:"device_id"`
 	Vendor           *string   `json:"vendor"`
@@ -693,6 +701,27 @@ type NasInfo struct {
 	LastSeenAt       time.Time `json:"last_seen_at"`
 }
 
+type NasIscsi struct {
+	DeviceID      uuid.UUID `json:"device_id"`
+	Kind          string    `json:"kind"`
+	Idx           int32     `json:"idx"`
+	Name          string    `json:"name"`
+	CapacityBytes *int64    `json:"capacity_bytes"`
+	Status        *string   `json:"status"`
+	Iqn           *string   `json:"iqn"`
+	LastSeenAt    time.Time `json:"last_seen_at"`
+}
+
+type NasPool struct {
+	DeviceID   uuid.UUID `json:"device_id"`
+	Idx        int32     `json:"idx"`
+	Name       *string   `json:"name"`
+	RaidType   *string   `json:"raid_type"`
+	RawBytes   *int64    `json:"raw_bytes"`
+	Status     *string   `json:"status"`
+	LastSeenAt time.Time `json:"last_seen_at"`
+}
+
 type NasVolume struct {
 	DeviceID   uuid.UUID `json:"device_id"`
 	Idx        int32     `json:"idx"`
@@ -701,6 +730,8 @@ type NasVolume struct {
 	TotalBytes *int64    `json:"total_bytes"`
 	UsedBytes  *int64    `json:"used_bytes"`
 	LastSeenAt time.Time `json:"last_seen_at"`
+	Status     *string   `json:"status"`
+	Pool       *string   `json:"pool"`
 }
 
 type Neighbor struct {
