@@ -298,6 +298,20 @@ func (s *Server) runOSCollection(ctx context.Context, d db.Device) osCollectResu
 					res.Reason, res.Detail = gate.Reason, detail+" "+gate.Detail
 					return res
 				}
+				// WinRM refused/filtered = not available on this host (Windows XP, or WinRM
+				// disabled). This is NOT the transient-timeout case (kept retryable above) and
+				// NOT an auth rejection — the listener is simply absent. Route to the site Relay
+				// Agent's WMI/DCOM path (the agent runs inside the site and reaches the host over
+				// RPC/DCOM), the same architecture as the legacy-WSMan route above. Without this,
+				// a pre-WinRM host (XP/2003) could never be managed even with a valid local admin.
+				if cat, _, _ := osinv.ClassifyWinRMError(err); cat == "unreachable" {
+					if ar, handled := s.routeViaSiteAgent(ctx, d, res.IP, "wmi"); handled {
+						return ar
+					}
+					gate := s.agentGateReason(ctx, d, "winrm_unreachable")
+					res.Reason, res.Detail = gate.Reason, "WinRM is not available on this host (refused/filtered); "+gate.Detail
+					return res
+				}
 			}
 			lastReason, lastDetail = categorizeCollectErr(res.Method, err.Error())
 			continue
