@@ -12,6 +12,7 @@ import { UPSDetail } from './UPSDetail'
 import { PbxDetail } from './PbxDetail'
 import { WirelessDetail } from './WirelessDetail'
 import { GenericDeviceDetail } from './GenericDeviceDetail'
+import { NasDetail } from './NasDetail'
 import { BmcDetail } from './BmcDetail'
 
 // DeviceDetailDispatch is the single entry point for `/devices/:id`. It looks up
@@ -38,6 +39,11 @@ export function DeviceDetailDispatch() {
       // server template — presenting controller identity, SNMP-vs-Redfish health, and the
       // full authenticated Redfish inventory (CPU/memory/storage-RAID/drives/sensors).
       return <BmcDetail />
+    case 'storage':
+      // A NAS (QNAP/Synology/TrueNAS) gets a DEDICATED storage template — physical
+      // disk bays, logical volumes, network interfaces, and live system health, all
+      // collected over SNMP with an honest not-collected gate before the first pull.
+      return <NasDetail />
     case 'endpoint':
       return <EndpointDetail />
     case 'firewall':

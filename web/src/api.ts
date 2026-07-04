@@ -327,6 +327,55 @@ export interface Interface {
   last_seen_at: string
 }
 
+// NAS deep-inventory (QNAP over SNMP). info/disks/volumes are the persisted snapshot;
+// network interfaces reuse the shared Interface type via /devices/{id}/interfaces.
+export interface NASInfo {
+  device_id: string
+  vendor?: string | null
+  model?: string | null
+  firmware?: string | null
+  serial?: string | null
+  hostname?: string | null
+  cpu_pct?: number | null
+  mem_total_bytes?: number | null
+  mem_used_bytes?: number | null
+  cpu_temp_c?: number | null
+  sys_temp_c?: number | null
+  uptime_seconds?: number | null
+  disk_count: number
+  volume_count: number
+  health?: string | null
+  collection_source: string
+  last_seen_at: string
+}
+export interface NASDisk {
+  device_id: string
+  slot: number
+  vendor?: string | null
+  model?: string | null
+  serial?: string | null
+  interface_type?: string | null
+  capacity_bytes?: number | null
+  temp_c?: number | null
+  health?: string | null
+  last_seen_at: string
+}
+export interface NASVolume {
+  device_id: string
+  idx: number
+  name: string
+  fs_type?: string | null
+  total_bytes?: number | null
+  used_bytes?: number | null
+  last_seen_at: string
+}
+export interface NASData {
+  collected: boolean
+  info?: NASInfo
+  disks?: NASDisk[]
+  volumes?: NASVolume[]
+}
+
 export interface VLAN {
   id: string
   device_id: string
