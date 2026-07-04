@@ -150,6 +150,14 @@ func WebVendorMarkers(server, title, body string) []domain.ClassificationEvidenc
 	// available (the scan reports that honestly), but the device type is known.
 	case strings.Contains(s, "ruijie") || (strings.Contains(s, "easy-smart") && strings.Contains(s, "switch")):
 		return []domain.ClassificationEvidence{ev(domain.EvidenceSourceHTTP, "Ruijie/Easy-Smart web-managed switch marker", string(domain.CatSwitch), domain.OSFamilyNetwork, "", 55)}
+	// NAS storage appliances — QNAP QTS/QuTS (also exposes the QDocRoot XML on
+	// /cgi-bin/authLogin.cgi), Synology DSM, TrueNAS/FreeNAS. Strong vendor markers.
+	case strings.Contains(s, "qnap") || strings.Contains(s, "qdocroot") || strings.Contains(s, "quts") || strings.Contains(s, "/qts/"):
+		return []domain.ClassificationEvidence{ev(domain.EvidenceSourceHTTP, "QNAP QTS web marker", string(domain.CatStorage), domain.OSFamilyEmbedded, "qnap", 85)}
+	case strings.Contains(s, "synology") || strings.Contains(s, "diskstation") || strings.Contains(s, "dsm ") || strings.Contains(s, "synoscgi"):
+		return []domain.ClassificationEvidence{ev(domain.EvidenceSourceHTTP, "Synology DSM web marker", string(domain.CatStorage), domain.OSFamilyEmbedded, "synology", 85)}
+	case strings.Contains(s, "truenas") || strings.Contains(s, "freenas"):
+		return []domain.ClassificationEvidence{ev(domain.EvidenceSourceHTTP, "TrueNAS web marker", string(domain.CatStorage), domain.OSFamilyEmbedded, "truenas", 85)}
 	// Wireless controllers. "unifi" is guarded against "unified" (Cisco Unified) —
 	// already handled above, but the guard keeps any other "unified…" string out.
 	case (strings.Contains(s, "unifi") && !strings.Contains(s, "unified")) || strings.Contains(s, "aruba") || strings.Contains(s, "ruckus") ||
@@ -194,6 +202,21 @@ func OpenPorts(tcp []int) []domain.ClassificationEvidence {
 	// JetDirect printing.
 	if has[9100] {
 		out = append(out, ev(domain.EvidenceSourcePort, "tcp/9100 (JetDirect)", string(domain.CatPrinter), domain.OSFamilyEmbedded, "", 55))
+	}
+	// SIP signalling — an IP phone / voice endpoint (Alcatel, Cisco, Yealink, Grandstream…).
+	// Many SIP phones expose ONLY 5060 (no web/SSH), so without this rule they answer no
+	// scanned port and are never enrolled. Weak on its own (a PBX/voice gateway also speaks
+	// SIP), so keep the confidence modest — a Windows/RPC surface or a PBX web marker outranks it.
+	if has[5060] || has[5061] {
+		out = append(out, ev(domain.EvidenceSourcePort, "tcp/5060 (SIP)", string(domain.CatIPPhone), domain.OSFamilyEmbedded, "", 50))
+	}
+	// NFS export (2049, usually with the 111 portmapper) is a file-serving / NAS signal.
+	// A device exposing NFS — especially alongside SMB + a web admin UI — is storage
+	// (QNAP, Synology, TrueNAS, a Linux NAS), not a generic app server. Modest confidence so a
+	// vendor web marker (below) or an authenticated OS caption can still refine it; the operator
+	// can also reclassify. Windows file servers use SMB (445), handled separately above.
+	if has[2049] {
+		out = append(out, ev(domain.EvidenceSourcePort, "tcp/2049 (NFS export)", string(domain.CatStorage), domain.OSFamilyEmbedded, "", 50))
 	}
 	// VMware ESXi host agent. Port 902 (vpxa/authd) points at ESXi — BUT only on a host that is
 	// not also clearly Windows. A bare ESXi host exposes 902 (+ the 443 vSphere SDK) and does NOT

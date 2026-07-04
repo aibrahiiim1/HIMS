@@ -54,11 +54,12 @@ export const INVENTORY_GROUPS: InvGroup[] = [
     label: 'Endpoints',
     allLabel: 'All Endpoints',
     allPath: '/inventory/endpoints',
-    categories: ['endpoint', 'printer', 'biometric', 'biometric_device_unclassified', 'pos', 'pos_device_unclassified', 'ups'],
+    categories: ['endpoint', 'printer', 'biometric', 'biometric_device_unclassified', 'pos', 'pos_device_unclassified', 'ups', 'storage'],
     manualClassify: true,
     children: [
       { label: 'Workstations', path: '/inventory/endpoints/workstations', categories: ['endpoint'], manualClassify: true , onboardType: 'endpoint' },
       { label: 'Printers', path: '/inventory/endpoints/printers', categories: ['printer'] , onboardType: 'printer' },
+      { label: 'NAS Storage', path: '/inventory/endpoints/storage', categories: ['storage'], manualClassify: true , onboardType: 'storage' },
       { label: 'Biometric Devices', path: '/inventory/endpoints/biometric', categories: ['biometric', 'biometric_device_unclassified'], manualClassify: true , onboardType: 'biometric_zkteco' },
       { label: 'Point of Sale', path: '/inventory/endpoints/pos', categories: ['pos', 'pos_device_unclassified'], manualClassify: true , onboardType: 'pos' },
       { label: 'UPS', path: '/inventory/endpoints/ups', categories: ['ups'] , onboardType: 'ups' },

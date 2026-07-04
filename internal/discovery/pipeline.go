@@ -293,7 +293,7 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 	// 902 = VMware ESXi vpxa/authd host-agent port — near-unique to ESXi, so probing it lets
 	// classification detect ESXi (→ virtual_host) even when the host's web banner does not
 	// advertise vmware/esxi, which is what routes vSphere/vendor_api collection automatically.
-	ports := []int{22, 23, 53, 80, 88, 135, 161, 389, 443, 445, 554, 636, 902, 1433, 1521, 3389, 5432, 5985, 5986, 8000, 8008, 8010, 8080, 8443, 9100}
+	ports := []int{22, 23, 53, 80, 88, 135, 161, 389, 443, 445, 554, 636, 902, 1433, 1521, 3389, 5060, 5061, 5432, 5985, 5986, 8000, 8008, 8010, 8080, 8443, 9100}
 	// Hikvision/CCTV convention: a recorder/camera's web/ISAPI port is commonly
 	// 8000 + the host's last octet (.2 -> 8002, .15 -> 8015). Probe it per-host so
 	// these recorders are discovered automatically — the operator never has to
@@ -561,7 +561,13 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 	// pre-login banner; if a scoped CLI credential authenticates over the OmniPCX telnet
 	// protocol, bind it + capture real software identity → managed pbx. Banner-only (no working
 	// credential) = credential_required; an attempted-but-rejected CLI cred = credential_failed.
-	if hasPortN(r.OpenPorts, 23) && strings.Contains(strings.ToLower(r.Probe.Hints["telnet_banner"]), "omnipcx") {
+	// A Windows host (RPC/SMB/RDP/WinRM) that also shows an OmniPCX telnet banner is the
+	// OmniPCX MANAGEMENT / OmniVista console PC, NOT the PBX — OmniPCX Enterprise runs on a
+	// dedicated Linux appliance, never Windows. Don't let the banner override the Windows
+	// classification (which strands the PC on voice onboarding with no OS collection). The
+	// real telnet-only appliance has none of these ports, so it still classifies as pbx.
+	winMgmtHost := hasPortN(r.OpenPorts, 135) || hasPortN(r.OpenPorts, 445) || hasPortN(r.OpenPorts, 3389) || hasPortN(r.OpenPorts, 5985) || hasPortN(r.OpenPorts, 5986)
+	if hasPortN(r.OpenPorts, 23) && strings.Contains(strings.ToLower(r.Probe.Hints["telnet_banner"]), "omnipcx") && !winMgmtHost {
 		// Honest detection from the banner alone — even with no working credential.
 		r.Match = driver.Match{Category: domain.CatPBX, Confidence: 80}
 		r.Vendor, r.Model, r.Subtype = "Alcatel-Lucent", "OmniPCX Enterprise", "alcatel_omnipcx"

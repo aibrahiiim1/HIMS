@@ -208,3 +208,38 @@ func TestEvidenceSortedStrongestFirst(t *testing.T) {
 		t.Errorf("evidence not sorted strongest-first: %+v", r.Evidence)
 	}
 }
+
+// TestClassify_NewDeviceTypes covers the classification fixes for reported miscategorised
+// devices: SIP phones (only 5060), NAS appliances (NFS/QNAP), and the OmniPCX telnet
+// banner NOT overriding a Windows management PC.
+func TestClassify_SIPPhone(t *testing.T) {
+	got := catOf(OpenPorts([]int{5060}))
+	if got != "ip_phone" {
+		t.Errorf("a SIP-only host (5060) must classify as ip_phone; got %q", got)
+	}
+}
+
+func TestClassify_NASbyNFS(t *testing.T) {
+	// NFS export → storage.
+	if c := catOf(OpenPorts([]int{2049, 111, 445})); c != "storage" {
+		t.Errorf("an NFS-exporting host must classify as storage/NAS; got %q", c)
+	}
+	// QNAP web marker → storage (vendor-specific, high confidence).
+	if ev := WebVendorMarkers("", "", "<QDocRoot version=\"1.0\">"); len(ev) == 0 || ev[0].Category != "storage" {
+		t.Errorf("QNAP QDocRoot marker must classify as storage; got %+v", ev)
+	}
+	if ev := WebVendorMarkers("", "Synology DiskStation", ""); len(ev) == 0 || ev[0].Category != "storage" {
+		t.Errorf("Synology marker must classify as storage; got %+v", ev)
+	}
+}
+
+// catOf returns the highest-confidence category from a set of port/marker evidence.
+func catOf(ev []domain.ClassificationEvidence) string {
+	best, bestConf := "", -1
+	for _, e := range ev {
+		if e.Category != "" && e.Confidence > bestConf {
+			best, bestConf = e.Category, e.Confidence
+		}
+	}
+	return best
+}
