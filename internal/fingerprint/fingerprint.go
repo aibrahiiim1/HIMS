@@ -369,7 +369,7 @@ func Library() []Print {
 		p(KindOID, "1.3.6.1.4.1.25053", "Ruckus Wireless", "wireless", 80), // Ruckus Wireless (generic PEN; ZD product prints above pin model)
 		p(KindOID, "1.3.6.1.4.1.534", "Eaton", "ups", 82),                  // Eaton / Powerware UPS
 		p(KindOID, "1.3.6.1.4.1.24681", "QNAP", "storage", 80),             // QNAP NAS (legacy QTS PEN)
-		p(KindOID, "1.3.6.1.4.1.55062", "QNAP", "storage", 84),             // QNAP QTS 5.x NAS (newer PEN; beats generic Linux/net-snmp server @55)
+		p(KindOID, "1.3.6.1.4.1.55062", "QNAP", "storage", 85),             // QNAP QTS 5.x NAS (newer PEN; exact-OID = specific → also sets vendor QNAP + model from sysDescr)
 		p(KindOID, "1.3.6.1.4.1.10642", "Zebra", "printer", 80),            // Zebra label printers
 		p(KindOID, "1.3.6.1.4.1.253", "Xerox", "printer", 80),              // Xerox
 		p(KindOID, "1.3.6.1.4.1.1248", "Epson", "printer", 78),             // Seiko Epson
