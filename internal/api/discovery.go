@@ -18,6 +18,7 @@ import (
 	"github.com/coralsearesorts/hims/internal/credtest"
 	"github.com/coralsearesorts/hims/internal/discovery"
 	"github.com/coralsearesorts/hims/internal/domain"
+	"github.com/coralsearesorts/hims/internal/nas"
 	"github.com/coralsearesorts/hims/internal/scan"
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
 )
@@ -900,6 +901,36 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 						} else {
 							enrichment = "CCTV collection incomplete: " + cv.Reason + scopeNote
 						}
+					}
+				} else if dev.Category == string(domain.CatStorage) && s.cipher() != nil && dev.CredentialID != nil {
+					// NAS candidate with a bound SNMP community. QNAP QTS/QuTS exposes
+					// disks, volumes, network interfaces, and live system health over
+					// SNMP — collect it now using ONLY the bound community (never sprays).
+					// Other NAS platforms (Synology/TrueNAS) stay honest candidates until
+					// their collector exists.
+					oid := r.Probe.SNMPSysObjectID
+					vendorLC := ""
+					if dev.Vendor != nil {
+						vendorLC = strings.ToLower(*dev.Vendor)
+					}
+					isQNAP := strings.Contains(oid, "55062") || strings.Contains(oid, "24681") ||
+						strings.Contains(vendorLC, "qnap") ||
+						strings.Contains(strings.ToLower(r.Probe.SNMPSysDescr), "qnap")
+					if isQNAP {
+						cctx, ccancel := context.WithTimeout(ctx, 60*time.Second)
+						if c, cerr := s.snmpClientForDevice(cctx, dev, "", 8*time.Second); cerr == nil {
+							rep := nas.CollectQNAP(cctx, c)
+							c.Close()
+							poll := time.Now()
+							s.persistNAS(cctx, dev.ID, rep, poll)
+							_, _ = s.collectSNMPInterfaces(cctx, dev, "", 8*time.Second)
+							enrichment = fmt.Sprintf("NAS inventory collected: %d disk(s), %d volume(s)", len(rep.Disks), len(rep.Volumes))
+						} else {
+							enrichment = "NAS candidate — SNMP collect failed: " + cerr.Error()
+						}
+						ccancel()
+					} else {
+						enrichment = "NAS candidate — QNAP SNMP MIB not detected; add a QTS/DSM credential to onboard deep inventory"
 					}
 				}
 			}

@@ -156,22 +156,23 @@ func onboardingCatalog() []onbType {
 			Vendors: []string{"HP", "Canon", "Epson", "Brother", "Xerox", "Other"}, Methods: []onbMethod{m("snmp_v2c", "SNMP v2c (Printer-MIB)", "snmp_v2c", "snmp_v2c", 161, true, ""), m("http_basic", "HTTP/HTTPS", "http_basic", "http_basic", 443, false, "identity-only until a printer web collector exists")}, BaseFields: baseFields(nil), LockOnSave: true},
 		{Type: "ups", Category: "ups", Subtype: "", DisplayName: "UPS", AddLabel: "Add UPS", Group: "endpoints",
 			Vendors: []string{"APC", "Eaton", "Vertiv", "CyberPower", "Other"}, Methods: []onbMethod{m("snmp_v2c", "SNMP v2c (UPS-MIB)", "snmp_v2c", "snmp_v2c", 161, true, "")}, BaseFields: baseFields(nil), LockOnSave: true},
-		// NAS storage (QNAP QTS/QuTS, Synology DSM, TrueNAS…). Identity/health onboard now over
-		// SNMP or SSH; deep NAS inventory (disks/volumes/RAID/shares via the vendor QTS/DSM API)
-		// is an honest collector_pending gate — a "storage" device is classified + manageable and
-		// the operator can reclassify a misdetected one to it, but full data collection needs a
-		// dedicated NAS collector adapter.
+		// NAS storage (QNAP QTS/QuTS, Synology DSM, TrueNAS…). QNAP deep inventory is LIVE
+		// over SNMP: physical disks (vendor/model/serial/capacity/temp/health), logical
+		// volumes, network interfaces, and system health (CPU/mem/temps) via the QTS-5
+		// enterprise MIB + legacy NAS-MIB + HOST-RESOURCES-MIB — collected automatically on
+		// a scan and via POST /devices/{id}/collect-nas. Synology/TrueNAS stay an honest
+		// collector_pending gate until their adapters exist (classification + manage are live).
 		{Type: "storage", Category: "storage", Subtype: "", DisplayName: "NAS Storage", AddLabel: "Add NAS Storage", Group: "endpoints",
 			Vendors: []string{"QNAP", "Synology", "TrueNAS", "Netgear", "Western Digital", "Buffalo", "Other"},
 			Methods: []onbMethod{
-				m("snmp_v2c", "SNMP v2c (NAS / HOST-RESOURCES-MIB)", "snmp_v2c", "snmp_v2c", 161, true, "identity + disk/volume health where the NAS exposes SNMP"),
-				m("ssh", "SSH", "ssh", "ssh", 22, false, "identity-only until a NAS collector exists"),
-				m("http_basic", "HTTP/HTTPS (QTS / DSM API)", "http_basic", "http_basic", 443, false, "deep NAS inventory (disks/volumes/RAID/shares) — collector_pending"),
+				m("snmp_v2c", "SNMP v2c (QNAP / NAS / HOST-RESOURCES-MIB)", "snmp_v2c", "snmp_v2c", 161, true, "QNAP: full disk/volume/NIC/health inventory; other NAS: identity + volume health where exposed"),
+				m("ssh", "SSH", "ssh", "ssh", 22, false, "identity-only until a NAS CLI collector exists"),
+				m("http_basic", "HTTP/HTTPS (QTS / DSM API)", "http_basic", "http_basic", 443, false, "reserved for Synology DSM / richer QTS-API inventory — collector_pending"),
 			},
 			BaseFields: baseFields(nil),
 			Capabilities: []onbCapability{
-				cap("identity", "Model / serial / firmware", "supported", "via SNMP sysDescr or SSH"),
-				cap("nas_inventory", "Disks / volumes / RAID / shares", "collector_pending", "needs a NAS collector (QNAP QTS / Synology DSM API, or NAS-MIB); classification + manage are live now"),
+				cap("identity", "Model / serial / firmware", "supported", "via SNMP sysDescr / QNAP NAS-MIB or SSH"),
+				cap("nas_inventory", "Disks / volumes / network / health", "supported", "QNAP QTS/QuTS: live over SNMP (auto on scan + collect-nas). Synology/TrueNAS collector still pending."),
 			},
 			LockOnSave: true},
 		{Type: "biometric_zkteco", Category: "biometric", Subtype: "zkteco", DisplayName: "Biometric Device — ZKTeco", AddLabel: "Add Biometric Device", Group: "endpoints",
