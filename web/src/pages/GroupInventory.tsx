@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom'
 import { Boxes } from 'lucide-react'
 import { api, type Device } from '../api'
 import { PageHeader, Panel, EmptyState, colorFor, usePaged, Pager } from '../components/ui'
-import { useQueryParam, useQueryNum } from '../lib/urlState'
+import { useQueryParam, useQueryNum, useSetParams } from '../lib/urlState'
 import { ManagementBadge, ReachabilityBadge } from '../components/StatusBadges'
 import { SummaryCards, type SummaryCard } from '../components/SummaryCards'
 import { ManualClassify } from '../components/ManualClassify'
@@ -49,23 +49,33 @@ export function GroupInventory({ title, subtitle, categories, allowManualClassif
   const all = data ?? []
 
   // Page + the drill-relevant filters (search, type, management, reachability) live
-  // in the URL so browser Back from a device restores the exact filtered page.
+  // in the URL so browser Back from a device restores the exact filtered page. Every
+  // filter change also resets to page 1 — always in ONE setParams call, because two
+  // setSearchParams calls in a row clobber each other (the search-box "won't type" bug).
   const [pageNum, setPageNum] = useQueryNum('page', 1)
-  const [q, setQU] = useQueryParam('q', '')
-  const [type, setTypeU] = useQueryParam('type', '')
-  const [mgmt, setMgmtU] = useQueryParam('mgmt', '')
-  const [reach, setReachU] = useQueryParam('reach', '')
-  const setQ = (v: string) => { setQU(v); setPageNum(1) }
-  const setType = (v: string) => { setTypeU(v); setPageNum(1) }
-  const setMgmt = (v: string) => { setMgmtU(v); setPageNum(1) }
-  const setReach = (v: string) => { setReachU(v); setPageNum(1) }
+  const [q] = useQueryParam('q', '')
+  const [type] = useQueryParam('type', '')
+  const [mgmt] = useQueryParam('mgmt', '')
+  const [reach] = useQueryParam('reach', '')
+  const setParams = useSetParams()
+  const setQ = (v: string) => setParams({ q: v, page: null })
+  const setType = (v: string) => setParams({ type: v, page: null })
+  const setMgmt = (v: string) => setParams({ mgmt: v, page: null })
+  // reachability filter is set only via the Online/Offline summary cards (selectOnly).
   const [subtype, setSubtype] = useState('')
   const [vendor, setVendor] = useState('')
   const [site, setSite] = useState('')
   const [proto, setProto] = useState('')
   const [credReq, setCredReq] = useState(false)
   const [manualOnly, setManualOnly] = useState(false)
-  const reset = () => { setType(''); setSubtype(''); setVendor(''); setMgmt(''); setSite(''); setProto(''); setReach(''); setCredReq(false); setManualOnly(false) }
+  const clearLocalFilters = () => { setSubtype(''); setVendor(''); setSite(''); setProto(''); setCredReq(false); setManualOnly(false) }
+  // selectOnly clears every filter and applies just this card's filter (one URL write),
+  // resetting to page 1 — replaces the old reset()+setX()+setPage() call chain.
+  const selectOnly = (upd: Record<string, string | null>) => {
+    setParams({ type: null, mgmt: null, reach: null, q: null, page: null, ...upd })
+    clearLocalFilters()
+  }
+  const reset = () => { setParams({ type: null, mgmt: null, reach: null, q: null, page: null }); clearLocalFilters() }
 
   const opts = useMemo(() => {
     const uniq = (xs: (string | undefined | null)[]) => Array.from(new Set(xs.filter((x): x is string => !!x))).sort()
@@ -108,26 +118,30 @@ export function GroupInventory({ title, subtitle, categories, allowManualClassif
     // Reachability first — so an operator sees at a glance how many devices are offline.
     const offline = cnt((d) => (d.reachability ?? '') === 'offline')
     list.push(
-      { label: 'Online', value: cnt((d) => (d.reachability ?? '') === 'online'), tone: 'ok', active: reach === 'online', onClick: () => { reset(); setReach(reach === 'online' ? '' : 'online'); paged.setPage(0) } },
-      { label: 'Offline', value: offline, tone: offline > 0 ? 'crit' : 'muted', active: reach === 'offline', onClick: () => { reset(); setReach(reach === 'offline' ? '' : 'offline'); paged.setPage(0) } },
+      { label: 'Online', value: cnt((d) => (d.reachability ?? '') === 'online'), tone: 'ok', active: reach === 'online', onClick: () => selectOnly({ reach: reach === 'online' ? null : 'online' }) },
+      { label: 'Offline', value: offline, tone: offline > 0 ? 'crit' : 'muted', active: reach === 'offline', onClick: () => selectOnly({ reach: reach === 'offline' ? null : 'offline' }) },
     )
     for (const c of opts.types) {
-      list.push({ label: deviceTypeLabel(c), value: cnt((d) => d.category === c), tone: 'muted', active: type === c, onClick: () => { reset(); setType(type === c ? '' : c); paged.setPage(0) } })
+      list.push({ label: deviceTypeLabel(c), value: cnt((d) => d.category === c), tone: 'muted', active: type === c, onClick: () => selectOnly({ type: type === c ? null : c }) })
     }
     list.push(
-      { label: 'Managed', value: cnt((d) => d.management === 'managed'), tone: 'ok', active: mgmt === 'managed', onClick: () => { reset(); setMgmt(mgmt === 'managed' ? '' : 'managed'); paged.setPage(0) } },
-      { label: 'Unmanaged', value: cnt((d) => d.management === 'unmanaged'), tone: 'muted', active: mgmt === 'unmanaged', onClick: () => { reset(); setMgmt(mgmt === 'unmanaged' ? '' : 'unmanaged'); paged.setPage(0) } },
-      { label: 'Credential required', value: cnt((d) => CRED_REQUIRED.has(d.management ?? '')), tone: 'crit', active: credReq, onClick: () => { reset(); setCredReq(!credReq); paged.setPage(0) } },
+      { label: 'Managed', value: cnt((d) => d.management === 'managed'), tone: 'ok', active: mgmt === 'managed', onClick: () => selectOnly({ mgmt: mgmt === 'managed' ? null : 'managed' }) },
+      { label: 'Unmanaged', value: cnt((d) => d.management === 'unmanaged'), tone: 'muted', active: mgmt === 'unmanaged', onClick: () => selectOnly({ mgmt: mgmt === 'unmanaged' ? null : 'unmanaged' }) },
+      { label: 'Credential required', value: cnt((d) => CRED_REQUIRED.has(d.management ?? '')), tone: 'crit', active: credReq, onClick: () => { const v = !credReq; reset(); setCredReq(v) } },
     )
     const manual = cnt((d) => d.classification_source === 'manual_override')
     if (manual > 0 || allowManualClassify) {
-      list.push({ label: 'Manual classified', value: manual, tone: 'info', active: manualOnly, onClick: () => { reset(); setManualOnly(!manualOnly); paged.setPage(0) } })
+      list.push({ label: 'Manual classified', value: manual, tone: 'info', active: manualOnly, onClick: () => { const v = !manualOnly; reset(); setManualOnly(v) } })
     }
     return list
   }, [data, type, subtype, vendor, mgmt, site, proto, credReq, manualOnly])
 
+  // Each setter passed to `sel` resets the page itself (URL setters via setParams,
+  // the local-state ones below via setLocal) — so the select's onChange must NOT
+  // also call setPage (that second setSearchParams would clobber a URL filter).
+  const setLocal = (set: (v: string) => void) => (v: string) => { set(v); setPageNum(1) }
   const sel = (val: string, set: (v: string) => void, label: string, options: string[], fmt?: (v: string) => string) => (
-    <select value={val} onChange={(e) => { set(e.target.value); paged.setPage(0) }}
+    <select value={val} onChange={(e) => set(e.target.value)}
       style={{ padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, background: 'var(--surface)', color: 'inherit' }}>
       <option value="">{label}: all</option>
       {options.map((o) => <option key={o} value={o}>{fmt ? fmt(o) : o}</option>)}
@@ -149,14 +163,14 @@ export function GroupInventory({ title, subtitle, categories, allowManualClassif
         {data && all.length > 0 && (
           <>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: '10px' }}>
-              <input placeholder="Search IP / hostname / model…" value={q} onChange={(e) => { setQ(e.target.value); paged.setPage(0) }}
+              <input placeholder="Search IP / hostname / model…" value={q} onChange={(e) => setQ(e.target.value)}
                 style={{ padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, width: 260, maxWidth: '100%' }} />
               {sel(type, setType, 'Type', opts.types, deviceTypeLabel)}
-              {opts.subtypes.length > 0 && sel(subtype, setSubtype, 'Subtype', opts.subtypes)}
-              {sel(vendor, setVendor, 'Vendor', opts.vendors)}
+              {opts.subtypes.length > 0 && sel(subtype, setLocal(setSubtype), 'Subtype', opts.subtypes)}
+              {sel(vendor, setLocal(setVendor), 'Vendor', opts.vendors)}
               {sel(mgmt, setMgmt, 'Management', opts.mgmts, (v) => v.replace(/_/g, ' '))}
-              {opts.sites.length > 0 && sel(site, setSite, 'Site', opts.sites)}
-              {opts.protos.length > 0 && sel(proto, setProto, 'Protocol', opts.protos, (v) => v.toUpperCase())}
+              {opts.sites.length > 0 && sel(site, setLocal(setSite), 'Site', opts.sites)}
+              {opts.protos.length > 0 && sel(proto, setLocal(setProto), 'Protocol', opts.protos, (v) => v.toUpperCase())}
             </div>
             <table className="data-table">
               <thead>

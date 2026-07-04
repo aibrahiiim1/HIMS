@@ -4,7 +4,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { Boxes, Trash2, Search, Wifi, WifiOff, Server, TriangleAlert, Package, Plus, Ghost } from 'lucide-react'
 import { api, type Device, type Lookup, type Location, locationPaths } from '../api'
 import { PageHeader, Panel, Kpi, BarList, EmptyState, colorFor, usePaged, Pager } from '../components/ui'
-import { useQueryParam, useQueryNum } from '../lib/urlState'
+import { useQueryParam, useQueryNum, useSetParams } from '../lib/urlState'
 import { ReachabilityBadge, ManagementBadge } from '../components/StatusBadges'
 import { DeleteAllToggle } from '../components/DeleteAllToggle'
 import { RescanSplit } from '../components/RescanSplit'
@@ -69,16 +69,18 @@ export function Inventory() {
   }
   // Category / class / location / search / page live in the URL so browser Back
   // from a device restores the exact filtered page (and the view is shareable).
-  const [cat, setCatRaw] = useQueryParam('cat', 'all')
-  const [classF, setClassFRaw] = useQueryParam('class', 'all')
-  const [locF, setLocFRaw] = useQueryParam('loc', 'all')
-  const [q, setQRaw] = useQueryParam('q', '')
+  // Each filter change also resets to page 1 — done in ONE setParams call so the
+  // two updates don't clobber each other (the search-box "won't type" bug).
+  const [cat] = useQueryParam('cat', 'all')
+  const [classF] = useQueryParam('class', 'all')
+  const [locF] = useQueryParam('loc', 'all')
+  const [q] = useQueryParam('q', '')
   const [pageNum, setPageNum] = useQueryNum('page', 1)
-  // Any filter/search change returns to page 1 (URL-synced).
-  const setCat = (v: string) => { setCatRaw(v); setPageNum(1) }
-  const setClassF = (v: string) => { setClassFRaw(v); setPageNum(1) }
-  const setLocF = (v: string) => { setLocFRaw(v); setPageNum(1) }
-  const setQ = (v: string) => { setQRaw(v); setPageNum(1) }
+  const setParams = useSetParams()
+  const setCat = (v: string) => setParams({ cat: v === 'all' ? null : v, page: null })
+  const setClassF = (v: string) => setParams({ class: v === 'all' ? null : v, page: null })
+  const setLocF = (v: string) => setParams({ loc: v === 'all' ? null : v, page: null })
+  const setQ = (v: string) => setParams({ q: v, page: null })
   const [sel, setSel] = useState<Set<string>>(new Set())
   const [editing, setEditing] = useState<Device | null>(null)
   const [msg, setMsg] = useState('')

@@ -4,7 +4,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { ShieldOff, Pencil, RefreshCw, KeyRound, Boxes, ClipboardList, Undo2 } from 'lucide-react'
 import { api, type Device, MGMT_BADGE } from '../api'
 import { PageHeader, Panel, Kpi, EmptyState, usePaged, Pager, colorFor } from '../components/ui'
-import { useQueryParam, useQueryNum } from '../lib/urlState'
+import { useQueryParam, useQueryNum, useSetParams } from '../lib/urlState'
 import { ReachabilityBadge, ManagementBadge } from '../components/StatusBadges'
 import { EditDevice } from '../components/EditDevice'
 import { ExportDevicesButton } from '../components/ExportDevicesButton'
@@ -55,9 +55,10 @@ export function UnmanagedDevices() {
   const filter = sp.get('management') ?? ''
   const [editDev, setEditDev] = useState<Device | null>(null)
   // Search + page in the URL so browser Back restores the exact view.
-  const [q, setQRaw] = useQueryParam('q', '')
+  const [q] = useQueryParam('q', '')
   const [pageNum, setPageNum] = useQueryNum('page', 1)
-  const setQ = (v: string) => { setQRaw(v); setPageNum(1) }
+  const setParams = useSetParams()
+  const setQ = (v: string) => setParams({ q: v, page: null })
   const qc = useQueryClient()
   const invView = filter === 'inventory_only'
 

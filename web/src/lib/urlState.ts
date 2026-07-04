@@ -34,3 +34,30 @@ export function useQueryNum(name: string, dflt = 0): [number, (v: number) => voi
   const n = Number.parseInt(s, 10)
   return [Number.isFinite(n) ? n : dflt, useCallback((v: number) => setS(String(v)), [setS])]
 }
+
+// useSetParams returns a setter that updates SEVERAL query params in ONE
+// setSearchParams call. This is required whenever a single UI action changes more
+// than one param — e.g. editing the search box also resets the page. Calling
+// useQueryParam's setter twice in a row does NOT work: react-router's functional
+// updater reads the current render's params each time, so the second call clobbers
+// the first (the classic symptom: the search box "won't type" because q is dropped
+// by the page-reset call). Pass '' | null | undefined to delete a param.
+export function useSetParams(): (updates: Record<string, string | number | null | undefined>) => void {
+  const [, setSp] = useSearchParams()
+  return useCallback(
+    (updates) => {
+      setSp(
+        (prev) => {
+          const next = new URLSearchParams(prev)
+          for (const [k, v] of Object.entries(updates)) {
+            if (v === null || v === undefined || v === '') next.delete(k)
+            else next.set(k, String(v))
+          }
+          return next
+        },
+        { replace: true },
+      )
+    },
+    [setSp],
+  )
+}

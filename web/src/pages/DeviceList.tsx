@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom'
 import { Boxes, Wifi, WifiOff, Server, Radar, Pencil } from 'lucide-react'
 import { api, type Device } from '../api'
 import { PageHeader, Panel, Kpi, StatusPill, EmptyState, colorFor, usePaged, Pager } from '../components/ui'
-import { useQueryParam, useQueryNum } from '../lib/urlState'
+import { useQueryParam, useQueryNum, useSetParams } from '../lib/urlState'
 import { DeleteAllToggle } from '../components/DeleteAllToggle'
 import { EditDevice } from '../components/EditDevice'
 import { ExportDevicesButton } from '../components/ExportDevicesButton'
@@ -68,9 +68,11 @@ export function DeviceList({ category, title, detailBase, headerExtra, preConten
   const vendors = useMemo(() => new Set(all.map((d) => d.vendor || 'Unknown')).size, [data])
 
   // Search + page live in the URL so browser Back from a device restores them.
-  const [q, setQRaw] = useQueryParam('q', '')
+  // q + page are updated in ONE setParams call (two setSearchParams calls would drop q).
+  const [q] = useQueryParam('q', '')
   const [pageNum, setPageNum] = useQueryNum('page', 1)
-  const setQ = (v: string) => { setQRaw(v); setPageNum(1) }
+  const setParams = useSetParams()
+  const setQ = (v: string) => setParams({ q: v, page: null })
   const filtered = useMemo(() => {
     const t = q.trim().toLowerCase()
     if (!t) return all
