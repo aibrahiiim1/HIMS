@@ -211,13 +211,15 @@ func OpenPorts(tcp []int) []domain.ClassificationEvidence {
 	if (has[5060] || has[5061]) && !winMgmt {
 		out = append(out, ev(domain.EvidenceSourcePort, "tcp/5060 (SIP)", string(domain.CatIPPhone), domain.OSFamilyEmbedded, "", 55))
 	}
-	// NFS export (2049, usually with the 111 portmapper) is a file-serving / NAS signal.
-	// A device exposing NFS — especially alongside SMB + a web admin UI — is storage
-	// (QNAP, Synology, TrueNAS, a Linux NAS), not a generic app server. Modest confidence so a
-	// vendor web marker (below) or an authenticated OS caption can still refine it; the operator
-	// can also reclassify. Windows file servers use SMB (445), handled separately above.
-	if has[2049] {
-		out = append(out, ev(domain.EvidenceSourcePort, "tcp/2049 (NFS export)", string(domain.CatStorage), domain.OSFamilyEmbedded, "", 50))
+	// NFS export (2049, usually with the 111 portmapper) on a NON-Windows host is a
+	// file-serving / NAS signal — QNAP, Synology, TrueNAS, a Linux NAS. Confidence is set
+	// above the SSH-auth provisional "server" guess (60) so a NAS that answers SSH still
+	// lands on storage; a real Windows box (RPC/RDP/WinRM) that also serves NFS is left to
+	// the Windows rules. SMB (445) is NOT treated as Windows here — every NAS serves SMB too.
+	// A vendor web marker (QNAP/Synology/TrueNAS, below) still refines vendor + subtype.
+	winHost := has[135] || has[3389] || has[5985] || has[5986]
+	if has[2049] && !winHost {
+		out = append(out, ev(domain.EvidenceSourcePort, "tcp/2049 (NFS export)", string(domain.CatStorage), domain.OSFamilyEmbedded, "", 65))
 	}
 	// VMware ESXi host agent. Port 902 (vpxa/authd) points at ESXi — BUT only on a host that is
 	// not also clearly Windows. A bare ESXi host exposes 902 (+ the 443 vSphere SDK) and does NOT
