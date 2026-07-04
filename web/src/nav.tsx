@@ -98,6 +98,7 @@ export const NAV: NavGroup[] = [
           { label: 'Printers', to: '/printers', icon: Plug, categories: ['printer'] },
           { label: 'Biometric Devices', to: '/inventory/endpoints/biometric', icon: ScanLine, categories: ['biometric', 'biometric_device_unclassified'] },
           { label: 'Point of Sale', to: '/inventory/endpoints/pos', icon: DollarSign, categories: ['pos', 'pos_device_unclassified'] },
+          { label: 'NAS Storage', to: '/inventory/endpoints/storage', icon: HardDrive, categories: ['storage'] },
           { label: 'UPS', to: '/ups', icon: BatteryCharging, categories: ['ups'] },
         ],
       },
