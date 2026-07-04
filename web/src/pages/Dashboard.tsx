@@ -6,7 +6,7 @@ import {
   Radar, Activity, TriangleAlert, RefreshCw, Clock, Boxes, TrendingUp, KeyRound, HeartPulse,
   ShieldCheck, Building2, Layers,
 } from 'lucide-react'
-import { api, type Device, type Alert, type DiscoveryJob, type MonitoringOverviewRow, type RoleSummaryRow, type ExpenseByCategory, type InfrastructureHealth, type AvailabilityAnalytics, type DeviceUptime, type SiteRollup, type ActionRequired } from '../api'
+import { api, type Device, type Alert, type DiscoveryJob, type MonitoringOverviewRow, type RoleSummaryRow, type ExpenseByCategory, type InfrastructureHealth, type AvailabilityAnalytics, type DeviceUptime, type SiteRollup, type ActionRequired, type AssetSummary } from '../api'
 import {
   PageHeader, Panel, Kpi, HealthRing, Donut, Legend, BarList, Sparkline, AreaChart,
   ActivityFeed, EmptyState, StatusPill, colorFor, timeAgo, InfoHint,
@@ -209,6 +209,7 @@ export function Dashboard() {
   const [showRisk, setShowRisk] = useState(false)
   const dash = useQuery({ queryKey: ['dashboard'], queryFn: () => api.get<DashboardData>('/dashboard'), refetchInterval: 30_000 })
   const mon = useQuery({ queryKey: ['mon-overview'], queryFn: () => api.get<MonitoringOverviewRow[]>('/monitoring/overview'), refetchInterval: 30_000 })
+  const assetSum = useQuery({ queryKey: ['asset-summary'], queryFn: () => api.get<AssetSummary>('/inventory/asset-summary'), refetchInterval: 60_000, retry: 0 })
   const devices = useQuery({ queryKey: ['devices', 'all'], queryFn: () => api.get<Device[]>('/devices?category=all') })
   const jobs = useQuery({ queryKey: ['discovery-jobs'], queryFn: () => api.get<DiscoveryJob[]>('/discovery/jobs'), refetchInterval: 30_000 })
   const alerts = useQuery({ queryKey: ['alerts'], queryFn: () => api.get<Alert[]>('/alerts'), refetchInterval: 30_000 })
@@ -435,10 +436,24 @@ export function Dashboard() {
 
       {/* KPI row */}
       <div className="kpi-grid kpi-6">
-        <Kpi label="Total Devices" value={total} icon={Boxes} tone="info"
-          hint="Every device in inventory — discovered on the network plus any manually-added (virtual) placeholders."
-          sub={h.virtual_devices ? `${h.discovered_devices ?? (total - h.virtual_devices)} discovered · ${h.virtual_devices} virtual` : `${byType.length} categories`}
-          footerRight={manageable > 0 ? <span style={{ color: 'var(--ok)' }}>{managed.toLocaleString()} managed</span> : undefined} />
+        {(() => {
+          const a = assetSum.data
+          // Assets = real inventory objects. Endpoints/interfaces are folded (an SVI IP or a
+          // linked iLO does NOT add an asset). Falls back to the raw device count until the
+          // asset-summary endpoint is live, so the card is never blank.
+          const folded = a ? a.folded_svi_gateways + a.folded_bmc_endpoints : 0
+          const assetVal = a ? a.assets : total
+          return (
+            <Kpi label="Assets" value={assetVal} icon={Boxes} tone="info"
+              hint={a
+                ? `Real inventory objects (servers, switches, printers, cameras…). ${a.monitored_endpoints} monitored endpoints / IPs collapse into ${a.assets} assets: ${a.folded_bmc_endpoints} iLO/iDRAC endpoints fold into their server (chassis-serial/UUID evidence) and ${a.folded_svi_gateways} SVI/VLAN-gateway IP into its switch (ipAddrTable). ${a.interface_addresses} interface IPs, ${a.logical_gateways} logical gateways, ${a.virtual_assets} virtual assets.`
+                : 'Real inventory objects — endpoints like an iLO or an SVI gateway IP fold into their parent asset (loading canonical counts…).'}
+              sub={a ? `${a.monitored_endpoints} endpoints · ${a.interface_addresses} interface IPs` : `${total} device rows`}
+              onClick={() => navigate('/inventory')}
+              footerLeft={folded > 0 ? `${folded} folded` : undefined}
+              footerRight={manageable > 0 ? <span style={{ color: 'var(--ok)' }}>{managed.toLocaleString()} managed</span> : undefined} />
+          )
+        })()}
         <Kpi
           label="Online"
           value={reachable}

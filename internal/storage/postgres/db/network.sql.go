@@ -13,6 +13,31 @@ import (
 	"github.com/google/uuid"
 )
 
+const countInterfaceAddresses = `-- name: CountInterfaceAddresses :one
+SELECT count(*) FROM ip_interfaces
+`
+
+// Collected L3 interface addresses (ipAddrTable): SVI gateways, loopbacks, mgmt IPs.
+// These are addresses attached to an asset, NOT separate assets.
+func (q *Queries) CountInterfaceAddresses(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countInterfaceAddresses)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countLogicalGateways = `-- name: CountLogicalGateways :one
+SELECT count(*) FROM vlans WHERE gateway_ip IS NOT NULL
+`
+
+// VLAN SVI gateway IPs — logical/derived entities that must not inflate the asset count.
+func (q *Queries) CountLogicalGateways(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countLogicalGateways)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countUnknownMACs = `-- name: CountUnknownMACs :one
 SELECT count(DISTINCT m.mac)::int AS total
 FROM mac_addresses m

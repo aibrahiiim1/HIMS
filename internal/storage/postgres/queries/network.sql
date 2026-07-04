@@ -388,3 +388,12 @@ LEFT JOIN LATERAL (
   WHERE vn.mac = m.mac LIMIT 1) vm ON true
 WHERE m.device_id = $1
 ORDER BY m.if_index, m.mac;
+
+-- name: CountInterfaceAddresses :one
+-- Collected L3 interface addresses (ipAddrTable): SVI gateways, loopbacks, mgmt IPs.
+-- These are addresses attached to an asset, NOT separate assets.
+SELECT count(*) FROM ip_interfaces;
+
+-- name: CountLogicalGateways :one
+-- VLAN SVI gateway IPs — logical/derived entities that must not inflate the asset count.
+SELECT count(*) FROM vlans WHERE gateway_ip IS NOT NULL;

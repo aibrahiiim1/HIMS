@@ -89,10 +89,15 @@ type Querier interface {
 	CountExpiringSystems(ctx context.Context) (int64, error)
 	// Failed jobs for one agent (for the agent detail page + Data Quality count).
 	CountFailedAgentJobs(ctx context.Context, agentID uuid.UUID) (int64, error)
+	// Collected L3 interface addresses (ipAddrTable): SVI gateways, loopbacks, mgmt IPs.
+	// These are addresses attached to an asset, NOT separate assets.
+	CountInterfaceAddresses(ctx context.Context) (int64, error)
 	// Headline count for the "N inventory-only (monitor-only)" indicator.
 	CountInventoryOnlyDevices(ctx context.Context) (int64, error)
 	// Channels whose camera IP matched an already-discovered standalone camera device.
 	CountLinkedNVRChannels(ctx context.Context) (int64, error)
+	// VLAN SVI gateway IPs — logical/derived entities that must not inflate the asset count.
+	CountLogicalGateways(ctx context.Context) (int64, error)
 	CountMibPacksBySource(ctx context.Context) ([]CountMibPacksBySourceRow, error)
 	CountMibWalkRows(ctx context.Context, deviceID uuid.UUID) (int64, error)
 	// Total camera channels collected across all recorders (CCTV summary). Channels

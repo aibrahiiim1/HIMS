@@ -1884,6 +1884,20 @@ export interface InfraDriver {
   last_changed?: string | null; link: string
 }
 export interface InfraHygiene { null_check_id_open: number; note: string; link: string }
+// Canonical inventory counting model — assets vs endpoints vs interfaces.
+export interface AssetReviewItem { device_id: string; name: string; ip: string; kind: string; reason: string; suggested_parent?: string; confidence: number }
+export interface AssetSummary {
+  assets: number
+  monitored_endpoints: number
+  management_endpoints: number
+  interface_addresses: number
+  logical_gateways: number
+  virtual_assets: number
+  folded_svi_gateways: number
+  folded_bmc_endpoints: number
+  needs_review: AssetReviewItem[]
+}
+
 export interface InfrastructureHealth {
   overall: {
     score: number; status: string; confidence: string; confidence_reason: string
