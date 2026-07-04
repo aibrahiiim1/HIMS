@@ -68,6 +68,14 @@ func osCollectionCandidate(d db.Device, boundOS, legacyWSMan, specialized, winMg
 	if specialized {
 		return false
 	}
+	// A NAS appliance is never a WinRM/OS-collection target — it has its own
+	// dedicated SNMP collector (the storage branch below). Without this, a QNAP
+	// that serves SMB (445) trips winMgmtPort, is treated as a Windows host, dead-
+	// ends at "OS collection incomplete: unsupported_os", and — because the NAS
+	// collection is an else-if — never runs. Exclude storage so it reaches its branch.
+	if d.Category == string(domain.CatStorage) {
+		return false
+	}
 	winHost := d.OsFamily == domain.OSFamilyWindows || d.Category == string(domain.CatEndpoint)
 	// winMgmtPort: the host answered on a Windows management port (WinRM 5985/5986, RPC 135,
 	// or SMB 445) THIS run. A host speaking WinRM/RPC is a Windows host worth a deep OS

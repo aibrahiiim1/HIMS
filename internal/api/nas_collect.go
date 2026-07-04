@@ -28,8 +28,10 @@ func (s *Server) collectNAS(w http.ResponseWriter, r *http.Request) {
 	}
 	c, err := s.snmpClientForDevice(ctx, dev, "", 8*time.Second)
 	if err != nil {
-		// Honest credential_required: a NAS with no bound SNMP community can't be collected over SNMP.
-		http.Error(w, "NAS SNMP collection needs a bound SNMP v2c community: "+err.Error(), http.StatusPreconditionRequired)
+		// Honest credential_required: a NAS with no bound SNMP community can't be collected
+		// over SNMP. 412 Precondition Failed = "bind an SNMP v2c community first" (never a
+		// fake/empty collection).
+		http.Error(w, "credential_required: NAS SNMP collection needs a bound SNMP v2c community: "+err.Error(), http.StatusPreconditionFailed)
 		return
 	}
 	defer c.Close()
