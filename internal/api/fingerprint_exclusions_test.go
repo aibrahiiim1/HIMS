@@ -30,6 +30,32 @@ func planByPattern(plan []seedAction, pattern string) (seedAction, bool) {
 	return seedAction{}, false
 }
 
+// TestSeedPlan_RetiresOrphanedBuiltin is the 150.0.0.132 root-cause lock: a builtin
+// row whose (kind,pattern) LEFT the code catalog (here the removed 5060→voip print)
+// must be planned for RETIRE so it stops firing during scans. An operator ('user')
+// row with the same orphaned pattern is PRESERVED (never retired).
+func TestSeedPlan_RetiresOrphanedBuiltin(t *testing.T) {
+	// The catalog no longer ships port|5060; it ships an unrelated OID switch print.
+	lib := []fingerprint.Print{{Kind: fingerprint.KindOID, Pattern: "1.3.6.1.4.1.11", Vendor: "Aruba/HPE", DeviceType: "switch", Confidence: 78}}
+
+	orphanBuiltin := fpRow("port", "5060", "Generic", "voip", 50, "builtin", nil)
+	a, ok := planByPattern(planBuiltinSeed([]db.VendorFingerprint{orphanBuiltin}, lib), "5060")
+	if !ok || a.Action != seedRetire {
+		t.Fatalf("orphaned builtin 5060→voip must be RETIRED, got %+v (ok=%v)", a.Action, ok)
+	}
+	if a.ExistingID != orphanBuiltin.ID {
+		t.Errorf("retire action must carry the row id to delete")
+	}
+
+	// An operator-owned row with the same orphaned pattern is preserved, not retired.
+	orphanUser := fpRow("port", "5060", "Generic", "voip", 50, "user", nil)
+	for _, act := range planBuiltinSeed([]db.VendorFingerprint{orphanUser}, lib) {
+		if act.Print.Pattern == "5060" && act.Action == seedRetire {
+			t.Errorf("an operator 'user' row must NOT be retired: %+v", act)
+		}
+	}
+}
+
 // TestSeedPlan_RefreshesDriftedBuiltinExclusions is the core follow-up regression:
 // an existing BUILT-IN HP ".11" switch row seeded BEFORE exclusions existed (so it
 // holds []) must be planned for REFRESH against a catalog entry that carries the

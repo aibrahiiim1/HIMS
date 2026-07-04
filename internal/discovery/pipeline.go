@@ -753,8 +753,21 @@ func applyFingerprints(r *HostResult, lib []fingerprint.Print) {
 	}
 	top := results[0]
 	if cat := fingerprintCategory(top.DeviceType); cat != "" && top.Confidence >= r.Match.Confidence {
-		r.Match = driver.Match{Category: cat, Confidence: top.Confidence}
-		detail.FinalSource = "fingerprint"
+		// Windows-management guard: a host exposing an RPC/SMB/RDP/WinRM surface is a
+		// Windows PC. A bare PORT fingerprint that reads as voice (e.g. a stale
+		// 5060→voip → pbx rule) must NOT override that — a softphone on a workstation,
+		// or the OmniVista management console, is NOT a PBX/phone. Mirrors the winMgmt
+		// guards in classify.OpenPorts (SIP) and the OmniPCX telnet classifier. This is
+		// the 150.0.0.132 regression lock: a real voice appliance is fingerprinted by
+		// OID/service/sysDescr (not a bare port) and has none of these Windows ports.
+		voice := cat == domain.CatPBX || cat == domain.CatIPPhone || cat == domain.CatVoiceGateway
+		winMgmt := hasPortN(r.OpenPorts, 135) || hasPortN(r.OpenPorts, 445) || hasPortN(r.OpenPorts, 3389) || hasPortN(r.OpenPorts, 5985) || hasPortN(r.OpenPorts, 5986)
+		if voice && top.Kind == fingerprint.KindPort && winMgmt {
+			detail.LikelyType = string(cat) // record the suppressed guess for the evidence panel
+		} else {
+			r.Match = driver.Match{Category: cat, Confidence: top.Confidence}
+			detail.FinalSource = "fingerprint"
+		}
 	}
 	// A strong/specific match is authoritative for vendor + product model, so we
 	// record "Extreme Networks / VE6120 Medium" instead of only the firmware string.

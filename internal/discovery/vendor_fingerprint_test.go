@@ -40,6 +40,35 @@ func TestApplyFingerprintsOverridesExtremeSwitch(t *testing.T) {
 	}
 }
 
+// TestApplyFingerprints_WinSoftphoneNeverPBX is the 150.0.0.132 regression: a
+// Windows PC with a softphone (RPC/SMB/RDP + SIP 5060, no telnet appliance evidence)
+// was flipped endpoint→pbx during a broad scan by a STALE port fingerprint
+// (5060→voip, voip→pbx) that lived in the vendor_fingerprints DB after being removed
+// from the code catalog. The Windows-management guard in applyFingerprints must
+// suppress a bare-PORT voice fingerprint on such a host so it stays endpoint.
+func TestApplyFingerprints_WinSoftphoneNeverPBX(t *testing.T) {
+	// The stale/rogue library entry that reproduces the flip (as merged from the DB).
+	staleLib := []fingerprint.Print{{Kind: fingerprint.KindPort, Pattern: "5060", Vendor: "Generic", DeviceType: "voip", Confidence: 50}}
+
+	r := HostResult{
+		// What classify.OpenPorts produced for the Windows PC: endpoint (RDP) @45.
+		Match:     driver.Match{Category: domain.CatEndpoint, Confidence: 45},
+		OpenPorts: []int{135, 445, 3389, 5060},
+	}
+	applyFingerprints(&r, staleLib)
+	if r.Match.Category != domain.CatEndpoint {
+		t.Fatalf("Windows PC + softphone must stay endpoint, got %q (conf %d)", r.Match.Category, r.Match.Confidence)
+	}
+
+	// A REAL SIP phone (only 5060, no Windows surface) is unaffected — the guard is
+	// scoped to Windows-management hosts, so the port fingerprint still applies there.
+	phone := HostResult{Match: driver.Match{Category: domain.CatIPPhone, Confidence: 40}, OpenPorts: []int{5060}}
+	applyFingerprints(&phone, staleLib)
+	if phone.Match.Category == domain.CatEndpoint {
+		t.Fatalf("a bare SIP phone must not be forced to endpoint by the guard, got %q", phone.Match.Category)
+	}
+}
+
 // TestApplyFingerprintsKeepsRealSwitch guards the precedence rule (req #7/#8):
 // a genuine Extreme switch (generic .1916 PEN, no product print) keeps category
 // switch and is NOT forced to wireless_controller.

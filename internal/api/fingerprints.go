@@ -210,10 +210,16 @@ func (s *Server) seedVendorFingerprints(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, err)
 		return
 	}
-	created, refreshed, preserved, upToDate := 0, 0, 0, 0
+	created, refreshed, preserved, upToDate, retired := 0, 0, 0, 0, 0
 	for _, a := range planBuiltinSeed(existing, fingerprint.Library()) {
 		p := a.Print
 		switch a.Action {
+		case seedRetire:
+			if err := s.queries.DeleteVendorFingerprint(r.Context(), a.ExistingID); err != nil {
+				writeErr(w, err)
+				return
+			}
+			retired++
 		case seedCreate:
 			if _, err := s.queries.CreateVendorFingerprint(r.Context(), db.CreateVendorFingerprintParams{
 				Kind: p.Kind, Pattern: p.Pattern, Vendor: p.Vendor, DeviceType: p.DeviceType,
@@ -243,10 +249,10 @@ func (s *Server) seedVendorFingerprints(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	s.audit(r, "config", "fingerprint.seed", "vendor_fingerprint", "", "Seeded/refreshed built-in fingerprint library",
-		map[string]any{"created": created, "refreshed": refreshed, "preserved": preserved, "up_to_date": upToDate})
+		map[string]any{"created": created, "refreshed": refreshed, "preserved": preserved, "up_to_date": upToDate, "retired": retired})
 	writeJSON(w, http.StatusOK, map[string]int{
 		"created": created, "refreshed": refreshed, "preserved": preserved,
-		"up_to_date": upToDate, "library_size": len(fingerprint.Library()),
+		"up_to_date": upToDate, "retired": retired, "library_size": len(fingerprint.Library()),
 	})
 }
 
@@ -259,6 +265,7 @@ const (
 	seedRefresh                        // existing builtin row drifted → UPDATE metadata+exclusions (id preserved)
 	seedPreserve                       // operator ('user') row owns this pattern → leave it untouched
 	seedUpToDate                       // existing builtin row already matches the catalog → no write
+	seedRetire                         // builtin row whose pattern LEFT the catalog → DELETE (self-heal orphans)
 )
 
 // seedAction is one planned operation for a built-in catalog entry.
@@ -283,7 +290,9 @@ func planBuiltinSeed(existing []db.VendorFingerprint, lib []fingerprint.Print) [
 		byKey[e.Kind+"|"+e.Pattern] = e
 	}
 	plan := make([]seedAction, 0, len(lib))
+	inCatalog := make(map[string]bool, len(lib))
 	for _, p := range lib {
+		inCatalog[p.Kind+"|"+p.Pattern] = true
 		row, ok := byKey[p.Kind+"|"+p.Pattern]
 		switch {
 		case !ok:
@@ -294,6 +303,18 @@ func planBuiltinSeed(existing []db.VendorFingerprint, lib []fingerprint.Print) [
 			plan = append(plan, seedAction{Print: p, Action: seedRefresh, ExistingID: row.ID})
 		default:
 			plan = append(plan, seedAction{Print: p, Action: seedUpToDate, ExistingID: row.ID})
+		}
+	}
+	// Retire orphaned BUILTIN rows: a (kind,pattern) that was shipped by an earlier
+	// catalog, seeded into the DB, then REMOVED from the code catalog would otherwise
+	// linger and keep firing during scans (the 150.0.0.132 stale 5060→voip → pbx bug).
+	// Operator ('user') rows are never retired — only builtin rows the catalog dropped.
+	for _, e := range existing {
+		if e.Source == "builtin" && !inCatalog[e.Kind+"|"+e.Pattern] {
+			plan = append(plan, seedAction{
+				Print:  fingerprint.Print{Kind: e.Kind, Pattern: e.Pattern, Vendor: e.Vendor, DeviceType: e.DeviceType},
+				Action: seedRetire, ExistingID: e.ID,
+			})
 		}
 	}
 	return plan
