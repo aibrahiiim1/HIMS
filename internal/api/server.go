@@ -279,7 +279,8 @@ func (s *Server) routes() {
 		r.Post("/devices/{id}/test-redfish", s.testBMCRedfish)           // Redfish Test Connection (one selected/bound cred, no persistence)
 		r.Post("/devices/{id}/collect-bmc-redfish", s.collectBMCRedfish) // authenticated Redfish inventory (one cred, writes bmc_info only on success)
 		r.Post("/devices/{id}/collect-cctv", s.collectCCTV)
-		r.Post("/devices/{id}/collect", s.collectDevice) // universal, profile-free deep collect (kind inferred or given)
+		r.Post("/devices/{id}/collect-nas", s.collectNAS) // QNAP/NAS deep inventory over the bound SNMP community
+		r.Post("/devices/{id}/collect", s.collectDevice)  // universal, profile-free deep collect (kind inferred or given)
 		r.Post("/cctv/collect-fleet", s.collectCCTVFleet)
 		r.Get("/cctv/collect-fleet", s.getCCTVFleet)
 		r.Get("/cctv/summary", s.cctvSummary)
@@ -326,6 +327,7 @@ func (s *Server) routes() {
 		r.Post("/devices/{id}/collect-ssh-cli", s.runSSHCLICollection)           // Extreme XCC SSH CLI collection
 		r.Post("/devices/{id}/test-ssh-cli", s.testSSHCLICommands)               // SSH CLI command probe (no persistence)
 		r.Get("/devices/{id}/ssh-cli-results", s.listSSHCliResults)              // per-command SSH CLI results
+		r.Get("/devices/{id}/nas", s.deviceNAS)                                  // persisted NAS inventory (info + disks + volumes)
 		r.Get("/devices/{id}/bmc", s.deviceBMC)
 		r.Get("/devices/{id}/bmc-sensors", s.deviceBMCSensors)
 		r.Get("/devices/{id}/bmc-components", s.deviceBMCComponents)       // detailed CPU/DIMM/RAID/volume/drive inventory

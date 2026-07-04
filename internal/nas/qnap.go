@@ -164,8 +164,12 @@ func collectDisks(ctx context.Context, c snmp.Client) []Disk {
 				d.TempC = &v
 			}
 		case qnapDiskCapacity:
-			if v, ok := snmp.PDUInt64(p); ok {
+			// QNAP reports capacity as a DisplayString (e.g. "4000787030016"), so
+			// prefer the integer decode but fall back to parsing the string form.
+			if v, ok := snmp.PDUInt64(p); ok && v > 0 {
 				d.CapacityBytes = v
+			} else if n, err := strconv.ParseInt(strings.TrimSpace(snmp.PDUString(p)), 10, 64); err == nil {
+				d.CapacityBytes = n
 			}
 		}
 		return nil
