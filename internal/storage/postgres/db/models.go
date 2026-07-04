@@ -660,6 +660,49 @@ type MonitoringSample struct {
 	Error     *string   `json:"error"`
 }
 
+type NasDisk struct {
+	DeviceID      uuid.UUID `json:"device_id"`
+	Slot          int32     `json:"slot"`
+	Vendor        *string   `json:"vendor"`
+	Model         *string   `json:"model"`
+	Serial        *string   `json:"serial"`
+	InterfaceType *string   `json:"interface_type"`
+	CapacityBytes *int64    `json:"capacity_bytes"`
+	TempC         *int32    `json:"temp_c"`
+	Health        *string   `json:"health"`
+	LastSeenAt    time.Time `json:"last_seen_at"`
+}
+
+type NasInfo struct {
+	DeviceID         uuid.UUID `json:"device_id"`
+	Vendor           *string   `json:"vendor"`
+	Model            *string   `json:"model"`
+	Firmware         *string   `json:"firmware"`
+	Serial           *string   `json:"serial"`
+	Hostname         *string   `json:"hostname"`
+	CpuPct           *float64  `json:"cpu_pct"`
+	MemTotalBytes    *int64    `json:"mem_total_bytes"`
+	MemUsedBytes     *int64    `json:"mem_used_bytes"`
+	CpuTempC         *int32    `json:"cpu_temp_c"`
+	SysTempC         *int32    `json:"sys_temp_c"`
+	UptimeSeconds    *int64    `json:"uptime_seconds"`
+	DiskCount        int32     `json:"disk_count"`
+	VolumeCount      int32     `json:"volume_count"`
+	Health           *string   `json:"health"`
+	CollectionSource string    `json:"collection_source"`
+	LastSeenAt       time.Time `json:"last_seen_at"`
+}
+
+type NasVolume struct {
+	DeviceID   uuid.UUID `json:"device_id"`
+	Idx        int32     `json:"idx"`
+	Name       string    `json:"name"`
+	FsType     *string   `json:"fs_type"`
+	TotalBytes *int64    `json:"total_bytes"`
+	UsedBytes  *int64    `json:"used_bytes"`
+	LastSeenAt time.Time `json:"last_seen_at"`
+}
+
 type Neighbor struct {
 	ID               uuid.UUID   `json:"id"`
 	DeviceID         uuid.UUID   `json:"device_id"`

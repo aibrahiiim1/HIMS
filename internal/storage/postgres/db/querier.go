@@ -216,6 +216,8 @@ type Querier interface {
 	DeleteStaleInterfaces(ctx context.Context, arg DeleteStaleInterfacesParams) error
 	DeleteStaleLicenses(ctx context.Context, arg DeleteStaleLicensesParams) error
 	DeleteStaleMACEntries(ctx context.Context, arg DeleteStaleMACEntriesParams) error
+	DeleteStaleNASDisks(ctx context.Context, arg DeleteStaleNASDisksParams) error
+	DeleteStaleNASVolumes(ctx context.Context, arg DeleteStaleNASVolumesParams) error
 	DeleteStaleNeighbors(ctx context.Context, arg DeleteStaleNeighborsParams) error
 	DeleteStaleNetworks(ctx context.Context, arg DeleteStaleNetworksParams) error
 	DeleteStaleOSDisks(ctx context.Context, arg DeleteStaleOSDisksParams) error
@@ -367,6 +369,7 @@ type Querier interface {
 	GetLocation(ctx context.Context, id uuid.UUID) (Location, error)
 	GetMibPack(ctx context.Context, id uuid.UUID) (MibPack, error)
 	GetMonitoringCheck(ctx context.Context, id uuid.UUID) (MonitoringCheck, error)
+	GetNASInfo(ctx context.Context, deviceID uuid.UUID) (NasInfo, error)
 	GetNVRInfo(ctx context.Context, deviceID uuid.UUID) (NvrInfo, error)
 	GetNotificationChannel(ctx context.Context, id uuid.UUID) (NotificationChannel, error)
 	// Deep OS Inventory queries. The 1:1 summary is upserted per device; the 1:N
@@ -609,6 +612,8 @@ type Querier interface {
 	ListMonitoringChecksByDevice(ctx context.Context, deviceID uuid.UUID) ([]MonitoringCheck, error)
 	ListMonitoringSamplesByCheck(ctx context.Context, arg ListMonitoringSamplesByCheckParams) ([]MonitoringSample, error)
 	ListMonitoringSamplesByDevice(ctx context.Context, arg ListMonitoringSamplesByDeviceParams) ([]MonitoringSample, error)
+	ListNASDisks(ctx context.Context, deviceID uuid.UUID) ([]NasDisk, error)
+	ListNASVolumes(ctx context.Context, deviceID uuid.UUID) ([]NasVolume, error)
 	ListNVRChannels(ctx context.Context, nvrDeviceID uuid.UUID) ([]NvrChannel, error)
 	ListNVRStorage(ctx context.Context, nvrDeviceID uuid.UUID) ([]NvrStorage, error)
 	ListNeighbors(ctx context.Context, deviceID uuid.UUID) ([]Neighbor, error)
@@ -1025,6 +1030,9 @@ type Querier interface {
 	// Idempotent registration: re-registering the same (device, kind, port)
 	// updates the schedule knobs without resetting the live status counters.
 	UpsertMonitoringCheck(ctx context.Context, arg UpsertMonitoringCheckParams) (MonitoringCheck, error)
+	UpsertNASDisk(ctx context.Context, arg UpsertNASDiskParams) error
+	UpsertNASInfo(ctx context.Context, arg UpsertNASInfoParams) error
+	UpsertNASVolume(ctx context.Context, arg UpsertNASVolumeParams) error
 	UpsertNVRChannel(ctx context.Context, arg UpsertNVRChannelParams) (NvrChannel, error)
 	UpsertNVRInfo(ctx context.Context, arg UpsertNVRInfoParams) (NvrInfo, error)
 	UpsertNVRStorage(ctx context.Context, arg UpsertNVRStorageParams) (NvrStorage, error)
