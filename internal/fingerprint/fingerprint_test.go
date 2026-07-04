@@ -676,3 +676,17 @@ func TestLibraryCategoriesAreValid(t *testing.T) {
 		}
 	}
 }
+
+// TestQNAP_QTS5_OID pins that a QNAP QTS 5.x NAS (sysObjectID PEN 55062, sysDescr
+// "Linux <model>") classifies as storage, beating the generic Linux→server(55) — the
+// 150.0.0.40 (TS-X53II, QTS 5.2.4) regression.
+func TestQNAP_QTS5_OID(t *testing.T) {
+	lib := Library()
+	res := Match(Evidence{SysObjectID: ".1.3.6.1.4.1.55062.1.1", SysDescr: "Linux TS-X53II 5.2.4.3079", SysName: "CHV-QNAP"}, lib)
+	if len(res) == 0 {
+		t.Fatal("no fingerprint matched a QNAP QTS 5.x NAS")
+	}
+	if res[0].DeviceType != "storage" || res[0].Vendor != "QNAP" {
+		t.Fatalf("QNAP QTS-5 NAS must be storage/QNAP, got type=%q vendor=%q conf=%d", res[0].DeviceType, res[0].Vendor, res[0].Confidence)
+	}
+}
