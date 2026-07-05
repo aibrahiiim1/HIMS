@@ -34,7 +34,8 @@ func (s *Server) seedReachabilityCheck(ctx context.Context, d db.Device, openPor
 				return // already has an SNMP check
 			}
 		}
-		_ = s.queries.DeleteDeviceReachabilityChecks(ctx, d.ID) // drop a doomed TCP check
+		_ = s.queries.ResolveAlertsForDeviceTCPChecks(ctx, d.ID) // avoid orphaning their alerts
+		_ = s.queries.DeleteDeviceReachabilityChecks(ctx, d.ID)  // drop a doomed TCP check
 		oid := monitoring.SysUpTimeOID
 		_, _ = s.queries.UpsertMonitoringCheck(ctx, db.UpsertMonitoringCheckParams{
 			DeviceID: d.ID, Kind: "snmp", Oid: &oid, IntervalSeconds: 60, DownThreshold: 2, Enabled: true,
@@ -59,6 +60,7 @@ func (s *Server) seedReachabilityCheck(ctx context.Context, d db.Device, openPor
 	}
 	port := int32(monitoring.ReachabilityPort(d.Category, d.OsFamily, openPorts))
 	if check == nil || check.TargetPort == nil || !open[*check.TargetPort] {
+		_ = s.queries.ResolveAlertsForDeviceTCPChecks(ctx, d.ID)
 		_ = s.queries.DeleteDeviceReachabilityChecks(ctx, d.ID)
 		ch, err := s.queries.UpsertMonitoringCheck(ctx, db.UpsertMonitoringCheckParams{
 			DeviceID: d.ID, Kind: "tcp", TargetPort: &port, IntervalSeconds: 60, DownThreshold: 2, Enabled: true,

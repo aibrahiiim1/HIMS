@@ -835,6 +835,12 @@ type Querier interface {
 	RequeueStaleAgentJobs(ctx context.Context, dispatchedAt *time.Time) (int64, error)
 	ResolveAlert(ctx context.Context, id uuid.UUID) (Alert, error)
 	ResolveAlertByID(ctx context.Context, id uuid.UUID) (Alert, error)
+	// Resolve open alerts bound to a device's TCP reachability checks BEFORE those
+	// checks are deleted/replaced. Without this, the alerts.check_id ON DELETE SET NULL
+	// would orphan the alert (check_id -> NULL, empty fingerprint), where it collides
+	// with idx_alerts_state_one_open on the next such deletion. Resolving first keeps
+	// the delete safe and closes an alert whose underlying check no longer exists.
+	ResolveAlertsForDeviceTCPChecks(ctx context.Context, deviceID uuid.UUID) error
 	// The resolver-assembly query: for a device IP, return every credential in a
 	// group bound to either a subnet that contains the IP (more specific) or a
 	// location anchor, with the binding specificity + member priority so the

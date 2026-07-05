@@ -1059,6 +1059,23 @@ func (q *Queries) ResolveAlertByID(ctx context.Context, id uuid.UUID) (Alert, er
 	return i, err
 }
 
+const resolveAlertsForDeviceTCPChecks = `-- name: ResolveAlertsForDeviceTCPChecks :exec
+UPDATE alerts a SET status = 'resolved', resolved_at = now()
+FROM monitoring_checks c
+WHERE a.check_id = c.id AND a.status <> 'resolved'
+  AND c.device_id = $1 AND c.kind = 'tcp'
+`
+
+// Resolve open alerts bound to a device's TCP reachability checks BEFORE those
+// checks are deleted/replaced. Without this, the alerts.check_id ON DELETE SET NULL
+// would orphan the alert (check_id -> NULL, empty fingerprint), where it collides
+// with idx_alerts_state_one_open on the next such deletion. Resolving first keeps
+// the delete safe and closes an alert whose underlying check no longer exists.
+func (q *Queries) ResolveAlertsForDeviceTCPChecks(ctx context.Context, deviceID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, resolveAlertsForDeviceTCPChecks, deviceID)
+	return err
+}
+
 const resolveRecoveredAlerts = `-- name: ResolveRecoveredAlerts :many
 UPDATE alerts a SET status = 'resolved', resolved_at = now()
 FROM monitoring_checks c

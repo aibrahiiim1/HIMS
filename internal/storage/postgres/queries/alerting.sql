@@ -73,6 +73,17 @@ FROM monitoring_checks c
 WHERE a.check_id = c.id AND a.status <> 'resolved' AND c.last_status = 'up'
 RETURNING a.id, a.device_id, a.work_order_id, a.message;
 
+-- name: ResolveAlertsForDeviceTCPChecks :exec
+-- Resolve open alerts bound to a device's TCP reachability checks BEFORE those
+-- checks are deleted/replaced. Without this, the alerts.check_id ON DELETE SET NULL
+-- would orphan the alert (check_id -> NULL, empty fingerprint), where it collides
+-- with idx_alerts_state_one_open on the next such deletion. Resolving first keeps
+-- the delete safe and closes an alert whose underlying check no longer exists.
+UPDATE alerts a SET status = 'resolved', resolved_at = now()
+FROM monitoring_checks c
+WHERE a.check_id = c.id AND a.status <> 'resolved'
+  AND c.device_id = $1 AND c.kind = 'tcp';
+
 -- name: GetAlert :one
 SELECT * FROM alerts WHERE id = $1;
 

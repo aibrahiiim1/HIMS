@@ -751,6 +751,9 @@ func (s *Server) repairReachabilityCheck(ctx context.Context, d db.Device) (port
 	openPorts := s.deviceOpenPorts(ctx, d.ID)
 	port = monitoring.ReachabilityPort(d.Category, d.OsFamily, openPorts)
 	source = portSource(port, d, openPorts)
+	// Resolve alerts bound to the checks we're about to delete, so the FK's
+	// ON DELETE SET NULL can't orphan them into a colliding state alert.
+	_ = s.queries.ResolveAlertsForDeviceTCPChecks(ctx, d.ID)
 	if err = s.queries.DeleteDeviceReachabilityChecks(ctx, d.ID); err != nil {
 		return port, source, err
 	}
