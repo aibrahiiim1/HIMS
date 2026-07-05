@@ -165,7 +165,10 @@ export function DeviceHeader({ deviceId, icon: Icon = HardDrive, showCredential 
             <h1>{d.name}</h1>
             <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
               <ReachabilityBadge value={d.reachability} />
-              {d.reachability === 'online' && d.reachability_signal && (
+              {/* Show the winning signal whenever reachability is PROVEN — online OR
+                  degraded (warning). A warning device is still reachable (its TCP check
+                  is up; a supplemental check degraded it), so it keeps its via-signal. */}
+              {(d.reachability === 'online' || d.reachability === 'warning') && d.reachability_signal && (
                 <span className="badge badge-unknown" title={`Reachability proven via ${d.reachability_signal}${d.reachability_confidence ? ` (${d.reachability_confidence} confidence)` : ''}. HIMS uses multiple TCP signals — a host answering ${d.reachability_signal} is online even if ICMP/ping is blocked.`}>
                   via {d.reachability_signal}{d.reachability_confidence && d.reachability_confidence !== 'none' ? ` · ${d.reachability_confidence}` : ''}
                 </span>
