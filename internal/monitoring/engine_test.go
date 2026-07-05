@@ -338,3 +338,45 @@ func TestSeedDefaults(t *testing.T) {
 		t.Fatalf("seeded ports wrong: %d,%d", *f.upserts[0].TargetPort, *f.upserts[1].TargetPort)
 	}
 }
+
+// TestRollupDevice_WarningKeepsSignal locks the degrade-only contract: a device
+// whose reachability check is UP but which a failing SUPPLEMENTAL check degraded
+// to "warning" is still REACHABLE and must keep its winning signal + confidence.
+// A supplemental failure can never blank the reachability evidence.
+func TestRollupDevice_WarningKeepsSignal(t *testing.T) {
+	dev := uuid.New()
+	reach := db.MonitoringCheck{
+		ID: uuid.New(), DeviceID: dev, Kind: "tcp", Role: "reachability",
+		LastStatus: "up", LastSignal: "tcp/80",
+		LastEvidence: []byte(`{"up":["tcp/80","tcp/443"]}`), // 2 up -> high
+	}
+	supp := db.MonitoringCheck{
+		ID: uuid.New(), DeviceID: dev, Kind: "snmp", Role: "supplemental", LastStatus: "down",
+	}
+	f := &fakeRepo{byDevice: map[uuid.UUID][]db.MonitoringCheck{dev: {reach, supp}}}
+	e := NewEngine(f, NewPoller(nil, time.Second), nil)
+	e.rollupDevice(context.Background(), dev)
+
+	if got := f.devStatus[dev]; got != "warning" {
+		t.Fatalf("device status = %q, want warning (reachable but supplemental down)", got)
+	}
+	if got := f.devSignal[dev]; got != "tcp/80|high" {
+		t.Fatalf("warning device signal = %q, want tcp/80|high (evidence preserved)", got)
+	}
+}
+
+// TestRollupDevice_DownBlanksSignal is the complement: a genuinely offline device
+// (reachability check down) carries no proving signal.
+func TestRollupDevice_DownBlanksSignal(t *testing.T) {
+	dev := uuid.New()
+	reach := db.MonitoringCheck{
+		ID: uuid.New(), DeviceID: dev, Kind: "tcp", Role: "reachability",
+		LastStatus: "down", LastSignal: "", LastEvidence: []byte(`{"down":["tcp/80"]}`),
+	}
+	f := &fakeRepo{byDevice: map[uuid.UUID][]db.MonitoringCheck{dev: {reach}}}
+	e := NewEngine(f, NewPoller(nil, time.Second), nil)
+	e.rollupDevice(context.Background(), dev)
+	if got := f.devSignal[dev]; got != "|none" {
+		t.Fatalf("offline device signal = %q, want |none", got)
+	}
+}

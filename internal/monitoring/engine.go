@@ -368,7 +368,12 @@ func (e *Engine) rollupDevice(ctx context.Context, deviceID uuid.UUID) {
 	}
 	dev := RollupDeviceWithSupplemental(reach, supp)
 	signal, confidence := reachabilityEvidence(reachChecks)
-	if dev != StatusUp { // a non-up device has no proving signal
+	// A "warning" device is still REACHABLE — its primary reachability check is up
+	// and only a supplemental check degraded it — so it keeps its winning signal +
+	// confidence. Only a genuinely offline (down) device has no proving signal.
+	// (reachabilityEvidence already yields none/"" when no reach check is up, so this
+	// is a defensive floor, not the primary source of truth.)
+	if dev == StatusDown {
 		signal, confidence = "", "none"
 	}
 	if err := e.repo.UpdateDeviceReachability(ctx, db.UpdateDeviceReachabilityParams{
