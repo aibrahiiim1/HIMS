@@ -48,6 +48,25 @@ function deviceHealth(checks: MonitoringCheck[]): { score: number; status: strin
   return { score, status }
 }
 
+// reachEvidenceSub summarizes the multi-signal reachability evidence for the hero stat,
+// e.g. "1/3 signals up" — never hides service failures, but proves online via any signal.
+function reachEvidenceSub(c?: MonitoringCheck): string {
+  const ev = c?.last_evidence
+  if (!ev || (!ev.up?.length && !ev.down?.length)) return ''
+  const up = ev.up?.length ?? 0, down = ev.down?.length ?? 0
+  return `${up}/${up + down} signals up`
+}
+// reachEvidenceTitle is the full hover explanation: which candidates answered vs failed.
+function reachEvidenceTitle(c?: MonitoringCheck): string {
+  const ev = c?.last_evidence
+  if (!ev) return 'reachability check'
+  const parts: string[] = []
+  if (ev.up?.length) parts.push(`up: ${ev.up.join(', ')}`)
+  if (ev.down?.length) parts.push(`failed: ${ev.down.join(', ')}`)
+  if (ev.icmp) parts.push(`icmp: ${ev.icmp}`)
+  return parts.length ? `Reachability is UP if ANY candidate answers. ${parts.join(' · ')}` : 'reachability check'
+}
+
 /**
  * Shared device-detail header: identity, badges, health score and a summary
  * stat strip (monitoring, discovery, location, credential/driver). Reused by
@@ -146,6 +165,11 @@ export function DeviceHeader({ deviceId, icon: Icon = HardDrive, showCredential 
             <h1>{d.name}</h1>
             <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
               <ReachabilityBadge value={d.reachability} />
+              {d.reachability === 'online' && d.reachability_signal && (
+                <span className="badge badge-unknown" title={`Reachability proven via ${d.reachability_signal}${d.reachability_confidence ? ` (${d.reachability_confidence} confidence)` : ''}. HIMS uses multiple TCP signals — a host answering ${d.reachability_signal} is online even if ICMP/ping is blocked.`}>
+                  via {d.reachability_signal}{d.reachability_confidence && d.reachability_confidence !== 'none' ? ` · ${d.reachability_confidence}` : ''}
+                </span>
+              )}
               <ManagementBadge value={d.management} managedBy={d.managed_by} />
               {d.previously_managed && d.reachability === 'offline' && (
                 <span className="badge badge-unknown" title="Offline now, but has a working management method on record">was Managed</span>
@@ -184,8 +208,8 @@ export function DeviceHeader({ deviceId, icon: Icon = HardDrive, showCredential 
           <div className="device-hero-stats">
             <div className="hero-stat"><span className="hero-stat-ico tone-info"><Wifi size={15} /></span>
               <div>
-                <b>{tcpCheck?.target_port ? `:${tcpCheck.target_port}` : '—'}{tcpCheck ? ` · ${tcpCheck.last_status || 'unknown'}` : ''}</b>
-                <small>reachability target {tcpCheck?.last_run_at ? `· ${timeAgo(tcpCheck.last_run_at)}` : ''}</small>
+                <b title={reachEvidenceTitle(tcpCheck)}>{tcpCheck?.last_signal ? tcpCheck.last_signal : (tcpCheck?.target_port ? `:${tcpCheck.target_port}` : '—')}{tcpCheck ? ` · ${tcpCheck.last_status || 'unknown'}` : ''}</b>
+                <small title={reachEvidenceTitle(tcpCheck)}>{reachEvidenceSub(tcpCheck) || 'reachability'} {tcpCheck?.last_run_at ? `· ${timeAgo(tcpCheck.last_run_at)}` : ''}</small>
               </div></div>
             <div className="hero-stat"><span className="hero-stat-ico"><ShieldCheck size={15} /></span>
               <div>

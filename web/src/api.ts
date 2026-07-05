@@ -160,6 +160,11 @@ export interface Device {
   // "is it online" (monitoring); management is "can HIMS actually collect from it"
   // (proven working method) — never conflated, never inferred from open ports.
   reachability?: string // online | offline | warning | unknown
+  // Multi-signal evidence: WHICH signal proved reachability (e.g. "tcp/5060") and how
+  // strong the evidence is (none | low | medium | high). So "Online" is explainable,
+  // never a bare bit — a host answering tcp/5060 while ping is blocked is honestly online.
+  reachability_signal?: string
+  reachability_confidence?: string
   management?: string // managed | partially_managed | unmanaged | needs_credential | credential_failed | needs_agent | agent_offline | collection_failed | web_authenticated | not_authorized
   managed_by?: string[] // protocol tokens with a PROVEN working method
   previously_managed?: boolean // offline now, but has a working method on record
@@ -1737,6 +1742,11 @@ export interface MonitoringCheck {
   last_status: string
   last_latency_ms?: number | null
   consecutive_failures: number
+  // Multi-signal reachability: the candidate ports this check probes (up if ANY
+  // answers), the winning signal, and the per-candidate evidence.
+  candidate_ports?: number[]
+  last_signal?: string // e.g. "tcp/5060" ("" when down)
+  last_evidence?: { up?: string[]; down?: string[]; icmp?: string }
   // 'reachability' = drives the device's online/offline status + inventory
   // counts; 'supplemental' = an extra port/metric check (polled + shown, but
   // never flips the device offline).
