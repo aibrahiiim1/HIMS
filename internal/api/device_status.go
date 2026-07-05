@@ -928,17 +928,40 @@ func (s *Server) reachabilityCheckIsStale(ctx context.Context, d db.Device) bool
 	if err != nil {
 		return false
 	}
-	hasTCP := false
 	for _, c := range checks {
-		if c.Kind != "tcp" {
+		if c.Kind != "tcp" || c.Role == "supplemental" {
 			continue
 		}
-		hasTCP = true
-		if c.TargetPort != nil && openSet[*c.TargetPort] {
-			return false // already on a confirmed-open port — healthy
+		// Multi-signal backfill: a check is stale unless its candidate set already
+		// matches the CURRENT discovered open ports. This covers two cases at once —
+		// (a) a legacy single-port check with an empty/partial candidate_ports (so
+		// {all:true} upgrades the whole fleet to multi-signal), and (b) a check whose
+		// target port the device no longer answers on. A check whose candidate set
+		// already equals the open set is healthy and left untouched (idempotent).
+		if !portSetEqual(c.CandidatePorts, openSet) {
+			return true
 		}
 	}
-	return hasTCP // has a TCP check, none on an open port → stale
+	return false // no tcp check, or all candidate sets already current → healthy
+}
+
+// portSetEqual reports whether a check's stored candidate_ports JSON is exactly
+// the given open-port set (order-independent). An empty/invalid blob never matches
+// a non-empty open set, so legacy checks get backfilled.
+func portSetEqual(candidateJSON []byte, openSet map[int32]bool) bool {
+	var cand []int32
+	if len(candidateJSON) == 0 || json.Unmarshal(candidateJSON, &cand) != nil {
+		return false
+	}
+	if len(cand) != len(openSet) {
+		return false
+	}
+	for _, p := range cand {
+		if !openSet[p] {
+			return false
+		}
+	}
+	return true
 }
 
 func itoa(n int) string { return strconv.Itoa(n) }

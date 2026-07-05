@@ -118,3 +118,32 @@ func TestIsVirtualByHardware(t *testing.T) {
 		t.Error("isVirtualByHardware(nil,nil)=true, want false")
 	}
 }
+
+// TestPortSetEqual locks the multi-signal backfill trigger: a legacy check with an
+// empty/partial candidate set is NOT equal to a non-empty open set (so {all:true}
+// upgrades it), while an order-independent exact match IS equal (idempotent no-op).
+func TestPortSetEqual(t *testing.T) {
+	open := map[int32]bool{135: true, 445: true, 5060: true}
+	cases := []struct {
+		name string
+		json string
+		want bool
+	}{
+		{"empty blob vs open set -> backfill", ``, false},
+		{"empty array vs open set -> backfill", `[]`, false},
+		{"single legacy port -> backfill", `[445]`, false},
+		{"partial subset -> backfill", `[135,445]`, false},
+		{"exact same set, different order -> healthy", `[5060,135,445]`, true},
+		{"superset -> not equal", `[135,445,5060,8080]`, false},
+		{"invalid json -> backfill", `{oops`, false},
+	}
+	for _, c := range cases {
+		if got := portSetEqual([]byte(c.json), open); got != c.want {
+			t.Errorf("%s: portSetEqual(%q)=%v want %v", c.name, c.json, got, c.want)
+		}
+	}
+	// empty open set: an empty candidate matches (no repair churn for portless hosts).
+	if !portSetEqual([]byte(`[]`), map[int32]bool{}) {
+		t.Errorf("empty candidate vs empty open set should be equal (no churn)")
+	}
+}
