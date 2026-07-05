@@ -23,6 +23,7 @@ type fakeRepo struct {
 	samples     []db.InsertMonitoringSampleParams
 	recorded    []db.RecordMonitoringResultParams
 	devStatus   map[uuid.UUID]string
+	devSignal   map[uuid.UUID]string
 	needSeed    []db.ListDevicesNeedingDefaultCheckRow
 	upserts     []db.UpsertMonitoringCheckParams
 	needSNMP    []db.ListDevicesNeedingSNMPHealthCheckRow
@@ -65,6 +66,17 @@ func (f *fakeRepo) UpdateDeviceMonitoringStatus(_ context.Context, arg db.Update
 		f.devStatus = map[uuid.UUID]string{}
 	}
 	f.devStatus[arg.ID] = arg.Status
+	return nil
+}
+func (f *fakeRepo) UpdateDeviceReachability(_ context.Context, arg db.UpdateDeviceReachabilityParams) error {
+	if f.devStatus == nil {
+		f.devStatus = map[uuid.UUID]string{}
+	}
+	f.devStatus[arg.ID] = arg.Status
+	if f.devSignal == nil {
+		f.devSignal = map[uuid.UUID]string{}
+	}
+	f.devSignal[arg.ID] = arg.ReachabilitySignal + "|" + arg.ReachabilityConfidence
 	return nil
 }
 func (f *fakeRepo) ListDevicesNeedingDefaultCheck(context.Context) ([]db.ListDevicesNeedingDefaultCheckRow, error) {

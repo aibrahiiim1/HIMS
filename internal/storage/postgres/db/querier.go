@@ -894,6 +894,8 @@ type Querier interface {
 	SearchWirelessClients(ctx context.Context, dollar_1 *string) ([]SearchWirelessClientsRow, error)
 	SetAlertRuleEnabled(ctx context.Context, arg SetAlertRuleEnabledParams) (AlertRule, error)
 	SetAlertWorkOrder(ctx context.Context, arg SetAlertWorkOrderParams) error
+	// The multi-signal reachability candidate set (the device's discovered open ports).
+	SetCheckCandidatePorts(ctx context.Context, arg SetCheckCandidatePortsParams) error
 	// Operator manual override: lock (true) freezes auto-classification for this
 	// device; unlock (false) lets the next discovery re-classify it.
 	SetClassificationLock(ctx context.Context, arg SetClassificationLockParams) (Device, error)
@@ -992,6 +994,11 @@ type Querier interface {
 	// Reflect the worst current check status onto the device row so device lists
 	// show a live health badge without a per-row sample query.
 	UpdateDeviceMonitoringStatus(ctx context.Context, arg UpdateDeviceMonitoringStatusParams) error
+	// The monitoring engine's rollup: device status + the multi-signal reachability
+	// evidence (winning signal + confidence) in one write. Status-only callers (a
+	// successful authenticated collection marking a host "up") use
+	// UpdateDeviceMonitoringStatus and must NOT blank the evidence.
+	UpdateDeviceReachability(ctx context.Context, arg UpdateDeviceReachabilityParams) error
 	UpdateDeviceTemplate(ctx context.Context, arg UpdateDeviceTemplateParams) (DeviceTemplate, error)
 	// Reconcile path: refresh a live device's mutable identity fields on
 	// re-discovery (keyed by the caller to the (primary_ip, location) match).

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/coralsearesorts/hims/internal/monitoring"
 	"github.com/coralsearesorts/hims/internal/storage/postgres/db"
@@ -41,20 +42,32 @@ func (s *Server) seedReachabilityCheck(ctx context.Context, d db.Device, openPor
 		return
 	}
 
-	// Keep an existing TCP check only if it already targets a confirmed-open port.
+	// Multi-signal reachability: the check is UP if ANY discovered open port answers,
+	// so one dead service never flips a live host offline. Ensure a TCP reachability
+	// check exists (keep its id/counters if it already targets an open port) and ALWAYS
+	// refresh its candidate set to the CURRENT open ports.
 	open := make(map[int32]bool, len(openPorts))
 	for _, p := range openPorts {
 		open[int32(p)] = true
 	}
-	for _, c := range existing {
-		if c.Kind == "tcp" && c.TargetPort != nil && open[*c.TargetPort] {
-			return
+	var check *db.MonitoringCheck
+	for i := range existing {
+		if existing[i].Kind == "tcp" && existing[i].Role != "supplemental" {
+			check = &existing[i]
+			break
 		}
 	}
-	// Replace any stale TCP check with an evidence-based one.
-	_ = s.queries.DeleteDeviceReachabilityChecks(ctx, d.ID)
 	port := int32(monitoring.ReachabilityPort(d.Category, d.OsFamily, openPorts))
-	_, _ = s.queries.UpsertMonitoringCheck(ctx, db.UpsertMonitoringCheckParams{
-		DeviceID: d.ID, Kind: "tcp", TargetPort: &port, IntervalSeconds: 60, DownThreshold: 2, Enabled: true,
-	})
+	if check == nil || check.TargetPort == nil || !open[*check.TargetPort] {
+		_ = s.queries.DeleteDeviceReachabilityChecks(ctx, d.ID)
+		ch, err := s.queries.UpsertMonitoringCheck(ctx, db.UpsertMonitoringCheckParams{
+			DeviceID: d.ID, Kind: "tcp", TargetPort: &port, IntervalSeconds: 60, DownThreshold: 2, Enabled: true,
+		})
+		if err != nil {
+			return
+		}
+		check = &ch
+	}
+	blob, _ := json.Marshal(openPorts)
+	_ = s.queries.SetCheckCandidatePorts(ctx, db.SetCheckCandidatePortsParams{ID: check.ID, CandidatePorts: blob})
 }

@@ -14,6 +14,10 @@ RETURNING *;
 -- name: GetMonitoringCheck :one
 SELECT * FROM monitoring_checks WHERE id = $1;
 
+-- name: SetCheckCandidatePorts :exec
+-- The multi-signal reachability candidate set (the device's discovered open ports).
+UPDATE monitoring_checks SET candidate_ports = $2, updated_at = now() WHERE id = $1;
+
 -- name: ListMonitoringChecks :many
 -- Global checks list (Health Overview). Joined to the device so the UI can
 -- identify each check by device name / IP (not just a bare port), and ordered
@@ -59,6 +63,8 @@ UPDATE monitoring_checks SET
     last_status = $2,
     last_latency_ms = $3,
     consecutive_failures = $4,
+    last_signal = $5,
+    last_evidence = $6,
     updated_at = now()
 WHERE id = $1
 RETURNING *;
@@ -161,6 +167,19 @@ DELETE FROM monitoring_checks WHERE device_id = $1 AND kind = 'tcp';
 -- show a live health badge without a per-row sample query.
 UPDATE devices SET
     status = $2,
+    last_monitoring_at = now(),
+    updated_at = now()
+WHERE id = $1;
+
+-- name: UpdateDeviceReachability :exec
+-- The monitoring engine's rollup: device status + the multi-signal reachability
+-- evidence (winning signal + confidence) in one write. Status-only callers (a
+-- successful authenticated collection marking a host "up") use
+-- UpdateDeviceMonitoringStatus and must NOT blank the evidence.
+UPDATE devices SET
+    status = $2,
+    reachability_signal = $3,
+    reachability_confidence = $4,
     last_monitoring_at = now(),
     updated_at = now()
 WHERE id = $1;

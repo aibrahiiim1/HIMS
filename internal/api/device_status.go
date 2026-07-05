@@ -755,9 +755,21 @@ func (s *Server) repairReachabilityCheck(ctx context.Context, d db.Device) (port
 		return port, source, err
 	}
 	p := int32(port)
-	_, err = s.queries.UpsertMonitoringCheck(ctx, db.UpsertMonitoringCheckParams{
+	check, uerr := s.queries.UpsertMonitoringCheck(ctx, db.UpsertMonitoringCheckParams{
 		DeviceID: d.ID, Kind: "tcp", TargetPort: &p, IntervalSeconds: 60, DownThreshold: 2, Enabled: true,
 	})
+	if uerr != nil {
+		return port, source, uerr
+	}
+	// Multi-signal: the check probes the FULL discovered open-port set (up if ANY
+	// answers), not just the single headline port — so one dead service can't flip a
+	// live host offline. Fall back to the headline port when discovery has none.
+	cand := openPorts
+	if len(cand) == 0 {
+		cand = []int{port}
+	}
+	blob, _ := json.Marshal(cand)
+	err = s.queries.SetCheckCandidatePorts(ctx, db.SetCheckCandidatePortsParams{ID: check.ID, CandidatePorts: blob})
 	return port, source, err
 }
 

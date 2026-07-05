@@ -56,7 +56,7 @@ func (q *Queries) DeleteSupplementalSNMPForSVIGateways(ctx context.Context) (int
 }
 
 const getMonitoringCheck = `-- name: GetMonitoringCheck :one
-SELECT id, device_id, kind, target_port, oid, interval_seconds, down_threshold, enabled, last_run_at, last_status, last_latency_ms, consecutive_failures, created_at, updated_at, role FROM monitoring_checks WHERE id = $1
+SELECT id, device_id, kind, target_port, oid, interval_seconds, down_threshold, enabled, last_run_at, last_status, last_latency_ms, consecutive_failures, created_at, updated_at, role, candidate_ports, last_signal, last_evidence FROM monitoring_checks WHERE id = $1
 `
 
 func (q *Queries) GetMonitoringCheck(ctx context.Context, id uuid.UUID) (MonitoringCheck, error) {
@@ -78,6 +78,9 @@ func (q *Queries) GetMonitoringCheck(ctx context.Context, id uuid.UUID) (Monitor
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Role,
+		&i.CandidatePorts,
+		&i.LastSignal,
+		&i.LastEvidence,
 	)
 	return i, err
 }
@@ -202,7 +205,7 @@ func (q *Queries) ListDevicesNeedingSNMPHealthCheck(ctx context.Context, categor
 }
 
 const listDueMonitoringChecks = `-- name: ListDueMonitoringChecks :many
-SELECT id, device_id, kind, target_port, oid, interval_seconds, down_threshold, enabled, last_run_at, last_status, last_latency_ms, consecutive_failures, created_at, updated_at, role FROM monitoring_checks
+SELECT id, device_id, kind, target_port, oid, interval_seconds, down_threshold, enabled, last_run_at, last_status, last_latency_ms, consecutive_failures, created_at, updated_at, role, candidate_ports, last_signal, last_evidence FROM monitoring_checks
 WHERE enabled
   AND (last_run_at IS NULL
        OR last_run_at + make_interval(secs => interval_seconds) <= now())
@@ -236,6 +239,9 @@ func (q *Queries) ListDueMonitoringChecks(ctx context.Context) ([]MonitoringChec
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Role,
+			&i.CandidatePorts,
+			&i.LastSignal,
+			&i.LastEvidence,
 		); err != nil {
 			return nil, err
 		}
@@ -248,7 +254,7 @@ func (q *Queries) ListDueMonitoringChecks(ctx context.Context) ([]MonitoringChec
 }
 
 const listMonitoringChecks = `-- name: ListMonitoringChecks :many
-SELECT c.id, c.device_id, c.kind, c.target_port, c.oid, c.interval_seconds, c.down_threshold, c.enabled, c.last_run_at, c.last_status, c.last_latency_ms, c.consecutive_failures, c.created_at, c.updated_at, c.role,
+SELECT c.id, c.device_id, c.kind, c.target_port, c.oid, c.interval_seconds, c.down_threshold, c.enabled, c.last_run_at, c.last_status, c.last_latency_ms, c.consecutive_failures, c.created_at, c.updated_at, c.role, c.candidate_ports, c.last_signal, c.last_evidence,
        d.name AS device_name,
        d.primary_ip AS device_ip,
        d.category AS device_category
@@ -274,6 +280,9 @@ type ListMonitoringChecksRow struct {
 	CreatedAt           time.Time   `json:"created_at"`
 	UpdatedAt           time.Time   `json:"updated_at"`
 	Role                string      `json:"role"`
+	CandidatePorts      []byte      `json:"candidate_ports"`
+	LastSignal          string      `json:"last_signal"`
+	LastEvidence        []byte      `json:"last_evidence"`
 	DeviceName          string      `json:"device_name"`
 	DeviceIp            *netip.Addr `json:"device_ip"`
 	DeviceCategory      string      `json:"device_category"`
@@ -307,6 +316,9 @@ func (q *Queries) ListMonitoringChecks(ctx context.Context) ([]ListMonitoringChe
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Role,
+			&i.CandidatePorts,
+			&i.LastSignal,
+			&i.LastEvidence,
 			&i.DeviceName,
 			&i.DeviceIp,
 			&i.DeviceCategory,
@@ -322,7 +334,7 @@ func (q *Queries) ListMonitoringChecks(ctx context.Context) ([]ListMonitoringChe
 }
 
 const listMonitoringChecksByDevice = `-- name: ListMonitoringChecksByDevice :many
-SELECT id, device_id, kind, target_port, oid, interval_seconds, down_threshold, enabled, last_run_at, last_status, last_latency_ms, consecutive_failures, created_at, updated_at, role FROM monitoring_checks WHERE device_id = $1 ORDER BY kind, target_port
+SELECT id, device_id, kind, target_port, oid, interval_seconds, down_threshold, enabled, last_run_at, last_status, last_latency_ms, consecutive_failures, created_at, updated_at, role, candidate_ports, last_signal, last_evidence FROM monitoring_checks WHERE device_id = $1 ORDER BY kind, target_port
 `
 
 func (q *Queries) ListMonitoringChecksByDevice(ctx context.Context, deviceID uuid.UUID) ([]MonitoringCheck, error) {
@@ -350,6 +362,9 @@ func (q *Queries) ListMonitoringChecksByDevice(ctx context.Context, deviceID uui
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Role,
+			&i.CandidatePorts,
+			&i.LastSignal,
+			&i.LastEvidence,
 		); err != nil {
 			return nil, err
 		}
@@ -496,9 +511,11 @@ UPDATE monitoring_checks SET
     last_status = $2,
     last_latency_ms = $3,
     consecutive_failures = $4,
+    last_signal = $5,
+    last_evidence = $6,
     updated_at = now()
 WHERE id = $1
-RETURNING id, device_id, kind, target_port, oid, interval_seconds, down_threshold, enabled, last_run_at, last_status, last_latency_ms, consecutive_failures, created_at, updated_at, role
+RETURNING id, device_id, kind, target_port, oid, interval_seconds, down_threshold, enabled, last_run_at, last_status, last_latency_ms, consecutive_failures, created_at, updated_at, role, candidate_ports, last_signal, last_evidence
 `
 
 type RecordMonitoringResultParams struct {
@@ -506,6 +523,8 @@ type RecordMonitoringResultParams struct {
 	LastStatus          string    `json:"last_status"`
 	LastLatencyMs       *float64  `json:"last_latency_ms"`
 	ConsecutiveFailures int32     `json:"consecutive_failures"`
+	LastSignal          string    `json:"last_signal"`
+	LastEvidence        []byte    `json:"last_evidence"`
 }
 
 // Persist the rollup the engine computed (status + failure counter) onto the
@@ -516,6 +535,8 @@ func (q *Queries) RecordMonitoringResult(ctx context.Context, arg RecordMonitori
 		arg.LastStatus,
 		arg.LastLatencyMs,
 		arg.ConsecutiveFailures,
+		arg.LastSignal,
+		arg.LastEvidence,
 	)
 	var i MonitoringCheck
 	err := row.Scan(
@@ -534,13 +555,31 @@ func (q *Queries) RecordMonitoringResult(ctx context.Context, arg RecordMonitori
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Role,
+		&i.CandidatePorts,
+		&i.LastSignal,
+		&i.LastEvidence,
 	)
 	return i, err
 }
 
+const setCheckCandidatePorts = `-- name: SetCheckCandidatePorts :exec
+UPDATE monitoring_checks SET candidate_ports = $2, updated_at = now() WHERE id = $1
+`
+
+type SetCheckCandidatePortsParams struct {
+	ID             uuid.UUID `json:"id"`
+	CandidatePorts []byte    `json:"candidate_ports"`
+}
+
+// The multi-signal reachability candidate set (the device's discovered open ports).
+func (q *Queries) SetCheckCandidatePorts(ctx context.Context, arg SetCheckCandidatePortsParams) error {
+	_, err := q.db.Exec(ctx, setCheckCandidatePorts, arg.ID, arg.CandidatePorts)
+	return err
+}
+
 const setMonitoringCheckEnabled = `-- name: SetMonitoringCheckEnabled :one
 UPDATE monitoring_checks SET enabled = $2, updated_at = now()
-WHERE id = $1 RETURNING id, device_id, kind, target_port, oid, interval_seconds, down_threshold, enabled, last_run_at, last_status, last_latency_ms, consecutive_failures, created_at, updated_at, role
+WHERE id = $1 RETURNING id, device_id, kind, target_port, oid, interval_seconds, down_threshold, enabled, last_run_at, last_status, last_latency_ms, consecutive_failures, created_at, updated_at, role, candidate_ports, last_signal, last_evidence
 `
 
 type SetMonitoringCheckEnabledParams struct {
@@ -567,6 +606,9 @@ func (q *Queries) SetMonitoringCheckEnabled(ctx context.Context, arg SetMonitori
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Role,
+		&i.CandidatePorts,
+		&i.LastSignal,
+		&i.LastEvidence,
 	)
 	return i, err
 }
@@ -607,6 +649,37 @@ func (q *Queries) UpdateDeviceMonitoringStatus(ctx context.Context, arg UpdateDe
 	return err
 }
 
+const updateDeviceReachability = `-- name: UpdateDeviceReachability :exec
+UPDATE devices SET
+    status = $2,
+    reachability_signal = $3,
+    reachability_confidence = $4,
+    last_monitoring_at = now(),
+    updated_at = now()
+WHERE id = $1
+`
+
+type UpdateDeviceReachabilityParams struct {
+	ID                     uuid.UUID `json:"id"`
+	Status                 string    `json:"status"`
+	ReachabilitySignal     string    `json:"reachability_signal"`
+	ReachabilityConfidence string    `json:"reachability_confidence"`
+}
+
+// The monitoring engine's rollup: device status + the multi-signal reachability
+// evidence (winning signal + confidence) in one write. Status-only callers (a
+// successful authenticated collection marking a host "up") use
+// UpdateDeviceMonitoringStatus and must NOT blank the evidence.
+func (q *Queries) UpdateDeviceReachability(ctx context.Context, arg UpdateDeviceReachabilityParams) error {
+	_, err := q.db.Exec(ctx, updateDeviceReachability,
+		arg.ID,
+		arg.Status,
+		arg.ReachabilitySignal,
+		arg.ReachabilityConfidence,
+	)
+	return err
+}
+
 const upsertMonitoringCheck = `-- name: UpsertMonitoringCheck :one
 INSERT INTO monitoring_checks (device_id, kind, target_port, oid, interval_seconds, down_threshold, enabled)
 VALUES ($1,$2,$3,$4,$5,$6,$7)
@@ -616,7 +689,7 @@ ON CONFLICT (device_id, kind, target_port) DO UPDATE SET
     down_threshold = EXCLUDED.down_threshold,
     enabled = EXCLUDED.enabled,
     updated_at = now()
-RETURNING id, device_id, kind, target_port, oid, interval_seconds, down_threshold, enabled, last_run_at, last_status, last_latency_ms, consecutive_failures, created_at, updated_at, role
+RETURNING id, device_id, kind, target_port, oid, interval_seconds, down_threshold, enabled, last_run_at, last_status, last_latency_ms, consecutive_failures, created_at, updated_at, role, candidate_ports, last_signal, last_evidence
 `
 
 type UpsertMonitoringCheckParams struct {
@@ -658,6 +731,9 @@ func (q *Queries) UpsertMonitoringCheck(ctx context.Context, arg UpsertMonitorin
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Role,
+		&i.CandidatePorts,
+		&i.LastSignal,
+		&i.LastEvidence,
 	)
 	return i, err
 }
@@ -667,7 +743,7 @@ INSERT INTO monitoring_checks (device_id, kind, target_port, oid, interval_secon
 VALUES ($1, 'snmp', 161, $2, $3, $4, true, 'supplemental')
 ON CONFLICT (device_id, kind, target_port) DO UPDATE SET
     oid = EXCLUDED.oid, role = 'supplemental', enabled = true, updated_at = now()
-RETURNING id, device_id, kind, target_port, oid, interval_seconds, down_threshold, enabled, last_run_at, last_status, last_latency_ms, consecutive_failures, created_at, updated_at, role
+RETURNING id, device_id, kind, target_port, oid, interval_seconds, down_threshold, enabled, last_run_at, last_status, last_latency_ms, consecutive_failures, created_at, updated_at, role, candidate_ports, last_signal, last_evidence
 `
 
 type UpsertSupplementalSNMPCheckParams struct {
@@ -703,6 +779,9 @@ func (q *Queries) UpsertSupplementalSNMPCheck(ctx context.Context, arg UpsertSup
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Role,
+		&i.CandidatePorts,
+		&i.LastSignal,
+		&i.LastEvidence,
 	)
 	return i, err
 }

@@ -326,7 +326,9 @@ type Device struct {
 	WebLastCredentialID *uuid.UUID `json:"web_last_credential_id"`
 	WebPrefProto        string     `json:"web_pref_proto"`
 	// Operator-marked record-and-monitor-only device: monitored for reachability but excluded from access/credential expectations.
-	IsInventoryOnly bool `json:"is_inventory_only"`
+	IsInventoryOnly        bool   `json:"is_inventory_only"`
+	ReachabilitySignal     string `json:"reachability_signal"`
+	ReachabilityConfidence string `json:"reachability_confidence"`
 }
 
 type DeviceCategory struct {
@@ -659,6 +661,9 @@ type MonitoringCheck struct {
 	CreatedAt           time.Time  `json:"created_at"`
 	UpdatedAt           time.Time  `json:"updated_at"`
 	Role                string     `json:"role"`
+	CandidatePorts      []byte     `json:"candidate_ports"`
+	LastSignal          string     `json:"last_signal"`
+	LastEvidence        []byte     `json:"last_evidence"`
 }
 
 type MonitoringSample struct {

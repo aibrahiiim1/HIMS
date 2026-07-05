@@ -148,6 +148,27 @@ func (s *Server) deleteMonitoringCheck(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// monitoringCheckDTO exposes the JSONB evidence columns as real JSON (a bare
+// db.MonitoringCheck would base64-encode the []byte last_evidence/candidate_ports).
+// The shallower fields shadow the embedded ones for the same json tag.
+type monitoringCheckDTO struct {
+	db.MonitoringCheck
+	LastEvidence   json.RawMessage `json:"last_evidence"`
+	CandidatePorts json.RawMessage `json:"candidate_ports"`
+}
+
+func toMonitoringCheckDTO(c db.MonitoringCheck) monitoringCheckDTO {
+	ev := json.RawMessage(c.LastEvidence)
+	if len(ev) == 0 {
+		ev = json.RawMessage("{}")
+	}
+	cp := json.RawMessage(c.CandidatePorts)
+	if len(cp) == 0 {
+		cp = json.RawMessage("[]")
+	}
+	return monitoringCheckDTO{MonitoringCheck: c, LastEvidence: ev, CandidatePorts: cp}
+}
+
 func (s *Server) deviceMonitoringChecks(w http.ResponseWriter, r *http.Request) {
 	ctx, id, ok := pathDevice(w, r)
 	if !ok {
@@ -158,7 +179,11 @@ func (s *Server) deviceMonitoringChecks(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, rows)
+	out := make([]monitoringCheckDTO, 0, len(rows))
+	for _, c := range rows {
+		out = append(out, toMonitoringCheckDTO(c))
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) deviceMonitoringSamples(w http.ResponseWriter, r *http.Request) {

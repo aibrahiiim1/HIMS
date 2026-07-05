@@ -100,6 +100,19 @@ type Result struct {
 	Latency time.Duration
 	Err     error
 	Value   *float64 // numeric value for metric probes (e.g. SNMP gauge)
+	Signal  string   // the signal that proved liveness, e.g. "tcp/5060" (multi-signal reachability)
+}
+
+// ReachResult is the outcome of a multi-signal reachability probe: OK if ANY candidate
+// answered, the winning Signal, and the full per-candidate evidence (which ports answered
+// vs failed) so status can be presented honestly instead of as a bare up/down bit.
+type ReachResult struct {
+	OK      bool
+	Latency time.Duration
+	Signal  string   // winning signal, e.g. "tcp/5060" ("" when down)
+	Up      []string // signals that answered, e.g. ["tcp/5060"]
+	Down    []string // candidates that did NOT answer, e.g. ["tcp/3389","tcp/445"]
+	Err     error
 }
 
 // SysUpTimeOID is the default OID an SNMP metric check polls when none is set
@@ -144,7 +157,45 @@ func (p *Poller) ProbeTCP(ctx context.Context, addr netip.Addr, port int) Result
 		return Result{OK: false, Latency: latency, Err: err}
 	}
 	_ = conn.Close()
-	return Result{OK: true, Latency: latency}
+	return Result{OK: true, Latency: latency, Signal: fmt.Sprintf("tcp/%d", port)}
+}
+
+// ProbeReachability is the multi-signal reachability probe: it dials EVERY candidate
+// port (not short-circuiting) so it can report the full evidence — which ports answered
+// and which didn't. The device is reachable if ANY candidate answers; the winning
+// signal is the first one that opened. This is the anti-false-positive core: a host with
+// one dead port but a live one (POS answering tcp/5060 while tcp/3389 died) stays online,
+// and the status can honestly say "Online · via tcp/5060 (tcp/3389 failed)".
+func (p *Poller) ProbeReachability(ctx context.Context, addr netip.Addr, ports []int) ReachResult {
+	if !addr.IsValid() {
+		return ReachResult{OK: false, Err: fmt.Errorf("invalid address")}
+	}
+	out := ReachResult{Up: []string{}, Down: []string{}}
+	seen := map[int]bool{}
+	for _, port := range ports {
+		if port <= 0 || seen[port] {
+			continue
+		}
+		seen[port] = true
+		if ctx.Err() != nil {
+			out.Err = ctx.Err()
+			break
+		}
+		r := p.ProbeTCP(ctx, addr, port)
+		sig := fmt.Sprintf("tcp/%d", port)
+		if r.OK {
+			out.Up = append(out.Up, sig)
+			if !out.OK { // first winner sets the headline signal + latency
+				out.OK, out.Signal, out.Latency = true, sig, r.Latency
+			}
+		} else {
+			out.Down = append(out.Down, sig)
+			if out.Err == nil {
+				out.Err = r.Err
+			}
+		}
+	}
+	return out
 }
 
 // ProbeTCPAny dials each port in turn and returns OK on the first that opens —

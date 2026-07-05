@@ -2,6 +2,7 @@ package monitoring
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"sync/atomic"
@@ -27,6 +28,7 @@ type Repo interface {
 	InsertMonitoringSample(ctx context.Context, arg db.InsertMonitoringSampleParams) error
 	ListMonitoringChecksByDevice(ctx context.Context, deviceID uuid.UUID) ([]db.MonitoringCheck, error)
 	UpdateDeviceMonitoringStatus(ctx context.Context, arg db.UpdateDeviceMonitoringStatusParams) error
+	UpdateDeviceReachability(ctx context.Context, arg db.UpdateDeviceReachabilityParams) error
 	ListDevicesNeedingDefaultCheck(ctx context.Context) ([]db.ListDevicesNeedingDefaultCheckRow, error)
 	UpsertMonitoringCheck(ctx context.Context, arg db.UpsertMonitoringCheckParams) (db.MonitoringCheck, error)
 	ListDevicesNeedingSNMPHealthCheck(ctx context.Context, categories []string) ([]db.ListDevicesNeedingSNMPHealthCheckRow, error)
@@ -182,25 +184,29 @@ func (e *Engine) runOne(ctx context.Context, c db.MonitoringCheck) {
 	}
 
 	var res Result
+	signal := ""
+	evidence := []byte("{}")
 	switch c.Kind {
 	case "snmp":
 		res = e.probeSNMP(ctx, dev, c)
-	default: // "tcp"
-		port := 443
-		if c.TargetPort != nil {
-			port = int(*c.TargetPort)
-		}
-		if dev.OsFamily == "windows" {
-			// Windows hosts rarely serve SSH/22 or 443; probe the real Windows
-			// management surface (RDP/WinRM/SMB) plus the stored port so a box
-			// collected over WinRM isn't marked "down" by a port it never serves.
-			res = e.poller.ProbeTCPAny(ctx, *dev.PrimaryIp, append([]int{port}, WindowsLivenessPorts...))
+		if res.OK {
+			signal = "snmp"
+			evidence = evidenceJSON([]string{"snmp"}, nil)
 		} else {
-			res = e.poller.ProbeTCP(ctx, *dev.PrimaryIp, port)
+			evidence = evidenceJSON(nil, []string{"snmp"})
 		}
+	default: // "tcp" — MULTI-SIGNAL reachability: probe every candidate port and stay
+		// UP if ANY answers, so one dead service never flips a live device offline.
+		rr := e.poller.ProbeReachability(ctx, *dev.PrimaryIp, reachabilityPorts(dev, c))
+		res = Result{OK: rr.OK, Latency: rr.Latency, Err: rr.Err, Signal: rr.Signal}
+		signal = rr.Signal
+		evidence = evidenceJSON(rr.Up, rr.Down)
 	}
 
 	status, failures := Evaluate(res.OK, int(c.ConsecutiveFailures), int(c.DownThreshold))
+	if status != StatusUp {
+		signal = "" // only a currently-up check carries a winning signal
+	}
 	latencyMs := float64(res.Latency.Microseconds()) / 1000.0
 	var errStr *string
 	if res.Err != nil {
@@ -213,6 +219,8 @@ func (e *Engine) runOne(ctx context.Context, c db.MonitoringCheck) {
 		LastStatus:          string(status),
 		LastLatencyMs:       &latencyMs,
 		ConsecutiveFailures: int32(failures),
+		LastSignal:          signal,
+		LastEvidence:        evidence,
 	}); err != nil {
 		e.log.Warn("monitoring: record result failed", "check", c.ID, "error", err)
 	}
@@ -266,6 +274,72 @@ func (e *Engine) probeSNMP(ctx context.Context, dev db.Device, c db.MonitoringCh
 	return e.poller.ProbeSNMP(ctx, *dev.PrimaryIp, port, string(secret), oid)
 }
 
+// reachabilityPorts returns the candidate ports a reachability check probes: its stored
+// multi-signal candidate set (the device's discovered open ports), else its single
+// target_port, plus the Windows liveness ports for a Windows host (so a WinRM/RDP/SMB box
+// isn't marked down by a port it doesn't serve). Duplicates are harmless (probe dedups).
+func reachabilityPorts(dev db.Device, c db.MonitoringCheck) []int {
+	var ports []int
+	_ = json.Unmarshal(c.CandidatePorts, &ports)
+	if len(ports) == 0 && c.TargetPort != nil {
+		ports = []int{int(*c.TargetPort)}
+	}
+	if dev.OsFamily == "windows" {
+		ports = append(ports, WindowsLivenessPorts...)
+	}
+	return ports
+}
+
+// evidenceJSON encodes the per-signal reachability evidence for honest status
+// presentation, e.g. {"up":["tcp/5060"],"down":["tcp/3389","tcp/445"]}.
+func evidenceJSON(up, down []string) []byte {
+	m := map[string][]string{}
+	if len(up) > 0 {
+		m["up"] = up
+	}
+	if len(down) > 0 {
+		m["down"] = down
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return []byte("{}")
+	}
+	return b
+}
+
+// reachabilityEvidence derives the device's winning signal + confidence from its
+// reachability checks. Confidence: high = ≥2 independent signals up (or an
+// authenticated SNMP signal + a port); medium = one signal up; none = nothing up.
+// (ICMP would be a "low" supplemental signal — not implemented as required yet.)
+func reachabilityEvidence(reachChecks []db.MonitoringCheck) (signal, confidence string) {
+	ups := []string{}
+	for _, c := range reachChecks {
+		if c.LastStatus != string(StatusUp) || c.LastSignal == "" {
+			continue
+		}
+		var ev struct {
+			Up []string `json:"up"`
+		}
+		_ = json.Unmarshal(c.LastEvidence, &ev)
+		if len(ev.Up) > 0 {
+			ups = append(ups, ev.Up...)
+		} else {
+			ups = append(ups, c.LastSignal)
+		}
+		if signal == "" {
+			signal = c.LastSignal
+		}
+	}
+	switch {
+	case len(ups) == 0:
+		return "", "none"
+	case len(ups) >= 2:
+		return signal, "high"
+	default:
+		return signal, "medium"
+	}
+}
+
 // rollupDevice recomputes the device's status from all its checks and writes
 // it onto the device row (the live badge for device lists).
 func (e *Engine) rollupDevice(ctx context.Context, deviceID uuid.UUID) {
@@ -281,6 +355,7 @@ func (e *Engine) rollupDevice(ctx context.Context, deviceID uuid.UUID) {
 	// lowers the health score without inflating the offline count.
 	reach := make([]Status, 0, len(checks))
 	supp := make([]Status, 0, len(checks))
+	reachChecks := make([]db.MonitoringCheck, 0, len(checks))
 	for _, c := range checks {
 		// "supplemental" is the explicit opt-in; anything else (including the
 		// "reachability" default and legacy empty role) drives reachability.
@@ -288,12 +363,19 @@ func (e *Engine) rollupDevice(ctx context.Context, deviceID uuid.UUID) {
 			supp = append(supp, Status(c.LastStatus))
 		} else {
 			reach = append(reach, Status(c.LastStatus))
+			reachChecks = append(reachChecks, c)
 		}
 	}
 	dev := RollupDeviceWithSupplemental(reach, supp)
-	if err := e.repo.UpdateDeviceMonitoringStatus(ctx, db.UpdateDeviceMonitoringStatusParams{
-		ID:     deviceID,
-		Status: string(dev),
+	signal, confidence := reachabilityEvidence(reachChecks)
+	if dev != StatusUp { // a non-up device has no proving signal
+		signal, confidence = "", "none"
+	}
+	if err := e.repo.UpdateDeviceReachability(ctx, db.UpdateDeviceReachabilityParams{
+		ID:                     deviceID,
+		Status:                 string(dev),
+		ReachabilitySignal:     signal,
+		ReachabilityConfidence: confidence,
 	}); err != nil {
 		e.log.Warn("monitoring: device status update failed", "device", deviceID, "error", err)
 	}
