@@ -6,7 +6,7 @@ import { api, type CameraInfo, type NVRChannel, type NVRDetail, type Device, typ
 import { DeviceHeader } from '../components/DeviceHeader'
 import { ConnectivityPanel } from '../components/ConnectivityPanel'
 import { ClassificationEvidencePanel } from '../components/ClassificationEvidence'
-import { Panel, Kpi, DefList, EmptyState, StatusPill } from '../components/ui'
+import { Panel, Kpi, DefList, EmptyState, StatusPill, timeAgo } from '../components/ui'
 
 const chStatus = (s: string) => (s === 'online' ? 'up' : s === 'offline' ? 'down' : 'unknown')
 
@@ -194,7 +194,7 @@ export function CctvDetail() {
         </Panel>
       )}
 
-      {tab === 'channels' && <ChannelsTab channels={channels} chOnline={chOnline} />}
+      {tab === 'channels' && <ChannelsTab channels={channels} chOnline={chOnline} deviceId={id ?? ''} isRecorder={isNVR} />}
 
       {tab === 'storage' && (
         <Panel title="Storage / HDD" icon={HardDrive} pad={false}>
@@ -454,11 +454,39 @@ function reasonKind(x: NVRChannel): 'online' | 'network' | 'credential' | 'other
 
 type ChFilter = 'all' | 'online' | 'offline' | 'network' | 'credential'
 
-function ChannelsTab({ channels, chOnline }: { channels: NVRChannel[]; chOnline: number }) {
+function ChannelsTab({ channels, chOnline, deviceId, isRecorder }: { channels: NVRChannel[]; chOnline: number; deviceId: string; isRecorder: boolean }) {
   const [q, setQ] = useState('')
   const [filter, setFilter] = useState<ChFilter>('all')
   const [page, setPage] = useState(0)
   const PAGE = 25
+  const qc = useQueryClient()
+
+  // Freshness: the online/offline picture is only as current as the last NVR poll.
+  // A stale snapshot is exactly what made a down camera keep reading "online", so
+  // surface how long ago the recorder was last checked and warn when it's stale.
+  const newestSeen = useMemo(() => {
+    let t = 0
+    for (const x of channels) {
+      const ms = x.last_seen_at ? Date.parse(x.last_seen_at) : 0
+      if (ms > t) t = ms
+    }
+    return t
+  }, [channels])
+  const STALE_MS = 35 * 60 * 1000 // > 3× the ~10-min monitor cadence
+  const stale = newestSeen > 0 && Date.now() - newestSeen > STALE_MS
+
+  const refresh = useMutation({
+    mutationFn: () => api.post(`/devices/${deviceId}/refresh-nvr-channels`, {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['nvr', deviceId] })
+      qc.invalidateQueries({ queryKey: ['nvr-channels', deviceId] })
+    },
+  })
+  const refreshBtn = isRecorder ? (
+    <button className="btn btn-sm" disabled={refresh.isPending} onClick={() => refresh.mutate()} title="Re-poll this recorder for the current per-camera online/offline status">
+      <RefreshCw size={13} style={{ marginRight: 4, verticalAlign: -1 }} />{refresh.isPending ? 'Checking…' : 'Refresh from NVR'}
+    </button>
+  ) : null
 
   // Read-only Camera Health summary, computed from the collected channel statuses.
   const sum = useMemo(() => {
@@ -500,11 +528,24 @@ function ChannelsTab({ channels, chOnline }: { channels: NVRChannel[]; chOnline:
   )
 
   return (
-    <Panel title="Camera Health" icon={Video} subtitle={channels.length ? `${chOnline}/${channels.length} online` : undefined} pad={false}>
+    <Panel title="Camera Health" icon={Video} subtitle={channels.length ? `${chOnline}/${channels.length} online` : undefined} pad={false}
+      actions={channels.length ? (
+        <span className="row" style={{ gap: 10, alignItems: 'center' }}>
+          <span className="muted" style={{ fontSize: 12 }} title="When this recorder was last polled for camera status">
+            {newestSeen ? `checked ${timeAgo(new Date(newestSeen).toISOString())}` : 'never checked'}
+          </span>
+          {refreshBtn}
+        </span>
+      ) : refreshBtn}>
       {channels.length === 0 ? (
         <EmptyState icon={Video} title="No channels collected" message="Run Collect — channels populate from ISAPI /ContentMgmt/InputProxy/channels. If the recorder exposes none, it will report empty." />
       ) : (
         <>
+          {stale && (
+            <div style={{ margin: '12px 12px 0', padding: '8px 12px', borderRadius: 8, background: 'rgba(245,158,11,0.12)', border: '1px solid var(--warn,#f59e0b)', fontSize: 13 }}>
+              ⚠ These statuses were last refreshed {timeAgo(new Date(newestSeen).toISOString())} — they may be a stale snapshot. Click <b>Refresh from NVR</b> for the current online/offline. (The recorder may be unreachable or its bound web/ONVIF credential may have failed.)
+            </div>
+          )}
           {/* Read-only summary cards (click to filter) */}
           <div className="row" style={{ gap: 8, padding: '12px', flexWrap: 'wrap' }}>
             {card('Total', sum.total, 'var(--text,#cbd5e1)', 'all')}
@@ -520,7 +561,7 @@ function ChannelsTab({ channels, chOnline }: { channels: NVRChannel[]; chOnline:
             <span className="muted" style={{ fontSize: 13 }}>{filtered.length} of {channels.length}{filter !== 'all' ? ` · filter: ${filter}` : ''}</span>
           </div>
           <table className="data-table">
-            <thead><tr><th>Ch</th><th>Camera name</th><th>Camera IP</th><th>Status</th><th>Reason</th><th>Recording</th><th>Linked device</th></tr></thead>
+            <thead><tr><th>Ch</th><th>Camera name</th><th>Camera IP</th><th>Status</th><th>Reason</th><th>Recording</th><th>Linked device</th><th>Last checked</th></tr></thead>
             <tbody>
               {rows.map((x: NVRChannel) => {
                 const k = reasonKind(x)
@@ -538,6 +579,7 @@ function ChannelsTab({ channels, chOnline }: { channels: NVRChannel[]; chOnline:
                       ? <span className="muted">—</span>
                       : <StatusPill status={x.recording ? 'up' : 'unknown'} label={x.recording ? 'Recording' : 'Off'} />}</td>
                     <td>{x.camera_device_id ? <Link className="cell-name" to={`/cctv/${x.camera_device_id}`}>camera device</Link> : <span className="muted">—</span>}</td>
+                    <td className="muted" style={{ fontSize: 12 }}>{x.last_seen_at ? timeAgo(x.last_seen_at) : '—'}</td>
                   </tr>
                 )
               })}

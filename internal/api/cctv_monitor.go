@@ -68,6 +68,35 @@ func (s *Server) refreshNVRChannelsNow(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"recorders_polled": n})
 }
 
+// refreshOneNVRNow (POST /devices/{id}/refresh-nvr-channels) re-polls a single
+// recorder for per-channel camera status on demand (the "Refresh from NVR" button
+// on the recorder's Camera Health tab), including transition-alert evaluation.
+func (s *Server) refreshOneNVRNow(w http.ResponseWriter, r *http.Request) {
+	ctx, id, ok := pathDevice(w, r)
+	if !ok {
+		return
+	}
+	d, err := s.queries.GetDevice(ctx, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if d.Category != "nvr" && d.Category != "dvr" {
+		http.Error(w, "device is not an NVR/DVR recorder", http.StatusBadRequest)
+		return
+	}
+	if _, _, ok := s.cctvCredential(ctx, d); !ok {
+		writeJSON(w, http.StatusOK, map[string]any{"polled": false, "reason": "no usable CCTV/ONVIF/HTTP-Basic credential bound to this recorder"})
+		return
+	}
+	polled := s.refreshOneRecorder(ctx, d, s.cameraOfflineRuleID(ctx))
+	if polled {
+		s.audit(r, "monitoring", "cctv.refresh_nvr_channels", "device", id.String(),
+			"Re-polled camera channel status for "+d.Name, nil)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"polled": polled})
+}
+
 // refreshNVRChannels re-polls every managed NVR/DVR for per-channel camera status.
 // Returns the number of recorders successfully polled. Honest no-op when the
 // encryption key is locked (can't decrypt recorder credentials).
