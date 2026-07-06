@@ -166,50 +166,8 @@ func Collect(ctx context.Context, ip, user, pass string, doer Doer, prefer []str
 		return out, nil
 	}
 
-	// Camera channels: NVRs proxy IP cameras (InputProxy); DVRs/encoders expose
-	// local video inputs. Try both; merge names from streaming channels.
-	chByNo := map[int]*Channel{}
-	videoInputNos := []int{} // local analog inputs (DVRs/encoders) — status fetched separately from IP-camera proxy
-	if b, ok := probe("/ISAPI/ContentMgmt/InputProxy/channels"); ok {
-		for _, c := range parseInputProxyChannels(b) {
-			cc := c
-			chByNo[c.No] = &cc
-		}
-	}
-	if b, ok := probe("/ISAPI/System/Video/inputs/channels"); ok {
-		for _, c := range parseVideoInputChannels(b) {
-			videoInputNos = append(videoInputNos, c.No)
-			if _, seen := chByNo[c.No]; !seen {
-				cc := c
-				chByNo[c.No] = &cc
-			}
-		}
-	}
-	// IP-camera channel online status (NVRs): the camera-behind-the-channel link state.
-	if b, ok := probe("/ISAPI/ContentMgmt/InputProxy/channels/status"); ok {
-		for no, st := range parseInputProxyStatus(b) {
-			if ch := chByNo[no]; ch != nil {
-				o := st.Online
-				ch.Online = &o
-				ch.DetectResult = st.Detect
-				if ch.IP == "" && st.IP != "" {
-					ch.IP = st.IP
-				}
-			}
-		}
-	}
-	// Analog-input signal status (DVRs/Turbo-HD/encoders): whether a camera is wired
-	// to each local BNC input. The IP-camera proxy status above never covers these,
-	// so without this every analog channel shows "unknown". Try the aggregate list
-	// first; per-channel fills any input the aggregate didn't (firmware schemas vary).
-	out.Probes = append(out.Probes, collectVideoInputStatus(ctx, cl, chByNo, videoInputNos)...)
-	if b, ok := probe("/ISAPI/Streaming/channels"); ok {
-		for no, name := range parseStreamingChannelNames(b) {
-			if ch := chByNo[no]; ch != nil && ch.Name == "" {
-				ch.Name = name
-			}
-		}
-	}
+	// Camera channels + per-channel online status (shared with the status-only poll).
+	chByNo := gatherChannels(ctx, cl, probe, &out.Probes)
 	// Recording (read-only): the record-tracks list gives a per-channel enabled
 	// flag (which inputs are actually being recorded) plus the overall summary.
 	// Done before the channel copy so per-channel Recording lands in out.Channels.
