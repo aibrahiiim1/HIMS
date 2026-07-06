@@ -8,6 +8,7 @@ package db
 import (
 	"context"
 	"net/netip"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -33,6 +34,21 @@ SELECT count(*) FROM nvr_channels
 // the device count.
 func (q *Queries) CountNVRChannels(ctx context.Context) (int64, error) {
 	row := q.db.QueryRow(ctx, countNVRChannels)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countStaleNVRChannels = `-- name: CountStaleNVRChannels :one
+SELECT count(*) FROM nvr_channels WHERE last_seen_at < $1
+`
+
+// Channels whose status hasn't been refreshed since the cutoff — the NVR-side poll
+// couldn't reach/authenticate the recorder, so their online/offline is a stale
+// snapshot and must NOT be trusted as current. (The exact staleness that made a
+// down camera still read "online" before the channel monitor existed.)
+func (q *Queries) CountStaleNVRChannels(ctx context.Context, lastSeenAt time.Time) (int64, error) {
+	row := q.db.QueryRow(ctx, countStaleNVRChannels, lastSeenAt)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -155,6 +171,65 @@ func (q *Queries) ListLinkedCameraDeviceIDs(ctx context.Context) ([]*uuid.UUID, 
 			return nil, err
 		}
 		items = append(items, camera_device_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listNVRChannelDiscrepancies = `-- name: ListNVRChannelDiscrepancies :many
+SELECT ch.nvr_device_id, nvr.name AS nvr_name, ch.channel_no,
+       COALESCE(host(ch.camera_ip),'')::text AS camera_ip,
+       COALESCE(ch.camera_name,'')::text AS camera_name,
+       ch.status AS nvr_status,
+       cam.id AS camera_device_id, cam.status AS device_status
+FROM nvr_channels ch
+JOIN devices nvr ON nvr.id = ch.nvr_device_id AND nvr.deleted_at IS NULL
+JOIN devices cam ON cam.id = ch.camera_device_id AND cam.deleted_at IS NULL
+WHERE (ch.status = 'offline' AND cam.status = 'up')
+   OR (ch.status = 'online'  AND cam.status = 'down')
+ORDER BY nvr.name, ch.channel_no
+`
+
+type ListNVRChannelDiscrepanciesRow struct {
+	NvrDeviceID    uuid.UUID `json:"nvr_device_id"`
+	NvrName        string    `json:"nvr_name"`
+	ChannelNo      int32     `json:"channel_no"`
+	CameraIp       string    `json:"camera_ip"`
+	CameraName     string    `json:"camera_name"`
+	NvrStatus      string    `json:"nvr_status"`
+	CameraDeviceID uuid.UUID `json:"camera_device_id"`
+	DeviceStatus   string    `json:"device_status"`
+}
+
+// Cameras where the NVR's reported channel status DISAGREES with the linked
+// standalone camera device's own reachability: the NVR says offline but the device
+// is up, or the NVR says online but the device is down. This is the "is the camera
+// REALLY online?" cross-check — two independent views contradicting each other,
+// which a single source (trusting the NVR alone, or the device alone) would miss.
+func (q *Queries) ListNVRChannelDiscrepancies(ctx context.Context) ([]ListNVRChannelDiscrepanciesRow, error) {
+	rows, err := q.db.Query(ctx, listNVRChannelDiscrepancies)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListNVRChannelDiscrepanciesRow{}
+	for rows.Next() {
+		var i ListNVRChannelDiscrepanciesRow
+		if err := rows.Scan(
+			&i.NvrDeviceID,
+			&i.NvrName,
+			&i.ChannelNo,
+			&i.CameraIp,
+			&i.CameraName,
+			&i.NvrStatus,
+			&i.CameraDeviceID,
+			&i.DeviceStatus,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

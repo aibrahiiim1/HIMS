@@ -54,6 +54,31 @@ JOIN devices nvr ON nvr.id = ch.nvr_device_id AND nvr.deleted_at IS NULL
 WHERE ch.status = 'offline'
 ORDER BY nvr.name, ch.channel_no;
 
+-- name: ListNVRChannelDiscrepancies :many
+-- Cameras where the NVR's reported channel status DISAGREES with the linked
+-- standalone camera device's own reachability: the NVR says offline but the device
+-- is up, or the NVR says online but the device is down. This is the "is the camera
+-- REALLY online?" cross-check — two independent views contradicting each other,
+-- which a single source (trusting the NVR alone, or the device alone) would miss.
+SELECT ch.nvr_device_id, nvr.name AS nvr_name, ch.channel_no,
+       COALESCE(host(ch.camera_ip),'')::text AS camera_ip,
+       COALESCE(ch.camera_name,'')::text AS camera_name,
+       ch.status AS nvr_status,
+       cam.id AS camera_device_id, cam.status AS device_status
+FROM nvr_channels ch
+JOIN devices nvr ON nvr.id = ch.nvr_device_id AND nvr.deleted_at IS NULL
+JOIN devices cam ON cam.id = ch.camera_device_id AND cam.deleted_at IS NULL
+WHERE (ch.status = 'offline' AND cam.status = 'up')
+   OR (ch.status = 'online'  AND cam.status = 'down')
+ORDER BY nvr.name, ch.channel_no;
+
+-- name: CountStaleNVRChannels :one
+-- Channels whose status hasn't been refreshed since the cutoff — the NVR-side poll
+-- couldn't reach/authenticate the recorder, so their online/offline is a stale
+-- snapshot and must NOT be trusted as current. (The exact staleness that made a
+-- down camera still read "online" before the channel monitor existed.)
+SELECT count(*) FROM nvr_channels WHERE last_seen_at < $1;
+
 -- name: FindNVRsForCamera :many
 -- Path Finder: which NVR/DVR(s) record this camera device, with the channel +
 -- recording status, so a camera's path shows the recorder it feeds.

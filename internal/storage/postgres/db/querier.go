@@ -113,6 +113,11 @@ type Querier interface {
 	// job-detail phase: > 0 keeps the job "self-heal" (not "complete") even while no
 	// collect_os job is in flight (the self-heal cooldown window).
 	CountSelfHealEligibleForJob(ctx context.Context, jobID uuid.UUID) (int64, error)
+	// Channels whose status hasn't been refreshed since the cutoff — the NVR-side poll
+	// couldn't reach/authenticate the recorder, so their online/offline is a stale
+	// snapshot and must NOT be trusted as current. (The exact staleness that made a
+	// down camera still read "online" before the channel monitor existed.)
+	CountStaleNVRChannels(ctx context.Context, lastSeenAt time.Time) (int64, error)
 	// Blobs sealed under a key id other than the one currently loaded.
 	CountUndecryptableCredentials(ctx context.Context, keyID string) (int64, error)
 	CountUnknownMACs(ctx context.Context) (int32, error)
@@ -631,6 +636,12 @@ type Querier interface {
 	ListNASISCSI(ctx context.Context, deviceID uuid.UUID) ([]NasIscsi, error)
 	ListNASPools(ctx context.Context, deviceID uuid.UUID) ([]NasPool, error)
 	ListNASVolumes(ctx context.Context, deviceID uuid.UUID) ([]NasVolume, error)
+	// Cameras where the NVR's reported channel status DISAGREES with the linked
+	// standalone camera device's own reachability: the NVR says offline but the device
+	// is up, or the NVR says online but the device is down. This is the "is the camera
+	// REALLY online?" cross-check — two independent views contradicting each other,
+	// which a single source (trusting the NVR alone, or the device alone) would miss.
+	ListNVRChannelDiscrepancies(ctx context.Context) ([]ListNVRChannelDiscrepanciesRow, error)
 	ListNVRChannels(ctx context.Context, nvrDeviceID uuid.UUID) ([]NvrChannel, error)
 	ListNVRStorage(ctx context.Context, nvrDeviceID uuid.UUID) ([]NvrStorage, error)
 	ListNeighbors(ctx context.Context, deviceID uuid.UUID) ([]Neighbor, error)

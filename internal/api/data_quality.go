@@ -211,6 +211,42 @@ func (s *Server) dataQuality(w http.ResponseWriter, r *http.Request) {
 		addDQ("nvr_camera_offline", "NVR/DVR cameras offline", desc, "warning", list, len(rows))
 	}
 
+	// --- NVR channel status vs camera-device reachability (cross-check) --------
+	// Two independent views of the same camera disagree: the recorder says one thing,
+	// the camera's own reachability says another. Surfaces stale/contradictory NVR
+	// "online" (the exact "is it REALLY online?" case) and NVR "offline" on a camera
+	// that is actually up (e.g. an ISAPI proxy glitch).
+	if rows, err := s.queries.ListNVRChannelDiscrepancies(ctx); err == nil && len(rows) > 0 {
+		list := []dqDevice{}
+		for _, r := range rows {
+			if len(list) >= dqSampleCap {
+				break
+			}
+			name := strings.TrimSpace(r.CameraName)
+			if name == "" {
+				name = nz(r.CameraIp, "channel "+strconv.Itoa(int(r.ChannelNo)))
+			}
+			list = append(list, dqDevice{
+				ID: r.CameraDeviceID.String(), Name: name, PrimaryIP: r.CameraIp, Category: "camera",
+				Note: fmt.Sprintf("%s ch%d reports %s, but the camera device is %s", r.NvrName, r.ChannelNo, r.NvrStatus, r.DeviceStatus),
+			})
+		}
+		addDQ("nvr_camera_status_discrepancy", "Camera NVR-vs-reachability mismatch",
+			"Cameras whose NVR-reported channel status disagrees with the camera's own reachability — a recorder saying 'online' for a camera that is actually down (or the reverse). Re-poll the NVR (channel monitor) and re-check the camera to reconcile; a persistent mismatch means one source is stale or wrong.",
+			"warning", list, len(rows))
+	}
+
+	// --- NVR channel data freshness (trust gate) ------------------------------
+	// If the NVR-side poll hasn't refreshed a recorder recently (couldn't reach/auth
+	// it), its channels' online/offline is a STALE snapshot — the very failure that
+	// let a down camera keep reading "online". Surface it so the picture is honest.
+	staleCut := time.Now().Add(-3 * nvrChannelRefreshInterval)
+	if stale, err := s.queries.CountStaleNVRChannels(ctx, staleCut); err == nil && stale > 0 {
+		addDQ("nvr_channel_status_stale", "NVR camera status not refreshed",
+			fmt.Sprintf("%d camera channel(s) haven't been re-polled from their NVR within %s — the recorder was unreachable or its credential failed, so those cameras' online/offline is a stale snapshot and can't be trusted. Fix the recorder's bound web/ONVIF credential or reachability, then re-poll.", stale, (3*nvrChannelRefreshInterval).String()),
+			"warning", nil, int(stale))
+	}
+
 	// --- BMC / server hardware health (iLO overall condition over SNMP) ------
 	// Surfaces controllers whose last SNMP-collected cpqHeMibCondition is non-OK. Real,
 	// device-reported health — not a synthetic alert; it flows through this existing DQ
