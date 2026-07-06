@@ -284,6 +284,82 @@ func (q *Queries) ListOfflineNVRChannels(ctx context.Context) ([]ListOfflineNVRC
 	return items, nil
 }
 
+const listRecorderDevices = `-- name: ListRecorderDevices :many
+SELECT id, location_id, primary_ip, hostname, name, vendor, model, serial, os_version, category, status, driver, credential_id, last_discovery_at, last_monitoring_at, metadata, created_at, updated_at, deleted_at, vlan, device_class, location, os_family, confidence_score, classification_evidence, classification_locked, subtype, notes, criticality, monitoring_enabled, manual_classification_reason, is_virtual, cctv_credential_id, web_scheme_pref, web_port_pref, web_alt_ports, web_notes, web_last_ok, web_last_ok_at, web_last_proto, web_last_scheme, web_last_port, web_last_credential_id, web_pref_proto, is_inventory_only, reachability_signal, reachability_confidence FROM devices
+WHERE deleted_at IS NULL AND primary_ip IS NOT NULL AND category IN ('nvr','dvr')
+ORDER BY primary_ip
+`
+
+// Managed NVR/DVR recorders (camera aggregators) with an IP — the fleet the
+// NVR-side channel-health monitor re-polls on a cadence. Excludes deleted devices.
+func (q *Queries) ListRecorderDevices(ctx context.Context) ([]Device, error) {
+	rows, err := q.db.Query(ctx, listRecorderDevices)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Device{}
+	for rows.Next() {
+		var i Device
+		if err := rows.Scan(
+			&i.ID,
+			&i.LocationID,
+			&i.PrimaryIp,
+			&i.Hostname,
+			&i.Name,
+			&i.Vendor,
+			&i.Model,
+			&i.Serial,
+			&i.OsVersion,
+			&i.Category,
+			&i.Status,
+			&i.Driver,
+			&i.CredentialID,
+			&i.LastDiscoveryAt,
+			&i.LastMonitoringAt,
+			&i.Metadata,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.DeletedAt,
+			&i.Vlan,
+			&i.DeviceClass,
+			&i.Location,
+			&i.OsFamily,
+			&i.ConfidenceScore,
+			&i.ClassificationEvidence,
+			&i.ClassificationLocked,
+			&i.Subtype,
+			&i.Notes,
+			&i.Criticality,
+			&i.MonitoringEnabled,
+			&i.ManualClassificationReason,
+			&i.IsVirtual,
+			&i.CctvCredentialID,
+			&i.WebSchemePref,
+			&i.WebPortPref,
+			&i.WebAltPorts,
+			&i.WebNotes,
+			&i.WebLastOk,
+			&i.WebLastOkAt,
+			&i.WebLastProto,
+			&i.WebLastScheme,
+			&i.WebLastPort,
+			&i.WebLastCredentialID,
+			&i.WebPrefProto,
+			&i.IsInventoryOnly,
+			&i.ReachabilitySignal,
+			&i.ReachabilityConfidence,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const nVRChannelStats = `-- name: NVRChannelStats :one
 SELECT count(*)::bigint AS total, count(camera_device_id)::bigint AS linked
 FROM nvr_channels WHERE nvr_device_id = $1

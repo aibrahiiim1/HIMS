@@ -34,6 +34,13 @@ ON CONFLICT (device_id) DO UPDATE SET
 -- name: ListNVRChannels :many
 SELECT * FROM nvr_channels WHERE nvr_device_id = $1 ORDER BY channel_no;
 
+-- name: ListRecorderDevices :many
+-- Managed NVR/DVR recorders (camera aggregators) with an IP — the fleet the
+-- NVR-side channel-health monitor re-polls on a cadence. Excludes deleted devices.
+SELECT * FROM devices
+WHERE deleted_at IS NULL AND primary_ip IS NOT NULL AND category IN ('nvr','dvr')
+ORDER BY primary_ip;
+
 -- name: ListOfflineNVRChannels :many
 -- Cameras an NVR/DVR reports OFFLINE, with the recorder + the reason (network
 -- unreachable / credential error / …), so Data Quality surfaces every disconnected

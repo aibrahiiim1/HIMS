@@ -210,6 +210,10 @@ func run(ctx context.Context, serviceMode, logPath string) error {
 	// Background workers, all bound to the run context so they stop on shutdown.
 	srv.StartTopologyRebuilder(ctx, 10*time.Minute)
 	srv.StartMonitoring(ctx, 30*time.Second)
+	// NVR-side camera health: re-poll every managed NVR/DVR for per-channel camera
+	// status so a camera dropping off a recorder is detected + alerted even when the
+	// camera was never added to HIMS as its own device.
+	srv.StartNVRChannelMonitor(ctx, 10*time.Minute)
 	srv.StartNotifier(ctx, 30*time.Second)
 	// Discovery worker-crash recovery: fail scans orphaned by a restart on boot,
 	// then watchdog scans that hang past 45m (single targets/CIDRs finish in

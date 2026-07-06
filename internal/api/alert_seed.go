@@ -52,6 +52,10 @@ func (s *Server) seedDefaultAlertRules(ctx context.Context) (int, error) {
 		{name: "Site relay agent offline", trigger: "down", severity: "critical", condition: "agent_offline", warn: i32ptr(5), escalateAfter: 0},
 		{name: "Virtualization collection failed/stale", trigger: "down", severity: "warning", condition: "virt_collection", warn: i32ptr(24), escalateAfter: 0},
 		{name: "Datastore low free space", trigger: "down", severity: "warning", condition: "datastore_low", warn: i32ptr(20), crit: i32ptr(10), escalateAfter: 0},
+		// NVR-side camera health: raised/resolved directly by the NVR channel monitor
+		// (transition-driven), NOT by the state evaluator — so a camera dropping off a
+		// recorder is surfaced even when the camera was never added as its own device.
+		{name: "Camera offline (via NVR)", trigger: "down", severity: "warning", condition: "camera_offline", escalateAfter: 0},
 	}
 	created := 0
 	for _, d := range defaults {

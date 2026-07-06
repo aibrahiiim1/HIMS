@@ -285,6 +285,7 @@ func (s *Server) routes() {
 		r.Get("/cctv/collect-fleet", s.getCCTVFleet)
 		r.Get("/cctv/summary", s.cctvSummary)
 		r.Post("/cctv/relink-channels", s.relinkCCTVChannels)
+		r.Post("/cctv/refresh-channels", s.refreshNVRChannelsNow) // NVR-side camera health poll on demand
 		r.Post("/devices/{id}/classification-lock", s.setClassificationLock)
 		r.Get("/devices/{id}/interfaces", s.deviceInterfaces)
 		r.Get("/devices/{id}/vlans", s.deviceVLANs)

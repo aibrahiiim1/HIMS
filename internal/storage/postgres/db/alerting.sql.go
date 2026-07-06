@@ -1003,6 +1003,36 @@ func (q *Queries) OpenStateAlert(ctx context.Context, arg OpenStateAlertParams) 
 	return i, err
 }
 
+const openStateAlertIfAbsent = `-- name: OpenStateAlertIfAbsent :exec
+INSERT INTO alerts (rule_id, device_id, check_id, severity, status, message, fingerprint)
+VALUES ($1, $2, NULL, $3, 'open', $4, $5)
+ON CONFLICT (rule_id, fingerprint) WHERE check_id IS NULL AND status <> 'resolved' DO NOTHING
+`
+
+type OpenStateAlertIfAbsentParams struct {
+	RuleID      uuid.UUID  `json:"rule_id"`
+	DeviceID    *uuid.UUID `json:"device_id"`
+	Severity    string     `json:"severity"`
+	Message     string     `json:"message"`
+	Fingerprint string     `json:"fingerprint"`
+}
+
+// Idempotent open for a state alert (e.g. NVR-side camera offline): if an open
+// alert with this (rule, fingerprint) already exists, do nothing — never errors on
+// a duplicate (unlike OpenStateAlert, which the .204 collision showed can 500).
+// The transition-driven caller (NVR channel monitor) uses this so re-running the
+// poll while a camera stays offline can't raise a second alert.
+func (q *Queries) OpenStateAlertIfAbsent(ctx context.Context, arg OpenStateAlertIfAbsentParams) error {
+	_, err := q.db.Exec(ctx, openStateAlertIfAbsent,
+		arg.RuleID,
+		arg.DeviceID,
+		arg.Severity,
+		arg.Message,
+		arg.Fingerprint,
+	)
+	return err
+}
+
 const resolveAlert = `-- name: ResolveAlert :one
 UPDATE alerts SET status = 'resolved', resolved_at = now()
 WHERE id = $1 AND status <> 'resolved'
@@ -1114,6 +1144,23 @@ func (q *Queries) ResolveRecoveredAlerts(ctx context.Context) ([]ResolveRecovere
 		return nil, err
 	}
 	return items, nil
+}
+
+const resolveStateAlertByFingerprint = `-- name: ResolveStateAlertByFingerprint :exec
+UPDATE alerts SET status = 'resolved', resolved_at = now()
+WHERE rule_id = $1 AND fingerprint = $2 AND check_id IS NULL AND status <> 'resolved'
+`
+
+type ResolveStateAlertByFingerprintParams struct {
+	RuleID      uuid.UUID `json:"rule_id"`
+	Fingerprint string    `json:"fingerprint"`
+}
+
+// Resolve any open state alert for (rule, fingerprint) — e.g. a camera that came
+// back online on its NVR. Idempotent: a no-op when nothing is open.
+func (q *Queries) ResolveStateAlertByFingerprint(ctx context.Context, arg ResolveStateAlertByFingerprintParams) error {
+	_, err := q.db.Exec(ctx, resolveStateAlertByFingerprint, arg.RuleID, arg.Fingerprint)
+	return err
 }
 
 const setAlertRuleEnabled = `-- name: SetAlertRuleEnabled :one

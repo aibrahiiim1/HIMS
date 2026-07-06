@@ -149,6 +149,22 @@ RETURNING *;
 SELECT id, device_id, fingerprint FROM alerts
 WHERE rule_id = $1 AND check_id IS NULL AND status <> 'resolved';
 
+-- name: OpenStateAlertIfAbsent :exec
+-- Idempotent open for a state alert (e.g. NVR-side camera offline): if an open
+-- alert with this (rule, fingerprint) already exists, do nothing — never errors on
+-- a duplicate (unlike OpenStateAlert, which the .204 collision showed can 500).
+-- The transition-driven caller (NVR channel monitor) uses this so re-running the
+-- poll while a camera stays offline can't raise a second alert.
+INSERT INTO alerts (rule_id, device_id, check_id, severity, status, message, fingerprint)
+VALUES ($1, $2, NULL, $3, 'open', $4, $5)
+ON CONFLICT (rule_id, fingerprint) WHERE check_id IS NULL AND status <> 'resolved' DO NOTHING;
+
+-- name: ResolveStateAlertByFingerprint :exec
+-- Resolve any open state alert for (rule, fingerprint) — e.g. a camera that came
+-- back online on its NVR. Idempotent: a no-op when nothing is open.
+UPDATE alerts SET status = 'resolved', resolved_at = now()
+WHERE rule_id = $1 AND fingerprint = $2 AND check_id IS NULL AND status <> 'resolved';
+
 -- name: ResolveAlertByID :one
 UPDATE alerts SET status = 'resolved', resolved_at = now() WHERE id = $1 AND status <> 'resolved' RETURNING *;
 

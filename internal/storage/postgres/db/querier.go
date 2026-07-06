@@ -682,6 +682,9 @@ type Querier interface {
 	ListRecentAgentJobsAll(ctx context.Context, limit int32) ([]ListRecentAgentJobsAllRow, error)
 	// Fleet activity feed for the Config page: recent captures with device name.
 	ListRecentConfigBackups(ctx context.Context, limit int32) ([]ListRecentConfigBackupsRow, error)
+	// Managed NVR/DVR recorders (camera aggregators) with an IP — the fleet the
+	// NVR-side channel-health monitor re-polls on a cadence. Excludes deleted devices.
+	ListRecorderDevices(ctx context.Context) ([]Device, error)
 	ListRelayAgents(ctx context.Context) ([]RelayAgent, error)
 	ListReportSchedules(ctx context.Context) ([]ReportSchedule, error)
 	ListRoles(ctx context.Context) ([]Role, error)
@@ -797,6 +800,12 @@ type Querier interface {
 	// Opens a state alert. The evaluator checks existence first (single-threaded sweep), and the
 	// partial unique index (rule_id, fingerprint) WHERE check_id IS NULL is the race backstop.
 	OpenStateAlert(ctx context.Context, arg OpenStateAlertParams) (Alert, error)
+	// Idempotent open for a state alert (e.g. NVR-side camera offline): if an open
+	// alert with this (rule, fingerprint) already exists, do nothing — never errors on
+	// a duplicate (unlike OpenStateAlert, which the .204 collision showed can 500).
+	// The transition-driven caller (NVR channel monitor) uses this so re-running the
+	// poll while a camera stays offline can't raise a second alert.
+	OpenStateAlertIfAbsent(ctx context.Context, arg OpenStateAlertIfAbsentParams) error
 	PermissionsForRole(ctx context.Context, roleID uuid.UUID) ([]Permission, error)
 	// All permission codes a user holds via any of their roles.
 	PermissionsForUser(ctx context.Context, userID uuid.UUID) ([]string, error)
@@ -862,6 +871,9 @@ type Querier interface {
 	// The newest enabled, recently-online agent assigned to a location — used to
 	// prefer agent collection for devices in that site.
 	ResolveSiteAgent(ctx context.Context, locationID *uuid.UUID) (RelayAgent, error)
+	// Resolve any open state alert for (rule, fingerprint) — e.g. a camera that came
+	// back online on its NVR. Idempotent: a no-op when nothing is open.
+	ResolveStateAlertByFingerprint(ctx context.Context, arg ResolveStateAlertByFingerprintParams) error
 	// Profiles applicable to a device during a scan: a profile bound to this exact
 	// device, or one bound to this location (site-level), or an unbound global
 	// profile — for the given vendor_type. Most specific first.
