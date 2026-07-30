@@ -29,6 +29,9 @@ async function post<T>(path: string, body: unknown): Promise<T> {
     const detail = (await r.text().catch(() => '')).trim()
     throw new Error(detail || `${r.status} ${r.statusText}: ${path}`)
   }
+  // 204 carries no body — parsing it as JSON would throw and turn a successful
+  // call (logout, password set) into a spurious error.
+  if (r.status === 204) return undefined as T
   return r.json()
 }
 

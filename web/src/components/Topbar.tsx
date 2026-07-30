@@ -56,10 +56,14 @@ export function Topbar({ collapsed, theme, counts, username, onToggleCollapse, o
         {alerts > 0 && <span className="dot" />}
       </button>
 
-      <div className="user-chip">
+      <button
+        type="button" className="user-chip" onClick={() => navigate('/account')}
+        title="My account — change password" aria-label="My account"
+        style={{ background: 'none', border: 'none', cursor: 'pointer', font: 'inherit', color: 'inherit' }}
+      >
         <span className="user-avatar">{initials(username)}</span>
         <span className="user-name">{username || 'operator'}</span>
-      </div>
+      </button>
       {onLogout && (
         <button type="button" className="icon-btn" onClick={onLogout} aria-label="Sign out" title="Sign out">
           <LogOut size={18} />

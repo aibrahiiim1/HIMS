@@ -1,9 +1,11 @@
 import { Fragment, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
-import { ShieldCheck, Users as UsersIcon, KeyRound, Plus, Grid3x3, DownloadCloud, Check } from 'lucide-react'
+import { ShieldCheck, Users as UsersIcon, KeyRound, Plus, Grid3x3, DownloadCloud, Check, Eye, EyeOff, RefreshCw, Copy } from 'lucide-react'
 import { api, type AppUser, type Role, type Permission, type RBACMatrix, type Location, locationPaths } from '../api'
 import { PageHeader, Panel, TabBar, EmptyState, timeAgo } from '../components/ui'
+import { generatePassword, passwordProblem, strengthOf } from '../lib/password'
+import { copyText } from '../lib/clipboard'
 
 type Tab = 'users' | 'roles' | 'permissions' | 'matrix'
 const TABS: Tab[] = ['users', 'roles', 'permissions', 'matrix']
@@ -35,6 +37,7 @@ function UsersTab() {
   const inv = () => qc.invalidateQueries({ queryKey: ['rbac-users'] })
   const [form, setForm] = useState({ username: '', full_name: '', email: '', location_id: '' })
   const [editRoles, setEditRoles] = useState<string | null>(null)
+  const [editPw, setEditPw] = useState<string | null>(null)
 
   const create = useMutation({ mutationFn: () => api.post('/rbac/users', { ...form, location_id: form.location_id || null }), onSuccess: () => { setForm({ username: '', full_name: '', email: '', location_id: '' }); inv() } })
   const del = useMutation({ mutationFn: (id: string) => api.del(`/rbac/users/${id}`), onSuccess: inv })
@@ -78,12 +81,16 @@ function UsersTab() {
                     <td className="muted">{timeAgo(u.created_at)}</td>
                     <td className="cell-actions">
                       <button className="btn btn-ghost btn-xs" onClick={() => setEditRoles(editRoles === u.id ? null : u.id)}>Roles</button>
+                      <button className="btn btn-ghost btn-xs" onClick={() => { setEditPw(editPw === u.id ? null : u.id); setEditRoles(null) }}>Reset password</button>
                       <button className="btn btn-ghost btn-xs" onClick={() => patch.mutate({ u, change: { is_active: !u.is_active } })}>{u.is_active ? 'Disable' : 'Enable'}</button>
                       <button className="btn btn-ghost btn-xs" style={{ color: 'var(--crit)' }} onClick={() => del.mutate(u.id)}>Delete</button>
                     </td>
                   </tr>
                   {editRoles === u.id && (
                     <tr><td colSpan={6} style={{ background: 'var(--surface-2)' }}><AssignEditor userId={u.id} allRoles={roles.data ?? []} onDone={() => setEditRoles(null)} /></td></tr>
+                  )}
+                  {editPw === u.id && (
+                    <tr><td colSpan={6} style={{ background: 'var(--surface-2)' }}><PasswordResetEditor user={u} onDone={() => setEditPw(null)} /></td></tr>
                   )}
                 </Fragment>
               ))}
@@ -165,6 +172,90 @@ function AssignEditor({ userId, allRoles, onDone }: { userId: string; allRoles: 
         ))}
       </div>
       <button className="btn btn-primary btn-sm" style={{ marginTop: 10 }} disabled={save.isPending} onClick={() => save.mutate()}>Save assignments</button>
+    </div>
+  )
+}
+
+// PasswordResetEditor lets an admin set another user's password.
+// POST /rbac/users/{id}/password revokes that user's sessions server-side, so
+// the warning below is a statement of what happens, not a caution.
+function PasswordResetEditor({ user, onDone }: { user: AppUser; onDone: () => void }) {
+  const [pw, setPw] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [show, setShow] = useState(false)
+  const [copied, setCopied] = useState<'ok' | 'fail' | null>(null)
+  const [done, setDone] = useState(false)
+
+  const problem = pw ? passwordProblem(pw) : ''
+  const mismatch = confirm.length > 0 && pw !== confirm
+  const strength = strengthOf(pw)
+  const ready = !!pw && !problem && pw === confirm
+
+  const reset = useMutation({
+    mutationFn: () => api.post(`/rbac/users/${user.id}/password`, { password: pw }),
+    onSuccess: () => setDone(true),
+  })
+
+  const doCopy = async () => {
+    const ok = await copyText(pw)
+    setCopied(ok ? 'ok' : 'fail')
+    setTimeout(() => setCopied(null), 2500)
+  }
+
+  if (done) {
+    return (
+      <div style={{ padding: 12 }}>
+        <div className="row" style={{ gap: 8, alignItems: 'center', marginBottom: 8 }}>
+          <Check size={16} style={{ color: 'var(--ok, #16a34a)' }} />
+          <strong>Password set for {user.username}.</strong>
+        </div>
+        <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+          Any active session for this user was signed out. Give them the password below over a
+          trusted channel and have them change it after signing in.
+        </div>
+        <div className="row" style={{ gap: 6, alignItems: 'center' }}>
+          <input className="field mono" readOnly value={pw} style={{ minWidth: 260 }} onFocus={(e) => e.currentTarget.select()} />
+          <button className="btn btn-sm" onClick={doCopy}><Copy size={14} /> {copied === 'ok' ? 'Copied' : copied === 'fail' ? 'Copy failed — select it' : 'Copy'}</button>
+          <button className="btn btn-primary btn-sm" onClick={onDone}>Done</button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ padding: 12 }}>
+      <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+        Set a new password for <strong>{user.username}</strong>. This does not require their
+        current password, and it signs them out of every active session.
+      </div>
+      <div className="row" style={{ gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+        <input
+          className="field mono" type={show ? 'text' : 'password'} placeholder="new password"
+          autoComplete="new-password" value={pw} onChange={(e) => setPw(e.target.value)} style={{ minWidth: 220 }}
+        />
+        <button className="btn btn-sm" type="button" title={show ? 'Hide' : 'Show'} onClick={() => setShow((v) => !v)}>
+          {show ? <EyeOff size={14} /> : <Eye size={14} />}
+        </button>
+        <button className="btn btn-sm" type="button" onClick={() => { const g = generatePassword(); setPw(g); setConfirm(g); setShow(true) }}>
+          <RefreshCw size={14} /> Generate
+        </button>
+      </div>
+      <div className="row" style={{ gap: 6, marginTop: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <input
+          className="field mono" type={show ? 'text' : 'password'} placeholder="confirm password"
+          autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} style={{ minWidth: 220 }}
+        />
+        {pw && <span className="muted" style={{ fontSize: 12 }}>{strength.label}</span>}
+      </div>
+      {problem && <div style={{ color: 'var(--crit)', fontSize: 12, marginTop: 6 }}>{problem}</div>}
+      {mismatch && <div style={{ color: 'var(--crit)', fontSize: 12, marginTop: 6 }}>Passwords do not match.</div>}
+      {reset.isError && <div style={{ color: 'var(--crit)', fontSize: 12, marginTop: 6 }}>{(reset.error as Error).message}</div>}
+      <div className="row" style={{ gap: 6, marginTop: 10 }}>
+        <button className="btn btn-primary btn-sm" disabled={!ready || reset.isPending} onClick={() => reset.mutate()}>
+          {reset.isPending ? 'Setting…' : 'Set password'}
+        </button>
+        <button className="btn btn-sm" onClick={onDone}>Cancel</button>
+      </div>
     </div>
   )
 }
