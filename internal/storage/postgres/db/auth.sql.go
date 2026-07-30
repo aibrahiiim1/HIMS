@@ -150,7 +150,7 @@ func (q *Queries) PermissionsForUser(ctx context.Context, userID uuid.UUID) ([]s
 	return items, nil
 }
 
-const setUserPassword = `-- name: SetUserPassword :exec
+const setUserPassword = `-- name: SetUserPassword :execrows
 UPDATE users SET password_hash = $2, updated_at = now() WHERE id = $1
 `
 
@@ -159,9 +159,15 @@ type SetUserPasswordParams struct {
 	PasswordHash string    `json:"password_hash"`
 }
 
-func (q *Queries) SetUserPassword(ctx context.Context, arg SetUserPasswordParams) error {
-	_, err := q.db.Exec(ctx, setUserPassword, arg.ID, arg.PasswordHash)
-	return err
+// Returns the affected row count so callers can tell "password set" from
+// "no such user" — an admin reset against a stale/deleted id must not look
+// like success.
+func (q *Queries) SetUserPassword(ctx context.Context, arg SetUserPasswordParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setUserPassword, arg.ID, arg.PasswordHash)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const touchSession = `-- name: TouchSession :exec

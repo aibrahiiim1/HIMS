@@ -1,7 +1,10 @@
 -- name: GetUserByUsername :one
 SELECT * FROM users WHERE username = $1;
 
--- name: SetUserPassword :exec
+-- name: SetUserPassword :execrows
+-- Returns the affected row count so callers can tell "password set" from
+-- "no such user" — an admin reset against a stale/deleted id must not look
+-- like success.
 UPDATE users SET password_hash = $2, updated_at = now() WHERE id = $1;
 
 -- name: CountUsersWithPassword :one

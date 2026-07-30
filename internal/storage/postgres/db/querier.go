@@ -969,7 +969,10 @@ type Querier interface {
 	SetRelayAgentToken(ctx context.Context, arg SetRelayAgentTokenParams) error
 	SetReportScheduleEnabled(ctx context.Context, arg SetReportScheduleEnabledParams) (ReportSchedule, error)
 	SetRolePermissionsClear(ctx context.Context, roleID uuid.UUID) error
-	SetUserPassword(ctx context.Context, arg SetUserPasswordParams) error
+	// Returns the affected row count so callers can tell "password set" from
+	// "no such user" — an admin reset against a stale/deleted id must not look
+	// like success.
+	SetUserPassword(ctx context.Context, arg SetUserPasswordParams) (int64, error)
 	SetUserRolesClear(ctx context.Context, userID uuid.UUID) error
 	// Platform-specific extra VM attributes; COALESCE(NULLIF...) so a collector that doesn't
 	// supply a field (e.g. vSphere has no generation) never wipes another platform's value.

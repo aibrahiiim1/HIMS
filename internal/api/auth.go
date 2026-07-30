@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -209,6 +210,22 @@ func (s *Server) writeMe(w http.ResponseWriter, ctx context.Context, uid uuid.UU
 	})
 }
 
+// minPasswordLen is the shared floor for every password-setting path (self
+// service and admin reset) so the two can never drift apart.
+const minPasswordLen = 8
+
+// validatePassword enforces the password policy. Returns a message suitable
+// for showing the operator verbatim, or "" when the password is acceptable.
+func validatePassword(pw string) string {
+	if len([]rune(pw)) < minPasswordLen {
+		return fmt.Sprintf("password must be at least %d characters", minPasswordLen)
+	}
+	if strings.TrimSpace(pw) == "" {
+		return "password cannot be blank"
+	}
+	return ""
+}
+
 type changePasswordReq struct {
 	CurrentPassword string `json:"current_password"`
 	NewPassword     string `json:"new_password"`
@@ -225,8 +242,8 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	if len(req.NewPassword) < 8 {
-		http.Error(w, "new password must be at least 8 characters", http.StatusBadRequest)
+	if msg := validatePassword(req.NewPassword); msg != "" {
+		http.Error(w, "new "+msg, http.StatusBadRequest)
 		return
 	}
 	u, err := s.queries.GetUserByUsername(r.Context(), id.Username)
@@ -234,12 +251,18 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "current password is incorrect", http.StatusBadRequest)
 		return
 	}
+	// Reusing the current password is a no-op that would still revoke every
+	// other session — reject it rather than silently "succeeding".
+	if req.NewPassword == req.CurrentPassword {
+		http.Error(w, "new password must be different from the current one", http.StatusBadRequest)
+		return
+	}
 	hash, err := auth.HashPassword(req.NewPassword)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	if err := s.queries.SetUserPassword(r.Context(), db.SetUserPasswordParams{ID: u.ID, PasswordHash: hash}); err != nil {
+	if _, err := s.queries.SetUserPassword(r.Context(), db.SetUserPasswordParams{ID: u.ID, PasswordHash: hash}); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -262,8 +285,8 @@ func (s *Server) adminSetPassword(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	if len(req.Password) < 8 {
-		http.Error(w, "password must be at least 8 characters", http.StatusBadRequest)
+	if msg := validatePassword(req.Password); msg != "" {
+		http.Error(w, msg, http.StatusBadRequest)
 		return
 	}
 	hash, err := auth.HashPassword(req.Password)
@@ -271,13 +294,20 @@ func (s *Server) adminSetPassword(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	if err := s.queries.SetUserPassword(r.Context(), db.SetUserPasswordParams{ID: id, PasswordHash: hash}); err != nil {
+	rows, err := s.queries.SetUserPassword(r.Context(), db.SetUserPasswordParams{ID: id, PasswordHash: hash})
+	if err != nil {
 		writeErr(w, err)
+		return
+	}
+	// No row updated => the id doesn't exist (stale UI, deleted user). Reporting
+	// 204 here would tell the admin a password was set when none was.
+	if rows == 0 {
+		http.Error(w, "user not found", http.StatusNotFound)
 		return
 	}
 	_ = s.queries.DeleteUserSessions(r.Context(), id)
 	s.authActive.Store(true)
-	s.audit(r, "user", "user.password_set", "user", id.String(), "Set user password", nil)
+	s.audit(r, "user", "user.password_set", "user", id.String(), "Reset user password", nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -335,7 +365,7 @@ func (s *Server) BootstrapAdmin(ctx context.Context, username, password string) 
 	if err != nil {
 		return err
 	}
-	if err := s.queries.SetUserPassword(ctx, db.SetUserPasswordParams{ID: u.ID, PasswordHash: hash}); err != nil {
+	if _, err := s.queries.SetUserPassword(ctx, db.SetUserPasswordParams{ID: u.ID, PasswordHash: hash}); err != nil {
 		return err
 	}
 	s.authActive.Store(true)
