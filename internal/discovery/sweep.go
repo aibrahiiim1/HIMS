@@ -54,6 +54,13 @@ type SweepConfig struct {
 	// carries the detection alone.
 	Controls []netip.Addr
 
+	// OnAddress, when set, is called as each address finishes probing, so the
+	// caller can stream results while the sweep runs instead of waiting for the
+	// whole pass. trusted reflects the CONTROL-proved promiscuous set, which is
+	// known before the host pass starts; the rate heuristic can only demote a
+	// port later, so a late-flagged port is corrected in the final result.
+	OnAddress func(ip netip.Addr, open []int, trusted bool)
+
 	// PromiscuousRate is the open-rate at or above which a port is treated as
 	// promiscuous when no control proved it. Real subnets are never near-fully
 	// populated on a single port, but a small fully-populated range legitimately
@@ -102,6 +109,45 @@ type SweepResult struct {
 	SuppressedByMiddlebox []netip.Addr
 	// NoResponse answered nothing at all.
 	NoResponse []netip.Addr
+}
+
+// AddressState is one scanned address and what the sweep concluded about it —
+// the IP-scanner view of a scan: every address, not just the enrolled ones.
+type AddressState struct {
+	IP        string `json:"ip"`
+	OpenPorts []int  `json:"open_ports,omitempty"`
+	// State is "responded" (real evidence), "untrusted_only" (answered solely on
+	// a port a middlebox is serving) or "silent" (no answer at all).
+	State string `json:"state"`
+}
+
+// Addresses returns every scanned address with its verdict, lowest IP first.
+// limit caps the slice (0 = no cap) so a huge scope cannot bloat the job record;
+// the caller reports truncation rather than silently trimming.
+func (r *SweepResult) Addresses(limit int) []AddressState {
+	state := make(map[netip.Addr]string, r.Total)
+	for _, a := range r.Alive {
+		state[a] = "responded"
+	}
+	for _, a := range r.SuppressedByMiddlebox {
+		state[a] = "untrusted_only"
+	}
+	for _, a := range r.NoResponse {
+		state[a] = "silent"
+	}
+	ordered := make([]netip.Addr, 0, len(state))
+	for a := range state {
+		ordered = append(ordered, a)
+	}
+	sortAddrs(ordered)
+	out := make([]AddressState, 0, len(ordered))
+	for _, a := range ordered {
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+		out = append(out, AddressState{IP: a.String(), OpenPorts: r.OpenByHost[a], State: state[a]})
+	}
+	return out
 }
 
 // IsPromiscuous reports whether the sweep distrusts this port.
@@ -250,16 +296,27 @@ func LivenessSweep(ctx context.Context, hosts []netip.Addr, cfg SweepConfig, pro
 			defer wg.Done()
 			defer func() { <-sem }()
 			open := scanPorts(ctx, ip, cfg.portsFor(ip), cfg.Timeout)
+			trusted := false
+			for _, p := range open {
+				if !controlOpen[p] {
+					trusted = true
+					break
+				}
+			}
 			mu.Lock()
 			res.OpenByHost[ip] = open
 			for _, p := range open {
 				res.PortOpen[p]++
 			}
 			scanned++
-			if progress != nil {
-				progress(scanned, 0) // alive is only final after classification
-			}
+			n := scanned
 			mu.Unlock()
+			if cfg.OnAddress != nil {
+				cfg.OnAddress(ip, open, trusted)
+			}
+			if progress != nil {
+				progress(n, 0) // alive is only final after classification
+			}
 		}(h)
 	}
 	wg.Wait()

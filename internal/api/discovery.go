@@ -506,6 +506,18 @@ func (s *Server) cctvWebCredsForScan(ctx context.Context, ip netip.Addr, locID *
 
 // runScanJob is the background scan worker. It owns its own context (the HTTP
 // request's is long gone) and records per-host outcomes + a final job status.
+// portsCSV renders open ports for a scan event message ("22,80,443").
+func portsCSV(ports []int) string {
+	if len(ports) == 0 {
+		return "responded"
+	}
+	parts := make([]string, 0, len(ports))
+	for _, p := range ports {
+		parts = append(parts, strconv.Itoa(p))
+	}
+	return strings.Join(parts, ",")
+}
+
 // recordSweepMetadata merges the liveness-sweep outcome into the job's metadata
 // so the scan page can report "N alive of M" and name any port it stopped
 // trusting. It MERGES: metadata already carries the scan spec used to re-run the
@@ -522,6 +534,11 @@ func (s *Server) recordSweepMetadata(ctx context.Context, jobID uuid.UUID, sw di
 			"total": p.Total, "proved_by_control": p.ViaControl,
 		})
 	}
+	// Per-address detail = the IP-scanner view: every scanned address and what it
+	// answered, not just the ones that became devices. Capped so a large scope
+	// cannot bloat the job row; truncation is reported rather than hidden.
+	const maxAddresses = 4096
+	addrs := sw.Addresses(maxAddresses)
 	meta["liveness"] = map[string]any{
 		"total":                   sw.Total,
 		"alive":                   len(sw.Alive),
@@ -529,6 +546,8 @@ func (s *Server) recordSweepMetadata(ctx context.Context, jobID uuid.UUID, sw di
 		"suppressed_by_middlebox": len(sw.SuppressedByMiddlebox),
 		"untrusted_ports":         untrusted,
 		"summary":                 sw.Summary(),
+		"addresses":               addrs,
+		"addresses_truncated":     sw.Total > len(addrs),
 	}
 	if blob, err := json.Marshal(meta); err == nil {
 		_ = s.queries.SetDiscoveryJobMetadata(ctx, db.SetDiscoveryJobMetadataParams{ID: jobID, Metadata: blob})
@@ -629,6 +648,16 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 		Timeout:     portTO,
 		Concurrency: concurrency,
 		Controls:    discovery.ControlsForHosts(hosts, 16),
+		// Stream each responding address as it is found, so the live board fills
+		// in like an IP scanner instead of staying empty until enrolment starts.
+		// Silent addresses are not emitted — on a /24 that is mostly empty they
+		// would drown the board without telling the operator anything.
+		OnAddress: func(ip netip.Addr, open []int, trusted bool) {
+			if !trusted {
+				return
+			}
+			s.publishScanEvent(jobID, ip, uuid.Nil, "host_responded", "", "found", portsCSV(open))
+		},
 	}, func(scanned, _ int) {
 		// Every 10th address (and the last) — enough to animate, not a firehose.
 		if scanned-lastTick < 10 && scanned != len(hosts) {
@@ -1808,12 +1837,14 @@ type scanJobDTO struct {
 }
 
 type livenessDTO struct {
-	Total                 int             `json:"total"`
-	Alive                 int             `json:"alive"`
-	NoResponse            int             `json:"no_response"`
-	SuppressedByMiddlebox int             `json:"suppressed_by_middlebox"`
-	Summary               string          `json:"summary"`
-	UntrustedPorts        []untrustedPort `json:"untrusted_ports,omitempty"`
+	Total                 int                      `json:"total"`
+	Alive                 int                      `json:"alive"`
+	NoResponse            int                      `json:"no_response"`
+	SuppressedByMiddlebox int                      `json:"suppressed_by_middlebox"`
+	Summary               string                   `json:"summary"`
+	UntrustedPorts        []untrustedPort          `json:"untrusted_ports,omitempty"`
+	Addresses             []discovery.AddressState `json:"addresses,omitempty"`
+	AddressesTruncated    bool                     `json:"addresses_truncated,omitempty"`
 }
 
 type untrustedPort struct {
@@ -1925,7 +1956,13 @@ func (s *Server) listDiscoveryJobs(w http.ResponseWriter, r *http.Request) {
 		d.CollectingPending = pending[j.ID]
 		d.SelfHealing = healing[j.ID]
 		d.Phase = scanPhase(j.Status, d.CollectingPending, d.SelfHealing)
-		d.Liveness = livenessFromMetadata(j.Metadata)
+		// Counts only in the LIST — the per-address array belongs to the job
+		// detail, not to every row of a 50-job listing.
+		if lv := livenessFromMetadata(j.Metadata); lv != nil {
+			slim := *lv
+			slim.Addresses = nil
+			d.Liveness = &slim
+		}
 		out = append(out, d)
 	}
 	writeJSON(w, http.StatusOK, out)

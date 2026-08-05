@@ -1004,6 +1004,13 @@ export interface UntrustedPort {
   total: number
   proved_by_control: boolean
 }
+// One scanned address and what it answered — present for every address in the
+// scope, not only those that became devices.
+export interface AddressState {
+  ip: string
+  open_ports?: number[]
+  state: 'responded' | 'untrusted_only' | 'silent'
+}
 export interface Liveness {
   total: number
   alive: number
@@ -1011,6 +1018,8 @@ export interface Liveness {
   suppressed_by_middlebox: number
   summary: string
   untrusted_ports?: UntrustedPort[]
+  addresses?: AddressState[]
+  addresses_truncated?: boolean
 }
 
 export interface DiscoveryJob {

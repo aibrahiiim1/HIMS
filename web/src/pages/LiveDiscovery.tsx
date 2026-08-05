@@ -112,6 +112,12 @@ function stageLabel(ev: ScanEvent): string {
   const p = (ev.protocol || '').toUpperCase()
   switch (ev.stage) {
     case 'target_probe_started': return 'Probing started'
+    // Liveness sweep — which addresses are real, before anything is probed deeply.
+    case 'liveness_sweep_started': return 'Checking which addresses are real…'
+    case 'liveness_sweep_progress': return ev.message || 'Liveness check…'
+    case 'liveness_sweep': return ev.message || 'Liveness check complete'
+    case 'host_responded': return `Responded — ports ${ev.message || ''}`
+    case 'port_untrusted': return `Untrusted port — ${ev.message || ''}`
     case 'tcp_port_found': return `Ports ${ev.message || ''}`
     case 'snmp_attempt_started': return 'Trying SNMP…'
     case 'snmp_success': return 'SNMP authenticated'

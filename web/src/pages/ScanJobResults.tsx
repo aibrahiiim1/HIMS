@@ -143,6 +143,62 @@ function bucketOf(r: DiscoveryResult, d?: Device): Bucket {
 }
 
 // Progress stages — highlighted from the job status + what the results show.
+// ScannedAddresses is the IP-scanner view: EVERY address in the scope with what
+// it answered — not just the ones that became devices. Without it a scan of 254
+// addresses that enrols 61 looks like 193 addresses were never looked at.
+const ADDR_STATE: Record<string, { label: string; badge: string }> = {
+  responded: { label: 'Responded', badge: 'badge-up' },
+  untrusted_only: { label: 'Untrusted port only', badge: 'badge-warning' },
+  silent: { label: 'No response', badge: 'badge-unknown' },
+}
+
+function ScannedAddresses({ live, enrolled }: { live: Liveness; enrolled: Set<string> }) {
+  const [show, setShow] = useState<'responded' | 'untrusted_only' | 'silent' | 'all'>('responded')
+  const all = useMemo(() => live.addresses ?? [], [live.addresses])
+  const counts = useMemo(() => {
+    const c: Record<string, number> = { responded: 0, untrusted_only: 0, silent: 0, all: all.length }
+    for (const a of all) c[a.state] = (c[a.state] ?? 0) + 1
+    return c
+  }, [all])
+  const rows = useMemo(() => (show === 'all' ? all : all.filter((a) => a.state === show)), [all, show])
+
+  return (
+    <Panel title="Scanned addresses" icon={Radar} pad={false}
+      subtitle={`${live.total} address(es) probed · ${live.alive} responded${live.addresses_truncated ? ' · list truncated' : ''}`}>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', padding: '8px 10px' }}>
+        {(['responded', 'untrusted_only', 'silent', 'all'] as const).map((k) => (
+          <button key={k} className={'seg-chip' + (show === k ? ' active' : '')} onClick={() => setShow(k)}>
+            {k === 'all' ? 'All' : ADDR_STATE[k].label} ({counts[k] ?? 0})
+          </button>
+        ))}
+      </div>
+      {rows.length === 0 && <div className="muted" style={{ padding: 12, fontSize: 13 }}>No addresses in this state.</div>}
+      {rows.length > 0 && (
+        <div style={{ maxHeight: 420, overflowY: 'auto' }}>
+          <table className="data-table">
+            <thead><tr><th>IP</th><th>State</th><th>Open ports</th><th>Enrolled</th></tr></thead>
+            <tbody>
+              {rows.map((a) => (
+                <tr key={a.ip}>
+                  <td className="mono">{a.ip}</td>
+                  <td><span className={'badge ' + ADDR_STATE[a.state].badge}>{ADDR_STATE[a.state].label}</span></td>
+                  <td className="mono" style={{ fontSize: 12 }}>{a.open_ports?.length ? a.open_ports.join(', ') : '—'}</td>
+                  <td>{enrolled.has(a.ip) ? <span className="badge badge-up">yes</span> : <span className="muted" style={{ fontSize: 12 }}>no</span>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {live.addresses_truncated && (
+        <div className="muted" style={{ padding: '8px 12px', fontSize: 12 }}>
+          Only the first {all.length} addresses of {live.total} are listed for this job.
+        </div>
+      )}
+    </Panel>
+  )
+}
+
 function Timeline({ job, results }: { job: DiscoveryJob; results: DiscoveryResult[] }) {
   const enrolled = results.filter((r) => r.outcome === 'enrolled').length
   const bound = results.filter((r) => r.probe_data?.bound_cred).length
@@ -377,6 +433,10 @@ export function ScanJobResults() {
                 told apart from an empty address by a TCP probe alone — scan it directly, or use a relay agent on that subnet.
               </div>
             </Panel>
+          )}
+
+          {live?.addresses && live.addresses.length > 0 && (
+            <ScannedAddresses live={live} enrolled={new Set(results.map((r) => r.ip))} />
           )}
 
           {/* E. Filters + C. Results table */}
