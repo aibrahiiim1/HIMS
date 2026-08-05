@@ -10,16 +10,20 @@ import (
 )
 
 type duplicateCredentialReq struct {
-	NewKind  string `json:"new_kind"` // ssh | winrm | wmi | http_basic | vendor_api | onvif | ...
+	NewKind  string `json:"new_kind"` // ssh | windows | http_basic | vendor_api | onvif | ... (see credentialKinds)
 	Username string `json:"username"` // required only when reusing a secret-only source (SNMP community / token) as a user:password login
 	Name     string `json:"name"`     // optional; defaults to "<source> (as <new_kind>)"
 }
 
 // userPassKind reports whether a credential kind stores a "user:password" secret
 // (as opposed to a bare community string / token like snmp_v2c / snmp_v3).
+// CredWinRM/CredWMI are retired for new credentials (migration 000089) but are
+// still listed so any pre-existing row keeps being treated as user:password.
 func userPassKind(k string) bool {
 	switch domain.CredentialKind(k) {
-	case domain.CredSSH, domain.CredWinRM, domain.CredWMI, domain.CredHTTPBasic, domain.CredVendorAPI, domain.CredONVIF, domain.CredLDAP:
+	case domain.CredSSH, domain.CredWindows, domain.CredCLI, domain.CredHTTPBasic,
+		domain.CredVendorAPI, domain.CredONVIF, domain.CredLDAP,
+		domain.CredWinRM, domain.CredWMI:
 		return true
 	}
 	return false
@@ -54,6 +58,10 @@ func (s *Server) duplicateCredential(w http.ResponseWriter, r *http.Request) {
 	req.NewKind = strings.TrimSpace(req.NewKind)
 	if req.NewKind == "" {
 		http.Error(w, "new_kind is required", http.StatusBadRequest)
+		return
+	}
+	if ok, msg := validCredentialKind(req.NewKind); !ok {
+		http.Error(w, msg, http.StatusBadRequest)
 		return
 	}
 

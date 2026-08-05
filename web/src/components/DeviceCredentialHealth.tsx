@@ -5,8 +5,9 @@ import { api, type CredTestHistory, type AuthMe, type Credential, type Credentia
 import { Panel, EmptyState, timeAgo } from './ui'
 
 const PROTO_LABEL: Record<string, string> = {
-  snmp_v2c: 'SNMP v2c', snmp_v3: 'SNMP v3', ssh: 'SSH', winrm: 'WinRM', wmi: 'WMI / DCOM', onvif: 'ONVIF',
-  http_basic: 'HTTP Basic', vendor_api: 'Vendor API', ldap: 'LDAP',
+  snmp_v2c: 'SNMP v2c', snmp_v3: 'SNMP v3', ssh: 'SSH', windows: 'Windows', winrm: 'WinRM',
+  wmi: 'WMI / DCOM', onvif: 'ONVIF', cli: 'CLI',
+  http_basic: 'HTTP Basic', vendor_api: 'Vendor API', ldap: 'LDAP', zkteco: 'ZKTeco',
 }
 const label = (k: string) => PROTO_LABEL[k] ?? k
 
@@ -14,12 +15,16 @@ const label = (k: string) => PROTO_LABEL[k] ?? k
 // device of this category is normally managed by. Used to show the "Expected
 // access method" first and collapse irrelevant attempts (so a Windows workstation
 // shows WinRM as its health, not a scary SNMP/ONVIF/SSH failure).
+// 'windows' is the live kind; 'winrm'/'wmi' are kept behind it so history rows
+// written before migration 000089 still read as the expected method rather than
+// showing up as an unrelated failure. The FIRST entry drives the header label.
+const WINDOWS_KINDS = ['windows', 'winrm', 'wmi']
 function expectedKindsFor(category?: string, osFamily?: string): string[] {
-  if (osFamily === 'windows') return ['winrm']
+  if (osFamily === 'windows') return WINDOWS_KINDS
   if (osFamily === 'linux') return ['ssh']
   switch (category) {
-    case 'endpoint': case 'workstation': return ['winrm', 'wmi']
-    case 'server': return ['winrm', 'ssh', 'wmi']
+    case 'endpoint': case 'workstation': return WINDOWS_KINDS
+    case 'server': return [...WINDOWS_KINDS, 'ssh']
     case 'switch': case 'router': case 'firewall': return ['snmp_v2c', 'ssh']
     case 'camera': case 'nvr': return ['onvif', 'http_basic']
     case 'virtual_host': return ['vmware', 'vendor_api']
@@ -32,7 +37,9 @@ const isExpectedKind = (kind: string, expected: string[]) =>
   expected.includes(kind) || (kind.startsWith('snmp') && expected.some((e) => e.startsWith('snmp')))
 // expectedLabel — the primary expected protocol shown in the header.
 function expectedLabel(category?: string, osFamily?: string): string {
-  const ks = expectedKindsFor(category, osFamily)
+  // Legacy aliases are accepted but never advertised — naming all three would
+  // read "Windows or WinRM or WMI / DCOM" for what is one credential.
+  const ks = expectedKindsFor(category, osFamily).filter((k) => k !== 'winrm' && k !== 'wmi')
   if (ks.length === 0) return 'SNMP / SSH (network) — depends on device type'
   return ks.map(label).join(' or ')
 }
@@ -67,14 +74,15 @@ export function DeviceCredentialHealth({ deviceId, category, osFamily }: { devic
   const winDiag = useMutation({
     mutationFn: async () => {
       const creds = await api.get<Credential[]>('/credentials')
-      const winrm = creds.find((c) => c.kind === 'winrm')
-      if (!winrm) throw new Error('No WinRM credential configured — add one on the Credentials page.')
+      // 'windows' is the current kind; fall back to legacy rows on old installs.
+      const winrm = creds.find((c) => c.kind === 'windows') ?? creds.find((c) => c.kind === 'winrm')
+      if (!winrm) throw new Error('No Windows credential configured — add one on the Credentials page.')
       if (!dev?.primary_ip) throw new Error('Device has no IP to diagnose.')
       return api.post<WinRMDiag>('/credentials/winrm-diagnose', { host: dev.primary_ip, credential_id: winrm.id })
     },
     onSuccess: (d) => setDiag(d),
   })
-  const showDiagnose = expected.includes('winrm') || history.some((h) => h.kind === 'winrm') || effCategory === 'endpoint'
+  const showDiagnose = expected.includes('windows') || history.some((h) => h.kind === 'windows' || h.kind === 'winrm') || effCategory === 'endpoint'
 
   // WMI/DCOM diagnostic (legacy Windows where WinRM is disabled).
   const [wmiMsg, setWmiMsg] = useState('')
@@ -82,7 +90,8 @@ export function DeviceCredentialHealth({ deviceId, category, osFamily }: { devic
     mutationFn: async () => {
       if (!dev?.primary_ip) throw new Error('Device has no IP to diagnose.')
       const creds = await api.get<Credential[]>('/credentials')
-      const wmi = creds.find((c) => c.kind === 'wmi') || creds.find((c) => c.kind === 'winrm')
+      const wmi = creds.find((c) => c.kind === 'windows')
+        ?? creds.find((c) => c.kind === 'wmi') ?? creds.find((c) => c.kind === 'winrm')
       return api.post<{ dcom_reachable: boolean; dcom_status: string; dcom_detail: string; collector_configured: boolean; collect_result?: string; collect_detail?: string }>(
         '/credentials/wmi-diagnose', { host: dev.primary_ip, credential_id: wmi?.id ?? '' })
     },

@@ -3,6 +3,8 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/coralsearesorts/hims/internal/credtest"
@@ -134,6 +136,34 @@ func (s *Server) credentialDevices(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// credentialKinds mirrors the credentials_kind_check CHECK constraint
+// (migrations/000093_credential_zkteco_kind.up.sql). Without this the DB is the
+// only gate, and a bad kind surfaces to the operator as the raw driver error
+// 'violates check constraint "credentials_kind_check" (SQLSTATE 23514)', which
+// names neither the offending value nor the valid ones.
+//
+// Retired kinds ('winrm', 'wmi' — superseded by the unified 'windows' in
+// migration 000089) are deliberately absent: they must fail. Keep this in step
+// with the constraint whenever a migration changes it.
+var credentialKinds = []string{
+	"snmp_v2c", "snmp_v3", "ssh", "cli", "windows",
+	"http_basic", "onvif", "vendor_api", "ldap", "zkteco",
+}
+
+// validCredentialKind reports whether kind is storable, plus a message naming
+// the accepted values (and the replacement for a retired kind) when it is not.
+func validCredentialKind(kind string) (bool, string) {
+	if slices.Contains(credentialKinds, kind) {
+		return true, ""
+	}
+	hint := ""
+	if kind == "winrm" || kind == "wmi" {
+		hint = " — 'winrm' and 'wmi' were replaced by the single 'windows' kind, which covers WinRM, WMI/DCOM, SMB and the relay agent"
+	}
+	return false, "unknown credential kind " + strconv.Quote(kind) + hint +
+		". Valid kinds: " + strings.Join(credentialKinds, ", ")
+}
+
 type createCredentialReq struct {
 	Name   string `json:"name"`
 	Kind   string `json:"kind"`   // snmp_v2c, ssh, http_basic, …
@@ -154,6 +184,10 @@ func (s *Server) createCredential(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Name == "" || req.Kind == "" || req.Secret == "" {
 		http.Error(w, "name, kind, and secret are required", http.StatusBadRequest)
+		return
+	}
+	if ok, msg := validCredentialKind(req.Kind); !ok {
+		http.Error(w, msg, http.StatusBadRequest)
 		return
 	}
 	if malformedUserPassSecret(req.Kind, req.Secret) {

@@ -22,6 +22,15 @@ const KIND_META: Record<string, { label: string; hint?: string; tone?: Tone }> =
 }
 const KINDS = Object.keys(KIND_META)
 const kindLabel = (k: string) => KIND_META[k]?.label ?? k
+// Default for the create form. MUST be a member of KINDS: a <select> whose value
+// matches no <option> still displays the first option, so a stale default silently
+// posts a kind the operator never chose (this defaulted to the retired 'winrm'
+// long after migration 000089 dropped it, and every create failed the DB CHECK).
+const DEFAULT_KIND = KINDS[0]
+// Kinds whose secret is "username:password" rather than a bare community/token.
+// Derived from one list so the create form and the duplicate form cannot drift.
+const USERPASS_KINDS = ['windows', 'ssh', 'cli', 'http_basic', 'onvif', 'vendor_api', 'ldap']
+const isUserPass = (k: string) => USERPASS_KINDS.includes(k)
 
 const btn: React.CSSProperties = {
   padding: '8px 16px', background: 'var(--brand)', color: '#fff', border: 'none',
@@ -227,13 +236,14 @@ function EditForm({ cred, onDone, onCancel }: { cred: Credential; onDone: () => 
 // login. When the target is a user:password kind and the source is secret-only,
 // the operator supplies just the username (not a secret).
 function DuplicateForm({ cred, onDone, onCancel }: { cred: Credential; onDone: () => void; onCancel: () => void }) {
-  const DUP_KINDS = ['vendor_api', 'ssh', 'winrm', 'wmi', 'http_basic', 'onvif', 'snmp_v2c']
-  const USERPASS = ['ssh', 'winrm', 'wmi', 'http_basic', 'onvif', 'vendor_api', 'ldap']
+  // Only kinds the server still accepts — 'winrm'/'wmi' were retired in favour
+  // of 'windows', and offering them here produced a CHECK-constraint failure.
+  const DUP_KINDS = ['vendor_api', 'ssh', 'windows', 'cli', 'http_basic', 'onvif', 'snmp_v2c']
   const [newKind, setNewKind] = useState('vendor_api')
   const [username, setUsername] = useState('root')
   const [name, setName] = useState(`${cred.name} (as vendor_api)`)
   // Username needed only when reusing a secret-only source as a user:password login.
-  const needsUser = USERPASS.includes(newKind) && !USERPASS.includes(cred.kind)
+  const needsUser = isUserPass(newKind) && !isUserPass(cred.kind)
   const m = useMutation({
     mutationFn: () => api.post<Credential>(`/credentials/${cred.id}/duplicate`, { new_kind: newKind, username: needsUser ? username : '', name }),
     onSuccess: onDone,
@@ -264,7 +274,7 @@ function DuplicateForm({ cred, onDone, onCancel }: { cred: Credential; onDone: (
 
 function CreateForm({ onDone, onCancel }: { onDone: () => void; onCancel: () => void }) {
   const [name, setName] = useState('')
-  const [kind, setKind] = useState('winrm')
+  const [kind, setKind] = useState(DEFAULT_KIND)
   const [secret, setSecret] = useState('')
   const [secName, setSecName] = useState('')
   const [authProto, setAuthProto] = useState('SHA')
@@ -273,7 +283,7 @@ function CreateForm({ onDone, onCancel }: { onDone: () => void; onCancel: () => 
   const [privKey, setPrivKey] = useState('')
 
   const isV3 = kind === 'snmp_v3'
-  const userPass = ['ssh', 'winrm', 'wmi', 'http_basic', 'onvif', 'vendor_api', 'ldap'].includes(kind)
+  const userPass = isUserPass(kind)
   const meta = KIND_META[kind]
 
   const buildSecret = (): string => isV3
