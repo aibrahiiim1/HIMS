@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
 import { Radar, Boxes, Wifi, ShieldCheck, ShieldOff, HelpCircle, KeyRound, Bot, CircleX, RefreshCw, ArrowLeft, Sparkles, History, LifeBuoy, EyeOff, Search } from 'lucide-react'
 import { Pencil } from 'lucide-react'
-import { api, locationPaths, type Device, type DiscoveryJob, type DiscoveryResult, type Location, type ScanJobCounts } from '../api'
+import { api, locationPaths, type Device, type DiscoveryJob, type DiscoveryResult, type Liveness, type Location, type ScanJobCounts } from '../api'
 import { PageHeader, Panel, Kpi, EmptyState, ProgressBar, timeAgo } from '../components/ui'
 import { ReachabilityBadge, ManagementBadge } from '../components/StatusBadges'
 import { ClassificationEvidence } from '../components/ClassificationEvidence'
@@ -11,7 +11,7 @@ import { EditDevice } from '../components/EditDevice'
 import { OnboardingActions, CollectedViaCell, CollectNowPanel, outcomeBadge, phaseMeta, duration } from './Discovery'
 
 type CollectionProgress = { queued: number; retry_waiting: number; running: number; done: number; failed: number; pending: number; settled: boolean; self_healing?: number }
-type JobDetail = { job: DiscoveryJob; results: DiscoveryResult[]; counts?: ScanJobCounts; collection?: CollectionProgress; phase?: string }
+type JobDetail = { job: DiscoveryJob; results: DiscoveryResult[]; counts?: ScanJobCounts; collection?: CollectionProgress; phase?: string; liveness?: Liveness | null }
 
 // Known-Device-Retry disposition → short badge label + tone. A known device that
 // the sweep missed never disappears: it shows as "Missed this run".
@@ -202,6 +202,7 @@ export function ScanJobResults() {
   const counts = detail.data?.counts
   const collection = detail.data?.collection
   const phase = detail.data?.phase ?? (job ? job.status : undefined)
+  const live = detail.data?.liveness ?? null
   const dev = (r: DiscoveryResult) => (r.device_id ? devMap.get(r.device_id) : undefined)
 
   // KPI rollup (joined to the live device for reachability/management).
@@ -360,6 +361,24 @@ export function ScanJobResults() {
             </Panel>
           )}
 
+          {/* Liveness: what the pre-probe sweep decided, and why. Shown whenever a
+              port was distrusted so "61 of 254" never reads as devices going missing. */}
+          {live && (live.untrusted_ports?.length ?? 0) > 0 && (
+            <Panel title="Address check" icon={Radar}
+              subtitle={`${live.alive} of ${live.total} addresses responded · ${live.suppressed_by_middlebox} answered only on a port that cannot be trusted`}>
+              {live.untrusted_ports?.map((p) => (
+                <div key={p.port} style={{ marginBottom: 8 }}>
+                  <div><strong>TCP/{p.port}</strong> answered on {p.open_count} of {p.total} addresses{p.proved_by_control ? ' — including addresses that cannot host a device' : ''}</div>
+                  <div className="muted" style={{ fontSize: 12 }}>{p.reason}</div>
+                </div>
+              ))}
+              <div className="muted" style={{ fontSize: 12 }}>
+                Those addresses were not enrolled. If a real device here is reachable only on that port, it cannot be
+                told apart from an empty address by a TCP probe alone — scan it directly, or use a relay agent on that subnet.
+              </div>
+            </Panel>
+          )}
+
           {/* E. Filters + C. Results table */}
           <Panel title="Results" subtitle={`${filtered.length} of ${results.length} device(s)`} pad={false}>
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', padding: '8px 10px', position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 1 }}>
@@ -367,7 +386,16 @@ export function ScanJobResults() {
                 <button key={f} className={'seg-chip' + (filter === f ? ' active' : '')} onClick={() => setFilter(f)}>{FILTER_LABEL[f]}</button>
               ))}
             </div>
-            {results.length === 0 && <EmptyState icon={Radar} title="No results yet" message={job.status === 'running' ? 'Scanning…' : 'No host results recorded.'} />}
+            {results.length === 0 && (
+              live
+                ? <EmptyState icon={Radar}
+                    title={job.status === 'running' ? `${live.alive} of ${live.total} addresses responded — probing them now` : `${live.alive} of ${live.total} addresses responded`}
+                    message={live.summary} />
+                : <EmptyState icon={Radar} title="No results yet"
+                    message={job.status === 'running'
+                      ? 'Checking which addresses are real before probing any of them. Results appear once that finishes.'
+                      : 'No host results recorded.'} />
+            )}
             {filtered.length > 0 && (
               <div style={{ overflowX: 'auto' }}>
               <table className="data-table">

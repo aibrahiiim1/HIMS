@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -220,6 +221,11 @@ type PipelineConfig struct {
 	// last-known open ports here so a host listening only on a non-standard port
 	// is still re-detected on the targeted retry.
 	ExtraPorts []int
+	// KnownOpenPorts carries the open ports the liveness sweep already found for
+	// an address, so the deep pass does not repeat the identical TCP scan. A
+	// missing entry means "not swept" and the host is scanned normally, which
+	// keeps the targeted-retry path (its own ExtraPorts) working unchanged.
+	KnownOpenPorts map[netip.Addr][]int
 	// OnEvent, if set, is called with a play-by-play event at each probe stage so
 	// the live discovery board can show what is happening in real time. Must be
 	// cheap + non-blocking (the scan calls it on the hot path).
@@ -293,22 +299,18 @@ func Run(ctx context.Context, ip netip.Addr, locationID *uuid.UUID, cfg Pipeline
 	// 902 = VMware ESXi vpxa/authd host-agent port — near-unique to ESXi, so probing it lets
 	// classification detect ESXi (→ virtual_host) even when the host's web banner does not
 	// advertise vmware/esxi, which is what routes vSphere/vendor_api collection automatically.
-	ports := append([]int(nil), StandardScanPorts...)
-	// Hikvision/CCTV convention: a recorder/camera's web/ISAPI port is commonly
-	// 8000 + the host's last octet (.2 -> 8002, .15 -> 8015). Probe it per-host so
-	// these recorders are discovered automatically — the operator never has to
-	// hand-add each port to the web-port settings.
-	if u := ip.Unmap(); u.Is4() {
-		if octet := int(u.As4()[3]); octet >= 1 && octet <= 255 {
-			ports = append(ports, 8000+octet)
-		}
+	// PortsForHost covers the standard set, the operator's extra/web ports, and
+	// the Hikvision convention (a recorder's web/ISAPI port is 8000 + the host's
+	// last octet), so these recorders are found without hand-adding each port.
+	//
+	// The liveness sweep already probed exactly this set to decide the host was
+	// real. Re-scanning it here doubled every scan's port work — reuse the
+	// sweep's finding when the caller supplies it.
+	if known, ok := cfg.KnownOpenPorts[ip]; ok {
+		r.OpenPorts = append([]int(nil), known...)
+	} else {
+		r.OpenPorts = scanPorts(ctx, ip, PortsForHost(ip, cfg.ExtraPorts), cfg.PortTimeout)
 	}
-	for _, p := range cfg.ExtraPorts { // targeted-retry: a missed known device's last-known open ports
-		if p > 0 && p < 65536 {
-			ports = append(ports, p)
-		}
-	}
-	r.OpenPorts = scanPorts(ctx, ip, dedupInts(ports), cfg.PortTimeout)
 	r.Probe = driver.Probe{IP: ip, OpenTCPPorts: r.OpenPorts}
 	if len(r.OpenPorts) > 0 {
 		emit("tcp_port_found", "", "found", intsCSV(r.OpenPorts))
@@ -876,21 +878,46 @@ func grabTelnetBanner(ctx context.Context, ip netip.Addr, timeout time.Duration)
 
 // --- Transport helpers --------------------------------------------------------
 
+// portScanFanout bounds how many ports are probed at once for a SINGLE host.
+// Sequential probing made a dead host cost (ports x timeout): with ~30 ports at
+// the default 800ms that is ~23s per unresponsive address, so a /24 spent about
+// six minutes in the port phase alone. Probing a host's ports concurrently cuts
+// that to roughly (ports/fanout) x timeout. Kept modest so a scan at the default
+// 16-way host concurrency opens ~256 sockets at peak, not thousands.
+const portScanFanout = 16
+
 func scanPorts(ctx context.Context, ip netip.Addr, ports []int, timeout time.Duration) []int {
 	if timeout <= 0 {
 		timeout = 500 * time.Millisecond
 	}
-	open := make([]int, 0, len(ports))
-	d := &net.Dialer{}
+	var (
+		mu   sync.Mutex
+		open = make([]int, 0, len(ports))
+		wg   sync.WaitGroup
+		sem  = make(chan struct{}, portScanFanout)
+		d    = &net.Dialer{}
+	)
 	for _, port := range ports {
-		tctx, cancel := context.WithTimeout(ctx, timeout)
-		c, err := d.DialContext(tctx, "tcp", fmt.Sprintf("%s:%d", ip, port))
-		cancel()
-		if err == nil {
-			_ = c.Close()
-			open = append(open, port)
+		if ctx.Err() != nil {
+			break
 		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(port int) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			tctx, cancel := context.WithTimeout(ctx, timeout)
+			c, err := d.DialContext(tctx, "tcp", fmt.Sprintf("%s:%d", ip, port))
+			cancel()
+			if err == nil {
+				_ = c.Close()
+				mu.Lock()
+				open = append(open, port)
+				mu.Unlock()
+			}
+		}(port)
 	}
+	wg.Wait()
 	sort.Ints(open)
 	return open
 }

@@ -38,7 +38,11 @@ type PromiscuousPort struct {
 
 // SweepConfig parameterises the liveness pass.
 type SweepConfig struct {
+	// Ports, when set, is probed verbatim for every address (tests use this).
+	// When empty the per-host set from PortsForHost(ip, ExtraPorts) is used, so
+	// the sweep probes exactly what the deep pipeline would.
 	Ports       []int
+	ExtraPorts  []int
 	Timeout     time.Duration
 	Concurrency int
 
@@ -56,6 +60,14 @@ type SweepConfig struct {
 	// can be — hence MinSampleForRate.
 	PromiscuousRate  float64
 	MinSampleForRate int
+}
+
+// portsFor is the port set probed for one address.
+func (c *SweepConfig) portsFor(ip netip.Addr) []int {
+	if len(c.Ports) > 0 {
+		return c.Ports
+	}
+	return PortsForHost(ip, c.ExtraPorts)
 }
 
 func (c *SweepConfig) withDefaults() {
@@ -148,6 +160,28 @@ var StandardScanPorts = []int{
 	2049, 3389, 5060, 5061, 5432, 5985, 5986, 8000, 8008, 8010, 8080, 8443, 9100,
 }
 
+// PortsForHost is the exact TCP port set probed for one host: the standard
+// management set, the operator's extra/web ports, and the Hikvision convention
+// where a recorder's web/ISAPI port is 8000 + the host's last octet.
+//
+// Both the liveness sweep and the deep pipeline call this, so the sweep can
+// never probe a narrower set than the pipeline would have and then hand back
+// results the pipeline treats as complete.
+func PortsForHost(ip netip.Addr, extra []int) []int {
+	ports := append([]int(nil), StandardScanPorts...)
+	if u := ip.Unmap(); u.Is4() {
+		if octet := int(u.As4()[3]); octet >= 1 && octet <= 255 {
+			ports = append(ports, 8000+octet)
+		}
+	}
+	for _, p := range extra {
+		if p > 0 && p < 65536 {
+			ports = append(ports, p)
+		}
+	}
+	return dedupInts(ports)
+}
+
 // ControlsForHosts derives negative-control addresses from a host list by
 // taking the network + broadcast address of every distinct IPv4 /24 present.
 // Those are precisely the addresses ExpandCIDR omits, so they cost nothing real
@@ -196,7 +230,7 @@ func LivenessSweep(ctx context.Context, hosts []netip.Addr, cfg SweepConfig, pro
 	// lets the progress counter report a truthful alive count as it goes.
 	controlOpen := map[int]bool{}
 	for _, c := range cfg.Controls {
-		for _, p := range scanPorts(ctx, c, cfg.Ports, cfg.Timeout) {
+		for _, p := range scanPorts(ctx, c, cfg.portsFor(c), cfg.Timeout) {
 			controlOpen[p] = true
 		}
 	}
@@ -215,7 +249,7 @@ func LivenessSweep(ctx context.Context, hosts []netip.Addr, cfg SweepConfig, pro
 		go func(ip netip.Addr) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			open := scanPorts(ctx, ip, cfg.Ports, cfg.Timeout)
+			open := scanPorts(ctx, ip, cfg.portsFor(ip), cfg.Timeout)
 			mu.Lock()
 			res.OpenByHost[ip] = open
 			for _, p := range open {

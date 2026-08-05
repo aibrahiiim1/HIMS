@@ -994,6 +994,25 @@ export interface BMCNicConnectivity {
   gap?: string
 }
 
+// Liveness = the pre-probe sweep: how many scanned addresses were real, and any
+// port found answering for addresses that cannot exist (a middlebox/ALG replying
+// on the path). Explains a result table that is much smaller than the scope.
+export interface UntrustedPort {
+  port: number
+  reason: string
+  open_count: number
+  total: number
+  proved_by_control: boolean
+}
+export interface Liveness {
+  total: number
+  alive: number
+  no_response: number
+  suppressed_by_middlebox: number
+  summary: string
+  untrusted_ports?: UntrustedPort[]
+}
+
 export interface DiscoveryJob {
   id: string
   location_id?: string | null

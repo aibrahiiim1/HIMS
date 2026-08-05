@@ -617,14 +617,29 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 	// with ~61 real devices enrolled all 254. The sweep probes the network and
 	// broadcast addresses as negative controls: nothing can live there, so a port
 	// answering on them proves the answer is not coming from the target. ---
-	sweepPorts := append(append([]int(nil), discovery.StandardScanPorts...), cfg.ExtraPorts...)
+	s.publishScanEvent(jobID, netip.Addr{}, uuid.Nil, "liveness_sweep_started", "", "info",
+		fmt.Sprintf("Checking which of %d addresses are real before probing any of them…", len(hosts)))
+	sweepStart := time.Now()
+	// Report movement while the sweep runs. Without this the job sits silent for
+	// the whole pass and the results page shows only "Scanning…" with nothing to
+	// indicate progress.
+	lastTick := 0
 	sweep := discovery.LivenessSweep(ctx, hosts, discovery.SweepConfig{
-		Ports:       sweepPorts,
+		ExtraPorts:  cfg.ExtraPorts,
 		Timeout:     portTO,
 		Concurrency: concurrency,
 		Controls:    discovery.ControlsForHosts(hosts, 16),
-	}, nil)
-	s.publishScanEvent(jobID, netip.Addr{}, uuid.Nil, "liveness_sweep", "", "info", sweep.Summary())
+	}, func(scanned, _ int) {
+		// Every 10th address (and the last) — enough to animate, not a firehose.
+		if scanned-lastTick < 10 && scanned != len(hosts) {
+			return
+		}
+		lastTick = scanned
+		s.publishScanEvent(jobID, netip.Addr{}, uuid.Nil, "liveness_sweep_progress", "", "info",
+			fmt.Sprintf("Liveness check %d/%d addresses", scanned, len(hosts)))
+	})
+	s.publishScanEvent(jobID, netip.Addr{}, uuid.Nil, "liveness_sweep", "", "info",
+		fmt.Sprintf("%s (%.0fs)", sweep.Summary(), time.Since(sweepStart).Seconds()))
 	for _, p := range sweep.Promiscuous {
 		s.publishScanEvent(jobID, netip.Addr{}, uuid.Nil, "port_untrusted", "", "warning",
 			fmt.Sprintf("TCP/%d: %s", p.Port, p.Reason))
@@ -639,7 +654,9 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 		s.bumpScanned(jobID)
 	}
 	s.recordSweepMetadata(ctx, jobID, sweep)
-	// Deep pipeline runs ONLY against addresses with trustworthy evidence.
+	// Deep pipeline runs ONLY against addresses with trustworthy evidence, and
+	// reuses the ports the sweep already found rather than scanning them again.
+	cfg.KnownOpenPorts = sweep.OpenByHost
 	hosts = sweep.Alive
 
 	res := scan.Scope(ctx, hosts, concurrency, func(ctx context.Context, ip netip.Addr) (uuid.UUID, error) {
@@ -1143,6 +1160,11 @@ func (s *Server) retryMissedKnown(ctx context.Context, jobID uuid.UUID, resolveL
 	retryCfg := base
 	retryCfg.PortTimeout = maxDur(base.PortTimeout*2, 1500*time.Millisecond)
 	retryCfg.SNMPTimeout = maxDur(base.SNMPTimeout*2, 4000*time.Millisecond)
+	// The whole point of the retry is to probe AGAIN, slower, with the device's
+	// last-known ports. Reusing the sweep's finding here would re-answer with the
+	// result that already declared the host missed, so the retry could never
+	// recover anything.
+	retryCfg.KnownOpenPorts = nil
 	const maxAttempts = 3
 
 	for _, ip := range missed {
@@ -1778,6 +1800,42 @@ type scanJobDTO struct {
 	Phase             string `json:"phase"`
 	CollectingPending int64  `json:"collecting_pending"`
 	SelfHealing       int64  `json:"self_healing"`
+	// Liveness is the pre-probe sweep outcome: how many of the scanned addresses
+	// were real, and any port that was found answering for addresses that cannot
+	// exist. Nil until the sweep finishes. This is what lets the results page say
+	// "61 of 254 responded" instead of an unexplained empty table.
+	Liveness *livenessDTO `json:"liveness,omitempty"`
+}
+
+type livenessDTO struct {
+	Total                 int             `json:"total"`
+	Alive                 int             `json:"alive"`
+	NoResponse            int             `json:"no_response"`
+	SuppressedByMiddlebox int             `json:"suppressed_by_middlebox"`
+	Summary               string          `json:"summary"`
+	UntrustedPorts        []untrustedPort `json:"untrusted_ports,omitempty"`
+}
+
+type untrustedPort struct {
+	Port            int    `json:"port"`
+	Reason          string `json:"reason"`
+	OpenCount       int    `json:"open_count"`
+	Total           int    `json:"total"`
+	ProvedByControl bool   `json:"proved_by_control"`
+}
+
+// livenessFromMetadata decodes the sweep result recorded by recordSweepMetadata.
+func livenessFromMetadata(raw []byte) *livenessDTO {
+	if len(raw) == 0 {
+		return nil
+	}
+	var meta struct {
+		Liveness *livenessDTO `json:"liveness"`
+	}
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		return nil
+	}
+	return meta.Liveness
 }
 
 // scanPhase derives the honest end-to-end scan phase. The DB `status` only reflects the
@@ -1867,6 +1925,7 @@ func (s *Server) listDiscoveryJobs(w http.ResponseWriter, r *http.Request) {
 		d.CollectingPending = pending[j.ID]
 		d.SelfHealing = healing[j.ID]
 		d.Phase = scanPhase(j.Status, d.CollectingPending, d.SelfHealing)
+		d.Liveness = livenessFromMetadata(j.Metadata)
 		out = append(out, d)
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -2014,5 +2073,10 @@ func (s *Server) getDiscoveryJob(w http.ResponseWriter, r *http.Request) {
 	healing, _ := s.queries.CountSelfHealEligibleForJob(ctx, id)
 	phase := scanPhase(job.Status, collectionPending, healing)
 	collection["self_healing"] = healing
-	writeJSON(w, http.StatusOK, map[string]any{"job": job, "results": out, "counts": counts, "collection": collection, "phase": phase})
+	// liveness explains an empty/short result table: how many addresses were real,
+	// and any port that answered for addresses that cannot exist.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"job": job, "results": out, "counts": counts, "collection": collection,
+		"phase": phase, "liveness": livenessFromMetadata(job.Metadata),
+	})
 }
