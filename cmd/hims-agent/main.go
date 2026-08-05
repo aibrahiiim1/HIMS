@@ -98,6 +98,20 @@ func main() {
 	}
 }
 
+// agentCapabilities reports what this agent can ACTUALLY do on the host it is
+// running on. WMI/DCOM collection is Windows-only (collectWindows skips that
+// rung entirely when GOOS != windows), so a Linux agent must not advertise it:
+// HIMS routes legacy Windows hosts to an agent by protocol, and an agent
+// claiming "wmi" it cannot perform turns "no Relay Agent for this site" into
+// jobs that queue, fail, and retry forever — which looks like progress and is
+// not. A Linux agent is honestly a WinRM-only collector.
+func agentCapabilities() []string {
+	if runtime.GOOS == "windows" {
+		return []string{"winrm", "wmi"}
+	}
+	return []string{"winrm"}
+}
+
 // newAgentFromEnv builds the agent from its environment (HIMS_URL,
 // HIMS_AGENT_TOKEN, …). It exits early with a clear message if the token is
 // missing — the one piece of config the operator must supply.
@@ -106,7 +120,7 @@ func newAgentFromEnv() *agent {
 		base:  strings.TrimRight(getenv("HIMS_URL", "http://localhost:8090"), "/"),
 		token: os.Getenv("HIMS_AGENT_TOKEN"),
 		name:  getenv("HIMS_AGENT_NAME", hostname()),
-		caps:  []string{"winrm", "wmi"},
+		caps:  agentCapabilities(),
 	}
 	if a.token == "" {
 		fmt.Fprintln(os.Stderr, "HIMS_AGENT_TOKEN is required (register an agent in HIMS → Relay Agents and use the downloaded installer)")

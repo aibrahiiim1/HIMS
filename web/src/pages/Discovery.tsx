@@ -76,6 +76,10 @@ export function CollectedViaCell({ via, agent }: { via?: string; agent?: string 
       return <span className="badge badge-down">agent offline</span>
     case 'agent_missing':
       return <span className="badge badge-warning">no agent</span>
+    case 'agent_capability_missing':
+      // The site HAS an agent, but not one that can speak this protocol — most
+      // often a Linux agent asked for WMI/DCOM, which is Windows-only.
+      return <span className="badge badge-warning" title={`${agent ?? 'site agent'} cannot collect over this protocol`}>agent can’t do this</span>
     default:
       return <span className="muted">—</span>
   }

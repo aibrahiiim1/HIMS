@@ -88,6 +88,21 @@ func (s *Server) routeViaSiteAgent(ctx context.Context, d db.Device, ip, protoco
 		pinNote = " (pinned collector override)"
 	}
 
+	// The chosen agent must actually be able to speak this protocol. WMI/DCOM is
+	// Windows-only, so a Linux agent (e.g. one installed on the HIMS server
+	// itself) cannot collect a legacy Windows host no matter how long it runs.
+	// Queuing anyway would replace an honest "no agent" gate with jobs that fail
+	// and retry forever — the same misleading state, harder to diagnose.
+	if !agentSupportsProtocol(target, protocol) {
+		res.Reason = "agent_capability_missing"
+		res.Detail = "site agent " + target.Name + " (" + agentOSLabel(target) + ") cannot collect over " + protocol +
+			"; it advertises [" + strings.Join(relayAgentCaps(target), ", ") + "]"
+		if protocol == "wmi" {
+			res.Detail += ". WMI/DCOM requires the Relay Agent to run on a WINDOWS host inside this site — a Linux agent is WinRM-only"
+		}
+		return res, false
+	}
+
 	// Avoid piling up duplicate jobs when the same device is re-scanned before its
 	// previous job ran.
 	if n, _ := s.queries.CountActiveDeviceAgentJobs(actx, &d.ID); n > 0 {
@@ -176,6 +191,45 @@ func (s *Server) deviceCollectorAgent(ctx context.Context, id uuid.UUID) uuid.UU
 // current online status (newest heartbeat wins). Used to queue collection for an
 // agent that is only momentarily offline instead of dropping the work — the job
 // waits in the queue and the agent collects it when it next polls.
+// relayAgentCaps decodes an agent's advertised capabilities. An agent that
+// registered before capabilities were reported honestly (or with none at all)
+// returns an empty list, which agentSupportsProtocol treats permissively — we
+// must not break existing working agents on missing metadata.
+func relayAgentCaps(a db.RelayAgent) []string {
+	if len(a.Capabilities) == 0 {
+		return nil
+	}
+	var caps []string
+	if err := json.Unmarshal(a.Capabilities, &caps); err != nil {
+		return nil
+	}
+	return caps
+}
+
+// agentSupportsProtocol reports whether the agent advertises this protocol.
+// Unknown/absent capabilities => assume capable (an older agent that never
+// reported them still collects fine; refusing to route would be a regression).
+func agentSupportsProtocol(a db.RelayAgent, protocol string) bool {
+	caps := relayAgentCaps(a)
+	if len(caps) == 0 {
+		return true
+	}
+	for _, c := range caps {
+		if strings.EqualFold(strings.TrimSpace(c), protocol) {
+			return true
+		}
+	}
+	return false
+}
+
+// agentOSLabel is the agent's reported OS, for operator-facing messages.
+func agentOSLabel(a db.RelayAgent) string {
+	if strings.TrimSpace(a.Os) == "" {
+		return "unknown OS"
+	}
+	return a.Os
+}
+
 func (s *Server) assignedSiteAgent(ctx context.Context, loc uuid.UUID) (db.RelayAgent, bool) {
 	all, err := s.queries.ListRelayAgents(ctx)
 	if err != nil {
