@@ -506,6 +506,35 @@ func (s *Server) cctvWebCredsForScan(ctx context.Context, ip netip.Addr, locID *
 
 // runScanJob is the background scan worker. It owns its own context (the HTTP
 // request's is long gone) and records per-host outcomes + a final job status.
+// recordSweepMetadata merges the liveness-sweep outcome into the job's metadata
+// so the scan page can report "N alive of M" and name any port it stopped
+// trusting. It MERGES: metadata already carries the scan spec used to re-run the
+// job, which must not be clobbered.
+func (s *Server) recordSweepMetadata(ctx context.Context, jobID uuid.UUID, sw discovery.SweepResult) {
+	meta := map[string]any{}
+	if job, err := s.queries.GetDiscoveryJob(ctx, jobID); err == nil && len(job.Metadata) > 0 {
+		_ = json.Unmarshal(job.Metadata, &meta)
+	}
+	untrusted := make([]map[string]any, 0, len(sw.Promiscuous))
+	for _, p := range sw.Promiscuous {
+		untrusted = append(untrusted, map[string]any{
+			"port": p.Port, "reason": p.Reason, "open_count": p.OpenCount,
+			"total": p.Total, "proved_by_control": p.ViaControl,
+		})
+	}
+	meta["liveness"] = map[string]any{
+		"total":                   sw.Total,
+		"alive":                   len(sw.Alive),
+		"no_response":             len(sw.NoResponse),
+		"suppressed_by_middlebox": len(sw.SuppressedByMiddlebox),
+		"untrusted_ports":         untrusted,
+		"summary":                 sw.Summary(),
+	}
+	if blob, err := json.Marshal(meta); err == nil {
+		_ = s.queries.SetDiscoveryJobMetadata(ctx, db.SetDiscoveryJobMetadataParams{ID: jobID, Metadata: blob})
+	}
+}
+
 func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUID, concurrency int, extraGroups []credresolver.ScopedGroup, explicitCreds bool, snmpTO, portTO time.Duration) {
 	// Overall job budget scales with the host count: a flat 30m can't cover a large
 	// multi-subnet scan whose deep collection is slow (camera ONVIF/ISAPI walks),
@@ -580,6 +609,38 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 	var seenMu sync.Mutex
 	seenAlive := make(map[netip.Addr]bool)
 	var newCount, knownSeenCount, recoveredCount, missedCount int
+
+	// --- Stage 0: liveness sweep. Establish which addresses are REAL before any
+	// deep probe, credential attempt or enrolment. Without this, "any TCP port
+	// answered" is enough to enrol, and a middlebox that answers one port for a
+	// whole range (a SIP ALG on TCP/5060) makes every address look alive — a /24
+	// with ~61 real devices enrolled all 254. The sweep probes the network and
+	// broadcast addresses as negative controls: nothing can live there, so a port
+	// answering on them proves the answer is not coming from the target. ---
+	sweepPorts := append(append([]int(nil), discovery.StandardScanPorts...), cfg.ExtraPorts...)
+	sweep := discovery.LivenessSweep(ctx, hosts, discovery.SweepConfig{
+		Ports:       sweepPorts,
+		Timeout:     portTO,
+		Concurrency: concurrency,
+		Controls:    discovery.ControlsForHosts(hosts, 16),
+	}, nil)
+	s.publishScanEvent(jobID, netip.Addr{}, uuid.Nil, "liveness_sweep", "", "info", sweep.Summary())
+	for _, p := range sweep.Promiscuous {
+		s.publishScanEvent(jobID, netip.Addr{}, uuid.Nil, "port_untrusted", "", "warning",
+			fmt.Sprintf("TCP/%d: %s", p.Port, p.Reason))
+	}
+	// Addresses the sweep ruled out are still SCANNED — advance the progress
+	// counter for them so the job reports against the full scope, not just the
+	// survivors.
+	for range sweep.SuppressedByMiddlebox {
+		s.bumpScanned(jobID)
+	}
+	for range sweep.NoResponse {
+		s.bumpScanned(jobID)
+	}
+	s.recordSweepMetadata(ctx, jobID, sweep)
+	// Deep pipeline runs ONLY against addresses with trustworthy evidence.
+	hosts = sweep.Alive
 
 	res := scan.Scope(ctx, hosts, concurrency, func(ctx context.Context, ip netip.Addr) (uuid.UUID, error) {
 		defer s.bumpScanned(jobID) // advance the 0→100% progress counter (once per host)
