@@ -42,6 +42,7 @@ import { AgentDetail } from './pages/AgentDetail'
 import { Mibs } from './pages/Mibs'
 import { Settings } from './pages/Settings'
 import { Account } from './pages/Account'
+import { DeviceAccess } from './pages/DeviceAccess'
 import { DeviceCategories } from './pages/DeviceCategories'
 import { Inventory } from './pages/Inventory'
 import { VirtualDeviceForm } from './pages/VirtualDeviceForm'
@@ -193,6 +194,7 @@ function Shell({ me, onLogout }: { me?: AuthMe; onLogout: () => void }) {
             <Route path="/mibs" element={<Mibs />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/account" element={<Account />} />
+            <Route path="/device-access" element={<DeviceAccess />} />
             <Route path="/inventory" element={<Inventory />} />
             {/* Data-driven inventory group + per-category pages (single source: inventoryGroups.ts).
                 "All <Group>" = union of the group's categories; children = their own categories;

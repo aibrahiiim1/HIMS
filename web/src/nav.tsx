@@ -60,6 +60,7 @@ export const NAV: NavGroup[] = [
       { label: 'Scan Results', icon: ClipboardList, to: '/discovery/results' },
       { label: 'MIB Browser', icon: BookOpen, to: '/mibs' },
       { label: 'Credentials', icon: KeyRound, to: '/credentials' },
+      { label: 'Device Access', icon: ShieldCheck, to: '/device-access' },
       { label: 'Vendor Profiles', icon: Plug, to: '/vendor-profiles' },
       { label: 'Relay Agents', icon: Radar, to: '/agents' },
       { label: 'Trust Audit', icon: ShieldCheck, to: '/trust-audit' },

@@ -477,6 +477,9 @@ func (s *Server) routes() {
 		r.Get("/credentials", s.listCredentials)
 		r.Post("/credentials", s.createCredential)
 		r.Post("/credentials/test", s.testCredentials)
+		// Bulk assign from Device Access: tests each selected device and binds the
+		// credential ONLY where authentication actually succeeded.
+		r.Post("/devices/credential-assign", s.assignCredentialToDevices)
 		r.Post("/credentials/http-basic/revalidate", s.revalidateHTTPBasic)
 		r.Post("/credentials/winrm-diagnose", s.winrmDiagnose)
 		r.Post("/credentials/wmi-diagnose", s.wmiDiagnose)

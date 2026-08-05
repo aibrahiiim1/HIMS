@@ -128,3 +128,19 @@ func TestIdentityCan(t *testing.T) {
 		t.Error("nil identity (open mode) should allow")
 	}
 }
+
+// Bulk credential assignment sits under /devices but wields a decrypted secret,
+// so devices.write must not be sufficient — it is a credential operation.
+func TestCredentialAssignRequiresCredentialsManage(t *testing.T) {
+	got := requiredPermission("POST", "/api/v1/devices/credential-assign")
+	if got != "credentials.manage" {
+		t.Errorf("POST /devices/credential-assign requires %q, want credentials.manage", got)
+	}
+	// Ordinary device writes are unaffected.
+	if got := requiredPermission("POST", "/api/v1/devices"); got != "devices.write" {
+		t.Errorf("POST /devices = %q, want devices.write", got)
+	}
+	if got := requiredPermission("GET", "/api/v1/devices"); got != "devices.read" {
+		t.Errorf("GET /devices = %q, want devices.read", got)
+	}
+}

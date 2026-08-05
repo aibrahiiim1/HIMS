@@ -83,6 +83,12 @@ func requiredPermission(method, path string) string {
 		}
 		return "devices.read"
 	case "devices", "inventory":
+		// Bulk credential assignment lives under /devices but decrypts and uses a
+		// stored secret, so it is gated as a credential operation — devices.write
+		// must not be enough to wield a credential.
+		if write && strings.HasPrefix(p, "devices/credential-assign") {
+			return "credentials.manage"
+		}
 		if write {
 			return "devices.write"
 		}
