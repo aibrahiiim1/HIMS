@@ -62,10 +62,29 @@ function Remove-Service-IfPresent {
   }
 }
 
+# Stop-StrayAgent kills any hims-agent.exe still running outside the service —
+# e.g. one started by hand in a console for troubleshooting. The service can be
+# gone while such a process still holds the binary open, which is enough to break
+# the copy. Only processes whose image is OUR install path are touched.
+function Stop-StrayAgent {
+  $dst = Join-Path $InstallDir 'hims-agent.exe'
+  $procs = @(Get-Process -Name 'hims-agent' -ErrorAction SilentlyContinue |
+             Where-Object { $_.Path -and ($_.Path -ieq $dst) })
+  if ($procs.Count -gt 0) {
+    Write-Step 'Stopping a running hims-agent.exe outside the service'
+    foreach ($p in $procs) {
+      try { Stop-Process -Id $p.Id -Force -ErrorAction Stop; Write-Ok "stopped PID $($p.Id)" }
+      catch { Write-Warn2 "could not stop PID $($p.Id): $($_.Exception.Message)" }
+    }
+    Start-Sleep -Seconds 2
+  }
+}
+
 function Do-Uninstall {
   Assert-Admin
   Write-Host "Uninstalling HIMS Relay Agent ($AgentName)..." -ForegroundColor Cyan
   Remove-Service-IfPresent
+  Stop-StrayAgent
   foreach ($v in 'HIMS_URL','HIMS_AGENT_TOKEN','HIMS_AGENT_NAME','HIMS_AGENT_INSECURE_TLS','HIMS_AGENT_LOG_DIR') {
     [Environment]::SetEnvironmentVariable($v, $null, 'Machine')
   }
@@ -99,13 +118,35 @@ function Do-Install {
   Write-Step 'Checking connectivity to HIMS'
   Test-HimsReachable
 
+  # Release the binary BEFORE copying over it. On a re-install/upgrade the old
+  # service is still running and holds hims-agent.exe open, so the copy fails with
+  # "the process cannot access the file ... because it is being used by another
+  # process" and the install dies half-done. Removing the service first is also
+  # what the service-registration step below expects.
+  Remove-Service-IfPresent
+  Stop-StrayAgent
+
   Write-Step 'Installing files'
   New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
   New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
   $src = Join-Path $PSScriptRoot $ExeName
   if (-not (Test-Path $src)) { throw "agent binary '$ExeName' not found next to this script." }
   $dst = Join-Path $InstallDir 'hims-agent.exe'
-  Copy-Item -Path $src -Destination $dst -Force
+  try {
+    Copy-Item -Path $src -Destination $dst -Force -ErrorAction Stop
+  } catch {
+    # Something still has it open (a console-mode agent, or a slow service stop).
+    # Renaming an in-use file IS allowed on Windows even when overwriting is not,
+    # so move the old binary aside and copy into the freed name. Windows deletes
+    # the renamed file once the last handle closes.
+    Write-Warn2 "in-use binary detected; retiring the old copy and retrying"
+    $stale = "$dst.old-$(Get-Date -Format yyyyMMddHHmmss)"
+    try { Rename-Item -Path $dst -NewName (Split-Path $stale -Leaf) -Force -ErrorAction Stop } catch {
+      throw "cannot replace '$dst' - it is still in use. Stop the '$ServiceName' service (or any running hims-agent.exe) and re-run this installer. Original error: $($_.Exception.Message)"
+    }
+    Copy-Item -Path $src -Destination $dst -Force
+    Remove-Item -Path $stale -Force -ErrorAction SilentlyContinue
+  }
   Write-Ok "agent copied to $dst"
 
   Write-Step 'Writing machine configuration'
@@ -116,7 +157,7 @@ function Do-Install {
   if ($InsecureTls -eq '1') { [Environment]::SetEnvironmentVariable('HIMS_AGENT_INSECURE_TLS', '1', 'Machine') }
   Write-Ok 'configuration stored (machine scope)'
 
-  Remove-Service-IfPresent
+  # (the previous service was already removed before the file copy above)
   Write-Step "Registering Windows service '$DisplayName'"
   & sc.exe create $ServiceName binPath= "`"$dst`"" start= auto DisplayName= "$DisplayName" obj= LocalSystem | Out-Null
   & sc.exe description $ServiceName "HIMS Relay Agent / Site Collector ($AgentName) - version $Version" | Out-Null
