@@ -683,6 +683,12 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 		s.bumpScanned(jobID)
 	}
 	s.recordSweepMetadata(ctx, jobID, sweep)
+	// scopeHosts is the number of addresses this job was ASKED to scan. It must
+	// survive the narrowing below: host_count/scanned_count describe the scope the
+	// operator chose, not the subset that turned out to be real. Reporting the
+	// alive count as host_count made a /24 scan read "76 hosts" and produced the
+	// nonsense found_count(78) > host_count(76).
+	scopeHosts := len(hosts)
 	// Deep pipeline runs ONLY against addresses with trustworthy evidence, and
 	// reuses the ports the sweep already found rather than scanning them again.
 	cfg.KnownOpenPorts = sweep.OpenByHost
@@ -1118,7 +1124,7 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 	_ = s.queries.UpdateDiscoveryJobStatus(context.Background(), db.UpdateDiscoveryJobStatusParams{
 		// scanned_count = host_count so a finished job reads exactly 100% even if a
 		// per-host increment was missed.
-		ID: jobID, Status: status, HostCount: int32(len(hosts)), FoundCount: int32(found), ScannedCount: int32(len(hosts)), Error: errMsg,
+		ID: jobID, Status: status, HostCount: int32(scopeHosts), FoundCount: int32(found), ScannedCount: int32(scopeHosts), Error: errMsg,
 	})
 	s.publishScanEvent(jobID, netip.Addr{}, uuid.Nil, "job_completed", "", status,
 		fmt.Sprintf("%d found · %d new · %d known · %d recovered · %d missed", found, newCount, knownSeenCount, recoveredCount, missedCount))
