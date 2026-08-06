@@ -41,7 +41,15 @@ func (s *Server) routeViaSiteAgent(ctx context.Context, d db.Device, ip, protoco
 	res = osCollectResult{DeviceID: d.ID.String(), Name: d.Name, IP: ip, Status: "failed"}
 
 	if d.LocationID == nil {
-		res.Reason, res.Detail = "agent_missing", "device is not assigned to a site — assign it to a site that has a Relay Agent, or install one"
+		// NOT agent_missing. Relay routing is per-site, so a device with no site
+		// is refused before any agent is even looked at — reporting this as a
+		// missing agent sends the operator to install one, which changes nothing.
+		// That misdiagnosis cost a full troubleshooting cycle in production: the
+		// site's agent was installed, online and on the very same subnet as the
+		// devices, while 78 of them sat with location_id = NULL.
+		res.Reason = "device_no_site"
+		res.Detail = "this device is not assigned to a site, and relay-agent routing is per-site — no agent can be selected for it. " +
+			"Map its subnet under Locations → Subnets (then re-scan), or set the site directly in Edit Device."
 		return res, false
 	}
 

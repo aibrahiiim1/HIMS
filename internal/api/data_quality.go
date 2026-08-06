@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"sort"
 	"strconv"
 	"strings"
@@ -164,11 +165,78 @@ func (s *Server) dataQuality(w http.ResponseWriter, r *http.Request) {
 		issues = append(issues, dqIssue{Key: key, Label: label, Description: desc, Severity: sev, Count: count, Devices: list})
 	}
 	addIssue("stale_devices", "Not seen recently", "These devices have not been re-discovered in over 30 days (or never). They may be decommissioned, moved, or unreachable.", "warning", stale)
-	addIssue("missing_location", "Missing location", "Devices not assigned to a site/location. Assign them so they roll up correctly in Sites Health and reports.", "warning", missingLoc)
+	// Severity is warning, not info: a site-less device is not merely untidy in
+	// reports — relay-agent routing is per-site, so it can never be dispatched to
+	// an agent at all. That is why this reads as a collection blocker.
+	addIssue("missing_location", "Missing location (blocks relay collection)", "Devices not assigned to a site/location. Beyond rolling up wrongly in Sites Health and reports, a device with no site can NEVER be collected through a Relay Agent — routing is per-site, so it is refused before any agent is considered. Map the subnet under Locations → Subnets, or set the site in Edit Device.", "warning", missingLoc)
 	addIssue("missing_credentials", "Missing credentials", "Credentialed device classes (switches, firewalls, servers…) with no bound credential cannot be deeply collected. Bind a working credential.", "warning", missingCreds)
 	addIssue("unknown_category", "Unclassified devices", "Devices still classified as 'unknown'. Enrich with SNMP/CLI or set the type manually so they appear in the right inventory views.", "info", unknownCat)
 	addIssue("low_confidence", "Low-confidence classification", "Devices auto-classified below "+strconv.Itoa(lowConfidenceThreshold)+"% confidence. Open the device, Re-classify (or bind a credential for deeper signals), then Lock once correct.", "info", lowConf)
 	addIssue("missing_vendor", "Missing vendor", "Devices with no vendor recorded. Vendor enriches fingerprinting, reports and lifecycle.", "info", missingVendor)
+
+	// --- Unmapped subnets: the ROOT CAUSE behind most missing_location rows ----
+	// missing_location lists the symptom device by device; this names the subnet
+	// to fix. One mapping here clears every site-less device on that /24 and
+	// unblocks relay collection for all of them at once. In production a single
+	// unmapped /24 left 78 devices unroutable while a healthy agent sat on that
+	// very subnet.
+	if subnets, serr := s.queries.ListSubnets(ctx); serr == nil {
+		mapped := make([]netip.Prefix, 0, len(subnets))
+		for _, sn := range subnets {
+			if sn.Cidr.IsValid() {
+				mapped = append(mapped, sn.Cidr)
+			}
+		}
+		covered := func(ip netip.Addr) bool {
+			for _, p := range mapped {
+				if p.Contains(ip) {
+					return true
+				}
+			}
+			return false
+		}
+		type gap struct {
+			devices int
+			sample  string
+		}
+		gaps := map[string]*gap{}
+		for _, d := range devs {
+			if d.LocationID != nil || d.PrimaryIp == nil || !d.PrimaryIp.IsValid() {
+				continue
+			}
+			ip := d.PrimaryIp.Unmap()
+			if !ip.Is4() || covered(ip) {
+				continue
+			}
+			b := ip.As4()
+			key := netip.PrefixFrom(netip.AddrFrom4([4]byte{b[0], b[1], b[2], 0}), 24).String()
+			g := gaps[key]
+			if g == nil {
+				g = &gap{}
+				gaps[key] = g
+			}
+			g.devices++
+			if g.sample == "" {
+				g.sample = ip.String()
+			}
+		}
+		keys := make([]string, 0, len(gaps))
+		for k := range gaps {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		rows := make([]dqDevice, 0, len(keys))
+		total := 0
+		for _, k := range keys {
+			g := gaps[k]
+			total += g.devices
+			rows = append(rows, dqDevice{
+				ID: k, Name: k, PrimaryIP: g.sample, Category: "subnet",
+				Note: strconv.Itoa(g.devices) + " device(s) here have no site because this subnet is not mapped",
+			})
+		}
+		addDQ("unmapped_subnet", "Subnets not mapped to a site", "These subnets contain devices but are not mapped to any site, so every device in them has no site — and a device with no site can never be collected through a Relay Agent. Map each subnet under Locations → Subnets; existing devices pick the site up on the next scan.", "warning", rows, total)
+	}
 
 	// --- Fingerprint-driven classification quality (FP-ext) -------------------
 	// Re-evaluate the vendor-fingerprint library against each device's STORED raw

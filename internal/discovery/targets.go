@@ -20,11 +20,53 @@ import (
 // maxHosts, so the operator re-scopes deliberately. This is the single entry
 // point the scan API uses for the Single-IP / IP-Range / Subnet modes.
 func ParseTargets(spec string, maxHosts int) ([]netip.Addr, error) {
-	tokens := strings.FieldsFunc(spec, func(r rune) bool {
+	hosts, _, err := ParseTargetsDetailed(spec, maxHosts)
+	return hosts, err
+}
+
+// tokenizeTargets splits a target spec on the accepted delimiters. Shared so
+// AssertedTargets and ParseTargetsDetailed can never disagree about what counts
+// as one token.
+func tokenizeTargets(spec string) []string {
+	return strings.FieldsFunc(spec, func(r rune) bool {
 		return r == ',' || r == ';' || r == '\n' || r == '\r' || r == '\t' || r == ' '
 	})
+}
+
+// AssertedTargets returns only the addresses the operator named individually —
+// bare IP tokens — WITHOUT expanding any CIDR or range. Cheap enough to call on
+// a huge spec, because it never enumerates.
+//
+// "Asserted" means the operator stated this device exists, which is what lets
+// the liveness sweep admit it on weak evidence instead of reporting nothing.
+func AssertedTargets(spec string) map[netip.Addr]bool {
+	out := map[netip.Addr]bool{}
+	for _, tok := range tokenizeTargets(spec) {
+		if strings.ContainsAny(tok, "/-") {
+			continue // CIDR or range: an expansion, not an assertion
+		}
+		if a, err := netip.ParseAddr(tok); err == nil {
+			out[a] = true
+		}
+	}
+	return out
+}
+
+// ParseTargetsDetailed is ParseTargets plus the set of addresses the operator
+// named ONE BY ONE (a bare IP token), as opposed to addresses produced by
+// expanding a CIDR or a range.
+//
+// The distinction matters for liveness. Sweeping a /24 and finding an address
+// that answers only on a port a middlebox serves is not evidence of a device —
+// suppressing it is what stops phantom enrolment. But when the operator TYPES a
+// single address they are asserting the device exists, and answering "nothing
+// found" ignores a direct instruction. Asserted addresses are therefore enrolled
+// with an honest liveness caveat rather than dropped.
+func ParseTargetsDetailed(spec string, maxHosts int) (hosts []netip.Addr, asserted map[netip.Addr]bool, err error) {
+	asserted = map[netip.Addr]bool{}
+	tokens := tokenizeTargets(spec)
 	if len(tokens) == 0 {
-		return nil, fmt.Errorf("discovery: no targets provided")
+		return nil, nil, fmt.Errorf("discovery: no targets provided")
 	}
 
 	seen := make(map[netip.Addr]struct{})
@@ -44,40 +86,42 @@ func ParseTargets(spec string, maxHosts int) ([]netip.Addr, error) {
 	for _, tok := range tokens {
 		switch {
 		case strings.Contains(tok, "/"):
-			p, err := netip.ParsePrefix(tok)
-			if err != nil {
-				return nil, fmt.Errorf("discovery: invalid CIDR %q: %w", tok, err)
+			p, perr := netip.ParsePrefix(tok)
+			if perr != nil {
+				return nil, nil, fmt.Errorf("discovery: invalid CIDR %q: %w", tok, perr)
 			}
-			hosts, err := ExpandCIDR(p, maxHosts)
-			if err != nil {
-				return nil, err
+			expanded, xerr := ExpandCIDR(p, maxHosts)
+			if xerr != nil {
+				return nil, nil, xerr
 			}
-			for _, h := range hosts {
-				if err := add(h); err != nil {
-					return nil, err
+			for _, h := range expanded {
+				if aerr := add(h); aerr != nil {
+					return nil, nil, aerr
 				}
 			}
 		case strings.Contains(tok, "-"):
-			hosts, err := expandRange(tok, maxHosts)
-			if err != nil {
-				return nil, err
+			expanded, xerr := expandRange(tok, maxHosts)
+			if xerr != nil {
+				return nil, nil, xerr
 			}
-			for _, h := range hosts {
-				if err := add(h); err != nil {
-					return nil, err
+			for _, h := range expanded {
+				if aerr := add(h); aerr != nil {
+					return nil, nil, aerr
 				}
 			}
 		default:
-			a, err := netip.ParseAddr(tok)
-			if err != nil {
-				return nil, fmt.Errorf("discovery: invalid IP %q: %w", tok, err)
+			a, perr := netip.ParseAddr(tok)
+			if perr != nil {
+				return nil, nil, fmt.Errorf("discovery: invalid IP %q: %w", tok, perr)
 			}
-			if err := add(a); err != nil {
-				return nil, err
+			if aerr := add(a); aerr != nil {
+				return nil, nil, aerr
 			}
+			// The operator named this address explicitly.
+			asserted[a] = true
 		}
 	}
-	return out, nil
+	return out, asserted, nil
 }
 
 // FilterExcluded removes from hosts every address the exclude spec resolves to.

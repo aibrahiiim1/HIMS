@@ -132,7 +132,7 @@ function bucketOf(r: DiscoveryResult, d?: Device): Bucket {
   const via = p.collected_via
   if (via === 'direct' || via === 'relay_agent' || d?.management === 'managed' || na.startsWith('managed via')) return 'managed'
   if (r.outcome === 'failed' || r.outcome === 'missed' || d?.reachability === 'offline') return 'offline'
-  if (d?.management === 'needs_agent' || d?.management === 'agent_offline' || via === 'agent_offline' || via === 'agent_missing' || na.includes('relay agent')) return 'needs_agent'
+  if (d?.management === 'needs_agent' || d?.management === 'agent_offline' || via === 'agent_offline' || via === 'agent_missing' || via === 'device_no_site' || na.includes('relay agent')) return 'needs_agent'
   if (d?.management === 'credential_failed' || na.includes('auth_failed') || na.includes('authentication rejected') || na.includes('auth failed')) return 'auth_failed'
   if (na.includes('telnet-only') || na.includes('unsupported')) return 'unsupported'
   if (na.includes('http-only') || na.includes('open its web ui') || na.includes('classify it') || na.includes('classify the device') || na.includes('classify manually')) return 'unknown_evidence'

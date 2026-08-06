@@ -76,6 +76,11 @@ export function CollectedViaCell({ via, agent }: { via?: string; agent?: string 
       return <span className="badge badge-down">agent offline</span>
     case 'agent_missing':
       return <span className="badge badge-warning">no agent</span>
+    case 'device_no_site':
+      // Distinct from "no agent": relay routing is per-site, so a site-less
+      // device is refused before any agent is considered. Installing an agent
+      // would not help — the device needs a site.
+      return <span className="badge badge-warning" title="This device has no site, so no Relay Agent can be selected. Map its subnet under Locations → Subnets.">no site</span>
     case 'agent_capability_missing':
       // The site HAS an agent, but not one that can speak this protocol — most
       // often a Linux agent asked for WMI/DCOM, which is Windows-only.

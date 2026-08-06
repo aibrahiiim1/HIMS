@@ -239,6 +239,18 @@ func isHandshakeAlgoError(e string) bool {
 		strings.Contains(e, "signature algorithm") || strings.Contains(e, "no common")
 }
 
+// standardWebEndpoints returns the default candidates tried before any
+// operator-configured web port: HTTPS then HTTP on the standard ports.
+//
+// It is a variable purely so tests can neutralise it. httptest binds 127.0.0.1,
+// and on a machine that genuinely serves :80/:443 (a developer box, a CI runner
+// with a local web server) these candidates answer FIRST and the test ends up
+// asserting against that server instead of its own fixture. Product behaviour is
+// unchanged — standard ports are still tried first.
+var standardWebEndpoints = func(host string) []string {
+	return []string{"https://" + host + "/", "http://" + host + "/"}
+}
+
 func testHTTP(ctx context.Context, secret, host string, timeout time.Duration, webPorts []int) Outcome {
 	user, pass := SplitUserPass(secret)
 	client := &http.Client{
@@ -253,7 +265,10 @@ func testHTTP(ctx context.Context, secret, host string, timeout time.Duration, w
 	type ep struct {
 		url string
 	}
-	eps := []ep{{"https://" + host + "/"}, {"http://" + host + "/"}}
+	eps := make([]ep, 0, 2+2*len(webPorts))
+	for _, u := range standardWebEndpoints(host) {
+		eps = append(eps, ep{u})
+	}
 	for _, p := range webPorts {
 		if p == 80 || p == 443 {
 			continue

@@ -54,6 +54,15 @@ type SweepConfig struct {
 	// carries the detection alone.
 	Controls []netip.Addr
 
+	// Asserted are addresses the operator named explicitly (a typed IP, not a
+	// CIDR/range expansion). Such an address is treated as alive when it answers
+	// at all — even if only on a port a middlebox serves — because the operator
+	// asserted the device exists and returning "nothing found" ignores a direct
+	// instruction. The weak evidence is not hidden: the address is reported in
+	// LivenessUnproven so enrolment can flag it honestly. Sweeps of a CIDR are
+	// unaffected, which is what keeps phantom enrolment suppressed.
+	Asserted map[netip.Addr]bool
+
 	// OnAddress, when set, is called as each address finishes probing, so the
 	// caller can stream results while the sweep runs instead of waiting for the
 	// whole pass. trusted reflects the CONTROL-proved promiscuous set, which is
@@ -109,6 +118,11 @@ type SweepResult struct {
 	SuppressedByMiddlebox []netip.Addr
 	// NoResponse answered nothing at all.
 	NoResponse []netip.Addr
+	// LivenessUnproven are Asserted addresses admitted to Alive on weak evidence
+	// (only a middlebox-served port answered). They ARE enrolled — the operator
+	// named them — but the caller must record why their liveness is unproven
+	// rather than presenting them as ordinary discoveries.
+	LivenessUnproven []netip.Addr
 }
 
 // AddressState is one scanned address and what the sweep concluded about it —
@@ -168,6 +182,9 @@ func (r *SweepResult) Summary() string {
 	}
 	if n := len(r.SuppressedByMiddlebox); n > 0 {
 		s += fmt.Sprintf("; %d address(es) answered ONLY on such a port and were not enrolled", n)
+	}
+	if n := len(r.LivenessUnproven); n > 0 {
+		s += fmt.Sprintf("; %d explicitly-targeted address(es) answered only on such a port and were enrolled anyway with liveness unproven", n)
 	}
 	return s
 }
@@ -360,15 +377,21 @@ func LivenessSweep(ctx context.Context, hosts []netip.Addr, cfg SweepConfig, pro
 				break
 			}
 		}
-		if trusted {
+		switch {
+		case trusted:
 			res.Alive = append(res.Alive, h)
-		} else {
+		case cfg.Asserted[h]:
+			// Operator named this address: admit it, but say the liveness is unproven.
+			res.Alive = append(res.Alive, h)
+			res.LivenessUnproven = append(res.LivenessUnproven, h)
+		default:
 			res.SuppressedByMiddlebox = append(res.SuppressedByMiddlebox, h)
 		}
 	}
 	sortAddrs(res.Alive)
 	sortAddrs(res.SuppressedByMiddlebox)
 	sortAddrs(res.NoResponse)
+	sortAddrs(res.LivenessUnproven)
 	return res
 }
 

@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/netip"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -155,5 +156,61 @@ func TestLivenessSweep_SmallFullRangeNotFlagged(t *testing.T) {
 	}
 	if len(res.Alive) != len(hosts) {
 		t.Errorf("want all %d alive, got %d", len(hosts), len(res.Alive))
+	}
+}
+
+// An address the operator NAMED must not be silently dropped just because the
+// only port it answers on is one a middlebox serves. Sweeping a /24 and finding
+// such an address is not evidence of a device; typing that address is the
+// operator asserting one exists, and answering "nothing found" ignores a direct
+// instruction. It is admitted, and reported as liveness-unproven.
+func TestLivenessSweep_AssertedAddressSurvivesSuppression(t *testing.T) {
+	algPort, stop := listenOn(t)
+	defer stop()
+
+	lo := netip.MustParseAddr("127.0.0.1")
+	cfg := SweepConfig{
+		Ports:    []int{algPort},
+		Timeout:  time.Second,
+		Controls: []netip.Addr{lo}, // control answers => port is promiscuous
+		Asserted: map[netip.Addr]bool{lo: true},
+	}
+	res := LivenessSweep(context.Background(), []netip.Addr{lo}, cfg, nil)
+
+	if !res.IsPromiscuous(algPort) {
+		t.Fatalf("port %d answered on the control and must still be flagged promiscuous", algPort)
+	}
+	if len(res.Alive) != 1 {
+		t.Errorf("an asserted address must be admitted, got alive=%v suppressed=%v", res.Alive, res.SuppressedByMiddlebox)
+	}
+	if len(res.SuppressedByMiddlebox) != 0 {
+		t.Errorf("an asserted address must not be suppressed, got %v", res.SuppressedByMiddlebox)
+	}
+	if len(res.LivenessUnproven) != 1 {
+		t.Errorf("the weak evidence must be reported, want 1 unproven, got %v", res.LivenessUnproven)
+	}
+	if !strings.Contains(res.Summary(), "liveness unproven") {
+		t.Errorf("summary must disclose the unproven liveness, got: %s", res.Summary())
+	}
+}
+
+// The same evidence WITHOUT an assertion must still be suppressed — that is what
+// stopped 193 phantom enrolments on the production /24.
+func TestLivenessSweep_UnassertedAddressStillSuppressed(t *testing.T) {
+	algPort, stop := listenOn(t)
+	defer stop()
+
+	lo := netip.MustParseAddr("127.0.0.1")
+	res := LivenessSweep(context.Background(), []netip.Addr{lo}, SweepConfig{
+		Ports:    []int{algPort},
+		Timeout:  time.Second,
+		Controls: []netip.Addr{lo},
+		// no Asserted
+	}, nil)
+	if len(res.Alive) != 0 {
+		t.Errorf("without an assertion the address must stay suppressed, got alive=%v", res.Alive)
+	}
+	if len(res.LivenessUnproven) != 0 {
+		t.Errorf("nothing was asserted, so nothing should be reported unproven, got %v", res.LivenessUnproven)
 	}
 }

@@ -164,7 +164,7 @@ func (s *Server) startScan(w http.ResponseWriter, r *http.Request) {
 	// in the dialog) overrides the standing subnet-scoped set — only those are
 	// tried. An empty selection ("all stored, auto") leaves subnet scope in force.
 	explicitCreds := len(req.CredentialIDs) > 0 || len(req.CredentialGroupIDs) > 0
-	go s.runScanJob(job.ID, hosts, locID, concurrency, extra, explicitCreds, snmpTO, portTO)
+	go s.runScanJob(job.ID, hosts, assertedTargets(req), locID, concurrency, extra, explicitCreds, snmpTO, portTO)
 	s.audit(r, "discovery", "discovery.scan", "discovery_job", job.ID.String(), "Launched discovery scan ("+scopeLabel+")", map[string]any{"hosts": len(hosts), "mode": req.Mode})
 	writeJSON(w, http.StatusAccepted, job)
 }
@@ -545,6 +545,7 @@ func (s *Server) recordSweepMetadata(ctx context.Context, jobID uuid.UUID, sw di
 		"no_response":             len(sw.NoResponse),
 		"suppressed_by_middlebox": len(sw.SuppressedByMiddlebox),
 		"untrusted_ports":         untrusted,
+		"liveness_unproven":       len(sw.LivenessUnproven),
 		"summary":                 sw.Summary(),
 		"addresses":               addrs,
 		"addresses_truncated":     sw.Total > len(addrs),
@@ -554,7 +555,21 @@ func (s *Server) recordSweepMetadata(ctx context.Context, jobID uuid.UUID, sw di
 	}
 }
 
-func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUID, concurrency int, extraGroups []credresolver.ScopedGroup, explicitCreds bool, snmpTO, portTO time.Duration) {
+// assertedTargets returns the addresses this request named individually. Only a
+// targets-mode scan can assert; site_subnets is always an expansion, so nothing
+// in it was explicitly stated to exist.
+func assertedTargets(req scanReq) map[netip.Addr]bool {
+	if req.Mode == "site_subnets" {
+		return nil
+	}
+	spec := req.Targets
+	if spec == "" {
+		spec = req.CIDR
+	}
+	return discovery.AssertedTargets(spec)
+}
+
+func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, asserted map[netip.Addr]bool, locID *uuid.UUID, concurrency int, extraGroups []credresolver.ScopedGroup, explicitCreds bool, snmpTO, portTO time.Duration) {
 	// Overall job budget scales with the host count: a flat 30m can't cover a large
 	// multi-subnet scan whose deep collection is slow (camera ONVIF/ISAPI walks),
 	// which truncated the tail of a 764-host two-subnet scan ("context deadline
@@ -648,6 +663,7 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 		Timeout:     portTO,
 		Concurrency: concurrency,
 		Controls:    discovery.ControlsForHosts(hosts, 16),
+		Asserted:    asserted,
 		// Stream each responding address as it is found, so the live board fills
 		// in like an IP scanner instead of staying empty until enrolment starts.
 		// Silent addresses are not emitted — on a /24 that is mostly empty they
@@ -672,6 +688,13 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 	for _, p := range sweep.Promiscuous {
 		s.publishScanEvent(jobID, netip.Addr{}, uuid.Nil, "port_untrusted", "", "warning",
 			fmt.Sprintf("TCP/%d: %s", p.Port, p.Reason))
+	}
+	// Explicitly-targeted addresses admitted on weak evidence are enrolled, but
+	// never presented as ordinary discoveries — say plainly that their liveness
+	// rests on a port a middlebox answers for everything.
+	for _, ip := range sweep.LivenessUnproven {
+		s.publishScanEvent(jobID, ip, uuid.Nil, "liveness_unproven", "", "warning",
+			"you targeted this address explicitly, so it was scanned — but it answered only on a port a device on the path answers for every address, so its liveness is unproven")
 	}
 	// Addresses the sweep ruled out are still SCANNED — advance the progress
 	// counter for them so the job reports against the full scope, not just the
@@ -824,6 +847,10 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 						enrichment, collectedVia, agentName = oc.Detail, "relay_agent", oc.AgentName
 					case strings.Contains(oc.Reason, "agent_offline"):
 						enrichment, collectedVia = "OS collection needs the site Relay Agent, which is offline", "agent_offline"
+					case strings.Contains(oc.Reason, "device_no_site"):
+						// Distinct from agent_missing: the blocker is the DEVICE having no
+						// site, so installing an agent would not help.
+						enrichment, collectedVia = "OS collection needs a site: this device has no site, so no Relay Agent can be selected — map its subnet under Locations → Subnets", "device_no_site"
 					case strings.Contains(oc.Reason, "no_agent") || strings.Contains(oc.Reason, "agent_missing"):
 						enrichment, collectedVia = "OS collection needs a Relay Agent for this site (none assigned)", "agent_missing"
 					default:
@@ -1079,6 +1106,8 @@ func (s *Server) runScanJob(jobID uuid.UUID, hosts []netip.Addr, locID *uuid.UUI
 				s.publishScanEvent(jobID, ip, id, "relay_agent_failed", "", "failed", "site Relay Agent offline")
 			case "agent_missing":
 				s.publishScanEvent(jobID, ip, id, "relay_agent_failed", "", "failed", "no Relay Agent for this site")
+			case "device_no_site":
+				s.publishScanEvent(jobID, ip, id, "device_no_site", "", "failed", "device has no site — relay routing is per-site; map its subnet under Locations → Subnets")
 			default:
 				if strings.HasPrefix(enrichment, "OS collection incomplete") {
 					s.publishScanEvent(jobID, ip, id, "collection_failed", "", "failed", enrichment)
@@ -1691,6 +1720,8 @@ func (s *Server) recordResult(ctx context.Context, jobID uuid.UUID, ip netip.Add
 		detail.NextAction = "This host needs the site Relay Agent, which is offline — start/repair it (Discovery → Relay Agents)"
 	case "agent_missing":
 		detail.NextAction = "This host needs a Relay Agent — install or assign one to this site (Discovery → Relay Agents)"
+	case "device_no_site":
+		detail.NextAction = "Assign this device to a site — relay routing is per-site, so no agent can be selected while it has none. Map its subnet (Locations → Subnets) and re-scan, or set the site in Edit Device"
 	}
 	// No vague dead-ends: when nothing managed the host and it stayed unclassified,
 	// replace the generic "insufficient evidence — re-scan" line with the concrete
@@ -2042,7 +2073,8 @@ func (s *Server) rerunDiscoveryJob(w http.ResponseWriter, r *http.Request) {
 	_ = s.queries.UpdateDiscoveryJobStatus(ctx, db.UpdateDiscoveryJobStatusParams{ID: job.ID, Status: "running", HostCount: int32(len(hosts)), FoundCount: 0})
 	_ = s.queries.SetDiscoveryJobMetadata(ctx, db.SetDiscoveryJobMetadataParams{ID: job.ID, Metadata: prev.Metadata})
 	explicitCreds := len(req.CredentialIDs) > 0 || len(req.CredentialGroupIDs) > 0
-	go s.runScanJob(job.ID, hosts, prev.LocationID, defConc, extra, explicitCreds, snmpTO, portTO)
+	// A re-run repeats the ORIGINAL request, so it carries the same assertions.
+	go s.runScanJob(job.ID, hosts, assertedTargets(req), prev.LocationID, defConc, extra, explicitCreds, snmpTO, portTO)
 	writeJSON(w, http.StatusAccepted, job)
 }
 

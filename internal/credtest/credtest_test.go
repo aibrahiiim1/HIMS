@@ -86,6 +86,13 @@ func TestHTTPBasic_AuthEnforcedVsPublic(t *testing.T) {
 // must be reached via WebPorts, not reported "no HTTP/HTTPS response" because only
 // :80/:443 were probed.
 func TestHTTP_NonStandardPort(t *testing.T) {
+	// Isolate from the host machine. httptest binds 127.0.0.1, and if this box
+	// serves :80/:443 (developer workstations often do) those answer before the
+	// fixture and the assertions below describe that server, not this test.
+	orig := standardWebEndpoints
+	standardWebEndpoints = func(string) []string { return nil }
+	defer func() { standardWebEndpoints = orig }()
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized) // ISAPI 401 = reached + needs auth
 	}))
