@@ -119,12 +119,16 @@ Deep collection is asynchronous; the job phase reports `collecting` while it dra
 
 | ID | Severity | Status | Title |
 |---|---|---|---|
-| F1 | **High** | **Fixed in this audit** | `host_count` reported the alive subset, not the scanned scope |
-| F2 | **Medium** | Open | Explicitly targeted IP silently not enrolled when only an ALG port answers |
-| F3 | **Medium** | Open | "No Relay Agent for this site" misreports a missing *site* as a missing *agent* |
-| F4 | Low | Open | Agent↔site matching is exact, not hierarchical |
-| F5 | Low | Open (pre-existing) | `credtest` test is environment-coupled and fails on any host serving :80/:443 |
+| F1 | **High** | **FIXED** `5e71532` | `host_count` reported the alive subset, not the scanned scope |
+| F2 | **Medium** | **FIXED** `a2c33bd` | Explicitly targeted IP silently not enrolled when only an ALG port answers |
+| F3 | **Medium** | **FIXED** `a2c33bd` | "No Relay Agent for this site" misreports a missing *site* as a missing *agent* |
+| F4 | Low | **Open — needs an operator decision** | Agent↔site matching is exact, not hierarchical |
+| F5 | Low | **FIXED** `a2c33bd` | `credtest` test is environment-coupled and fails on any host serving :80/:443 |
 | F6 | Info | Accepted | Historical job rows retain pre-fix counters |
+
+**Status after remediation:** F1, F2, F3 and F5 are fixed, tested and deployed. F4 is the
+only open item and needs a policy decision (below). The full `internal/...` test suite is
+green — including `credtest`, which was red before this engagement began.
 
 ---
 
@@ -255,15 +259,43 @@ The pre-fix scan job still records `found_count = 254` for `172.21.96.0/24`. Tha
 
 ## 5. Fix plan
 
-| # | Item | Sev | Effort | Risk | Status |
-|---|---|---|---|---|---|
-| 1 | F1 — scope vs alive in `host_count`/`scanned_count` | High | done | low | **Fixed** |
-| 2 | F3 — `device_no_site` reason + Data Quality subnet-coverage gap | Med | 0.5 d | very low | Planned |
-| 3 | F2 — operator-asserted targets survive suppression (flagged) | Med | 0.5 d | low | Planned |
-| 4 | F5 — make `testHTTP` standard ports injectable | Low | 2 h | none | Planned |
-| 5 | F4 — decide + implement agent↔site hierarchy policy | Low | 0.5 d | low | Needs decision |
+| # | Item | Sev | Risk | Status |
+|---|---|---|---|---|
+| 1 | F1 — scope vs alive in `host_count`/`scanned_count` | High | low | **Fixed** `5e71532` |
+| 2 | F3 — `device_no_site` reason + Data Quality subnet-coverage gap | Med | very low | **Fixed** `a2c33bd` |
+| 3 | F2 — operator-asserted targets survive suppression (flagged) | Med | low | **Fixed** `a2c33bd` |
+| 4 | F5 — make `testHTTP` standard ports injectable | Low | none | **Fixed** `a2c33bd` |
+| 5 | F4 — decide + implement agent↔site hierarchy policy | Low | low | **Open — needs decision** |
 
-**Sequencing:** 1 (done) → 2 → 3 → 4 → 5. Items 2–4 are independent and can land in any order; 5 needs an operator decision first.
+### Remaining open item — F4, agent↔site hierarchy
+
+`assignedSiteAgent` matches `*a.LocationID != loc` **exactly**. An agent assigned to the
+parent group `Coral Sea Group` therefore serves **nothing** in the child hotels `CAC` / `CHR`.
+It is not biting today (the CHR agent is assigned directly to CHR), but assigning an agent at
+group level looks correct and silently serves no devices.
+
+Two defensible policies — this is an operator decision, not a technical one:
+
+- **Inherit down the tree** (recommended if you intend group-level agents): walk the location
+  ancestry — already loaded by `locationParents` for site-scope checks — so an agent at an
+  ancestor serves descendants, preferring the most specific match. ~0.5 d, low risk.
+- **Keep exact matching** as deliberate policy: then say so in the Agents UI ("an agent serves
+  only the exact site it is assigned to"), so nobody assigns one at group level expecting
+  inheritance. ~1 h.
+
+### What was changed in remediation
+
+- **F3:** the site gate returns `device_no_site` — its own reason, threaded through scan
+  events, next-action text and the UI badge — whose wording points at mapping the subnet or
+  setting the site, and never suggests installing an agent. Data Quality now reports the root
+  cause (`unmapped_subnet`: subnets holding devices but mapped to no site) alongside the
+  symptom, and `missing_location` states the relay-collection consequence explicitly.
+- **F2:** `ParseTargets` distinguishes addresses named individually from CIDR/range
+  expansions. An asserted address is admitted on weak evidence and reported as
+  liveness-unproven (scan event + `liveness.liveness_unproven` count) rather than dropped.
+  CIDR sweeps are untouched, so phantom suppression still holds — both directions are tested.
+- **F5:** the standard-port candidates are overridable so the test isolates itself from a
+  machine that serves :80/:443. Product ordering is unchanged.
 
 **Definition of done for each:** compiles, `go vet` clean, unit test covering the specific failure mode, deployed to `150.0.0.120`, and verified against the live system — the standard applied throughout this engagement.
 
