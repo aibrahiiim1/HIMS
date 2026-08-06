@@ -42,6 +42,68 @@ type dqIssue struct {
 
 const dqSampleCap = 100
 
+// unmappedSubnetGaps groups site-less devices by their /24 and reports only the
+// ones whose address falls outside every mapped subnet — i.e. the subnets an
+// operator has not mapped to a site yet.
+//
+// This is the ROOT CAUSE behind most missing_location rows: one mapping clears
+// every site-less device on that /24 and unblocks relay collection for all of
+// them at once. Returns the per-subnet rows and the total device count they
+// account for. Pure, so the positive case is testable without a database.
+func unmappedSubnetGaps(devs []db.Device, mapped []netip.Prefix) ([]dqDevice, int) {
+	covered := func(ip netip.Addr) bool {
+		for _, p := range mapped {
+			if p.Contains(ip) {
+				return true
+			}
+		}
+		return false
+	}
+	type gap struct {
+		devices int
+		sample  string
+	}
+	gaps := map[string]*gap{}
+	for _, d := range devs {
+		// A device that already HAS a site is not a coverage gap, even if its
+		// subnet is unmapped — the operator set it explicitly.
+		if d.LocationID != nil || d.PrimaryIp == nil || !d.PrimaryIp.IsValid() {
+			continue
+		}
+		ip := d.PrimaryIp.Unmap()
+		if !ip.Is4() || covered(ip) {
+			continue
+		}
+		b := ip.As4()
+		key := netip.PrefixFrom(netip.AddrFrom4([4]byte{b[0], b[1], b[2], 0}), 24).String()
+		g := gaps[key]
+		if g == nil {
+			g = &gap{}
+			gaps[key] = g
+		}
+		g.devices++
+		if g.sample == "" {
+			g.sample = ip.String()
+		}
+	}
+	keys := make([]string, 0, len(gaps))
+	for k := range gaps {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	rows := make([]dqDevice, 0, len(keys))
+	total := 0
+	for _, k := range keys {
+		g := gaps[k]
+		total += g.devices
+		rows = append(rows, dqDevice{
+			ID: k, Name: k, PrimaryIP: g.sample, Category: "subnet",
+			Note: strconv.Itoa(g.devices) + " device(s) here have no site because this subnet is not mapped",
+		})
+	}
+	return rows, total
+}
+
 // lowConfidenceThreshold: auto-classifications scoring below this (out of 100)
 // are surfaced for operator confirmation in the Data Quality center.
 const lowConfidenceThreshold = 50
@@ -187,54 +249,7 @@ func (s *Server) dataQuality(w http.ResponseWriter, r *http.Request) {
 				mapped = append(mapped, sn.Cidr)
 			}
 		}
-		covered := func(ip netip.Addr) bool {
-			for _, p := range mapped {
-				if p.Contains(ip) {
-					return true
-				}
-			}
-			return false
-		}
-		type gap struct {
-			devices int
-			sample  string
-		}
-		gaps := map[string]*gap{}
-		for _, d := range devs {
-			if d.LocationID != nil || d.PrimaryIp == nil || !d.PrimaryIp.IsValid() {
-				continue
-			}
-			ip := d.PrimaryIp.Unmap()
-			if !ip.Is4() || covered(ip) {
-				continue
-			}
-			b := ip.As4()
-			key := netip.PrefixFrom(netip.AddrFrom4([4]byte{b[0], b[1], b[2], 0}), 24).String()
-			g := gaps[key]
-			if g == nil {
-				g = &gap{}
-				gaps[key] = g
-			}
-			g.devices++
-			if g.sample == "" {
-				g.sample = ip.String()
-			}
-		}
-		keys := make([]string, 0, len(gaps))
-		for k := range gaps {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		rows := make([]dqDevice, 0, len(keys))
-		total := 0
-		for _, k := range keys {
-			g := gaps[k]
-			total += g.devices
-			rows = append(rows, dqDevice{
-				ID: k, Name: k, PrimaryIP: g.sample, Category: "subnet",
-				Note: strconv.Itoa(g.devices) + " device(s) here have no site because this subnet is not mapped",
-			})
-		}
+		rows, total := unmappedSubnetGaps(devs, mapped)
 		addDQ("unmapped_subnet", "Subnets not mapped to a site", "These subnets contain devices but are not mapped to any site, so every device in them has no site — and a device with no site can never be collected through a Relay Agent. Map each subnet under Locations → Subnets; existing devices pick the site up on the next scan.", "warning", rows, total)
 	}
 
