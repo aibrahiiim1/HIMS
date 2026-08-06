@@ -122,7 +122,7 @@ Deep collection is asynchronous; the job phase reports `collecting` while it dra
 | F1 | **High** | **FIXED** `5e71532` | `host_count` reported the alive subset, not the scanned scope |
 | F2 | **Medium** | **FIXED** `a2c33bd` | Explicitly targeted IP silently not enrolled when only an ALG port answers |
 | F3 | **Medium** | **FIXED** `a2c33bd` | "No Relay Agent for this site" misreports a missing *site* as a missing *agent* |
-| F4 | Low | **FIXED** `a4d21c6` | Agent↔site matching is exact, not hierarchical |
+| F4 | Low | **FIXED** `4296cc9` | Agent↔site matching is exact, not hierarchical |
 | F5 | Low | **FIXED** `a2c33bd` | `credtest` test is environment-coupled and fails on any host serving :80/:443 |
 | F6 | Info | Accepted | Historical job rows retain pre-fix counters |
 
@@ -265,7 +265,7 @@ The pre-fix scan job still records `found_count = 254` for `172.21.96.0/24`. Tha
 | 2 | F3 — `device_no_site` reason + Data Quality subnet-coverage gap | Med | very low | **Fixed** `a2c33bd` |
 | 3 | F2 — operator-asserted targets survive suppression (flagged) | Med | low | **Fixed** `a2c33bd` |
 | 4 | F5 — make `testHTTP` standard ports injectable | Low | none | **Fixed** `a2c33bd` |
-| 5 | F4 — opt-in agent↔site hierarchical inheritance | Low | low | **Fixed** `a4d21c6` |
+| 5 | F4 — opt-in agent↔site hierarchical inheritance | Low | low | **Fixed** `4296cc9` |
 
 **Rollback for F4:** the feature is inert until switched on. To disable per agent, PATCH
 `include_descendants=false` (or clear the checkbox) — routing reverts to exact-only
