@@ -205,6 +205,22 @@ export function Coverage() {
               <a className="btn btn-sm" href={`${API}/reports/inventory/export?format=csv`}><Download size={14} /> Full inventory</a>
               <a className="btn btn-sm" href={`${API}/reports/inventory/export?format=xlsx`}><Download size={14} /> Inventory (Excel)</a>
             </div>
+
+            {/* Port Map — the "where is this device plugged in" export. Excel is
+                listed first: the CSV concatenates all four sheets into one file,
+                so the workbook is the more useful form here. */}
+            <div style={{ borderTop: '1px solid var(--border)', paddingTop: 10, marginTop: 4 }}>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>Port Map — device → switch, port &amp; VLAN</div>
+              <p className="muted" style={{ fontSize: 12, margin: '4px 0 8px' }}>
+                Every device with its switch, switch IP, port, port description, VLAN (and tagged VLANs), how many MACs
+                are on that port, and the confidence. Four sheets: full map, resolved, not-resolved (with the reason
+                each one could not be placed), and per-switch port utilisation.
+              </p>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <a className="btn btn-sm btn-primary" href={`${API}/reports/port-map/export?format=xlsx`}><Download size={14} /> Port Map (Excel)</a>
+                <a className="btn btn-sm" href={`${API}/reports/port-map/export?format=csv`}><Download size={14} /> Port Map (CSV)</a>
+              </div>
+            </div>
           </div>
         </Panel>
       )}
