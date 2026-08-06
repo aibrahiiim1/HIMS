@@ -155,6 +155,7 @@ export function Reports() {
                   { type: 'inventory', label: 'Inventory', desc: 'Devices + by category / vendor / status' },
                   { type: 'availability', label: 'Availability', desc: 'Monitoring status rollup' },
                   { type: 'vendors', label: 'Vendors', desc: 'Device count per vendor' },
+                  { type: 'port-map', label: 'Port Map', desc: 'Where each device is plugged in: device + IP + MAC → switch, switch IP, port, port description, VLAN (+ tagged), confidence. Sheets: all / resolved / not-resolved (with the reason) / per-switch utilisation' },
                   { type: 'all', label: 'Full Report', desc: 'Inventory + availability combined' },
                 ].map((r) => (
                   <tr key={r.type}>

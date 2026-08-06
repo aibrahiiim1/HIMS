@@ -123,6 +123,9 @@ func (s *Server) buildReport(ctx context.Context, kind string, now time.Time) (r
 	case "vendors":
 		r.Title = "Vendor Report"
 		return r, add(s.vendorSheets)
+	case "port-map":
+		r.Title = "Port Map — device to switch port and VLAN"
+		return r, add(s.portMapSheets)
 	case "all":
 		r.Title = "Full Inventory & Health Report"
 		if err := add(s.inventorySheets); err != nil {
@@ -133,7 +136,7 @@ func (s *Server) buildReport(ctx context.Context, kind string, now time.Time) (r
 		}
 		return r, nil
 	default:
-		return r, errBadRequest("unknown report type (inventory|availability|vendors|all)")
+		return r, errBadRequest("unknown report type (inventory|availability|vendors|port-map|all)")
 	}
 }
 
