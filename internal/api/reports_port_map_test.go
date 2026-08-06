@@ -82,3 +82,51 @@ func TestUnresolvedReasonIsAlwaysExplained(t *testing.T) {
 		}
 	}
 }
+
+// Discovery names a device after its IP when nothing better is known, and a
+// later collection stores the real hostname WITHOUT rewriting the name. A port
+// map that prints "172.21.60.101" for the machine everyone calls "CHV-DOF" is
+// useless for its one job: telling an engineer which box is on which port.
+func TestDeviceDisplayName(t *testing.T) {
+	ip := netip.MustParseAddr("172.21.60.101")
+	str := func(s string) *string { return &s }
+
+	cases := []struct {
+		name string
+		dev  db.Device
+		want string
+	}{
+		{
+			name: "IP-named device falls back to the learned hostname",
+			dev:  db.Device{Name: "172.21.60.101", Hostname: str("CHV-DOF"), PrimaryIp: &ip},
+			want: "CHV-DOF",
+		},
+		{
+			name: "a real name wins over the hostname (an operator may have set it)",
+			dev:  db.Device{Name: "Reception PC", Hostname: str("CHV-DOF"), PrimaryIp: &ip},
+			want: "Reception PC",
+		},
+		{
+			name: "no hostname at all keeps the IP so the row is still identifiable",
+			dev:  db.Device{Name: "172.21.60.101", PrimaryIp: &ip},
+			want: "172.21.60.101",
+		},
+		{
+			name: "a blank hostname is not treated as a name",
+			dev:  db.Device{Name: "172.21.60.101", Hostname: str("   "), PrimaryIp: &ip},
+			want: "172.21.60.101",
+		},
+		{
+			name: "device with no IP keeps its name",
+			dev:  db.Device{Name: "orphan"},
+			want: "orphan",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := deviceDisplayName(tc.dev); got != tc.want {
+				t.Errorf("deviceDisplayName = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

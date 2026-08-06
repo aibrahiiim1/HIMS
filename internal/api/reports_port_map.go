@@ -31,6 +31,7 @@ import (
 // portMapRow is one device's attachment, flattened for a spreadsheet.
 type portMapRow struct {
 	DeviceName  string
+	Hostname    string
 	DeviceIP    string
 	DeviceMAC   string
 	Category    string
@@ -51,7 +52,7 @@ type portMapRow struct {
 
 func (r portMapRow) cells() []string {
 	return []string{
-		r.DeviceName, r.DeviceIP, r.DeviceMAC, r.Category, r.Site,
+		r.DeviceName, r.Hostname, r.DeviceIP, r.DeviceMAC, r.Category, r.Site,
 		r.SwitchName, r.SwitchIP, r.Port, r.PortIndex, r.PortDescr,
 		r.VLAN, r.VLANName, r.TaggedVLANs, r.MACsOnPort,
 		r.Confidence, r.Evidence, r.Unresolved,
@@ -59,7 +60,7 @@ func (r portMapRow) cells() []string {
 }
 
 var portMapHeaders = []string{
-	"Device", "Device IP", "Device MAC", "Category", "Site",
+	"Device", "Hostname", "Device IP", "Device MAC", "Category", "Site",
 	"Switch", "Switch IP", "Port", "Port ifIndex", "Port description",
 	"VLAN", "VLAN name", "Tagged VLANs", "MACs on port",
 	"Confidence", "Evidence", "Not resolved — reason",
@@ -94,6 +95,35 @@ func (s *Server) resolveDeviceAttachment(ctx context.Context, d db.Device) (topo
 		}
 	}
 	return topology.SearchResult{}, false
+}
+
+// deviceDisplayName returns the most useful name for a device.
+//
+// Discovery names a device after its IP when nothing better is known at enrol
+// time, but a later OS/SNMP collection often learns the real hostname and
+// stores it in devices.hostname WITHOUT rewriting the name. A report that shows
+// only `name` then prints "172.21.60.101" for a machine everyone calls
+// "CHV-DOF" — which is useless for the one job this report has: telling an
+// engineer which physical box is on which port.
+//
+// So: a name that is not just the IP wins (an operator may have set it
+// deliberately); otherwise fall back to the learned hostname; otherwise the IP,
+// which at least identifies the row.
+func deviceDisplayName(d db.Device) string {
+	ip := ""
+	if d.PrimaryIp != nil && d.PrimaryIp.IsValid() {
+		ip = d.PrimaryIp.String()
+	}
+	name := strings.TrimSpace(d.Name)
+	if name != "" && name != ip {
+		return name
+	}
+	if d.Hostname != nil {
+		if h := strings.TrimSpace(*d.Hostname); h != "" {
+			return h
+		}
+	}
+	return d.Name
 }
 
 // portMapVLAN decides what belongs in the VLAN / VLAN-name columns for one
@@ -142,8 +172,11 @@ func (s *Server) portMapSheets(ctx context.Context) ([]reports.Sheet, error) {
 	rows := make([]portMapRow, 0, len(devs))
 	for _, d := range devs {
 		row := portMapRow{
-			DeviceName: d.Name,
+			DeviceName: deviceDisplayName(d),
 			Category:   d.Category,
+		}
+		if d.Hostname != nil {
+			row.Hostname = strings.TrimSpace(*d.Hostname)
 		}
 		if d.PrimaryIp != nil && d.PrimaryIp.IsValid() {
 			row.DeviceIP = d.PrimaryIp.String()

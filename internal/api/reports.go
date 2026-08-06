@@ -61,13 +61,16 @@ func (s *Server) inventorySheets(ctx context.Context) ([]reports.Sheet, error) {
 	deviceRows := make([][]string, len(devs))
 	var cats, vendors, statuses []string
 	for i, d := range devs {
-		deviceRows[i] = []string{d.Name, ipStr(d), derefStr(d.Vendor), derefStr(d.Model), d.Category, d.Status, derefStr(d.Driver)}
+		// deviceDisplayName, not d.Name: discovery names a device after its IP
+		// when nothing better is known, and the real hostname learned later is
+		// stored separately. Exporting the IP as the name is unusable.
+		deviceRows[i] = []string{deviceDisplayName(d), derefStr(d.Hostname), ipStr(d), derefStr(d.Vendor), derefStr(d.Model), d.Category, d.Status, derefStr(d.Driver)}
 		cats = append(cats, d.Category)
 		vendors = append(vendors, derefStr(d.Vendor))
 		statuses = append(statuses, d.Status)
 	}
 	return []reports.Sheet{
-		{Name: "Devices", Headers: []string{"Name", "IP", "Vendor", "Model", "Category", "Status", "Driver"}, Rows: deviceRows},
+		{Name: "Devices", Headers: []string{"Name", "Hostname", "IP", "Vendor", "Model", "Category", "Status", "Driver"}, Rows: deviceRows},
 		{Name: "By Category", Headers: []string{"Category", "Count"}, Rows: countByRows(cats)},
 		{Name: "By Vendor", Headers: []string{"Vendor", "Count"}, Rows: countByRows(vendors)},
 		{Name: "By Status", Headers: []string{"Status", "Count"}, Rows: countByRows(statuses)},
