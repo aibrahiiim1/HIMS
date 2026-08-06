@@ -79,6 +79,12 @@ export function Agents() {
     mutationFn: (a: RelayAgent) => api.patch(`/agents/${a.id}`, { enabled: !a.enabled }),
     onSuccess: refresh,
   })
+  // Opt-in hierarchical scope. Off by default so existing agents are unchanged.
+  const setScope = useMutation({
+    mutationFn: ({ id, include_descendants }: { id: string; include_descendants: boolean }) =>
+      api.patch(`/agents/${id}`, { include_descendants }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['agents'] }),
+  })
   const setSite = useMutation({
     mutationFn: ({ id, location_id }: { id: string; location_id: string }) => api.patch(`/agents/${id}`, { location_id }),
     onSuccess: refresh,
@@ -149,11 +155,30 @@ export function Agents() {
                 <Fragment key={a.id}>
                   <tr>
                     <td><Link to={`/agents/${a.id}`}><strong>{a.name}</strong></Link>{a.failed_jobs ? <span className="badge badge-down" style={{ marginLeft: 6 }}>{a.failed_jobs} failed</span> : null}{a.last_error && <div className="error-msg" style={{ fontSize: 11, whiteSpace: 'normal', maxWidth: 220 }}>{a.last_error}</div>}</td>
-                    <td style={{ minWidth: 150 }}>
+                    <td style={{ minWidth: 200 }}>
                       <select style={{ ...input, fontSize: 12, padding: '4px 6px' }} value={a.location_id ?? ''} onChange={(e) => setSite.mutate({ id: a.id, location_id: e.target.value })}>
                         <option value="">— unassigned —</option>
                         {(locs.data ?? []).map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
                       </select>
+                      {/* Effective scope, stated outright. A site assignment alone
+                          does NOT imply the sites beneath it are covered. */}
+                      <label style={{ display: 'flex', gap: 5, alignItems: 'center', marginTop: 5, fontSize: 11 }} title="When on, this agent may also collect devices in sites beneath its own. An agent assigned directly to a child site still wins there.">
+                        <input
+                          type="checkbox"
+                          checked={!!a.include_descendants}
+                          disabled={!a.location_id || setScope.isPending}
+                          onChange={(e) => setScope.mutate({ id: a.id, include_descendants: e.target.checked })}
+                        />
+                        Include descendant sites
+                      </label>
+                      {a.effective_scope && (
+                        <div className="muted" style={{ fontSize: 10, marginTop: 3, whiteSpace: 'normal', maxWidth: 230 }}>
+                          <span className={'badge ' + (a.effective_scope.mode === 'inherited' ? 'badge-up' : 'badge-unknown')} style={{ fontSize: 9 }}>
+                            {a.effective_scope.mode === 'inherited' ? `inherits · ${a.effective_scope.covered_count} sites` : a.effective_scope.mode === 'exact' ? 'exact site only' : 'unassigned'}
+                          </span>
+                          <div style={{ marginTop: 2 }}>{a.effective_scope.explanation}</div>
+                        </div>
+                      )}
                     </td>
                     <td>{a.hostname || <span className="muted">—</span>}</td>
                     <td className="mono" style={{ fontSize: 12 }}>{a.ip || '—'}</td>

@@ -46,6 +46,12 @@ type agentDTO struct {
 	LastError     string   `json:"last_error,omitempty"`
 	Online        bool     `json:"online"`
 	FailedJobs    int64    `json:"failed_jobs,omitempty"` // count of failed collection jobs
+	// IncludeDescendants is the opt-in hierarchical scope. False (the default)
+	// means exact-site matching only — a group-level agent covers NOTHING beneath
+	// it, which EffectiveScope states explicitly so the assignment is not
+	// misread as covering child sites.
+	IncludeDescendants bool                 `json:"include_descendants"`
+	EffectiveScope     *agentEffectiveScope `json:"effective_scope,omitempty"`
 }
 
 // agentOnlineWindow: a heartbeat older than this flips the agent to "offline"
@@ -57,6 +63,7 @@ func toAgentDTO(a db.RelayAgent) agentDTO {
 		ID: a.ID.String(), Name: a.Name, LocationID: uuidPtrStr(a.LocationID),
 		Hostname: a.Hostname, IP: a.Ip, OS: a.Os, Version: a.Version,
 		Status: a.Status, Enabled: a.Enabled, LastError: a.LastError,
+		IncludeDescendants: a.IncludeDescendants,
 	}
 	d.Capabilities = []string{}
 	if len(a.Capabilities) > 0 {
@@ -85,12 +92,17 @@ func (s *Server) listRelayAgents(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	locs := s.locationsByID(r.Context())
 	out := make([]agentDTO, 0, len(rows))
 	for _, a := range rows {
 		dto := toAgentDTO(a)
 		if n, err := s.queries.CountFailedAgentJobs(r.Context(), a.ID); err == nil {
 			dto.FailedJobs = n
 		}
+		// Effective scope: exactly which sites this agent serves, and whether that
+		// is by direct assignment or inheritance.
+		sc := describeAgentScope(a, locs)
+		dto.EffectiveScope = &sc
 		out = append(out, dto)
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -120,8 +132,13 @@ func (s *Server) getRelayAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	dto := toAgentDTO(a)
 	dto.FailedJobs = failed
+	sc := describeAgentScope(a, s.locationsByID(r.Context()))
+	dto.EffectiveScope = &sc
 	writeJSON(w, http.StatusOK, map[string]any{
 		"agent": dto, "failed_jobs": failed, "running_jobs": running,
+		// Duplicated at the top level so agent diagnostics can read the effective
+		// scope without unpacking the DTO.
+		"effective_scope": sc,
 	})
 }
 
@@ -159,8 +176,9 @@ func (s *Server) patchRelayAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Enabled    *bool   `json:"enabled"`
-		LocationID *string `json:"location_id"`
+		Enabled            *bool   `json:"enabled"`
+		LocationID         *string `json:"location_id"`
+		IncludeDescendants *bool   `json:"include_descendants"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -172,12 +190,23 @@ func (s *Server) patchRelayAgent(w http.ResponseWriter, r *http.Request) {
 	if req.LocationID != nil {
 		_ = s.queries.SetRelayAgentLocation(r.Context(), db.SetRelayAgentLocationParams{ID: id, LocationID: parseUUIDPtr(req.LocationID)})
 	}
+	if req.IncludeDescendants != nil {
+		_ = s.queries.SetRelayAgentIncludeDescendants(r.Context(), db.SetRelayAgentIncludeDescendantsParams{ID: id, IncludeDescendants: *req.IncludeDescendants})
+		// Widening an agent's reach is a routing change, not cosmetic — audit it
+		// so a later "why did THAT collector run?" has an answer.
+		s.audit(r, "agent", "agent.scope_change", "agent", id.String(),
+			"Set include_descendants="+strconv.FormatBool(*req.IncludeDescendants),
+			map[string]any{"include_descendants": *req.IncludeDescendants})
+	}
 	a, err := s.queries.GetRelayAgent(r.Context(), id)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toAgentDTO(a))
+	dto := toAgentDTO(a)
+	sc := describeAgentScope(a, s.locationsByID(r.Context()))
+	dto.EffectiveScope = &sc
+	writeJSON(w, http.StatusOK, dto)
 }
 
 func (s *Server) deleteRelayAgent(w http.ResponseWriter, r *http.Request) {

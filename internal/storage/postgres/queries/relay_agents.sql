@@ -297,3 +297,7 @@ WHERE d.deleted_at IS NULL
   )
 ORDER BY d.updated_at
 LIMIT 50;
+
+-- name: SetRelayAgentIncludeDescendants :exec
+-- Opt-in hierarchical scope. Off by default; see migration 000105.
+UPDATE relay_agents SET include_descendants = $2, updated_at = now() WHERE id = $1;

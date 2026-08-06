@@ -2513,6 +2513,22 @@ export interface RelayAgent {
   last_error?: string
   online: boolean // computed: enabled && status==online && heartbeat fresh
   failed_jobs?: number // count of failed collection jobs
+  // Opt-in hierarchical scope. False (default) = exact-site matching only, so a
+  // group-level agent covers NOTHING beneath it.
+  include_descendants?: boolean
+  effective_scope?: AgentEffectiveScope
+}
+
+// Exactly which sites an agent serves, and whether by direct assignment or
+// inheritance. Shown so a group-level assignment is never misread as covering
+// the sites beneath it.
+export interface AgentEffectiveScope {
+  mode: 'exact' | 'inherited' | 'unassigned'
+  site_id?: string
+  site_name?: string
+  covered_sites?: string[]
+  covered_count: number
+  explanation: string
 }
 // GET /agents/{id} — agent detail + job rollups.
 export interface RelayAgentDetail {

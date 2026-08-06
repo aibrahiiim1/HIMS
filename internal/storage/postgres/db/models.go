@@ -1042,6 +1042,8 @@ type RelayAgent struct {
 	LastError     string     `json:"last_error"`
 	CreatedAt     time.Time  `json:"created_at"`
 	UpdatedAt     time.Time  `json:"updated_at"`
+	// When true this agent may also serve devices in sites BENEATH its assigned location. Default false = exact-site matching only. A directly assigned child-site agent always wins over an inherited parent agent.
+	IncludeDescendants bool `json:"include_descendants"`
 }
 
 type RemediationSnooze struct {

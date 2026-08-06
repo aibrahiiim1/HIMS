@@ -79,21 +79,42 @@ func (s *Server) routeViaSiteAgent(ctx context.Context, d db.Device, ip, protoco
 	// Resolve the site agent to QUEUE for (unless pinned). Prefer an online agent; but if the
 	// site's assigned agent is only momentarily offline (heartbeat lag under load), STILL queue
 	// for it — it drains when it next polls. Only a site with NO assigned agent is a hard gate.
+	matchKind := agentMatchExact
+	viaSite := ""
 	if !pinned {
-		var ok bool
-		target, ok = s.onlineSiteAgent(actx, *d.LocationID)
+		// Prefer an ONLINE agent, then fall back to an assigned-but-offline one
+		// (it drains when it next polls). Both passes use the same scope rules:
+		// exact first, then the nearest ancestor that opted in to descendants.
+		match, competing, ok := s.resolveSiteAgentScoped(actx, *d.LocationID, relayAgentOnline)
+		if !ok && len(competing) == 0 {
+			match, competing, ok = s.resolveSiteAgentScoped(actx, *d.LocationID, nil)
+		}
+		if len(competing) > 0 {
+			// Never pick arbitrarily: an unintended collector is worse than an
+			// honest stop, and far harder to diagnose after the fact.
+			res.Reason = "agent_scope_ambiguous"
+			res.Detail = "more than one Relay Agent inherits this site from the same parent (" + agentNames(competing) + "), so the correct collector is not determined. " +
+				"Assign one agent directly to this site, or turn off “Include descendant sites” on all but one of them."
+			return res, false
+		}
 		if !ok {
-			assigned, has := s.assignedSiteAgent(actx, *d.LocationID)
-			if !has {
-				res.Reason, res.Detail = "agent_missing", "no Relay Agent is assigned to this site — install or assign one to collect legacy/local Windows hosts"
-				return res, false
-			}
-			target = assigned // assigned but offline → queue anyway; it drains when the agent returns
+			res.Reason = "agent_missing"
+			res.Detail = "no Relay Agent serves this site — install or assign one, or enable “Include descendant sites” on an agent at a parent site"
+			return res, false
+		}
+		target, matchKind = match.Agent, match.Kind
+		if match.Kind == agentMatchInherited {
+			viaSite = locationNameOf(s.locationsByID(actx), match.Via)
 		}
 	}
 	pinNote := ""
-	if pinned {
+	switch {
+	case pinned:
 		pinNote = " (pinned collector override)"
+	case matchKind == agentMatchInherited:
+		// Say plainly that this agent was inherited, not assigned here — otherwise
+		// an operator cannot tell why THIS collector was chosen.
+		pinNote = " (inherited from parent site " + nameOr(viaSite, "above") + ")"
 	}
 
 	// The chosen agent must actually be able to speak this protocol. WMI/DCOM is

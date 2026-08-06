@@ -963,6 +963,8 @@ type Querier interface {
 	SetMonitoringCheckRole(ctx context.Context, arg SetMonitoringCheckRoleParams) error
 	SetNotificationChannelEnabled(ctx context.Context, arg SetNotificationChannelEnabledParams) (NotificationChannel, error)
 	SetRelayAgentEnabled(ctx context.Context, arg SetRelayAgentEnabledParams) error
+	// Opt-in hierarchical scope. Off by default; see migration 000105.
+	SetRelayAgentIncludeDescendants(ctx context.Context, arg SetRelayAgentIncludeDescendantsParams) error
 	SetRelayAgentLocation(ctx context.Context, arg SetRelayAgentLocationParams) error
 	// Rotate an agent's enrollment token (only the new hash is stored). The previous
 	// token stops working immediately; the operator re-downloads a fresh installer.

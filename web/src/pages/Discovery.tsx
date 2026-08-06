@@ -81,6 +81,11 @@ export function CollectedViaCell({ via, agent }: { via?: string; agent?: string 
       // device is refused before any agent is considered. Installing an agent
       // would not help — the device needs a site.
       return <span className="badge badge-warning" title="This device has no site, so no Relay Agent can be selected. Map its subnet under Locations → Subnets.">no site</span>
+    case 'agent_scope_ambiguous':
+      // Two agents inherit the same site from the same parent. Routing stops
+      // rather than guessing, because an unintended collector is worse than an
+      // honest halt and far harder to diagnose afterwards.
+      return <span className="badge badge-warning" title="More than one Relay Agent inherits this site — assign one directly, or disable “Include descendant sites” on all but one.">agent ambiguous</span>
     case 'agent_capability_missing':
       // The site HAS an agent, but not one that can speak this protocol — most
       // often a Linux agent asked for WMI/DCOM, which is Windows-only.

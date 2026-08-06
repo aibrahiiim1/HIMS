@@ -122,13 +122,13 @@ Deep collection is asynchronous; the job phase reports `collecting` while it dra
 | F1 | **High** | **FIXED** `5e71532` | `host_count` reported the alive subset, not the scanned scope |
 | F2 | **Medium** | **FIXED** `a2c33bd` | Explicitly targeted IP silently not enrolled when only an ALG port answers |
 | F3 | **Medium** | **FIXED** `a2c33bd` | "No Relay Agent for this site" misreports a missing *site* as a missing *agent* |
-| F4 | Low | **Open — needs an operator decision** | Agent↔site matching is exact, not hierarchical |
+| F4 | Low | **FIXED** `a4d21c6` | Agent↔site matching is exact, not hierarchical |
 | F5 | Low | **FIXED** `a2c33bd` | `credtest` test is environment-coupled and fails on any host serving :80/:443 |
 | F6 | Info | Accepted | Historical job rows retain pre-fix counters |
 
-**Status after remediation:** F1, F2, F3 and F5 are fixed, tested and deployed. F4 is the
-only open item and needs a policy decision (below). The full `internal/...` test suite is
-green — including `credtest`, which was red before this engagement began.
+**Status after remediation: ALL findings closed.** F1, F2, F3, F5 and now F4 are fixed,
+tested and deployed. The full `internal/...` test suite is green — including `credtest`,
+which was red before this engagement began.
 
 ---
 
@@ -265,23 +265,43 @@ The pre-fix scan job still records `found_count = 254` for `172.21.96.0/24`. Tha
 | 2 | F3 — `device_no_site` reason + Data Quality subnet-coverage gap | Med | very low | **Fixed** `a2c33bd` |
 | 3 | F2 — operator-asserted targets survive suppression (flagged) | Med | low | **Fixed** `a2c33bd` |
 | 4 | F5 — make `testHTTP` standard ports injectable | Low | none | **Fixed** `a2c33bd` |
-| 5 | F4 — decide + implement agent↔site hierarchy policy | Low | low | **Open — needs decision** |
+| 5 | F4 — opt-in agent↔site hierarchical inheritance | Low | low | **Fixed** `a4d21c6` |
 
-### Remaining open item — F4, agent↔site hierarchy
+**Rollback for F4:** the feature is inert until switched on. To disable per agent, PATCH
+`include_descendants=false` (or clear the checkbox) — routing reverts to exact-only
+immediately, no restart. To roll back the code, redeploy the previous binary; migration
+`000105` only ADDs a defaulted column, so an older binary ignores it and behaves exactly as
+before. No data is lost either way.
 
-`assignedSiteAgent` matches `*a.LocationID != loc` **exactly**. An agent assigned to the
-parent group `Coral Sea Group` therefore serves **nothing** in the child hotels `CAC` / `CHR`.
-It is not biting today (the CHR agent is assigned directly to CHR), but assigning an agent at
-group level looks correct and silently serves no devices.
+### F4 — controlled, opt-in hierarchical inheritance · **CLOSED**
 
-Two defensible policies — this is an operator decision, not a technical one:
+Previously `assignedSiteAgent` matched the device's location **exactly**, so an agent assigned
+to the parent group served **nothing** in the child hotels — a trap, because a group-level
+assignment looks correct and silently covers no devices.
 
-- **Inherit down the tree** (recommended if you intend group-level agents): walk the location
-  ancestry — already loaded by `locationParents` for site-scope checks — so an agent at an
-  ancestor serves descendants, preferring the most specific match. ~0.5 d, low risk.
-- **Keep exact matching** as deliberate policy: then say so in the Agents UI ("an agent serves
-  only the exact site it is assigned to"), so nobody assigns one at group level expecting
-  inheritance. ~1 h.
+Implemented as **opt-in**, chosen over changing the default because widening every existing
+agent's reach silently would hand collectors jobs for sites they were never meant to serve.
+
+| Requirement | How it is met |
+|---|---|
+| Exact matching stays the default | `include_descendants` defaults to `false` (migration `000105`, `NOT NULL DEFAULT false`) |
+| Existing agents unchanged | Pre-existing rows take the column default; verified in production — the `CHR` agent reports `include_descendants=false` after upgrade |
+| Explicit per-agent setting | `PATCH /agents/{id} {"include_descendants": bool}`, plus an **Include descendant sites** checkbox on the Agents page |
+| Serves descendant sites when enabled | `pickSiteAgent` walks the location ancestry; the nearest opted-in ancestor wins |
+| Child-site agent takes precedence | Exact match is resolved first and always wins over inheritance |
+| Ambiguity fails safe | Two or more opted-in agents at the same nearest ancestor → `agent_scope_ambiguous`, naming the competitors and how to resolve. **No agent is ever chosen silently** |
+| Scope visible in diagnostics + UI | `effective_scope` on the agent DTO (`mode`, `covered_sites`, `covered_count`, plain-English `explanation`); routing detail states *"(inherited from parent site X)"* |
+| Group assignment without inheritance is honest | `effective_scope.mode = "exact"` with the explanation *"Sites beneath it are NOT covered"* |
+
+Deliberate exception: an **exact-level** tie keeps the pre-existing most-recent-heartbeat
+tie-break rather than becoming ambiguous. Making it ambiguous would break sites already running
+two agents — ambiguity applies only to the new inherited path.
+
+**Tests:** 14 pure unit tests (exact, inheritance enabled/disabled, multi-level, child
+precedence, nearest-ancestor, ambiguity, exact-tie compatibility, disabled/ineligible agents,
+sibling isolation, cyclic-tree termination, and all three effective-scope modes) plus a
+DB-backed integration test asserting the column default, round-trip, live resolution and that
+disabling restores exact-only routing.
 
 ### What was changed in remediation
 

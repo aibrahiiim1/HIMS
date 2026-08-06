@@ -275,7 +275,7 @@ const createRelayAgent = `-- name: CreateRelayAgent :one
 
 INSERT INTO relay_agents (name, location_id, token_hash)
 VALUES ($1, $2, $3)
-RETURNING id, name, location_id, token_hash, hostname, ip, os, version, capabilities, status, enabled, last_heartbeat, last_error, created_at, updated_at
+RETURNING id, name, location_id, token_hash, hostname, ip, os, version, capabilities, status, enabled, last_heartbeat, last_error, created_at, updated_at, include_descendants
 `
 
 type CreateRelayAgentParams struct {
@@ -305,6 +305,7 @@ func (q *Queries) CreateRelayAgent(ctx context.Context, arg CreateRelayAgentPara
 		&i.LastError,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.IncludeDescendants,
 	)
 	return i, err
 }
@@ -349,7 +350,7 @@ func (q *Queries) GetAgentJob(ctx context.Context, id uuid.UUID) (AgentJob, erro
 }
 
 const getRelayAgent = `-- name: GetRelayAgent :one
-SELECT id, name, location_id, token_hash, hostname, ip, os, version, capabilities, status, enabled, last_heartbeat, last_error, created_at, updated_at FROM relay_agents WHERE id = $1
+SELECT id, name, location_id, token_hash, hostname, ip, os, version, capabilities, status, enabled, last_heartbeat, last_error, created_at, updated_at, include_descendants FROM relay_agents WHERE id = $1
 `
 
 func (q *Queries) GetRelayAgent(ctx context.Context, id uuid.UUID) (RelayAgent, error) {
@@ -371,12 +372,13 @@ func (q *Queries) GetRelayAgent(ctx context.Context, id uuid.UUID) (RelayAgent, 
 		&i.LastError,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.IncludeDescendants,
 	)
 	return i, err
 }
 
 const getRelayAgentByToken = `-- name: GetRelayAgentByToken :one
-SELECT id, name, location_id, token_hash, hostname, ip, os, version, capabilities, status, enabled, last_heartbeat, last_error, created_at, updated_at FROM relay_agents WHERE token_hash = $1
+SELECT id, name, location_id, token_hash, hostname, ip, os, version, capabilities, status, enabled, last_heartbeat, last_error, created_at, updated_at, include_descendants FROM relay_agents WHERE token_hash = $1
 `
 
 func (q *Queries) GetRelayAgentByToken(ctx context.Context, tokenHash string) (RelayAgent, error) {
@@ -398,6 +400,7 @@ func (q *Queries) GetRelayAgentByToken(ctx context.Context, tokenHash string) (R
 		&i.LastError,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.IncludeDescendants,
 	)
 	return i, err
 }
@@ -668,7 +671,7 @@ func (q *Queries) ListRecentAgentJobsAll(ctx context.Context, limit int32) ([]Li
 }
 
 const listRelayAgents = `-- name: ListRelayAgents :many
-SELECT id, name, location_id, token_hash, hostname, ip, os, version, capabilities, status, enabled, last_heartbeat, last_error, created_at, updated_at FROM relay_agents ORDER BY name
+SELECT id, name, location_id, token_hash, hostname, ip, os, version, capabilities, status, enabled, last_heartbeat, last_error, created_at, updated_at, include_descendants FROM relay_agents ORDER BY name
 `
 
 func (q *Queries) ListRelayAgents(ctx context.Context) ([]RelayAgent, error) {
@@ -696,6 +699,7 @@ func (q *Queries) ListRelayAgents(ctx context.Context) ([]RelayAgent, error) {
 			&i.LastError,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.IncludeDescendants,
 		); err != nil {
 			return nil, err
 		}
@@ -912,7 +916,7 @@ func (q *Queries) RequeueStaleAgentJobs(ctx context.Context, dispatchedAt *time.
 }
 
 const resolveSiteAgent = `-- name: ResolveSiteAgent :one
-SELECT id, name, location_id, token_hash, hostname, ip, os, version, capabilities, status, enabled, last_heartbeat, last_error, created_at, updated_at FROM relay_agents
+SELECT id, name, location_id, token_hash, hostname, ip, os, version, capabilities, status, enabled, last_heartbeat, last_error, created_at, updated_at, include_descendants FROM relay_agents
 WHERE location_id = $1 AND enabled AND status = 'online'
 ORDER BY last_heartbeat DESC NULLS LAST
 LIMIT 1
@@ -939,6 +943,7 @@ func (q *Queries) ResolveSiteAgent(ctx context.Context, locationID *uuid.UUID) (
 		&i.LastError,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.IncludeDescendants,
 	)
 	return i, err
 }
@@ -956,6 +961,21 @@ type SetRelayAgentEnabledParams struct {
 
 func (q *Queries) SetRelayAgentEnabled(ctx context.Context, arg SetRelayAgentEnabledParams) error {
 	_, err := q.db.Exec(ctx, setRelayAgentEnabled, arg.ID, arg.Enabled)
+	return err
+}
+
+const setRelayAgentIncludeDescendants = `-- name: SetRelayAgentIncludeDescendants :exec
+UPDATE relay_agents SET include_descendants = $2, updated_at = now() WHERE id = $1
+`
+
+type SetRelayAgentIncludeDescendantsParams struct {
+	ID                 uuid.UUID `json:"id"`
+	IncludeDescendants bool      `json:"include_descendants"`
+}
+
+// Opt-in hierarchical scope. Off by default; see migration 000105.
+func (q *Queries) SetRelayAgentIncludeDescendants(ctx context.Context, arg SetRelayAgentIncludeDescendantsParams) error {
+	_, err := q.db.Exec(ctx, setRelayAgentIncludeDescendants, arg.ID, arg.IncludeDescendants)
 	return err
 }
 
