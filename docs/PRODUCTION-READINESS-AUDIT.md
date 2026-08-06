@@ -11,9 +11,9 @@
 
 The pipeline is structurally sound: every stage gates on real evidence, credentials bind only on successful authentication, and secrets are never returned by the API. The flow reached a healthy end state during this audit — **129 of 139 devices fully managed**, with the remaining 10 explained by genuine credential gaps, not defects.
 
-Three defects were found that affect correctness or operator trust. One (**F1**) was introduced by the liveness-sweep work earlier in this engagement and is fixed here. Two (**F2**, **F3**) are open and carry concrete fix plans. Nothing found is a data-loss or security defect.
+Five findings were raised. **All five are now fixed, tested and deployed** (F1, F2, F3, F4, F5). Two of them (**F1**, **F2**) were regressions introduced by the liveness-sweep work earlier in this engagement and are corrected here. Nothing found was a data-loss or security defect.
 
-**Production readiness: GO, with F2 and F3 scheduled.** Neither blocks operation; both cause an operator to be misinformed in a specific situation, which is the category of bug this system is explicitly designed to avoid.
+**Production readiness: GO — no open findings.** The full `internal/...` suite is green, including `credtest`, which was red before this engagement began. The remaining unmanaged devices are credential gaps, not pipeline defects.
 
 ### Current production state (live, end of audit)
 
